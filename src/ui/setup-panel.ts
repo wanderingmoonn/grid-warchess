@@ -42,6 +42,7 @@ import {
   type FixedMap,
 } from '../core/fixed-maps.ts';
 import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
+import { allLevels, applyLevelToConfig, goalText, playableLevels, type LevelDef } from '../core/level.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -49,8 +50,9 @@ import {
   MIN_BOARD_SIZE,
   clampBoardSize,
   randomSeed,
+  startGoldFor,
 } from '../core/setup.ts';
-import type { MatchConfig, UnitTypeDef } from '../core/types.ts';
+import type { MatchConfig, PlayerId, UnitTypeDef } from '../core/types.ts';
 
 export interface SetupResult {
   config: MatchConfig;
@@ -123,6 +125,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       mapSymmetry: initial.mapSymmetry ?? 'fair',
       // 固定地图跟着上一局走：同一张图连着打几局是常态（复盘 / 换阵营再来一把）
       fixedMap: initial.fixedMap,
+      // 关卡也跟着上一局走。**这一行漏了，选关卡就会在"开一次面板"之后静默消失**——
+      // 这个对象是逐个字段抄的，和 createMatch 里那份是同一个坑。
+      level: initial.level,
       expansionIds: [...initial.expansionIds],
       enabledUnits: [...initial.enabledUnits],
       // 关掉的兵种是"上一局的选择"的一部分：不抄过来的话，每次开新局
@@ -264,6 +269,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 战役页只剩一行摘要，而全表照旧在——只是要按一下才出来。
      */
     let poolOpen = false;
+    /* 关卡模式的「换扩展」抽屉：和兵种池一样，是盖在面板上的一层 */
+    let expDrawerOpen = false;
 
     /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
     const selectorFor = (el: HTMLElement): string | null => {
@@ -281,8 +288,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       return null;
     };
 
-    /** 左侧两页：战役（怎么打）与地图（在哪打）。默认停在战役 */
-    let tab: 'battle' | 'maps' = 'battle';
+    /**
+     * 左侧三页：关卡（打哪一关）、战役（怎么打）、地图（在哪打）。默认停在战役。
+     *
+     * 关卡单独一页，而不是塞在战役页顶上：它会一直长（每加一张关卡就多一张卡），
+     * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
+     */
+    let tab: 'battle' | 'maps' | 'levels' = 'battle';
     /** 换页的时候把滚动条拨回顶部：留在上一页的位置会让人以为页面没换 */
     let resetScroll = false;
 
@@ -356,6 +368,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        </button>`;
 
     const paint = () => {
+      /*
+       * 关卡局没有「地图」页。如果玩家正停在那页时点了关卡（或上车时记着 maps），
+       * 就把他挪到简报页——否则会画出一页没有对应标签的内容，
+       * 看起来像是点了导航却跳到了别的地方。
+       */
+      if (config.level && tab === 'maps') tab = 'battle';
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
       // 点一个兵种就"弹回顶部"就是这么来的——所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
@@ -365,6 +383,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 兵种池弹层有自己的滚动区，而且它盖在上面——不单独记一份的话，
       // 在弹层里点「全选」这种会重绘的操作会把两百多个兵种弹回第一行。
       const prevPoolScroll = mask.querySelector<HTMLElement>('.pool-body')?.scrollTop ?? 0;
+      const prevDrawerScroll = mask.querySelector<HTMLElement>('.exp-drawer-body')?.scrollTop ?? 0;
       resetScroll = false;
       const prevFocusEl = document.activeElement;
       const prevFocus =
@@ -423,10 +442,23 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       const ceiling = eraCeilingFor(config.expansionIds);
       const eras = ERAS.filter((e) => e.level <= ceiling);
-      const eraChips = eras.map(
-        (e) =>
-          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}" title="${e.name}">${e.short}</button>`,
-      ).join('');
+      /*
+       * 关卡写死了时代，这一排按钮就点不动。
+       *
+       * 为什么这个必须锁：**时代决定开局金币**（青铜 120，每升一级 +240）。
+       * 一张"3 个兵守住 20 次行动"的关，玩家把时代调到信息化，光是开局那笔钱
+       * 就能堆出一条防线——难度设计当场失效，而且它不像作弊，像是"我正常玩的"。
+       */
+      const eraLock = config.level?.setup?.startEra;
+      const eraChips = eras.map((e) => {
+        const on = config.startEra === e.level;
+        const locked = eraLock !== undefined;
+        return `<button class="chip ${on ? 'active' : ''}${locked ? ' is-locked' : ''}" data-era="${e.level}" ${
+          locked ? 'disabled' : ''
+        } title="${locked ? '这一关固定了开局时代（开局金币跟着它，不能改）' : e.name}">${e.short}</button>`;
+      }).join('');
+      /** 关卡规定先手时，那一排按钮同样点不动 */
+      const firstLock = config.level?.setup?.firstSide;
 
       /*
        * 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 沼泽 / 群岛 / 大川。
@@ -435,10 +467,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const multi = (config.playerCount ?? 2) > 2;
       const styles = mapStylesFor(config.expansionIds);
+      const styleLock = !!config.level;
       const styleChips = styles
         .map(
           (st) =>
-            `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}" data-mapstyle="${st.id}" title="${st.note}">${st.name}</button>`,
+            `<button class="chip ${config.mapStyle === st.id ? 'active' : ''}${styleLock ? ' is-locked' : ''}" data-mapstyle="${st.id}" title="${styleLock ? '这一关的地形是写死的' : st.note}" ${styleLock ? 'disabled' : ''}>${st.name}</button>`,
         )
         .join('');
       // 提示也跟着变：没勾扩展时说清"多出来的地貌去哪了"，勾了就说现在是几种
@@ -522,9 +555,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           }</div>`
         : '';
 
+      /*
+       * 尺寸：关卡局一律锁。地图就是关卡带的那一张，尺寸由它决定，
+       * 让玩家还能点"20×20"就是在说一句和事实相反的话。
+       */
+      const sizeLock = !!config.level;
       const sizeChips = BOARD_SIZES.map(
         (s) =>
-          `<button class="chip ${config.size === s ? 'active' : ''}" data-size="${s}">${s} × ${s}</button>`,
+          `<button class="chip ${config.size === s ? 'active' : ''}${
+            sizeLock ? ' is-locked' : ''
+          }" data-size="${s}" ${sizeLock ? 'disabled title="这一关的图是固定的，尺寸由地图决定"' : ''}>${s} × ${s}</button>`,
       ).join('');
 
       /*
@@ -600,6 +640,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 卡上什么都看不到，勾下去才被拒。
        */
       const nameOf = (x: string): string => expansionById(x)?.name ?? x;
+      /**
+       * 这一局是不是"按关卡来"。
+       *
+       * 定义得比用到它的地方早：扩展区（靠它判断哪些包被锁）、战役页（人数/对手）、
+       * 地图页（关卡自带地图）、关卡页（选中态）四处都要读它。
+       */
+      const levelOn = !!config.level;
+      /* 关卡局是照着打的一局：沙盒/观战/选卡这些"玩另一局"的模式一律锁掉 */
+      const roleLock = levelOn;
       const relChips = (id: string): string => {
         const out: string[] = [];
         const need = expansionById(id)?.requires ?? [];
@@ -623,20 +672,95 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // （"桨帆船、德罗蒙、卡拉克、盖伦……"）。这个面板只回答"勾不勾"，
       // 想读细则的人点规则书——那里每册都有专章。没写 blurb 的退回 summary，
       // 免得将来新加的包在面板上变成一行空白。
+      /*
+       * 关卡锁定的扩展：必须开的算"已勾且点不动"，禁用的算"没勾且点不动"。
+       *
+       * 只锁**关卡提到的那些**。没提到的照旧归玩家——关卡没有意见，
+       * 就不该替玩家做决定（这也是 `LevelExpansionRules` 的三档语义）。
+       */
+      const lockedRequire = new Set(levelOn ? config.level?.expansions?.require ?? [] : []);
+      const lockedForbid = new Set(levelOn ? config.level?.expansions?.forbid ?? [] : []);
+      // 第三档：不锁、只提醒。开了会让这一关明显变难
+      const warned = new Set(levelOn ? config.level?.expansions?.warn ?? [] : []);
+      const expLockNote = (() => {
+        const req = [...lockedRequire].map(nameOf);
+        const forb = [...lockedForbid].map(nameOf);
+        const warn = [...warned].map(nameOf);
+        const parts = [
+          req.length > 0 ? `必须开：${req.join('、')}` : '',
+          forb.length > 0 ? `禁用：${forb.join('、')}` : '',
+        ].filter(Boolean);
+        const lockLine =
+          parts.length > 0
+            ? `<div class="field-hint">这一关固定了扩展规则——${parts.join('；')}。其余包你自己定。</div>`
+            : '';
+        /*
+         * 警告档单独一行，而且**措辞要说清是"建议"不是"禁止"**：
+         * 写成"禁用"玩家会以为点不动；写成"会变难"他才知道自己还有选择。
+         */
+        const warnLine =
+          warn.length > 0
+            ? `<div class="field-hint is-warn">开了「${warn.join('、')}」这一关会明显变难——想挑战可以开，但难度不是设计过的那个。</div>`
+            : '';
+        return lockLine + warnLine;
+      })();
       const expItems = availableExpansions().map(
-        (e) => `
-        <label class="expansion-item ${config.expansionIds.includes(e.id) ? 'on' : ''}">
-          <input type="checkbox" data-exp="${e.id}" ${config.expansionIds.includes(e.id) ? 'checked' : ''} />
+        (e) => {
+          const lock = lockedRequire.has(e.id) ? 'on' : lockedForbid.has(e.id) ? 'off' : '';
+          const on = lock === 'on' || (lock === '' && config.expansionIds.includes(e.id));
+          const tag =
+            lock === 'on'
+              ? '<span class="expansion-req">这一关必须开</span>'
+              : lock === 'off'
+                ? '<span class="expansion-req is-clash">这一关禁用</span>'
+                : warned.has(e.id)
+                  ? '<span class="expansion-req is-warn">这一关会变难</span>'
+                  : '';
+          return `
+        <label class="expansion-item ${on ? 'on' : ''} ${lock ? 'is-locked' : ''}">
+          <input type="checkbox" data-exp="${e.id}" ${on ? 'checked' : ''} ${lock ? 'disabled' : ''} />
           <span class="expansion-body">
             <b>${e.name}</b>
             <span>${e.blurb ?? e.summary}</span>
             ${relChips(e.id)}
+            ${tag}
           </span>
-        </label>`,
+        </label>`;
+        },
       ).join('');
 
       /* ── 战役页：这一局怎么打 ── */
-      const battleView = `
+      /*
+       * 人数和对手在选了关卡之后会变成只读说明——关卡决定了这两样，
+       * 留一排"点了不生效"的开关比没有更糟。
+       *
+       * 想自己调？去「关卡」页选「自由对局」。**改人数也会自动脱离关卡**，
+       * 因为一份"面板写 2 人、关卡写 3 人"的配置，建出来到底几家没人说得清。
+       */
+
+      /*
+       * 多席位局的"谁交给电脑"。
+       *
+       * 两家局用上面那三个档（热座 / 人机 / 双 AI 观战），因为那三种组合是玩家真正
+       * 会选的；三家四家局的组合太多（八种），列成档位等于让人在菜单里做题，
+       * 所以改成**每一席一个开关**，点一下翻转。
+       */
+      const seatLabel: Record<string, string> = { A: '红方', B: '蓝方', C: '绿方', D: '黄方' };
+      const aiSeatSet = new Set<string>(config.aiSeats ?? []);
+      const multiSeatChips = ['A', 'B', 'C', 'D']
+        .slice(0, playerCount)
+        .map(
+          (p) =>
+            `<button class="chip ${aiSeatSet.has(p) ? 'active' : ''}" data-ai-seat="${p}">${seatLabel[p]} · ${aiSeatSet.has(p) ? '电脑' : '真人'}</button>`,
+        )
+        .join('');
+      const levelAiText = (() => {
+        const ai = config.aiSeats ?? [];
+        if (ai.length === 0) return '这一关全是真人：可以热座轮流，也可以建房联机。';
+        return `这一关由电脑操作：${ai.map((p) => seatLabel[p] ?? p).join('、')}；其余席位是真人。`;
+      })();
+
+      const battleViewFull = `
             <section class="field">
               <div class="field-label">
                 数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
@@ -657,10 +781,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                人数 <span class="field-hint">${playerHint}</span>
+                人数 <span class="field-hint">${levelOn ? '由关卡决定' : playerHint}</span>
               </div>
-              <div class="chip-row">${playerChips}${twoCityToggle}</div>
-              <div class="field-hint">${playerNote}</div>
+              ${
+                levelOn
+                  ? `<div class="field-hint">这一关是 ${playerCount} 家。想自己定几家，去左边「关卡」页选「自由对局」。</div>`
+                  : `<div class="chip-row">${playerChips}${twoCityToggle}</div>
+              <div class="field-hint">${playerNote}</div>`
+              }
             </section>
 
             <section class="field">
@@ -668,8 +796,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 netOn ? '测试 AI 自带全视野：开雾也看得见你' : 'AI 会跟你一样受迷雾限制'
               }</span></div>
               ${
-                playerCount > 2
-                  ? `<div class="field-hint">${playerCount} 人局固定为「全真人」：可以本地热座轮流操作，也可以建房联机。AI 不进多方局。</div>`
+                levelOn
+                  ? `<div class="field-hint">${levelAiText}</div>`
+                  : playerCount > 2
+                  ? `<div class="chip-row">${multiSeatChips}</div>
+              <div class="field-hint">点一下翻转：真人自己走，电脑替它走。多方局里电脑会挑最强的一家当主攻，见谁打谁。</div>
+              ${config.aiSeats && config.aiSeats.length > 0 ? aiLevelChips : ''}`
                   : config.godMode
                   ? `<div class="field-hint">上帝模式是纯单人沙盒：两边都归你摆，AI 只在点「交给 AI」时同时操控两边。</div>`
                   : `<div class="chip-row">
@@ -687,16 +819,24 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 : playerCount === 2
                   ? `<section class="field">
               <div class="field-label">先手 <span class="field-hint">${
-                config.aiOpponent || config.aiAlly
-                  ? '你操作红方；选「蓝方先手」就是 AI 先动一步'
-                  : '谁先行动、谁先禁/先选卡；后手照旧拿「先后手补偿」'
+                config.level?.setup?.firstSide
+                  ? '这一关固定了先手'
+                  : config.aiOpponent || config.aiAlly
+                    ? '你操作红方；选「蓝方先手」就是 AI 先动一步'
+                    : '谁先行动、谁先禁/先选卡；后手照旧拿「先后手补偿」'
               }</span></div>
               <div class="chip-row">
-                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">红方先手</button>
-                <button class="chip ${config.firstSide === 'B' ? 'active' : ''}" data-first="B">蓝方先手</button>
-                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}" data-first="random">随机</button>
+                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}${firstLock ? ' is-locked' : ''}" data-first="A" ${firstLock ? 'disabled' : ''}>红方先手</button>
+                <button class="chip ${config.firstSide === 'B' ? 'active' : ''}${firstLock ? ' is-locked' : ''}" data-first="B" ${firstLock ? 'disabled' : ''}>蓝方先手</button>
+                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}${firstLock ? ' is-locked' : ''}" data-first="random" ${firstLock ? 'disabled' : ''}>随机</button>
               </div>
-              ${config.firstSide === 'random' ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>' : ''}
+              ${
+                firstLock
+                  ? '<div class="field-hint">这一关规定谁先动，换不了——先手差一回合，整张图的强度就变了。</div>'
+                  : config.firstSide === 'random'
+                    ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>'
+                    : ''
+              }
             </section>`
                   : `<section class="field">
               <div class="field-label">先手 <span class="field-hint">谁先行动、谁先禁/先选卡</span></div>
@@ -715,14 +855,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                起始时代 <span class="field-hint">${eraHint}</span>
+                起始时代 <span class="field-hint">${
+                  eraLock !== undefined
+                    ? `这一关固定为${eraDef(eraLock).name}：开局金币 ${startGoldFor(eraLock)}，可造兵种也跟着这一档`
+                    : eraHint
+                }</span>
               </div>
               <div class="chip-row">${eraChips}</div>
             </section>
 
             <section class="field">
               <div class="field-label">
-                棋盘大小 <span class="field-hint">预设之外可以自己填 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE}</span>
+                棋盘大小 <span class="field-hint">${
+                  sizeLock ? '由关卡的地图决定' : `预设之外可以自己填 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE}`
+                }</span>
               </div>
               <div class="chip-row">${sizeChips}</div>
               <div class="size-row">
@@ -738,12 +884,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 你的角色 <span class="field-hint">指挥官模式：只决定造什么兵，其余交给 AI</span>
               </div>
               <div class="chip-row">
-                <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" title="每个单位都由你自己走、自己打">亲自指挥</button>
-                <button class="chip ${config.commanderMode ? 'active' : ''}" data-role="commander" title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
+                <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" ${roleLock ? 'disabled' : ''} title="每个单位都由你自己走、自己打">亲自指挥</button>
+                <button class="chip ${config.commanderMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-role="commander" ${roleLock ? 'disabled' : ''} title="你只排接下来几回合造什么，建造、移动、攻击、升级全部由 AI 执行">指挥官模式</button>
                 ${
                   playerCount > 2
                     ? ''
-                    : `<button class="chip ${config.godMode ? 'active' : ''}" data-role="god" title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
+                    : `<button class="chip ${config.godMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-role="god" ${roleLock ? 'disabled' : ''} title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
                 }
               </div>
               <div class="field-hint">${
@@ -763,8 +909,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 playerCount > 2
                   ? `<div class="field-hint">多人局暂不支持选卡：禁选是"双方互相看不见"设计的，三家四家一桌要改的是整套 BP 界面，不是加两行。这一局直接按下方勾选的兵种池开局。</div>`
                   : `<div class="chip-row">
-                <button class="chip ${config.draftMode ? '' : 'active'}" data-draft-mode="off" title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
-                <button class="chip ${config.draftMode ? 'active' : ''}" data-draft-mode="on" title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
+                <button class="chip ${config.draftMode ? '' : 'active'}${roleLock ? ' is-locked' : ''}" data-draft-mode="off" ${roleLock ? 'disabled' : ''} title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
+                <button class="chip ${config.draftMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-draft-mode="on" ${roleLock ? 'disabled' : ''} title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
               </div>`
               }
               <div class="field-hint">${
@@ -839,6 +985,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">扩展规则 <span class="field-hint">可多选，效果叠加</span></div>
+              ${expLockNote}
               <div class="expansion-list">${expItems}</div>
               ${expNote ? `<div class="map-note is-bad">${esc(expNote)}</div>` : ''}
             </section>
@@ -853,6 +1000,203 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>`;
 
       /*
+       * 关卡页：打哪一关。
+       *
+       * 为什么单独一页而不是塞在战役页顶上：它会一直长——每加一张关卡就多一张卡，
+       * 而"人数 / 对手 / 时代"这些一屏就放得下。地图页当年也是从"塞在战役页最下面"
+       * 搬出来的，同一条理由。
+       */
+      const levelCard = (l: LevelDef): string => {
+        const n = l.seats?.count ?? 2;
+        const ai = l.seats?.ai ?? [];
+        const who = ai.length === 0 ? '全真人' : `${ai.map((p) => seatLabel[p] ?? p).join('、')}电脑`;
+        return `<button type="button" class="map-card ${config.level?.id === l.id ? 'active' : ''}" data-level="${esc(l.id)}" title="${esc(l.brief ?? '')}">
+           <span class="map-card-thumb">${mapThumbSvg(l.map, 2, l.seats?.cities)}</span>
+           <b>${esc(l.name)}</b>
+           <i>${n} 家 · ${who}</i>
+         </button>`;
+      };
+      const levelsView = `
+            <section class="field">
+              <div class="field-label">
+                选一关 <span class="field-hint">关卡决定地图、几家、谁交给电脑</span>
+              </div>
+              <div class="map-gallery">
+                <button type="button" class="map-card ${levelOn ? '' : 'active'}" data-level="" title="自己定所有设置">
+                  <span class="map-card-thumb is-random">自由</span>
+                  <b>自由对局</b>
+                  <i>自己选地图和对手</i>
+                </button>
+                ${playableLevels().map(levelCard).join('')}
+              </div>
+              <div class="field-hint">关卡由我们预制，暂时不能自己改。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。</div>
+            </section>
+
+            ${
+              config.level
+                ? `<section class="field">
+              <div class="field-label">这一关</div>
+              <div class="field-hint">${esc(config.level.brief ?? '')}</div>
+              <div class="field-hint">
+                ${config.level.map.w}×${config.level.map.h} ·
+                ${config.level.seats?.count ?? 2} 家 ·
+                ${(config.level.seats?.ai ?? []).length === 0 ? '全是真人' : `电脑操作：${(config.level.seats?.ai ?? []).map((p) => seatLabel[p] ?? p).join('、')}`} ·
+                地图由关卡自带，不能换
+              </div>
+              ${
+                config.level.expansions
+                  ? `<div class="field-hint">
+                      扩展：${
+                        (config.level.expansions.require ?? []).length > 0
+                          ? `必须开 ${(config.level.expansions.require ?? []).map(nameOf).join('、')}`
+                          : ''
+                      }${
+                        (config.level.expansions.require ?? []).length > 0 &&
+                        (config.level.expansions.forbid ?? []).length > 0
+                          ? '；'
+                          : ''
+                      }${
+                        (config.level.expansions.forbid ?? []).length > 0
+                          ? `禁用 ${(config.level.expansions.forbid ?? []).map(nameOf).join('、')}`
+                          : ''
+                      }（在「战役」页可以看到具体是哪几个）
+                     </div>`
+                  : ''
+              }
+              ${
+                config.level.deploy
+                  ? `<div class="field-hint">开局兵力由关卡指定，不再自动撒兵。</div>`
+                  : ''
+              }
+              ${
+                (config.level.seats?.hidden ?? []).length > 0
+                  ? `<div class="field-hint">开局只有 ${(config.level.seats?.count ?? 2) - (config.level.seats?.hidden ?? []).length} 家在场；${(config.level.seats?.hidden ?? [])
+                      .map((p) => seatLabel[p] ?? p)
+                      .join('、')}要到中途才登场。</div>`
+                  : ''
+              }
+              ${
+                (config.level.events ?? []).length > 0
+                  ? `<div class="field-hint">这一关有 ${(config.level.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  : ''
+              }
+              ${
+                (config.level.goals ?? []).length > 0
+                  ? `<div class="field-hint"><b>胜利条件：</b>${(config.level.goals ?? [])
+                      /*
+                       * 每条目标都标上"这是谁的目标"。
+                       *
+                       * 不标的话，一眼看过去全是命令句——"守住 15 次行动"明明是敌方的
+                       * 目标（他撑住就赢），写在玩家眼前像是在让他去守。进攻关里尤其误导。
+                       */
+                      .map((g) => {
+                        const seat = g.kind === 'assassinate' ? g.winner : g.seat;
+                        return `${seatLabel[seat] ?? seat}：${goalText(g)}`;
+                      })
+                      .join('；')}。没达成就算这一局还没打完；城丢了、兵打光了，照普通规则判输。</div>`
+                  : ''
+              }
+            </section>`
+                : `<section class="field">
+              <div class="field-label">现在是自由对局</div>
+              <div class="field-hint">地图在「地图」页挑，人数和对手在「战役」页定。选择一张关卡，这三样都会按关卡来。</div>
+            </section>`
+            }`;
+
+      /*
+       * ── 任务简报（选了关卡时）──
+       *
+       * 关卡模式下**不再复用那一整套配置器**：人数、时代、尺寸、先手、模式、选卡
+       * 全部由关卡决定，把它们灰一片放在这儿，玩家只会反复去点、反复想"是不是我漏了什么"。
+       * 这里只回答三件事：**这是什么关、我要面对什么、还能改什么**。
+       *
+       * 唯一留给玩家的是扩展包（换包重打同一关是一种重玩价值），它走一个抽屉，
+       * 抽屉里就是原来那份扩展列表——依赖 / 联动 / 冲突那套标记已经写好了，不要重写第二份。
+       */
+      const mySeat = (
+        (['A', 'B', 'C', 'D'] as PlayerId[]).slice(0, playerCount).find((p) => !(config.aiSeats ?? []).includes(p)) ??
+        'A'
+      ) as PlayerId;
+      const sideOf = (p: PlayerId): string => {
+        const troops = config.level?.deploy?.[p]?.length ?? 0;
+        const cities =
+          p === 'A'
+            ? config.level?.map.citiesA.length ?? 0
+            : p === 'B'
+              ? config.level?.map.citiesB.length ?? 0
+              : config.level?.seats?.cities?.[p as 'C' | 'D']?.length ?? 0;
+        const hidden = (config.level?.seats?.hidden ?? []).includes(p);
+        return `${seatLabel[p] ?? p}${hidden ? '（中途登场）' : ''}：${troops} 兵 · ${cities} 城`;
+      };
+      const others = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(0, playerCount).filter((p) => p !== mySeat);
+      const extraPacks = config.expansionIds.filter(
+        (id) =>
+          !(config.level?.expansions?.require ?? []).includes(id) &&
+          !(config.level?.expansions?.forbid ?? []).includes(id),
+      );
+      const fixedLine = [
+        `${eraDef(config.startEra).name}（开局 ${startGoldFor(config.startEra)} 金）`,
+        `${config.level?.map.w}×${config.level?.map.h}`,
+        `你执${seatLabel[mySeat] ?? mySeat}`,
+        (config.aiSeats ?? []).length > 0
+          ? `${(config.aiSeats ?? []).map((p) => seatLabel[p] ?? p).join('、')}由电脑操作`
+          : '全部真人',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      const briefingView = `
+            <section class="field level-brief">
+              <div class="level-brief-name">${esc(config.level?.name ?? '')}</div>
+              <div class="field-hint">${esc(config.level?.brief ?? '')}</div>
+            </section>
+
+            ${
+              (config.level?.goals ?? []).length > 0
+                ? `<section class="field">
+              <div class="field-label">目标</div>
+              <div class="level-goal-lines">${(config.level?.goals ?? [])
+                .map((g) => {
+                  const seat = g.kind === 'assassinate' ? g.winner : g.seat;
+                  const mine = seat === mySeat;
+                  return `<div class="${mine ? 'is-mine' : ''}"><b>${seatLabel[seat] ?? seat}</b>${goalText(g)}</div>`;
+                })
+                .join('')}</div>
+            </section>`
+                : ''
+            }
+
+            <section class="field">
+              <div class="field-label">双方开局</div>
+              <div class="level-balance">
+                <div class="is-mine"><b>你</b><span>${sideOf(mySeat).replace(/^[^：]*：/, '')}</span></div>
+                ${others.map((p) => `<div><b>${sideOf(p).split('：')[0]}</b><span>${sideOf(p).split('：')[1]}</span></div>`).join('')}
+              </div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">这一关固定</div>
+              <div class="field-hint">${fixedLine}</div>
+              ${
+                (config.level?.events ?? []).length > 0
+                  ? `<div class="field-hint">这一关有 ${(config.level?.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  : ''
+              }
+              ${expLockNote}
+            </section>
+
+            <section class="field">
+              <div class="field-label">换扩展重打 <span class="field-hint">可选，会改变难度</span></div>
+              <button type="button" class="exp-entry" data-act="exp-drawer">
+                <span class="exp-entry-main">${extraPacks.length > 0 ? `${extraPacks.length} 个额外扩展在生效` : '没有额外扩展'}</span>
+                <span class="exp-entry-sub">${extraPacks.length > 0 ? extraPacks.map((id) => expansionById(id)?.name ?? id).join('、') : '点开挑'}</span>
+                <span class="exp-entry-arrow">▸</span>
+              </button>
+            </section>`;
+
+      const battleView = levelOn ? briefingView : battleViewFull;
+
+      /*
        * 地图页：选图与传图是同一件事的两头。
        *
        * 之前"上传"藏在上帝模式侧栏里，而"选图"在开局面板里——同一条流水线的
@@ -861,10 +1205,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const mapsView = `
             ${
-              (config.playerCount ?? 2) > 2
+              config.level
                 ? `<section class="field">
+                     <div class="field-label">这一局的地图 <span class="field-hint">由关卡自带，换不了</span></div>
+                     <div class="map-gallery">
+                       <button type="button" class="map-card active is-locked" data-level="${esc(config.level.id)}" title="这一关的地图" disabled>
+                         <span class="map-card-thumb">${mapThumbSvg(config.level.map, thumbCity, config.level.seats?.cities)}</span>
+                         <b>${esc(config.level.name)}</b>
+                         <i>${config.level.map.w}×${config.level.map.h} · 关卡</i>
+                       </button>
+                     </div>
+                     <div class="field-hint">这一关的图是手摆的，城位也一起写死了。想换一张，去「关卡」页选「自由对局」。</div>
+                   </section>`
+                : (config.playerCount ?? 2) > 2
+                  ? `<section class="field">
                      <div class="field-label">这一局的地图 <span class="field-hint">${(config.playerCount ?? 2)} 人图由种子生成</span></div>
-                     <div class="field-hint">多人局不用固定地图：一张手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。</div>
+                     <div class="field-hint">多人局不用固定地图：一张上传的手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。关卡不受这条限制：它自己带第三四家的城位。</div>
                    </section>`
                 : `<section class="field">
               <div class="field-label">
@@ -886,7 +1242,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>`
             }
 
-            <section class="field">
+            ${
+              config.level
+                ? `<section class="field">
+              <div class="field-label">地图库</div>
+              <div class="field-hint">关卡局不掺和地图库：这一关的图是写死的，选别的图、传新图都不会生效。想自由选图，先去「关卡」页选「自由对局」。</div>
+            </section>`
+                : ``
+            }
+            ${''}
+            <section class="field" ${config.level ? 'hidden' : ''}>
               <div class="field-label">
                 玩家上传 <span class="field-hint">${userCards.length > 0 ? `${userCards.length} 张，来自地图库` : '来自地图库'}</span>
                 <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新</button>
@@ -910,7 +1275,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
             </section>
 
-            <section class="field">
+            <section class="field" ${config.level ? 'hidden' : ''}>
               <div class="field-label">
                 上传地图 <span class="field-hint">传上去要审核，通过之后所有玩家开局都能选到</span>
               </div>
@@ -941,11 +1306,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${mapNote ? `<div class="map-note ${mapBad ? 'is-bad' : 'is-ok'}">${esc(mapNote)}</div>` : ''}
             </section>
 
-            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />`;
+            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" ${config.level ? 'disabled' : ''} hidden />`;
 
-      const summary = `${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
+      const summary = `${config.level ? `关卡「${esc(config.level.name)}」 · ` : ''}${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
         (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
-      }${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
+      }${config.level ? '关卡地图' : config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
 
       mask.innerHTML = `
         <div class="modal start-panel">
@@ -955,14 +1320,28 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <span>回合制战棋</span>
             </div>
             <nav class="start-nav">
-              <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
-                <b>战役</b>
-                <span>规则 · 时代 · 兵种</span>
+              <button class="start-nav-item ${tab === 'levels' ? 'active' : ''}" data-tab="levels">
+                <b>关卡</b>
+                <span>选关 · 剧情</span>
               </button>
-              <button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
+              <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
+                <b>${levelOn ? '简报' : '战役'}</b>
+                <span>${levelOn ? '目标 · 兵力 · 扩展' : '规则 · 时代 · 兵种'}</span>
+              </button>
+              ${
+                /*
+                 * 关卡局不给「地图」页。
+                 *
+                 * 那张图是关卡带的，改不了；留一页只放一张不可点的卡片，
+                 * 等于请玩家进去看一遍"你不能改"。与其解释，不如不出现。
+                 */
+                levelOn
+                  ? ''
+                  : `<button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
                 <b>地图</b>
                 <span>选图 · 上传</span>
-              </button>
+              </button>`
+              }
             </nav>
             <div class="start-rail-foot">同一个种子永远生成同一张地图</div>
           </aside>
@@ -971,14 +1350,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <div class="modal-head">
               ${
                 tab === 'battle'
-                  ? `<h2>战役</h2>
+                  ? levelOn
+                    ? `<h2>任务简报</h2>
+                       <p>这一关的图、兵力、时代都由关卡定。唯一能改的是扩展包——换一套重打，难度会变。</p>`
+                    : `<h2>战役</h2>
                      <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
-                  : `<h2>地图</h2>
+                  : tab === 'levels'
+                    ? `<h2>关卡</h2>
+                       <p>内建关卡：地图、几家、谁交给电脑都按关卡来。选「自由对局」就全部自己定。</p>`
+                    : `<h2>地图</h2>
                      <p>挑一张现成的地图，或者把自己画的上传上去——传上去的图，所有玩家开局都能选到。</p>`
               }
             </div>
 
-            <div class="modal-body">${tab === 'battle' ? battleView : mapsView}</div>
+            <div class="modal-body">${tab === 'battle' ? battleView : tab === 'maps' ? mapsView : levelsView}</div>
 
             <div class="modal-foot start-foot">
               <div class="start-summary">${summary}</div>
@@ -1008,6 +1393,23 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                  </div>`
               : ''
           }
+          ${
+            expDrawerOpen && levelOn
+              ? `<div class="exp-drawer-layer" data-act="exp-backdrop">
+                   <div class="exp-drawer">
+                     <div class="exp-drawer-head">
+                       <div>
+                         <b>换扩展重打</b>
+                         <span>同一张关，换一套规则。改完直接开始，就是新的一局。</span>
+                       </div>
+                       <button class="btn btn-sm" data-act="exp-close">关闭</button>
+                     </div>
+                     <div class="exp-drawer-locks">${expLockNote || '<span class="field-hint">这一关没有锁定任何扩展包，全部由你决定。</span>'}</div>
+                     <div class="exp-drawer-body"><div class="expansion-list">${expItems}</div></div>
+                   </div>
+                 </div>`
+              : ''
+          }
         </div>
       `;
 
@@ -1019,6 +1421,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       const nextPool = mask.querySelector<HTMLElement>('.pool-body');
       if (nextPool) nextPool.scrollTop = prevPoolScroll;
+      const nextDrawer = mask.querySelector<HTMLElement>('.exp-drawer-body');
+      if (nextDrawer) nextDrawer.scrollTop = prevDrawerScroll;
       if (prevFocus) {
         mask.querySelector<HTMLElement>(prevFocus)?.focus({ preventScroll: true });
       }
@@ -1042,10 +1446,60 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 左侧导航：换页就是换一屏内容，滚动位置跟着归零
       const tabBtn = target.closest<HTMLElement>('[data-tab]');
       if (tabBtn?.dataset.tab) {
-        const next = tabBtn.dataset.tab === 'maps' ? 'maps' : 'battle';
+        const t = tabBtn.dataset.tab;
+        const next = t === 'maps' ? 'maps' : t === 'levels' ? 'levels' : 'battle';
         if (next === tab) return;
         tab = next;
         resetScroll = true;
+        paint();
+        return;
+      }
+
+      /*
+       * 关卡：选一张＝把面板设成这一关的样子。
+       *
+       * 翻译只在 `applyLevelToConfig` 里做一次（面板和脚本共用），这里不重复读
+       * `level.seats` —— 两处各读一份，迟早有一处漏掉，表现是"面板写三家、建出来两家"。
+       */
+      if (target.closest('[data-act="exp-drawer"]')) {
+        expDrawerOpen = true;
+        paint();
+        return;
+      }
+      if (
+        target.closest('[data-act="exp-close"]') ||
+        (target as HTMLElement).dataset.act === 'exp-backdrop'
+      ) {
+        expDrawerOpen = false;
+        paint();
+        return;
+      }
+
+      const levelBtn = target.closest<HTMLElement>('[data-level]');
+      if (levelBtn) {
+        const id = levelBtn.dataset.level ?? '';
+        const picked = id ? allLevels().find((l) => l.id === id) ?? null : null;
+        Object.assign(config, applyLevelToConfig(config, picked));
+        // 换了关，抽屉里「这一关锁定哪些包」已经变了，收起来重新看
+        expDrawerOpen = false;
+        paint();
+        return;
+      }
+
+      /*
+       * 多席位局：点某一席，翻转"真人 / 电脑"。
+       *
+       * 只在三家四家局出现。两家局用上面那三个档——那里的组合是玩家真正会选的，
+       * 列成"每一席一个开关"反而更难用。
+       */
+      const seatBtn = target.closest<HTMLElement>('[data-ai-seat]');
+      if (seatBtn?.dataset.aiSeat) {
+        const seat = seatBtn.dataset.aiSeat as 'A' | 'B' | 'C' | 'D';
+        const cur = new Set(config.aiSeats ?? []);
+        if (cur.has(seat)) cur.delete(seat);
+        else cur.add(seat);
+        // 按席位顺序存，存档和报告里读起来才不会随点击顺序变
+        config.aiSeats = (['A', 'B', 'C', 'D'] as const).filter((p) => cur.has(p));
         paint();
         return;
       }
@@ -1056,9 +1510,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (playersBtn?.dataset.players) {
         const n = Number(playersBtn.dataset.players);
         config.playerCount = n === 3 ? 3 : n === 4 ? 4 : 2;
+        /*
+         * 改人数＝脱离关卡。
+         *
+         * 关卡规定了"几家"和"谁托管"，面板再改就会和它打架。与其做出一个
+         * "看着是两家、实际建三家"的面板，不如老老实实退回自由对局——
+         * 这也正好是玩家想做的事：他要自己调，那就不该还在关卡里。
+         */
+        config.level = undefined;
         if (config.playerCount > 2) {
           config.aiOpponent = false;
           config.aiAlly = false;
+          // 三家四家：从"全真人"起步，谁要电脑得自己去点那一席
+          // （不清空的话，上一局两家局留下的 ['A','B'] 会让三家局一开局就有两个电脑）
+          config.aiSeats = [];
           // 指挥官模式**留着**：多人局也能用（每一方只排生产序列，其余交给 AI）。
           // 以前这里一起关掉，是因为 AI 只认一个对手——那条限制已经放开。
           config.draftMode = false;
@@ -1083,7 +1548,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           }
         }
         // 回到两人局：双城市开局这个开关不适用（两家本来就两座城），顺手关掉
-        if (config.playerCount === 2) config.twoCities = false;
+        if (config.playerCount === 2) {
+          config.twoCities = false;
+          /*
+           * 托管交回上面那三个档（热座 / 人机 / 双 AI）。
+           *
+           * 必须清成 undefined 而不是 []：`[]` 的意思是"全是真人"，
+           * 会把玩家刚点的「人机对战」压掉——面板显示人机对战、进去却两边都是人。
+           */
+          config.aiSeats = undefined;
+        }
         paint();
         return;
       }
@@ -1114,6 +1588,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const mode = aiBtn.dataset.ai;
         config.aiAlly = mode === '2';
         config.aiOpponent = mode === '1' || mode === '2';
+        /*
+         * 这两个档说的就是"两边怎么分"，所以要把通用写法（`aiSeats`）清掉，
+         * 交给它们自己决定。
+         *
+         * 不清的话会出一个很隐蔽的毛病：从关卡退出来（关卡把 `aiSeats` 设成了
+         * `['B']`）、点「双人热座」、开局——**对面还是电脑**，因为 `aiSeats` 优先。
+         */
+        config.aiSeats = undefined;
         // 指挥官模式保留：双 AI 观战时两边都受"一回合一个兵"的限制，
         // 这正是用来量"这套限制下 AI 到底能打成什么样"的场景。
         paint();
@@ -1385,6 +1867,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       const id = input.dataset.exp;
       if (!id) return;
+      /*
+       * 关卡锁定的包：点不动。
+       *
+       * 界面上那个 input 已经是 `disabled`（点不出 change），这里是第二道门——
+       * 键盘、脚本、以后换控件都可能绕开 disabled。锁的是**关卡提到的那几个**，
+       * 其余包照旧归玩家。
+       */
+      const lockedByLevel = config.level
+        ? [...(config.level.expansions?.require ?? []), ...(config.level.expansions?.forbid ?? [])]
+        : [];
+      if (lockedByLevel.includes(id)) {
+        // 把界面拨回关卡要的样子（万一它被改过），然后什么都不做
+        paint();
+        return;
+      }
       // 地貌列表是扩展的函数：勾上/取消可能让"地貌"一栏多出或少掉几个 chip。
       // 记下变动前后的选项数，变了就整块重绘（不重绘的话新 chip 要等下次重绘才出现）。
       const stylesBefore = mapStylesFor(config.expansionIds).length;

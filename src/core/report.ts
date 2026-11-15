@@ -247,9 +247,12 @@ export function buildMatchReport(
       commander: s.config.commanderMode === true,
       godMode: s.config.godMode === true,
     },
-    // AI 代打哪几席：ally 表示"A 由 AI 代打"，opponent 表示"对面是 AI"。
-    // 双 AI 观战时两个都真，于是名单是 ['A','B']——这正是 v1 分不出来的那种局。
-    aiSides: [...(s.config.aiAlly === true ? ['A' as PlayerId] : []), ...(s.config.aiOpponent === true ? ['B' as PlayerId] : [])],
+    // AI 代打哪几席。优先读 `aiSeats`（三家四家局只有它有值），
+    // 老存档没有这个字段时退回两个布尔：ally＝A 由 AI 代打，opponent＝对面（B）是 AI。
+    aiSides:
+      s.config.aiSeats !== undefined
+        ? [...s.config.aiSeats]
+        : [...(s.config.aiAlly === true ? ['A' as PlayerId] : []), ...(s.config.aiOpponent === true ? ['B' as PlayerId] : [])],
     turns: s.turn,
     winner: s.winner,
     sites: s.units.filter((u) => underConstruction(u)).length,

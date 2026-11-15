@@ -16,6 +16,7 @@ import { normalizeUnitTypes } from '../core/customUnits.ts';
 import { normalizeExpansionIds } from '../core/expansions.ts';
 import { normalizePlayerNames } from '../core/setup.ts';
 import { pruneLegacyDraftPool } from '../core/draft.ts';
+import { levelById } from '../core/level.ts';
 import type { GameState } from '../core/types.ts';
 
 const KEY_MATCH = 'warchess:match:v1';
@@ -116,6 +117,33 @@ export function loadMatch(): GameState | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as GameState;
     if (!isValidState(parsed)) return null;
+    /*
+     * 关卡改过之后：**照样续档，只提醒一句**。
+     *
+     * `createMatch` 把关卡整包快照进 `config.level`，所以旧存档跑的是旧内容——
+     * 但它是**自洽的**（事件、城位、部署都来自同一份快照），不会崩。
+     *
+     * 之前这里写的是"不一致就当没有存档"（`return null`），直接扔掉了存档。
+     * 那一下同时干掉两样东西：**「继续上一局」不见了**，而且**配置也回到默认**——
+     * 因为新开局的默认配置本来就寄生在这一局的 `state.config` 上。
+     * 对作者是方便（不用手动清缓存），对玩家是灾难。所以改成只警告。
+     *
+     * 想验证新版关卡：开一局新的就行（或者在开发者工具里清掉 localStorage）。
+     */
+    const snap = parsed.config?.level;
+    if (snap?.id) {
+      const now = levelById(snap.id);
+      if (now) {
+        const changed =
+          JSON.stringify(now.events ?? []) !== JSON.stringify(snap.events ?? []) ||
+          JSON.stringify(now.map?.rows ?? []) !== JSON.stringify(snap.map?.rows ?? []);
+        if (changed) {
+          console.warn(
+            `[存档] 关卡「${now.name}」在保存之后改过，这一局按旧版本继续。想看新版请开新局。`,
+          );
+        }
+      }
+    }
     // 老存档里双方还叫"我方/敌方"：读出来顺手换成红蓝，不用玩家重开一局
     normalizePlayerNames(parsed);
     // 老存档里内嵌的兵种表用的是"整数抗性"，按倍率语义重新折算一次。
@@ -132,6 +160,28 @@ export function loadMatch(): GameState | null {
     // 兵种表会被删（2026-11-09 删了弩手）：存档里残留的旧兵种必须在这里摘掉，
     // 否则 `utype()` 一抛错，这局就是"读不开"而不是"少个兵"。
     pruneUnknownUnits(parsed);
+    /*
+     * 2026-11-15 之前的存档没有 `mapBridges`（地图自带的桥面）。
+     *
+     * 那时候 `syncBridges` 会把地图上的桥当成"没有桥单位撑着"而拆掉，
+     * 所以老存档里**还剩下的**桥面基本都是真的架起来的。这里按"读出来时
+     * 是桥面、且那格上没有任何桥单位"补一次——只影响这一份内存数据，
+     * 下次落盘自然写成新格式。
+     */
+    if (parsed.mapBridges === undefined) {
+      const decked = new Set<string>();
+      for (const u of parsed.units ?? []) {
+        if (parsed.unitTypes?.[u.type]?.bridges) decked.add(`${u.x},${u.y}`);
+      }
+      const out: number[] = [];
+      (parsed.tiles ?? []).forEach((t, i) => {
+        if (t?.terrain !== 'bridge') return;
+        const x = i % parsed.w;
+        const y = Math.floor(i / parsed.w);
+        if (!decked.has(`${x},${y}`)) out.push(i);
+      });
+      parsed.mapBridges = out;
+    }
     return parsed;
   } catch {
     return null;

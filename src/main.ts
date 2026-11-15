@@ -21,6 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
+import { goalText } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
@@ -350,6 +351,19 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
  * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
  * 导入一局、进房间接手一局，都把它置 true。
  */
+/*
+ * `?fresh=1`：作者验证新版关卡时的一键清档。
+ *
+ * 默认**不清**。发布给玩家之后，"静默丢掉存档"是破坏性行为——「继续上一局」会消失，
+ * 配置也会跟着回到默认（新开局的默认配置寄生在这一局的 `state.config` 上）。
+ * 但作者每改一次关卡就进开发者工具清 localStorage 也很烦，所以留一个显式开关：
+ * 地址栏带上 `?fresh=1` 才清，玩家永远碰不到。
+ */
+if (new URLSearchParams(location.search).has('fresh')) {
+  clearMatch();
+  console.info('[存档] 已按 ?fresh=1 清掉本机存档');
+}
+
 let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 
@@ -1015,10 +1029,34 @@ function me(): PlayerId {
   // 以前这里跟着 state.current 走，于是 AI 的回合里面板把 AI 的兵当成自己的，
   // 产兵、升级、技能全都亮着（点下去又被 aiBusy 挡住），视野也跟着 AI 走。
   // 现在"我是谁"是固定的，AI 走它的回合时，面板就是一张只读的卡。
-  const aiA = isAiSide(state, 'A');
-  const aiB = isAiSide(state, 'B');
-  if (aiA !== aiB) return aiA ? 'B' : 'A';
+  //
+  // 三家四家局不能只问 A/B 两席：电脑可能坐在 C（关卡「三岔口」就是）。
+  // 改成"场上只有一个真人时，我就是那个真人"——两人局的三种情形和以前完全等价
+  // （人机 → 真人那席；双 AI → 没有真人，跟当前席位走；热座 → 两个真人，跟当前席位走），
+  // 三家四家局则正确地认出了"只有一个真人"的那一局。
+  const humans = seatsOf(state).filter((p) => !isAiSide(state, p));
+  if (humans.length === 1) return humans[0]!;
   return state.current;
+}
+
+/**
+ * 顶栏那一行"这一局的目标"。
+ *
+ * 普通对局没有关卡，返回空串，顶栏那一块就不占位。
+ * 守到第 N 次行动的那一条会带上"还剩几次"——那是玩家真正想知道的东西，
+ * 光写"守住 20 次行动"他得自己数，而顶栏的回合数是**行动序号**，本来就不好数。
+ */
+function levelGoalLine(s: GameState): string {
+  const goals = s.config.level?.goals;
+  if (!goals || goals.length === 0) return '';
+  const parts = goals.map((g) => {
+    if (g.kind === 'survive') {
+      const left = Math.max(0, g.untilTurn - s.turn + 1);
+      return `守住 ${g.untilTurn} 次行动（还剩 ${left}）`;
+    }
+    return goalText(g);
+  });
+  return `目标：${parts.join(' · ')}`;
 }
 
 /**
@@ -1756,6 +1794,7 @@ function render(): void {
     god: state.config.godMode === true,
     commander: state.config.commanderMode === true,
     commanderRunning,
+    goalLine: levelGoalLine(state),
   });
   // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
   // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
@@ -3302,6 +3341,16 @@ const HEAT_FLASH_MS = 700;
  */
 function noteStrikeFlash(before: GameState, after: GameState): void {
   const cells = newHeatCells(before, after);
+  /*
+   * 地形变了也要闪。
+   *
+   * 和"这一手打到哪"合并成同一次闪烁（同一套色块、同一个 0.7 秒）——
+   * 一次动作里既塌桥又挨打是可能的，分两次闪会互相盖掉。
+   */
+  const terrain = after.levelState?.terrain;
+  if (terrain && terrain.seq !== before.levelState?.terrain?.seq) {
+    for (const i of terrain.cells) cells.set(i, Math.max(cells.get(i) ?? 0, 1));
+  }
   if (cells.size === 0) return;
 
   heatFlashSeq += 1;

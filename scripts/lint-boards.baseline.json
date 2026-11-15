@@ -31,8 +31,11 @@
     "inBounds(": 1
   },
   "src/core/cultivation/qi-field.ts": {
-    "state.tiles": 11,
+    "state.tiles": 12,
     "idx(": 7
+  },
+  "src/core/cultivation/skills/blast.ts": {
+    "state.tiles": 2
   },
   "src/core/cultivation/skills/blood-rite.ts": {
     "inBounds(": 1
@@ -78,7 +81,7 @@
     "state.tiles": 1
   },
   "src/core/rules.ts": {
-    "state.tiles": 15,
+    "state.tiles": 17,
     "idx(": 11,
     "tileAt(": 14,
     "inBounds(": 8,
@@ -132,10 +135,10 @@
     "unitAt(": 1
   },
   "src/storage/save.ts": {
-    "state.tiles": 1
+    "state.tiles": 2
   },
   "src/ui/board.ts": {
-    "state.tiles": 7
+    "state.tiles": 8
   },
   "src/ui/draft-panel.ts": {
     "state.tiles": 3

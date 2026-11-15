@@ -374,6 +374,27 @@ body {
   font-weight: 600;
 }
 
+/*
+ * 关卡目标（"守住 20 次行动（还剩 12）"）。
+ *
+ * 和回合胶囊同一套形状，但用主色描边：它是**这一局特有的东西**，
+ * 不该和"第几回合 / 轮到谁"混成一片。普通对局这一块是 hidden，不占位。
+ */
+.level-goal {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 11px;
+  border: 1px solid var(--a);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: nowrap;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .side-dot {
   width: 7px;
   height: 7px;
@@ -4644,6 +4665,28 @@ a.btn {
 }
 
 /*
+ * 关卡钉住的选项（时代 / 尺寸 / 先手）。
+ *
+ * 用 `:disabled` 而不是只加一个类：禁用是真的，不是"看起来禁用"——
+ * 这几个按钮改的是**这一局的强度**（时代直接决定开局金币），不能只靠 handler 拦。
+ * 视觉上压暗但仍保留选中态的反色，让人看得出"现在是这一档、但换不了"。
+ */
+.chip:disabled,
+.chip.is-locked {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.chip:disabled:hover,
+.chip.is-locked:hover {
+  border-color: var(--line-strong);
+}
+
+.chip.active:disabled {
+  opacity: 0.8;
+}
+
+/*
  * 扩展 / 自定义兵种：名字后面挂一个淡淡的「扩」。
  *
  * 它是"勾了包才在名单里"的——和本体兵种不是一回事：本体兵种关掉只是这一局
@@ -4698,6 +4741,22 @@ a.btn {
 .expansion-item.on {
   border-color: #8fb0cc;
   background: var(--surface-hl);
+}
+
+/*
+ * 关卡锁定的扩展：勾不动。
+ *
+ * 只是压一点亮度、把指针改成默认——**不能做成"看起来禁用"的灰色**：
+ * 那条规则是这一关的一部分（比如"这一关必须开哀兵必胜"），要让人看得出
+ * "是被关卡钉住的"，而不是"这个包坏了"。真正的解释在条目里那行小字上。
+ */
+.expansion-item.is-locked {
+  opacity: 0.78;
+  cursor: default;
+}
+
+.expansion-item.is-locked:hover {
+  border-color: var(--line);
 }
 
 .expansion-item input {
@@ -8704,4 +8763,222 @@ a.btn {
      */
     opacity: 1;
   }
+}
+
+/*
+ * ── 任务简报（关卡模式的「战役」页）──
+ *
+ * 这一页替代了原来的配置器：不再有"点不动的开关"，只有"这一关是什么"。
+ * 唯一能点的是扩展抽屉——换一套规则重打同一张图，是这一关的重玩价值。
+ */
+.level-brief {
+  gap: 6px;
+}
+
+.level-brief-name {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+/* 目标逐条列开：谁的目标、要做什么，比挤成一句好读 */
+.level-goal-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.level-goal-lines > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-goal-lines > div.is-mine {
+  border-color: var(--a);
+  color: var(--text);
+}
+
+.level-goal-lines b {
+  color: var(--text-3);
+  font-weight: 500;
+  flex: none;
+}
+
+.level-goal-lines > div.is-mine b {
+  color: var(--accent, var(--a));
+}
+
+/* 双方开局：一眼看清"我几个兵、对面几个兵" */
+.level-balance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.level-balance > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+}
+
+.level-balance > div.is-mine {
+  border-color: var(--a);
+}
+
+.level-balance b {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.level-balance > div.is-mine b {
+  color: var(--a);
+}
+
+.level-balance span {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+
+/* 抽屉入口：一行，写得下"开了几个包"，不用点开也知道状态 */
+.exp-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.exp-entry:hover {
+  border-color: var(--a);
+}
+
+.exp-entry-main {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.exp-entry-sub {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.exp-entry-arrow {
+  color: var(--text-3);
+}
+
+/*
+ * 扩展抽屉：盖在整个面板上，而不是挤在简报页里。
+ *
+ * 27 个包各自带一句说明、还带依赖 / 冲突标记，塞进简报页要么撑爆版面，
+ * 要么压成两字缩写让人猜。给一整屏，才装得下"看明白再勾"这件事。
+ */
+.exp-drawer-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: inherit;
+}
+
+.exp-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100% - 48px));
+  max-height: calc(100% - 48px);
+  margin: auto;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.exp-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.exp-drawer-head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.exp-drawer-head b {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.exp-drawer-head span {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.exp-drawer-locks {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.exp-drawer-locks .field-hint {
+  margin: 0;
+}
+
+.exp-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 18px 16px;
+}
+
+/*
+ * 扩展包的第三档：警告。
+ *
+ * 「必须开」和「禁用」是关卡对规则的硬要求，玩家没得选；这一档是作者的建议——
+ * 能开，但开了这一关就不再是设计过的那个难度。所以用琥珀而不是红/蓝：
+ * 红色读起来像"被禁了"，蓝色像"要你开"。
+ */
+.expansion-body .expansion-req.is-warn {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn-deep);
+}
+
+.field-hint.is-warn {
+  color: var(--warn-deep);
+}
+
+.field-hint.is-warn::before {
+  content: '⚠ ';
 }

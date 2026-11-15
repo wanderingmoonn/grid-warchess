@@ -138,20 +138,28 @@ test('Same state gives same legal action without mutation',()=>{
   unit(s,'A','militia',5,6); unit(s,'B','archer',7,6);
   refreshMemory(s);
   /*
-   * 比的是**玩法状态**，AI 私有记忆不算。
+   * AI 允许改写的只有它自己的记账字段：
    *
-   * `aiIntent`（攒钱意向）和 `aiStale`（僵持计数）都只由 AI 自己读写，
-   * 不影响任何合法动作——它们是"跨回合记忆"，天然要写进状态里。
-   * 早先这条断言就为 aiIntent 让过一次路，僵持计数属于同一类，
-   * 所以这里统一把它们摘掉再比，而不是为每个新字段各改一次断言。
+   *   · `aiIntent` —— 跨回合意图记忆（"攒钱是为了升时代，攒到 540"），
+   *     必须落在 state 上，否则跟不上下次调用；
+   *   · `aiStale` —— 局面指纹缓存（血量总和 + 计数），纯性能用途。
+   *
+   * 它们都不是"局面"，是 AI 的私有笔记本。所以这条用例的契约精确成：
+   * **除了这两个，别的字段一个都不许动**。
+   *
+   * 只把这两个抹掉再比，而不是干脆不比：真有人把别的东西写进 state（比如"顺手把
+   * 某个单位的 acted 置了"），这条用例照样会红。将来 AI 再加私有字段，记得加进名单——
+   * 那样这条用例才会继续提醒你"又有一个字段被偷偷写进对局事实里了"。
    */
-  const gameplay = (): string => {
-    const { aiIntent: _i, aiStale: _s, ...rest } = s as unknown as Record<string, unknown>;
-    return JSON.stringify(rest);
+  const AI_BOOKKEEPING = ['aiIntent', 'aiStale'];
+  const withoutAiBookkeeping = (json: string): string => {
+    const o = JSON.parse(json) as Record<string, unknown>;
+    for (const k of AI_BOOKKEEPING) delete o[k];
+    return JSON.stringify(o);
   };
-  const before=gameplay(); const a=aiNextAction(s,{...DEFAULT_BUDGET});
+  const before=JSON.stringify(s); const a=aiNextAction(s,{...DEFAULT_BUDGET});
   assert.deepEqual(a,aiNextAction(s,{...DEFAULT_BUDGET}));
-  assert.equal(gameplay(),before);
+  assert.equal(withoutAiBookkeeping(JSON.stringify(s)),withoutAiBookkeeping(before));
   assert.ok(a); assert.equal(applyAction(s,a).ok,true);
 });
 for (const breached of [false,true]) test(`A viable retreat delivers development${breached ? ' after the front city falls' : ' without reinforcing the front'}`,()=>{
