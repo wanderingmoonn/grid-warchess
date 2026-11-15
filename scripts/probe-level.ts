@@ -1052,9 +1052,17 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
     '农民靠河就会被弓手白点',
   );
 
-  // 桥是两格宽：一个人堵不住，塌的时候一起塌
+  /*
+   * 桥面 2×2：**通行口宽两格**。
+   *
+   * 这里最容易搞错的是"什么叫两格宽"：河是竖的、过河走横向，所以通行口宽不宽
+   * 只看桥面在 y 方向占了几个格子。只画 (7,7)(8,7) 是"跨过两列河、只开一个口子"，
+   * 还是一个兵堵得死。四格才是两条通道。
+   */
   const bridges = s.tiles.map((t, i) => ({ t, i })).filter((x) => x.t.terrain === 'bridge');
-  check(bridges.length === 2, `桥是两格宽（${bridges.length} 格）`, '一格宽的桥＝一个兵封死全场');
+  check(bridges.length === 4, `桥面是 2×2 四格（${bridges.length} 格）`, '一格宽＝一个兵封死全场');
+  const lanes = new Set(bridges.map((b) => Math.floor(b.i / s.w)));
+  check(lanes.size === 2, `两条过河通道（y=${[...lanes].join('/')}）`, '桥还是只有一条通道');
 
   // 兵种构成：4 近战 / 4 远程 / 2 高机动 / 2 塔
   const count = (t: string): number => s.units.filter((u) => u.owner === 'B' && u.type === t).length;
@@ -1079,7 +1087,8 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
     cur = r.state;
   }
   const at = (st: GameState, x: number, y: number): string => st.tiles[y * st.w + x]?.terrain ?? '?';
-  check(at(cur, 7, 7) === 'deep' && at(cur, 8, 7) === 'deep', `第 ${cur.turn} 次行动后两格桥一起没了`);
+  const gone = [[7, 7], [8, 7], [7, 8], [8, 8]].filter(([x, y]) => at(cur, x!, y!) === 'deep').length;
+  check(gone === 4, `第 ${cur.turn} 次行动后四格桥一起没了（${gone}/4））`.replace('）', ''), '四格没全塌：剩下的那行还能过河');
 }
 
 /* ── 汇总 ─────────────────────────────────────────────────────── */
