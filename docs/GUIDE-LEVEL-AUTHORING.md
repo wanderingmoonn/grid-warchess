@@ -311,16 +311,27 @@ ai: { riskAversion: 0.6, cohesion: 0.4, appetite: 1.5 }
 **所以真正的重压力关卡，别指望 AI 自己过来，要用事件把兵送过去**：
 
 ```ts
-{ id: 'cross-1', when: { kind: 'turn', at: 12 },
-  do: [{ kind: 'say', text: '他们淌过河了。' },
+// 关卡自带兵种：从边缘奔袭的骑兵
+units: {
+  raider: { id: 'raider', name: '游骑', short: '骑', era: 2, category: 'combat',
+            cost: 95, move: 4, atk: 16, armor: 3, maxHp: 36, range: 1, vision: 3,
+            summonedOnly: true },
+},
+
+// 从地图南北边缘进场
+{ id: 'flank-north', when: { kind: 'turn', at: 14 },
+  do: [{ kind: 'say', text: '北边的林线上冒出人影——是骑兵。' },
        { kind: 'spawn', owner: 'B', units: [
-         { type: 'militia', x: 5, y: 6 }, { type: 'militia', x: 5, y: 7 }] }] }
+         { type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 3, y: 0 }] }] }
 ```
 
-三条经验：
-1. **落点要在对方这一侧**（`spawn` 在自己后方等于没送）；
-2. **时间要早**——晚到第 16 次以后，守方已经攒了六七个兵，三支民兵落地就被吃掉；
-3. **每波都要播报**，否则玩家只看到"忽然多出几个人"。
+四条经验：
+1. **落点在对方那一侧的边缘**，不是对方身边。试过直接送到玩家腹地——玩家的第一反应是
+   "AI 在耍赖"，不是"远处来了援军"。从画面外跑进来才叫合围。
+2. **用高机动兵种**：骑兵 `move 4` 才有包抄的味道；`move 3` 的会被一步步点掉，
+   逼不出分兵。
+3. **时间要早**——晚到第 16 次以后，守方已经攒了六七个兵，两三个兵落地就被吃掉。
+4. **每波都要播报**，否则玩家只看到"忽然多出几个人"。
 
 ---
 

@@ -1086,19 +1086,26 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
    * 那就是纯视野盲区。只 spawn 不播报，玩家的体验就是"敌方所谓的援兵都没来"：
    * 看不见、也没人告诉他。这条断言防的就是这个。
    */
-  const waves = (lv.events ?? []).filter((e) => e.id.startsWith('wave') || e.id.startsWith('cross'));
+  const waves = (lv.events ?? []).filter((e) => e.id.startsWith('wave') || e.id.startsWith('flank'));
   check(waves.length >= 3, `援军/突击队分 ${waves.length} 波`);
-  // 过河突击队：投送是 AI 的硬伤，兵得直接放到西岸（详见关卡里那段注释）
-  const crossers = waves.filter((w) => w.id.startsWith('cross'));
-  check(crossers.length >= 2, `过河突击队 ${crossers.length} 支`);
-  const onWestBank = crossers.flatMap((w) =>
-    w.do.flatMap((d) => (d.kind === 'spawn' ? d.units.filter((u) => u.x <= 6) : [])),
+  /*
+   * 两翼骑兵：投送是 AI 的硬伤，兵得由事件送过来。
+   *
+   * 但**不能直接送到玩家身边**——试过，玩家的第一反应是"AI 在耍赖"，
+   * 不是"远处来了援军"。所以落点必须在地图边缘：从画面外跑进来才叫合围。
+   */
+  const flankers = waves.filter((w) => w.id.startsWith('flank'));
+  check(flankers.length >= 2, `两翼骑兵 ${flankers.length} 波`);
+  const spots = flankers.flatMap((w) =>
+    w.do.flatMap((d) => (d.kind === 'spawn' ? d.units : [])),
   );
+  const h = lv.map.h;
   check(
-    onWestBank.length === crossers.flatMap((w) => w.do.flatMap((d) => (d.kind === 'spawn' ? d.units : []))).length,
-    `突击队全部落在西岸（${onWestBank.length} 个）`,
-    '有突击队刷在东岸了：那样等于没送',
+    spots.every((u) => u.y === 0 || u.y === h - 1),
+    `骑兵全部从地图南北边缘进场（${spots.length} 个）`,
+    '有骑兵落在腹地：那看起来像是凭空冒出来的',
   );
+  check(spots.every((u) => u.type === 'raider'), '骑兵用的是关卡自带的游骑');
   const silent = waves.filter((w) => !w.do.some((d) => d.kind === 'say')).map((w) => w.id);
   check(silent.length === 0, '每一波援军都有播报', `这几波是静默的：${silent.join('、')}`);
   // 两格桥一起塌

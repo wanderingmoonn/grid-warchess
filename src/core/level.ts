@@ -533,6 +533,31 @@ export const LEVELS: LevelDef[] = [
      * 配合三支过河突击队，压力才是持续的——单靠参数不够（实测过：只调参数时
      * 它最多多过去一两个兵，城一滴血不掉）。
      */
+    /*
+     * 游骑：从地图边缘长途奔袭的骑兵，只由事件刷出，谁也造不出来。
+     *
+     * 数值贴着铁器骑士（40 血 / 17 攻 / 4 甲），但**移动力从 3 提到 4**。
+     * 不靠移动力它撑不起"包抄"：从边缘到城要跑六七格，走 3 步的骑兵能被一步步点掉，
+     * 走 4 步才真的要在两翼分兵。
+     */
+    units: {
+      raider: {
+        id: 'raider',
+        name: '游骑',
+        short: '骑',
+        era: 2,
+        category: 'combat',
+        cost: 95,
+        move: 4,
+        atk: 16,
+        armor: 3,
+        maxHp: 36,
+        range: 1,
+        vision: 3,
+        // 只此一份：不进产线、AI 也不采购
+        summonedOnly: true,
+      },
+    },
     ai: { riskAversion: 0.6, cohesion: 0.4 },
     deploy: {
       A: [
@@ -647,38 +672,39 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       /*
-       * 三支过河突击队。
+       * 两翼的骑兵。
        *
-       * 为什么不是"让 AI 自己过来"：实测过，它不会。河把战线切两段，先过去的几个
-       * 算"在战线前面"，于是停下等队友；队友被两格宽的桥堵在另一头，整支部队就
-       * 僵在桥头。改关卡 AI 参数（`riskAversion` / `cohesion`）只能让它多过去一两个，
-       * 城照样一滴血不掉。**投送是它的硬伤，那就别让它投送──直接把突击队放到西岸。**
+       * 试过"把步兵直接送到西岸"，玩家第一反应是 AI 在耍赖——人凭空出现在身边，
+       * 不是"远处来了援军"。所以改成从**地图南北边缘**进场：从画面外跑进来，
+       * 视觉上是合围，不是空投。
        *
-       * 时间点都排在"水退"之后：桥没了、水退了，他们是涉水过来的，剧情上说得通。
-       * 每波三个民兵，落点在河岸与城之间：玩家兵力薄就守不住，厚就能吃掉。
+       * 兵种是游骑（移动 4 的铁器骑兵）：从边缘到城要跑六七格，走 3 步的骑兵会被
+       * 一步步点掉，走 4 步才逼得玩家把兵分到两翼——中间桥头的压力就松不下来了。
+       *
+       * 时间点排在水退之后：桥没了、水退了，他们从上游下游绕过来。
        */
       {
-        id: 'cross-1',
-        when: { kind: 'turn', at: 16 },
+        id: 'flank-north',
+        when: { kind: 'turn', at: 14 },
         do: [
-          { kind: 'say', text: '他们淌过河了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 6 }, { type: 'militia', x: 5, y: 7 }, { type: 'militia', x: 6, y: 7 }] },
+          { kind: 'say', text: '北边的林线上冒出人影——是骑兵。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 3, y: 0 }] },
         ],
       },
       {
-        id: 'cross-2',
-        when: { kind: 'turn', at: 15 },
+        id: 'flank-south',
+        when: { kind: 'turn', at: 19 },
         do: [
-          { kind: 'say', text: '西岸的河滩上又聚起一群人。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 8 }, { type: 'militia', x: 6, y: 8 }, { type: 'archer', x: 6, y: 9 }] },
+          { kind: 'say', text: '南边也来了。他们从两翼绕，不走桥。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 13 }, { type: 'raider', x: 3, y: 13 }] },
         ],
       },
       {
-        id: 'cross-3',
-        when: { kind: 'turn', at: 24 },
+        id: 'flank-both',
+        when: { kind: 'turn', at: 25 },
         do: [
-          { kind: 'say', text: '又一批涉水过来了，这次带着弓手。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 5 }, { type: 'militia', x: 6, y: 5 }, { type: 'archer', x: 6, y: 6 }] },
+          { kind: 'say', text: '两翼又是一拨。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 4, y: 0 }, { type: 'raider', x: 4, y: 13 }] },
         ],
       },
       {
