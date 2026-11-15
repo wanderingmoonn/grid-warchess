@@ -613,27 +613,11 @@ export const LEVELS: LevelDef[] = [
      */
     events: [
       {
-        id: 'wave-1',
-        when: { kind: 'turn', at: 3 },
-        do: [
-          { kind: 'say', text: '东边的路上又上来一队人。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
-        ],
-      },
-      {
-        id: 'wave-2',
-        when: { kind: 'turn', at: 5 },
-        do: [
-          { kind: 'say', text: '东边的路上又上来一队人。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
-        ],
-      },
-      {
         id: 'flank-1',
         when: { kind: 'turn', at: 6 },
         do: [
           { kind: 'say', text: '南北边冒出人影——是骑兵。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 2, y: 13 }] },
         ],
       },
       {
@@ -649,7 +633,6 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 10 },
         do: [
           { kind: 'say', text: '桥被炸断了。' },
-          // 四格一起炸。区域少写一行，桥就只塌一半——看着像"炸桥没生效"
           { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'water' },
         ],
       },
@@ -673,7 +656,7 @@ export const LEVELS: LevelDef[] = [
         id: 'wave-5',
         when: { kind: 'turn', at: 15 },
         do: [
-          { kind: 'say', text: '又上来一队人，这次带着弓手。' },
+          { kind: 'say', text: '又上来一队人，这次带着长弓手。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
         ],
       },
@@ -689,8 +672,8 @@ export const LEVELS: LevelDef[] = [
         id: 'wave-6',
         when: { kind: 'turn', at: 17 },
         do: [
-          { kind: 'say', text: '又上来一队人，这次带着弓手。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
+          { kind: 'say', text: '又上来一队长弓手。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
         ],
       },
       {
