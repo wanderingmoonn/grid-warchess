@@ -921,6 +921,62 @@ line('22. 事件改不了的地形');
   }
 }
 
+/* ── 23. 地图桥 vs 工兵桥（2026-11-15 修的 bug）──────────────── */
+line('23. 地图上的桥不该自己塌');
+{
+  const rear = levelById('level:rear-guard')!;
+  let s = createMatch({ ...DEFAULT_CONFIG, level: rear }, 1);
+  const bridgeAt = (st: GameState): string => st.tiles[7 * 14 + 6]?.terrain ?? '?';
+  check(bridgeAt(s) === 'bridge', '开局桥在');
+  check(s.units.filter((u) => u.owner === 'A').length === 1, '开局守桥的兵在');
+  check((s.mapBridges ?? []).includes(7 * 14 + 6), '这一格被记进 mapBridges（地图自带）');
+
+  /*
+   * 这一步是关键：以前 `syncBridges` 会在**第一次结算**就把地图桥判成塌了，
+   * 站在上面的兵当场落水。所以"走几步之后桥还在、兵还在"才是这条 bug 的回归测试。
+   */
+  for (let i = 0; i < 3; i++) {
+    const r = applyAction(s, { type: 'END_TURN' } as Action);
+    if (!r.ok) break;
+    s = r.state;
+  }
+  check(bridgeAt(s) === 'bridge', `走了 ${s.turn - 1} 步，桥还在（${bridgeAt(s)}）`,
+    '地图上的桥被当成工兵桥拆掉了');
+  const alive = s.units.filter((u) => u.owner === 'A');
+  check(alive.length === 1, `守桥的兵还活着（${alive.length}）`, '桥塌了把人一起带走了');
+  check(!s.log.some((l) => l.text.includes('落水')), '没有出现"落水"战报');
+
+  // 反过来：工兵架出来的桥，单位没了还得塌
+  {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: levelById('level:cut-bridge')! }, 7);
+    const W = st.w;
+    const spot = 3 * W + 7; // 河里的一格，不在 mapBridges 里
+    check(!(st.mapBridges ?? []).includes(spot), '这一格不是地图自带的桥');
+    const def = st.unitTypes['bridge']!;
+    st.tiles[spot]!.terrain = 'bridge'; // 模拟 deckBridge
+    st.units.push({
+      id: `u${st.nextUnitSeq++}`,
+      type: 'bridge',
+      owner: 'A',
+      x: 7,
+      y: 3,
+      hp: def.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+    const keep = applyAction(st, { type: 'END_TURN' } as Action);
+    check(keep.ok && keep.state.tiles[spot]?.terrain === 'bridge', '工兵桥有单位撑着：不塌',
+      `实际 ${keep.ok ? keep.state.tiles[spot]?.terrain : '动作被拒'}`);
+
+    const without = keep.ok ? keep.state : st;
+    without.units = without.units.filter((u) => u.type !== 'bridge');
+    const gone = applyAction(without, { type: 'END_TURN' } as Action);
+    check(gone.ok && gone.state.tiles[spot]?.terrain === 'water', '工兵没了：桥面照旧塌回水面',
+      `实际 ${gone.ok ? gone.state.tiles[spot]?.terrain : '动作被拒'}`);
+  }
+}
+
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
 if (failed === 0) {

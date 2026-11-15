@@ -132,6 +132,28 @@ export function loadMatch(): GameState | null {
     // 兵种表会被删（2026-11-09 删了弩手）：存档里残留的旧兵种必须在这里摘掉，
     // 否则 `utype()` 一抛错，这局就是"读不开"而不是"少个兵"。
     pruneUnknownUnits(parsed);
+    /*
+     * 2026-11-15 之前的存档没有 `mapBridges`（地图自带的桥面）。
+     *
+     * 那时候 `syncBridges` 会把地图上的桥当成"没有桥单位撑着"而拆掉，
+     * 所以老存档里**还剩下的**桥面基本都是真的架起来的。这里按"读出来时
+     * 是桥面、且那格上没有任何桥单位"补一次——只影响这一份内存数据，
+     * 下次落盘自然写成新格式。
+     */
+    if (parsed.mapBridges === undefined) {
+      const decked = new Set<string>();
+      for (const u of parsed.units ?? []) {
+        if (parsed.unitTypes?.[u.type]?.bridges) decked.add(`${u.x},${u.y}`);
+      }
+      const out: number[] = [];
+      (parsed.tiles ?? []).forEach((t, i) => {
+        if (t?.terrain !== 'bridge') return;
+        const x = i % parsed.w;
+        const y = Math.floor(i / parsed.w);
+        if (!decked.has(`${x},${y}`)) out.push(i);
+      });
+      parsed.mapBridges = out;
+    }
     return parsed;
   } catch {
     return null;
