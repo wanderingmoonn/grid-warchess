@@ -192,6 +192,24 @@ function playImpact(node: HTMLElement, strength: number): void {
   });
 }
 
+
+/**
+ * 城市时代 → 城区贴图档（2026-11-15）。
+ *
+ * 顺序就是 `ERAS` 的顺序（青铜→聚变），用**时代名派生的 slug** 而不是编号：
+ * 以后在中间插入一个时代，这里跟着插一格就行，不会整排错位。
+ */
+const CITY_ERA_SLUG = [
+  'bronze',
+  'iron',
+  'gunpowder',
+  'steam',
+  'mechanized',
+  'info',
+  'armor',
+  'fusion',
+] as const;
+
 const TERRAIN_CLASS: Record<string, string> = {
   plain: 't-plain',
   forest: 't-forest',
@@ -661,7 +679,7 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
            * 档位名直接用时代名派生的词（civil/brick/concrete/alloy），
            * 别用数字：以后加时代不会让 1~8 的映射全乱。
            */
-          node.dataset.cityEra = city.era <= 4 ? 'civil' : 'concrete';
+          node.dataset.cityEra = CITY_ERA_SLUG[Math.min(CITY_ERA_SLUG.length, Math.max(1, city.era)) - 1]!;
           /*
            * 城市块的四条边（`data-ct/cr/cb/cl`）：邻居**不是同一座城**就是块的边界。
            *
