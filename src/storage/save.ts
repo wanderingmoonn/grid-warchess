@@ -16,6 +16,7 @@ import { normalizeUnitTypes } from '../core/customUnits.ts';
 import { normalizeExpansionIds } from '../core/expansions.ts';
 import { normalizePlayerNames } from '../core/setup.ts';
 import { pruneLegacyDraftPool } from '../core/draft.ts';
+import { levelById } from '../core/level.ts';
 import type { GameState } from '../core/types.ts';
 
 const KEY_MATCH = 'warchess:match:v1';
@@ -116,6 +117,27 @@ export function loadMatch(): GameState | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as GameState;
     if (!isValidState(parsed)) return null;
+    /*
+     * 关卡改过之后，**不要续那一局**。
+     *
+     * `createMatch` 把关卡整包快照进 `config.level`，事件、城位、部署全从快照读。
+     * 于是"作者改了关卡、玩家续旧档"会跑出旧内容，而且不报任何错——
+     * 表现就是"我明明加了援军，游戏里一个都没有"。
+     *
+     * 只比 `events` 和 `map.rows`：这两样决定"会发生什么"和"在哪发生"，
+     * 是作者改得最勤的；`deploy` 的对象 key 顺序不稳定，比了容易误判。
+     * 不一致就当作没有存档，让玩家从新版关卡开一局。
+     */
+    const snap = parsed.config?.level;
+    if (snap?.id) {
+      const now = levelById(snap.id);
+      if (now) {
+        const changed =
+          JSON.stringify(now.events ?? []) !== JSON.stringify(snap.events ?? []) ||
+          JSON.stringify(now.map?.rows ?? []) !== JSON.stringify(snap.map?.rows ?? []);
+        if (changed) return null;
+      }
+    }
     // 老存档里双方还叫"我方/敌方"：读出来顺手换成红蓝，不用玩家重开一局
     normalizePlayerNames(parsed);
     // 老存档里内嵌的兵种表用的是"整数抗性"，按倍率语义重新折算一次。
