@@ -3328,6 +3328,16 @@ const HEAT_FLASH_MS = 700;
  */
 function noteStrikeFlash(before: GameState, after: GameState): void {
   const cells = newHeatCells(before, after);
+  /*
+   * 地形变了也要闪。
+   *
+   * 和"这一手打到哪"合并成同一次闪烁（同一套色块、同一个 0.7 秒）——
+   * 一次动作里既塌桥又挨打是可能的，分两次闪会互相盖掉。
+   */
+  const terrain = after.levelState?.terrain;
+  if (terrain && terrain.seq !== before.levelState?.terrain?.seq) {
+    for (const i of terrain.cells) cells.set(i, Math.max(cells.get(i) ?? 0, 1));
+  }
   if (cells.size === 0) return;
 
   heatFlashSeq += 1;

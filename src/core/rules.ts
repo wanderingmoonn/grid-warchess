@@ -4489,6 +4489,10 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
     deploySeat(s, act.seat);
     return;
   }
+  if (act.kind === 'terrain') {
+    applyTerrainEvent(s, act);
+    return;
+  }
   // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
   s.orderDirectives = {
     ...(s.orderDirectives ?? {}),
@@ -4567,6 +4571,102 @@ function deploySeat(s: GameState, seat: PlayerId): void {
   }
   refreshMemory(s);
   say(`${s.players[seat]?.name ?? seat} 登场了`);
+}
+
+/**
+ * 改地形（事件用）。
+ *
+ * 三条兜底，对应设计文档第七章：
+ *   1. **城格跳过**——城压在格子上，格子指向城，把城格改成水会得到一座悬空的城；
+ *   2. **格上有兵就挤走**——挤到最近能站的空地；实在无处可去才没了（并说一声）；
+ *      桥本身挤不走（它不会爬），地没了就是没了；
+ *   3. **必须播报**——玩家记住的是"东边有座桥"，桥在他没看的时候没了，
+ *      他不会觉得是剧情，他会觉得是 bug。
+ *
+ * **不拦截"把地图切成两块"**：那是一种合法设计（"断了桥才能守住"）。
+ * 这一关能不能打通，是批量自检的事，不是引擎的事。
+ */
+function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').LevelDo, { kind: 'terrain' }>): void {
+  const say = (text: string): void => {
+    s.log.push({ turn: s.turn, player: 'A', text, open: true, system: true });
+  };
+
+  const cells = new Set<number>();
+  for (let y = act.zone.y0; y <= act.zone.y1; y += 1) {
+    for (let x = act.zone.x0; x <= act.zone.x1; x += 1) {
+      const i = y * s.w + x;
+      const tile = s.tiles[i];
+      if (!tile) continue;
+      if (tile.cityId) continue; // 城格归城市管
+      if (act.only && !act.only.includes(tile.terrain as never)) continue;
+      if (tile.terrain === act.to) continue;
+      tile.terrain = act.to;
+      cells.add(i);
+    }
+  }
+  if (cells.size === 0) return;
+
+  say(`地形变了：${cells.size} 格成为${CONFIG.terrainName[act.to] ?? act.to}`);
+
+  /*
+   * 挤走站不住的兵。
+   *
+   * 判定用 `ignoreUnits: true`：这时候那个人**本来就在这一格上**，
+   * 带着占用去问"能不能站"，永远得到否——那会把所有人都判成"站不住"。
+   */
+  const gone: Unit[] = [];
+  for (const u of s.units) {
+    const n = footprintOf(s, u.type);
+    let touched = false;
+    for (let dy = 0; dy < n && !touched; dy += 1) {
+      for (let dx = 0; dx < n; dx += 1) {
+        if (cells.has((u.y + dy) * s.w + (u.x + dx))) {
+          touched = true;
+          break;
+        }
+      }
+    }
+    if (!touched) continue;
+    if (canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true })) continue;
+
+    const name = utype(s, u.type).name;
+    // 桥挪不了：地没了，桥就是没了
+    if (utype(s, u.type).bridges) {
+      gone.push(u);
+      say(`${name}塌了`);
+      continue;
+    }
+    const spot = freeSpotWithin(s, u, u.type, 6);
+    if (spot) {
+      u.x = spot.x;
+      u.y = spot.y;
+      say(`${name}被挤到 (${spot.x}, ${spot.y})`);
+    } else {
+      gone.push(u);
+      say(`${name}无处可退，没了`);
+    }
+  }
+  if (gone.length > 0) {
+    const ids = new Set(gone.map((u) => u.id));
+    s.units = s.units.filter((u) => !ids.has(u.id));
+  }
+
+  // 地形影响视野（高地看得远），改完要重新算一遍雾
+  refreshMemory(s);
+
+  /*
+   * 记下"这一手改了哪几格"，让界面闪一下。
+   *
+   * 播报是写给"读战报的人"的，闪烁是写给"正盯着棋盘的人"的——同一件事要两种交代：
+   * 桥在他没留意的时候没了，他不一定会去翻战报，但一定会觉得画面出错了。
+   */
+  s.levelState = {
+    ...(s.levelState ?? { fired: [] }),
+    terrain: {
+      seq: (s.levelState?.terrain?.seq ?? 0) + 1,
+      cells: [...cells],
+    },
+  };
 }
 
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {

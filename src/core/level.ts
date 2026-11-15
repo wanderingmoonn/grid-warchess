@@ -31,7 +31,7 @@ import { expansionById } from './expansions.ts';
 import { ERAS } from './config.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
-import type { MatchConfig, PlayerId } from './types.ts';
+import type { MatchConfig, PlayerId, Terrain } from './types.ts';
 
 /**
  * 关卡规定的一个开局兵。
@@ -89,7 +89,17 @@ export type LevelDo =
    * 只做一次（调用后把它从 `hidden` 里去掉）。重复调用不会放两座城。
    * 兵源固定用关卡自己的 `deploy`——事件里再写一遍坐标，作者会有两处要同步。
    */
-  | { kind: 'deploy'; seat: PlayerId };
+  | { kind: 'deploy'; seat: PlayerId }
+  /**
+   * 改地形：把 `zone` 里符合条件的地形改成 `to`。
+   *
+   * 三条兜底由引擎做，作者不用管：城格跳过；格上站着兵就挤到最近能站的空地
+   * （挤不到就没了，会在战报里说一声）；桥塌了连着桥本身一起没。
+   *
+   * **不自动拦截"把地图切成两块"**——"断了桥才能守住"本身就是一种设计，
+   * 引擎去拦反而是拦创意。这一关能不能打完，是批量自检该管的事。
+   */
+  | { kind: 'terrain'; zone: LevelZone; to: LevelTerrain; only?: LevelTerrain[] };
 
 /**
  * 一件事：什么时候、做什么。
@@ -124,6 +134,35 @@ export interface LevelSetup {
   /** 每家两座城 */
   twoCities?: boolean;
 }
+
+/**
+ * 事件能把格子改成哪些地形。
+ *
+ * 排除三种：
+ *   · `city` —— 城压在格子上，格子指向城，把城格改成水会得到一座悬空的城；
+ *   · `void` —— "这里还没有东西"，只有空间站棋盘才有；
+ *   · `bridge` —— 桥面是**由桥这个单位维持的**（`syncBridges` 每次动作后对账，
+ *     没有桥单位的桥面会被打回水面）。事件直接写 `bridge` 会在下一手被悄悄改回去，
+ *     作者会以为"改了没生效"。要修桥就让工兵去修。
+ */
+export type LevelTerrain = Exclude<Terrain, 'city' | 'void' | 'bridge'>;
+
+/** 运行时白名单，和上面的类型一一对应（类型在运行期查不了，所以留一份） */
+export const LEVEL_TERRAINS: readonly LevelTerrain[] = [
+  'plain',
+  'forest',
+  'hill',
+  'water',
+  'shallow',
+  'deep',
+  'mountain',
+  'plateau',
+  'valley',
+  'marsh',
+  'dune',
+  'regolith',
+  'crater',
+];
 
 /**
  * 这一关怎么算赢。
@@ -336,11 +375,27 @@ const HOLD_PAINT: Array<[number, number, string]> = [
 ];
 
 /**
+ * 「断桥」的地形：一条竖河、一座桥。
+ *
+ * 这张图只为一件事而存在——**桥会在你眼前消失**。所以河要够宽（陆军过不去），
+ * 桥要唯一，两边的兵都要看得见对方。
+ */
+const CUT_PAINT: Array<[number, number, string]> = (() => {
+  const out: Array<[number, number, string]> = [];
+  for (let y = 0; y < 14; y += 1) out.push([7, y, '~']);
+  out.push([7, 7, '=']);
+  out.push([4, 4, 'f'], [5, 4, 'f'], [4, 5, 'f']);
+  out.push([9, 10, 'f'], [10, 10, 'f'], [9, 11, 'f']);
+  out.push([3, 10, 'h'], [4, 11, 'h']);
+  return out;
+})();
+
+/**
  * 内建关卡。
  *
- * 前三张是"测试夹具"：不追求好玩，各验证一条机制。
+ * 前四张是"测试夹具"：不追求好玩，各验证一条机制。
  * 「三岔口」是第一张能给人玩的三家混战；「断后」验证部署与扩展规则；
- * 「死守」验证胜负条件——这是第一张"能赢也能输"的关卡。
+ * 「死守」验证胜负条件；「黄雀」验证晚到的一家；「断桥」验证改地形。
  */
 export const LEVELS: LevelDef[] = [
   {
@@ -605,6 +660,64 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '东南角的地平线上立起了一座城——第三家来了。' },
           { kind: 'deploy', seat: 'C' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'level:cut-bridge',
+    version: LEVEL_VERSION,
+    name: '断桥',
+    brief: '14×14，一座桥。第 4 次行动桥被炸掉，第 8 次行动水退了——守住 10 次行动。',
+    map: {
+      id: 'levelmap:cut-bridge',
+      name: '断桥',
+      w: 14,
+      h: 14,
+      rows: rowsOf(14, 14, CUT_PAINT),
+      citiesA: [{ x: 2, y: 6 }],
+      citiesB: [{ x: 10, y: 6 }],
+      source: 'builtin',
+    },
+    seats: { count: 2, ai: ['B'] },
+    setup: { startEra: 1, firstSide: 'A' },
+    deploy: {
+      A: [
+        { type: 'militia', x: 5, y: 6 },
+        { type: 'archer', x: 5, y: 7 },
+        { type: 'militia', x: 4, y: 8 },
+      ],
+      B: [
+        { type: 'militia', x: 8, y: 5 },
+        { type: 'archer', x: 8, y: 6 },
+        { type: 'militia', x: 8, y: 7 },
+        { type: 'militia', x: 8, y: 8 },
+        { type: 'archer', x: 9, y: 9 },
+      ],
+    },
+    goals: [{ kind: 'survive', seat: 'A', untilTurn: 10 }],
+    /*
+     * 两次改地形，一次比一次"不合理"，但都是设计：
+     *   · 第 4 次行动：桥没了。攻方五个人全堵在东岸，只能隔河干瞪眼；
+     *   · 第 8 次行动：水退了，河变成浅流，陆军能涉水过来——最后一搏。
+     * 第二件事专门用了 `only: ['water']`：桥墩那一格现在是深水，
+     * 不该跟着一起变浅，正好把"只改指定地形"这条也走一遍。
+     */
+    events: [
+      {
+        id: 'blow-bridge',
+        when: { kind: 'turn', at: 4 },
+        do: [
+          { kind: 'say', text: '轰的一声——桥没了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 7, y1: 7 }, to: 'deep' },
+        ],
+      },
+      {
+        id: 'ebb',
+        when: { kind: 'turn', at: 8 },
+        do: [
+          { kind: 'say', text: '水位落下去了一截，河床露了出来——他们能淌过来了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 7, y1: 13 }, to: 'shallow', only: ['water'] },
         ],
       },
     ],
@@ -1133,7 +1246,32 @@ function normalizeDo(
     return { kind: 'deploy', seat };
   }
 
-  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy）`);
+  if (kind === 'terrain') {
+    const zone = normZone(a.zone, `事件「${id}」改地形的范围`, map, errors);
+    if (!zone) return undefined;
+    const to = String(a.to ?? '');
+    if (!LEVEL_TERRAINS.includes(to as LevelTerrain)) {
+      errors.push(
+        `事件「${id}」要把地形改成「${to}」，这个改不了（能改的是：${LEVEL_TERRAINS.join(' / ')}）`,
+      );
+      return undefined;
+    }
+    let only: LevelTerrain[] | undefined;
+    if (a.only !== undefined) {
+      only = [];
+      for (const raw of Array.isArray(a.only) ? a.only : []) {
+        const t = String(raw);
+        if (!LEVEL_TERRAINS.includes(t as LevelTerrain)) {
+          errors.push(`事件「${id}」的 only 里有「${t}」，不是能改的地形`);
+          continue;
+        }
+        only.push(t as LevelTerrain);
+      }
+    }
+    return { kind: 'terrain', zone, to: to as LevelTerrain, ...(only && only.length > 0 ? { only } : {}) };
+  }
+
+  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain）`);
   return undefined;
 }
 

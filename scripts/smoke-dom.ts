@@ -9263,6 +9263,14 @@ check('选「断后」：开局兵力与扩展规则都被关卡钉住', () => {
   assert.ok(txt.includes('这一关固定了扩展规则'), `扩展区要有锁定说明，实际：${txt.slice(0, 200)}`);
 });
 
+check('选「断桥」：说清桥会被炸掉', () => {
+  click('[data-tab="levels"]');
+  click('[data-level="level:cut-bridge"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('胜利条件'), '要写清怎么算赢');
+  assert.ok(body.includes('守住 10 次行动'), '要写出守多久');
+});
+
 check('选「黄雀」：说清第三家要中途才登场', () => {
   click('[data-tab="levels"]');
   click('[data-level="level:latecomer"]');

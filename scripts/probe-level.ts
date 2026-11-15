@@ -19,7 +19,7 @@
 
 import { aiNextAction } from '../src/core/ai.ts';
 import { isAiSide } from '../src/core/ai-meta.ts';
-import { applyAction, isEliminated, runLevelEvents } from '../src/core/rules.ts';
+import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
 import { LEVELS, levelById, validateLevel } from '../src/core/level.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
@@ -794,6 +794,130 @@ line('20. 未登场：第三家第 8 次行动才上场');
   {
     const plain = createMatch(DEFAULT_CONFIG, 5);
     check(plain.levelState === undefined, '普通对局没有 levelState 字段（老行为不变）');
+  }
+}
+
+/* ── 21. 改地形（批次 6）────────────────────────────────────── */
+line('21. 改地形：桥塌、水退、兵被挤走');
+{
+  const cut = levelById('level:cut-bridge');
+  if (!cut) {
+    bad('找不到 level:cut-bridge', '注册表里没有这张关卡');
+  } else {
+    let s = createMatch({ ...DEFAULT_CONFIG, level: cut }, 7);
+    const at = (st: GameState, x: number, y: number): string => st.tiles[y * st.w + x]?.terrain ?? '?';
+    check(at(s, 7, 7) === 'bridge', `开局桥还在（${at(s, 7, 7)}）`);
+
+    // 走到第 4 次行动：桥应该没了
+    for (let i = 0; i < 3; i++) {
+      const r = applyAction(s, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      s = r.state;
+    }
+    check(s.turn === 4, `走到第 ${s.turn} 次行动`);
+    check(at(s, 7, 7) === 'deep', `桥变深水（${at(s, 7, 7)}）`);
+    check(s.log.some((l) => l.text.includes('地形变了')), '改地形有播报');
+    const note = s.log.find((l) => l.text.includes('地形变了'));
+    check(!!note?.open && note?.system === true, '播报是公开的旁白（双方都看得到）');
+    // 界面靠这个闪一下：光有战报不够，正盯着棋盘的人不会去翻
+    check(
+      (s.levelState?.terrain?.cells ?? []).includes(7 * 14 + 7),
+      `改动记进了 levelState.terrain（第 ${s.levelState?.terrain?.seq ?? 0} 批）`,
+    );
+
+    // 第 8 次行动：水退成浅流，但桥墩那格不变
+    for (let i = 0; i < 6 && s.turn < 8; i++) {
+      const r = applyAction(s, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      s = r.state;
+    }
+    check(s.turn >= 8, `走到第 ${s.turn} 次行动`);
+    check(at(s, 7, 0) === 'shallow', `河道变成浅流（${at(s, 7, 0)}）`);
+    check(at(s, 7, 7) === 'deep', `桥墩那格没跟着变（${at(s, 7, 7)}）——only 只改指定的地形`);
+
+    // 存读一遍，地形是改过之后的样子
+    const round = JSON.parse(JSON.stringify(s)) as GameState;
+    check(at(round, 7, 0) === 'shallow' && at(round, 7, 7) === 'deep', '存读之后地形还是改过的样子');
+  }
+
+  /*
+   * 格子上的兵：改成水之后要**挤到旁边**，不能消失。
+   * 城格：改成什么都不动。
+   */
+  const mkTerrainLevel = (events: unknown[], deploy: unknown) => ({
+    ...LEVELS[0]!,
+    id: 'level:test-terrain',
+    seats: { count: 2, ai: [] },
+    setup: { startEra: 1 },
+    deploy,
+    events,
+  });
+  const flood = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      level: mkTerrainLevel(
+        [
+          {
+            id: 'flood',
+            when: { kind: 'turn', at: 2 },
+            do: [{ kind: 'terrain', zone: { x0: 5, y0: 5, x1: 5, y1: 5 }, to: 'water' }],
+          },
+          {
+            id: 'quake',
+            when: { kind: 'turn', at: 2 },
+            do: [{ kind: 'terrain', zone: { x0: 0, y0: 0, x1: 4, y1: 4 }, to: 'deep' }],
+          },
+        ],
+        {
+          A: [{ type: 'militia', x: 5, y: 5 }],
+          B: [{ type: 'militia', x: 10, y: 10 }],
+        },
+      ) as never,
+    },
+    11,
+  );
+  const before = flood.units.find((u) => u.owner === 'A')!;
+  check(before.x === 5 && before.y === 5, '测试局：守方那个兵站在 (5,5)');
+  const cityTile = flood.tiles[0]; // 城格由地图决定，下面按 cityId 找
+  void cityTile;
+
+  const r2 = applyAction(flood, { type: 'END_TURN' } as Action);
+  check(r2.ok, '走到第 2 次行动');
+  if (r2.ok) {
+    const st = r2.state;
+    const him = st.units.find((u) => u.owner === 'A');
+    check(!!him, '被水淹的兵没有凭空消失');
+    check(st.tiles[5 * st.w + 5]?.terrain === 'water', '那一格确实变成水了');
+    check(
+      !!him && (him.x !== 5 || him.y !== 5),
+      `兵被挤到旁边（${him?.x}, ${him?.y}）`,
+      '还站在水里：寻路和攻击判定都会错乱',
+    );
+    // 用 ignoreUnits：他自己就站在那一格上，带着占用去问永远是否
+    check(!!him && canStandAt(st, him.x, him.y, him.type, { ignoreUnits: true }), '挤到的那一格是站得住的');
+    check(st.log.some((l) => l.text.includes('被挤到')), '挤走也说了句人话');
+    // 城格不在改动之列
+    const city = st.cities.find((c) => c.owner === 'A')!;
+    check(st.tiles[city.y * st.w + city.x]?.terrain === 'city', '城格没有被改成深水');
+  }
+}
+
+/* ── 22. 改不成的地形 ───────────────────────────────────────── */
+line('22. 事件改不了的地形');
+{
+  const base = levelById('level:cut-bridge')!;
+  const mk = (doList: unknown): unknown => ({
+    ...base,
+    id: 'level:x',
+    events: [{ id: 'e', when: { kind: 'turn', at: 2 }, do: doList }],
+  });
+  for (const [label, act] of [
+    ['改成城', { kind: 'terrain', zone: { x0: 1, y0: 1, x1: 1, y1: 1 }, to: 'city' }],
+    ['改成桥', { kind: 'terrain', zone: { x0: 1, y0: 1, x1: 1, y1: 1 }, to: 'bridge' }],
+    ['改成不认识的地形', { kind: 'terrain', zone: { x0: 1, y0: 1, x1: 1, y1: 1 }, to: 'lava' }],
+  ] as Array<[string, unknown]>) {
+    const res = validateLevel(mk([act]));
+    check(!res.ok && res.errors.length > 0, `${label}：被拒并给出原因`, res.ok ? '居然通过了' : '被拒但没有原因');
   }
 }
 
