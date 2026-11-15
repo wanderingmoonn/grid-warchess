@@ -559,7 +559,6 @@ export const LEVELS: LevelDef[] = [
        * 四类各有分工，不能互相替代：
        *   · 民兵占桥头、扛线；
        *   · 弓手（射程 3）越过两格宽的河压制西岸——守方站岸边就要挨打；
-       *   · 斥候（移动 4）绕后、抢浅滩，水退之后第一批扑过去；
        *   · 箭塔钉在桥头两侧，守方想清掉对岸的目标就得先拆塔，而拆塔要拿命换；
        *   · 农民摆在城后，把两座城的产能真的用起来。
        *
@@ -575,13 +574,8 @@ export const LEVELS: LevelDef[] = [
         { type: 'archer', x: 10, y: 6 },
         { type: 'archer', x: 10, y: 9 },
         { type: 'archer', x: 10, y: 10 },
-        { type: 'scout', x: 13, y: 7 },
-        { type: 'scout', x: 13, y: 8 },
         { type: 'tower', x: 9, y: 6 },
         { type: 'tower', x: 9, y: 9 },
-        // 后方农民：开局就给两座城的产能点火
-        { type: 'farmer', x: 13, y: 3 },
-        { type: 'farmer', x: 13, y: 9 },
       ],
     },
     goals: [{ kind: 'survive', seat: 'A', untilTurn: 30 }],
@@ -611,16 +605,16 @@ export const LEVELS: LevelDef[] = [
         id: 'flank-1',
         when: { kind: 'turn', at: 6 },
         do: [
-          { kind: 'say', text: '南北边冒出斥候，小心之后更多的援兵。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'scout', x: 2, y: 0 }, { type: 'scout', x: 2, y: 13 }] },
+          { kind: 'say', text: '北边冒出斥候，小心之后更多的援兵。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'scout', x: 2, y: 0 }] },
         ],
       },
       {
-        id: 'wave-3',
+        id: 'wave-1',
         when: { kind: 'turn', at: 8 },
         do: [
-          { kind: 'say', text: '对岸又有人在动。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
+          { kind: 'say', text: '对岸有人在动。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }] },
         ],
       },
       {
@@ -632,7 +626,7 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
-        id: 'wave-4',
+        id: 'wave-2',
         when: { kind: 'turn', at: 12 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
@@ -643,12 +637,12 @@ export const LEVELS: LevelDef[] = [
         id: 'flank-2',
         when: { kind: 'turn', at: 15 },
         do: [
-          { kind: 'say', text: '南北边骑兵绕行来了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 2, y: 13 }] },
+          { kind: 'say', text: '北边骑兵绕行来了。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }] },
         ],
       },
       {
-        id: 'wave-5',
+        id: 'wave-3',
         when: { kind: 'turn', at: 15 },
         do: [
           { kind: 'say', text: '又上来一队人，这次带着长弓手。' },
@@ -664,7 +658,7 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
-        id: 'wave-6',
+        id: 'wave-4',
         when: { kind: 'turn', at: 17 },
         do: [
           { kind: 'say', text: '又上来一队长弓手。' },
@@ -672,7 +666,7 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
-        id: 'wave-7',
+        id: 'wave-5',
         when: { kind: 'turn', at: 20 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
@@ -681,10 +675,10 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'flank-3',
-        when: { kind: 'turn', at: 20 },
+        when: { kind: 'turn', at: 24 },
         do: [
-          { kind: 'say', text: '两翼又是一拨。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 2, y: 13 }, { type: 'knight', x: 3, y: 13 }] },
+          { kind: 'say', text: '这次是南北夹击。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 3, y: 13 }] },
         ],
       },
     ],
