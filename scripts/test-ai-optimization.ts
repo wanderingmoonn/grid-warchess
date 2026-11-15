@@ -137,9 +137,21 @@ test('Same state gives same legal action without mutation',()=>{
   const s=arena(); s.players.A.gold=500;
   unit(s,'A','militia',5,6); unit(s,'B','archer',7,6);
   refreshMemory(s);
-  const before=JSON.stringify(s); const a=aiNextAction(s,{...DEFAULT_BUDGET});
+  /*
+   * 比的是**玩法状态**，AI 私有记忆不算。
+   *
+   * `aiIntent`（攒钱意向）和 `aiStale`（僵持计数）都只由 AI 自己读写，
+   * 不影响任何合法动作——它们是"跨回合记忆"，天然要写进状态里。
+   * 早先这条断言就为 aiIntent 让过一次路，僵持计数属于同一类，
+   * 所以这里统一把它们摘掉再比，而不是为每个新字段各改一次断言。
+   */
+  const gameplay = (): string => {
+    const { aiIntent: _i, aiStale: _s, ...rest } = s as unknown as Record<string, unknown>;
+    return JSON.stringify(rest);
+  };
+  const before=gameplay(); const a=aiNextAction(s,{...DEFAULT_BUDGET});
   assert.deepEqual(a,aiNextAction(s,{...DEFAULT_BUDGET}));
-  assert.equal(JSON.stringify(s),before);
+  assert.equal(gameplay(),before);
   assert.ok(a); assert.equal(applyAction(s,a).ok,true);
 });
 for (const breached of [false,true]) test(`A viable retreat delivers development${breached ? ' after the front city falls' : ' without reinforcing the front'}`,()=>{
