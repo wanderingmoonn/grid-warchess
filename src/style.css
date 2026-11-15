@@ -4544,6 +4544,28 @@ a.btn {
 }
 
 /*
+ * 关卡钉住的选项（时代 / 尺寸 / 先手）。
+ *
+ * 用 `:disabled` 而不是只加一个类：禁用是真的，不是"看起来禁用"——
+ * 这几个按钮改的是**这一局的强度**（时代直接决定开局金币），不能只靠 handler 拦。
+ * 视觉上压暗但仍保留选中态的反色，让人看得出"现在是这一档、但换不了"。
+ */
+.chip:disabled,
+.chip.is-locked {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.chip:disabled:hover,
+.chip.is-locked:hover {
+  border-color: var(--line-strong);
+}
+
+.chip.active:disabled {
+  opacity: 0.8;
+}
+
+/*
  * 扩展 / 自定义兵种：名字后面挂一个淡淡的「扩」。
  *
  * 它是"勾了包才在名单里"的——和本体兵种不是一回事：本体兵种关掉只是这一局

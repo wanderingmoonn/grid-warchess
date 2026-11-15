@@ -9263,6 +9263,14 @@ check('选「断后」：开局兵力与扩展规则都被关卡钉住', () => {
   assert.ok(txt.includes('这一关固定了扩展规则'), `扩展区要有锁定说明，实际：${txt.slice(0, 200)}`);
 });
 
+check('选「黄雀」：说清第三家要中途才登场', () => {
+  click('[data-tab="levels"]');
+  click('[data-level="level:latecomer"]');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('开局只有 2 家在场'), `要写清开局只有两家，实际：${body.slice(0, 260)}`);
+  assert.ok(body.includes('绿方'), '要指名是哪一家晚到');
+});
+
 check('关卡页选「自由对局」：人数开关回来，关卡不残留', () => {
   click('[data-tab="levels"]');
   click('[data-level=""]');
@@ -9291,6 +9299,20 @@ check('选「死守」：关卡页写明胜利条件', () => {
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
   assert.ok(body.includes('守住 20 次行动'), '要写出具体时限');
+});
+
+check('选了「死守」：时代、尺寸、先手都点不动', () => {
+  click('[data-tab="battle"]');
+  const eras = [...doc.querySelectorAll<HTMLButtonElement>('.modal-body [data-era]')];
+  assert.ok(eras.length > 0, '应该有时代按钮');
+  assert.ok(eras.every((b) => b.disabled), '关卡钉住时代之后，每个时代按钮都该禁用');
+  assert.ok(eras.some((b) => b.classList.contains('active')), '仍然要能看出当前是哪一档');
+  const sizes = [...doc.querySelectorAll<HTMLButtonElement>('.modal-body [data-size]')];
+  assert.ok(sizes.length > 0 && sizes.every((b) => b.disabled), '尺寸由关卡地图决定，也该禁用');
+  const firsts = [...doc.querySelectorAll<HTMLButtonElement>('.modal-body [data-first]')];
+  assert.ok(firsts.length > 0 && firsts.every((b) => b.disabled), '先手是这一关规定的，也该禁用');
+  const txt = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(txt.includes('开局金币 120'), `要说明金币也被锁了，实际：${txt.slice(0, 260)}`);
 });
 
 click('[data-act="start"]');

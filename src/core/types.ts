@@ -2024,7 +2024,16 @@ export interface GameState {
    *
    * 普通对局没有这个字段，读出来是 undefined，语义正好等于"没有关卡"。
    */
-  levelState?: { fired: string[] };
+  levelState?: {
+    fired: string[];
+    /**
+     * 还没登场的席位（关卡 `seats.hidden`）。
+     *
+     * 它们不占回合、不算出局、不参与"还剩几家"——但**仍然在 `seatsOf` 里**，
+     * 因为"这一局有几个席位"是配置决定的事实，不该随场上情况变。
+     */
+    hidden?: PlayerId[];
+  };
   /**
    * 指挥官模式（双人热座）：这一批计划谁已经交了。
    *

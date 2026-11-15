@@ -50,6 +50,7 @@ import {
   MIN_BOARD_SIZE,
   clampBoardSize,
   randomSeed,
+  startGoldFor,
 } from '../core/setup.ts';
 import type { MatchConfig, UnitTypeDef } from '../core/types.ts';
 
@@ -432,10 +433,23 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       const ceiling = eraCeilingFor(config.expansionIds);
       const eras = ERAS.filter((e) => e.level <= ceiling);
-      const eraChips = eras.map(
-        (e) =>
-          `<button class="chip ${config.startEra === e.level ? 'active' : ''}" data-era="${e.level}" title="${e.name}">${e.short}</button>`,
-      ).join('');
+      /*
+       * 关卡写死了时代，这一排按钮就点不动。
+       *
+       * 为什么这个必须锁：**时代决定开局金币**（青铜 120，每升一级 +240）。
+       * 一张"3 个兵守住 20 次行动"的关，玩家把时代调到信息化，光是开局那笔钱
+       * 就能堆出一条防线——难度设计当场失效，而且它不像作弊，像是"我正常玩的"。
+       */
+      const eraLock = config.level?.setup?.startEra;
+      const eraChips = eras.map((e) => {
+        const on = config.startEra === e.level;
+        const locked = eraLock !== undefined;
+        return `<button class="chip ${on ? 'active' : ''}${locked ? ' is-locked' : ''}" data-era="${e.level}" ${
+          locked ? 'disabled' : ''
+        } title="${locked ? '这一关固定了开局时代（开局金币跟着它，不能改）' : e.name}">${e.short}</button>`;
+      }).join('');
+      /** 关卡规定先手时，那一排按钮同样点不动 */
+      const firstLock = config.level?.setup?.firstSide;
 
       /*
        * 地貌跟着扩展走：勾了「地形高差」才多出高原 / 峡谷 / 沼泽 / 群岛 / 大川。
@@ -531,9 +545,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           }</div>`
         : '';
 
+      /*
+       * 尺寸：关卡局一律锁。地图就是关卡带的那一张，尺寸由它决定，
+       * 让玩家还能点"20×20"就是在说一句和事实相反的话。
+       */
+      const sizeLock = !!config.level;
       const sizeChips = BOARD_SIZES.map(
         (s) =>
-          `<button class="chip ${config.size === s ? 'active' : ''}" data-size="${s}">${s} × ${s}</button>`,
+          `<button class="chip ${config.size === s ? 'active' : ''}${
+            sizeLock ? ' is-locked' : ''
+          }" data-size="${s}" ${sizeLock ? 'disabled title="这一关的图是固定的，尺寸由地图决定"' : ''}>${s} × ${s}</button>`,
       ).join('');
 
       /*
@@ -770,16 +791,24 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 : playerCount === 2
                   ? `<section class="field">
               <div class="field-label">先手 <span class="field-hint">${
-                config.aiOpponent || config.aiAlly
-                  ? '你操作红方；选「蓝方先手」就是 AI 先动一步'
-                  : '谁先行动、谁先禁/先选卡；后手照旧拿「先后手补偿」'
+                config.level?.setup?.firstSide
+                  ? '这一关固定了先手'
+                  : config.aiOpponent || config.aiAlly
+                    ? '你操作红方；选「蓝方先手」就是 AI 先动一步'
+                    : '谁先行动、谁先禁/先选卡；后手照旧拿「先后手补偿」'
               }</span></div>
               <div class="chip-row">
-                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">红方先手</button>
-                <button class="chip ${config.firstSide === 'B' ? 'active' : ''}" data-first="B">蓝方先手</button>
-                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}" data-first="random">随机</button>
+                <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}${firstLock ? ' is-locked' : ''}" data-first="A" ${firstLock ? 'disabled' : ''}>红方先手</button>
+                <button class="chip ${config.firstSide === 'B' ? 'active' : ''}${firstLock ? ' is-locked' : ''}" data-first="B" ${firstLock ? 'disabled' : ''}>蓝方先手</button>
+                <button class="chip ${config.firstSide === 'random' ? 'active' : ''}${firstLock ? ' is-locked' : ''}" data-first="random" ${firstLock ? 'disabled' : ''}>随机</button>
               </div>
-              ${config.firstSide === 'random' ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>' : ''}
+              ${
+                firstLock
+                  ? '<div class="field-hint">这一关规定谁先动，换不了——先手差一回合，整张图的强度就变了。</div>'
+                  : config.firstSide === 'random'
+                    ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>'
+                    : ''
+              }
             </section>`
                   : `<section class="field">
               <div class="field-label">先手 <span class="field-hint">谁先行动、谁先禁/先选卡</span></div>
@@ -798,14 +827,20 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                起始时代 <span class="field-hint">${eraHint}</span>
+                起始时代 <span class="field-hint">${
+                  eraLock !== undefined
+                    ? `这一关固定为${eraDef(eraLock).name}：开局金币 ${startGoldFor(eraLock)}，可造兵种也跟着这一档`
+                    : eraHint
+                }</span>
               </div>
               <div class="chip-row">${eraChips}</div>
             </section>
 
             <section class="field">
               <div class="field-label">
-                棋盘大小 <span class="field-hint">预设之外可以自己填 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE}</span>
+                棋盘大小 <span class="field-hint">${
+                  sizeLock ? '由关卡的地图决定' : `预设之外可以自己填 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE}`
+                }</span>
               </div>
               <div class="chip-row">${sizeChips}</div>
               <div class="size-row">
@@ -1003,6 +1038,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               ${
                 config.level.deploy
                   ? `<div class="field-hint">开局兵力由关卡指定，不再自动撒兵。</div>`
+                  : ''
+              }
+              ${
+                (config.level.seats?.hidden ?? []).length > 0
+                  ? `<div class="field-hint">开局只有 ${(config.level.seats?.count ?? 2) - (config.level.seats?.hidden ?? []).length} 家在场；${(config.level.seats?.hidden ?? [])
+                      .map((p) => seatLabel[p] ?? p)
+                      .join('、')}要到中途才登场。</div>`
                   : ''
               }
               ${

@@ -690,7 +690,20 @@ export function others(s: GameState, p: PlayerId): PlayerId[] {
  * 按城判出局会让回合推都推不动（这条以前是藏在 checkWinner 里的同一个特例，
  * 现在抽出来给回合轮转也用）。
  */
+/**
+ * 这一席是不是"还没登场"（关卡 `seats.hidden`）。
+ *
+ * 未登场 ≠ 出局。它没有城、没有兵，但那是**还没来**，不是**打没了**：
+ * 不占回合、不算出局；靠一个 `deploy` 事件把它叫上场。
+ * 普通对局没有 `levelState.hidden`，这个函数恒为 false。
+ */
+export function isHiddenSeat(s: GameState, p: PlayerId): boolean {
+  return s.levelState?.hidden?.includes(p) === true;
+}
+
 export function isEliminated(s: GameState, p: PlayerId): boolean {
+  // 未登场：没城是正常的，判成出局会让整局在第一回合就结束
+  if (isHiddenSeat(s, p)) return false;
   if (hasQuit(s, p)) return true;
   if (s.config.godMode === true) return false;
   return citiesOf(s, p).length === 0;
@@ -718,6 +731,8 @@ export function nextSeat(s: GameState, from: PlayerId): PlayerId {
   for (let k = 1; k <= seats.length; k += 1) {
     const cand = seats[(start + k) % seats.length]!;
     if (cand === from) break;
+    // 未登场的席位不轮：让它当回合，界面会停在一个"场上什么都没有"的玩家身上
+    if (isHiddenSeat(s, cand)) continue;
     if (isEliminated(s, cand)) continue;
     return cand;
   }
@@ -3676,7 +3691,15 @@ function checkWinner(s: GameState): PlayerId | null {
    * 两条出局条件：城被打光，或者一个兵都没有且连一个都造不起。
    */
   const seats = seatsOf(s);
-  const alive = seats.filter((p) => {
+  /*
+   * "还剩几家"只数**在场的**席位。
+   *
+   * 未登场的席位不算：否则三家局里丙还没来、甲乙打完只剩乙，
+   * `alive = [乙, 丙]` 会让对局以为"还有两家"而永远不收场，
+   * 而丙要到第 8 回合才来——那时候可能已经卡了好几回合。
+   */
+  const playing = seats.filter((p) => !isHiddenSeat(s, p));
+  const alive = playing.filter((p) => {
     if (isEliminated(s, p)) return false;
     if (unitsOf(s, p).length > 0) return true;
     return Object.values(s.unitTypes).some(
@@ -3686,7 +3709,7 @@ function checkWinner(s: GameState): PlayerId | null {
         canPay(s.players[p], recruitResCost(s, p, d)),
     );
   });
-  if (alive.length === seats.length) return null;
+  if (alive.length === playing.length) return null;
   if (alive.length === 1) return alive[0]!;
   // 一家都没了（同归于尽）：判给第一个还站着的……没有，那就平局
   if (alive.length === 0) return null;
@@ -4403,7 +4426,16 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
     for (const act of ev.do) runEventAction(cur, act);
   }
 
-  if (ran > 0) cur.levelState = { fired: [...fired] };
+  if (ran > 0) {
+    /*
+     * 注意是 `{ ...cur.levelState, fired }`，不是 `{ fired }`。
+     *
+     * `levelState` 里还躺着 `hidden`（谁还没登场）。整块替换会把它抹掉——
+     * 表现是"事件一触发，未登场的席位就被当成已登场"，而它既没城也没兵，
+     * 立刻被判出局。
+     */
+    cur.levelState = { ...cur.levelState, fired: [...fired] };
+  }
 }
 
 function eventMatches(
@@ -4453,6 +4485,10 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
     }
     return;
   }
+  if (act.kind === 'deploy') {
+    deploySeat(s, act.seat);
+    return;
+  }
   // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
   s.orderDirectives = {
     ...(s.orderDirectives ?? {}),
@@ -4461,6 +4497,76 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
       ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
     },
   };
+}
+
+/**
+ * 给某一席补一座城（未登场席位登场时用）。
+ *
+ * 为什么不复用 `setup.ts` 里那份 `placeCity`：那是 `createMatch` 的局部闭包，
+ * 靠外面的 `citySeq` 编号；rules 也没法 import setup（setup 依赖 rules）。
+ * 所以这里按"现有城 id 的最大值 +1"自己编号，判据和那份保持一致
+ * （城市边长取本局 config、耐久取开局时代的城防）。
+ */
+function addCityFor(s: GameState, owner: PlayerId, left: number, top: number): void {
+  const size = Math.max(CITY.size, Math.round(s.config.citySize ?? CITY.size));
+  const era = s.config.startEra;
+  const info = eraDef(era);
+  const maxSeq = s.cities.reduce((m, c) => Math.max(m, Number(String(c.id).replace(/\D/g, '')) || 0), 0);
+  const id = `c${maxSeq + 1}`;
+  s.cities.push({
+    id,
+    x: left,
+    y: top,
+    size,
+    owner,
+    era,
+    hp: info.cityMaxHp,
+    maxHp: info.cityMaxHp,
+    armor: info.cityArmor,
+  });
+  for (let dy = 0; dy < size; dy += 1) {
+    for (let dx = 0; dx < size; dx += 1) {
+      const tile = s.tiles[(top + dy) * s.w + (left + dx)];
+      if (!tile) continue;
+      tile.terrain = 'city';
+      tile.cityId = id;
+    }
+  }
+}
+
+/**
+ * 让一个未登场的席位上场：放城 + 摆它在关卡 `deploy` 里写好的兵。
+ *
+ * 兵源只用关卡自己那份 `deploy`：如果事件里还要再写一遍坐标，作者就有两处要同步，
+ * 改了一处忘了另一处是迟早的事。
+ */
+function deploySeat(s: GameState, seat: PlayerId): void {
+  const hidden = s.levelState?.hidden ?? [];
+  const say = (text: string): void => {
+    s.log.push({ turn: s.turn, player: 'A', text, open: true, system: true });
+  };
+  if (!hidden.includes(seat)) {
+    say(`第 ${seat} 家已经在场上了`);
+    return;
+  }
+
+  const lv = s.config.level;
+  const pts =
+    seat === 'A'
+      ? lv?.map.citiesA
+      : seat === 'B'
+        ? lv?.map.citiesB
+        : lv?.seats?.cities?.[seat as 'C' | 'D'];
+  for (const p of pts ?? []) addCityFor(s, seat, p.x, p.y);
+
+  s.levelState = { ...(s.levelState ?? { fired: [] }), hidden: hidden.filter((x) => x !== seat) };
+
+  for (const d of lv?.deploy?.[seat] ?? []) {
+    const why = spawnFromEvent(s, seat, d.type, d.x, d.y);
+    if (why) say(`关卡登场：${why}（${d.type}）`);
+  }
+  refreshMemory(s);
+  say(`${s.players[seat]?.name ?? seat} 登场了`);
 }
 
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {

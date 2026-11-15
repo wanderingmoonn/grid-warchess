@@ -468,7 +468,18 @@ export function createMatch(
   let citySeq = 1;
   // 开局时代也要按"这一局能走到第几级"夹住：不勾「现代战争」时，
   // 配置里写 startEra: 6 只该得到第五时代，而不是一座没有兵可用、也再造不出兵的城。
-  const startEra = Math.max(1, Math.min(eraCeilingFor(expansionIds), config.startEra));
+  /*
+   * 起始时代：**关卡写死的优先**。
+   *
+   * 面板那边已经把时代按钮锁了，但锁 UI 只是"不让人点"——`config` 会跟着存档、
+   * 房间、分享链接一路传，谁都能改它。开局金币就是 `startGoldFor(startEra)`，
+   * 一句改过的 config 就能把"1 个兵守住 20 次行动"变成"开着坦克守"。
+   * 所以规则层必须再认一次，和固定地图、扩展规则同一个口径。
+   */
+  const startEra = Math.max(
+    1,
+    Math.min(eraCeilingFor(expansionIds), level?.setup?.startEra ?? config.startEra),
+  );
   const eraInfo = eraDef(startEra);
 
   const placeCity = (owner: PlayerId, left: number, top: number) => {
@@ -507,7 +518,8 @@ export function createMatch(
    * 存档里留一个"随机"字样，就等于每次打开都可能换一个先手。
    */
   const firstSeat: PlayerId = (() => {
-    const want = config.firstSide;
+    // 关卡可以钉死先手（和时代同一个理由：先手差一回合，整张图的强度就变了）
+    const want = level?.setup?.firstSide ?? config.firstSide;
     /*
      * 随机：两人局抽 A/B，三四人局**在所有席位上抽**（等于随机轮转起点）。
      *
@@ -540,7 +552,19 @@ export function createMatch(
     D: layout.spawnsD ?? [],
   };
 
-  for (const p of seats) for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
+  /**
+   * 开局**不在场上**的席位（关卡 `seats.hidden`）。
+   *
+   * 不给城、不给兵、不占回合，但要留在 `seatsOf` 里——"这一局有几个席位"
+   * 是配置决定的事实。它靠事件里的 `deploy` 上场。
+   */
+  const hiddenSeatList = (level?.seats?.hidden ?? []).filter((p) => seatList.includes(p));
+
+  for (const p of seats) {
+    // 未登场的席位：地图上不给它城（要靠事件里的 deploy 放）
+    if (hiddenSeatList.includes(p)) continue;
+    for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
+  }
 
   // ---- 单位 ----
   const units: Unit[] = [];
@@ -569,6 +593,7 @@ export function createMatch(
    */
   const levelDeploy = level?.deploy ?? {};
   for (const p of seats) {
+    if (hiddenSeatList.includes(p)) continue;
     if ((levelDeploy[p]?.length ?? 0) > 0) continue;
     for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
   }
@@ -584,6 +609,8 @@ export function createMatch(
       // 关卡写了部署的席位也不送经济单位：那会把它写死的兵力再加两个，
       // 而作者要的正是"就这几个人"。
       if ((levelDeploy[owner]?.length ?? 0) > 0) continue;
+      // 还没登场的席位也不发经济单位：它连城都没有，发了也站在虚空里
+      if (hiddenSeatList.includes(owner)) continue;
       const ownCity = cities.find((c) => c.owner === owner);
       if (!ownCity) continue;
       for (let k = 0; k < 2; k++) {
@@ -724,6 +751,8 @@ export function createMatch(
       C: { known: [] },
       D: { known: [] },
     },
+    // 有未登场的席位才写这个字段：普通对局和以前一字不差
+    ...(hiddenSeatList.length > 0 ? { levelState: { fired: [], hidden: [...hiddenSeatList] } } : {}),
   };
 
   /*
@@ -738,6 +767,8 @@ export function createMatch(
    * 静默跳过是最糟的选择——作者会以为"我明明写了"而查不出原因，所以战报里必须有一句。
    */
   for (const p of seats) {
+    // 未登场：它的兵要等 `deploy` 事件那一刻才出现（见 rules.ts 的 deploySeat）
+    if (hiddenSeatList.includes(p)) continue;
     const list = levelDeploy[p];
     if (!list || list.length === 0) continue;
     for (const d of list) {

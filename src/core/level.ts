@@ -28,6 +28,7 @@
 
 import { validateFixedMap, type FixedMap, type MapPoint } from './fixed-maps.ts';
 import { expansionById } from './expansions.ts';
+import { ERAS } from './config.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
 import type { MatchConfig, PlayerId } from './types.ts';
@@ -81,7 +82,14 @@ export type LevelDo =
   /** 播报一句。写进战报，双方都能看到（`open`） */
   | { kind: 'say'; text: string }
   /** 改这一席电脑的打法（守/攻/经营/停手），AI 下一手就按它来 */
-  | { kind: 'doctrine'; seat: PlayerId; strategy: 'auto' | 'rush' | 'boom' | 'hold'; targetSeat?: PlayerId };
+  | { kind: 'doctrine'; seat: PlayerId; strategy: 'auto' | 'rush' | 'boom' | 'hold'; targetSeat?: PlayerId }
+  /**
+   * 让一个"未登场"的席位上场：放它的城、摆 `level.deploy` 里给它写好的兵。
+   *
+   * 只做一次（调用后把它从 `hidden` 里去掉）。重复调用不会放两座城。
+   * 兵源固定用关卡自己的 `deploy`——事件里再写一遍坐标，作者会有两处要同步。
+   */
+  | { kind: 'deploy'; seat: PlayerId };
 
 /**
  * 一件事：什么时候、做什么。
@@ -96,6 +104,25 @@ export interface LevelEvent {
   do: LevelDo[];
   /** 默认只触发一次。写 `true` 才是每次都触发（同一条回合数没有意义，只对 enter 有用） */
   repeat?: boolean;
+}
+
+/**
+ * 这一关**写死的开局设定**。
+ *
+ * 为什么需要它：面板上那几个开关（时代、尺寸、先手）会直接改变这一局的强度——
+ * 最要命的是**时代决定开局金币**（青铜 120，每升一级 +240）。同一张"3 打 6 死守"，
+ * 玩家把时代调到信息化，守方就能靠开局那笔钱直接堆出防线，难度全没了。
+ * 所以关卡必须能把这些也钉住，而不是只钉住兵力和扩展。
+ *
+ * 规矩和扩展规则一样：**写了就锁，没写就归玩家**。
+ */
+export interface LevelSetup {
+  /** 开局时代（1 起）。锁了它，开局金币、可造兵种也就一起锁了 */
+  startEra?: number;
+  /** 谁先手。多人局本来就不能选先手（席位顺序牵着城位），所以只收 A / B */
+  firstSide?: 'A' | 'B';
+  /** 每家两座城 */
+  twoCities?: boolean;
 }
 
 /**
@@ -171,6 +198,16 @@ export interface LevelSeats {
   cities?: Partial<Record<'C' | 'D', MapPoint[]>>;
   /** 哪些席位由电脑操作。不写＝全是真人；写了 B 就是 B 交给电脑 */
   ai?: PlayerId[];
+  /**
+   * 开局**不在场上**的席位。
+   *
+   * 和"出局"是两件事：出局是打没了，未登场是还没来。所以它不占回合、不算出局、
+   * 不参与"还剩几家"的统计；地图上没有它的城，也没有它的兵。
+   * 要靠一个 `deploy` 事件把它叫上场（那时才放城、摆兵）。
+   *
+   * 这一条是整套里最省事的表达方式：不用发明"中立阵营"，只是让某一席**晚一点上班**。
+   */
+  hidden?: PlayerId[];
 }
 
 /**
@@ -202,6 +239,8 @@ export interface LevelDef {
    * （改得动的只有"没被关节点掉的那些"，见批次 2 的扩展规则）。
    */
   seats?: LevelSeats;
+  /** 写死的开局设定（时代 / 先手 / 双城）。没写的仍然归玩家 */
+  setup?: LevelSetup;
   /**
    * 每席开局的兵。**没写的席位照旧按规则自动撒**（这是"加字段不改变老行为"的写法：
    * 关卡没提这件事，就等于这件事不存在）。
@@ -322,6 +361,7 @@ export const LEVELS: LevelDef[] = [
       source: 'builtin',
     },
     seats: { count: 2, ai: [] },
+    setup: { startEra: 1, firstSide: 'A' },
   },
   {
     id: 'level:tri-corner',
@@ -346,6 +386,8 @@ export const LEVELS: LevelDef[] = [
       // 绿方交给电脑。红蓝留给玩家——这就是"两个玩家对打 + 电脑骚扰"。
       ai: ['C'],
     },
+    // 三家分立全靠地形，跟科技没关系；锁青铜，免得玩家带坦克进来
+    setup: { startEra: 1 },
   },
   {
     id: 'level:rear-guard',
@@ -363,6 +405,13 @@ export const LEVELS: LevelDef[] = [
       source: 'builtin',
     },
     seats: { count: 2, ai: ['B'] },
+    /*
+     * 锁青铜 + 守方先手。
+     *
+     * 时代一放开，玩家就能把开局金币从 120 抬到上千金——这张图的全部设计
+     * （一个兵能扛多久）立刻失效。先手也锁：让攻方先动等于白送一回合。
+     */
+    setup: { startEra: 1, firstSide: 'A' },
     /*
      * 开局兵力由关卡写死：守方一个民兵卡在桥面，攻方五个兵在河东岸。
      *
@@ -455,6 +504,13 @@ export const LEVELS: LevelDef[] = [
     },
     seats: { count: 2, ai: ['B'] },
     /*
+     * 锁青铜 + 守方先手。
+     *
+     * 时代一放开，玩家就能把开局金币从 120 抬到上千金——这张图的全部设计
+     * （3 个兵能扛多久）立刻失效。先手也锁：让攻方先动等于白送一回合。
+     */
+    setup: { startEra: 1, firstSide: 'A' },
+    /*
      * 3 打 6。守方靠城、林子和高地撑着，攻方人多但要走过来。
      * 这个比例是估的，没实测——P7 打磨内容时要按实机胜率再调。
      */
@@ -493,6 +549,66 @@ export const LEVELS: LevelDef[] = [
       },
     ],
   },
+  {
+    id: 'level:latecomer',
+    version: LEVEL_VERSION,
+    name: '黄雀',
+    brief: '16×16，先两家对打。第 8 次行动，第三家从东南角登场——它一直在等你们打完。',
+    map: {
+      id: 'levelmap:latecomer',
+      name: '黄雀',
+      w: 16,
+      h: 16,
+      // 和「三岔口」同一副地形（一条竖河、中间一个渡口），换的是规则不是图
+      rows: rowsOf(16, 16, TRI_PAINT),
+      citiesA: [{ x: 1, y: 6 }],
+      citiesB: [{ x: 12, y: 1 }],
+      source: 'builtin',
+    },
+    seats: {
+      count: 3,
+      cities: { C: [{ x: 12, y: 12 }] },
+      ai: ['B', 'C'],
+      /*
+       * 绿方开局**不在场上**：没有城、没有兵、不占回合。
+       *
+       * 前 8 次行动就是红蓝两家的事。绿方的城位和兵都写在这儿，但只有
+       * `deploy` 事件真的调用它们时才会出现——所以它登场那一下是有画面的：
+       * 一座城凭空立起来，四个兵围在城边。
+       */
+      hidden: ['C'],
+    },
+    setup: { startEra: 1, firstSide: 'A' },
+    deploy: {
+      A: [
+        { type: 'militia', x: 2, y: 6 },
+        { type: 'archer', x: 3, y: 7 },
+        { type: 'militia', x: 2, y: 8 },
+      ],
+      B: [
+        { type: 'militia', x: 11, y: 2 },
+        { type: 'archer', x: 10, y: 3 },
+        { type: 'militia', x: 11, y: 4 },
+      ],
+      // 绿方登场时才摆的这些
+      C: [
+        { type: 'militia', x: 10, y: 11 },
+        { type: 'militia', x: 11, y: 11 },
+        { type: 'archer', x: 10, y: 13 },
+        { type: 'archer', x: 11, y: 13 },
+      ],
+    },
+    events: [
+      {
+        id: 'arrive',
+        when: { kind: 'turn', at: 8 },
+        do: [
+          { kind: 'say', text: '东南角的地平线上立起了一座城——第三家来了。' },
+          { kind: 'deploy', seat: 'C' },
+        ],
+      },
+    ],
+  },
 ];
 
 export function allLevels(): LevelDef[] {
@@ -519,6 +635,7 @@ export function levelById(id: string | null | undefined): LevelDef | null {
  */
 export function applyLevelToConfig(base: MatchConfig, level: LevelDef | null): MatchConfig {
   if (!level) return { ...base, level: undefined };
+  const s = level.setup;
   return {
     ...base,
     level,
@@ -528,6 +645,10 @@ export function applyLevelToConfig(base: MatchConfig, level: LevelDef | null): M
     playerCount: level.seats?.count ?? base.playerCount,
     // 关卡没规定托管就沿用面板（"这一关没意见，你自己挑"）
     ...(level.seats?.ai !== undefined ? { aiSeats: [...level.seats.ai] } : {}),
+    // 开局设定：写死的就覆盖，没写的（＝这一关不在乎）保留玩家原来的选择
+    ...(s?.startEra !== undefined ? { startEra: s.startEra } : {}),
+    ...(s?.firstSide !== undefined ? { firstSide: s.firstSide } : {}),
+    ...(s?.twoCities !== undefined ? { twoCities: s.twoCities } : {}),
   };
 }
 
@@ -566,6 +687,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   const deploy = normalizeDeploy(obj.deploy, map, seats, errors);
   const events = normalizeEvents(obj.events, map, seats, errors);
   const goals = normalizeGoals(obj.goals, map, seats, errors);
+  const setup = normalizeSetup(obj.setup, seats, errors);
   if (errors.length > 0) return { ok: false, errors };
 
   return {
@@ -583,6 +705,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       ...(expansions ? { expansions: structuredClone(expansions) } : {}),
       ...(events ? { events: structuredClone(events) } : {}),
       ...(goals ? { goals: structuredClone(goals) } : {}),
+      ...(setup ? { setup: structuredClone(setup) } : {}),
     },
   };
 }
@@ -811,8 +934,7 @@ function normalizeWhen(
 }
 
 /** 一块矩形区域。事件和胜利条件共用同一份判据 */
-function normZone(raw: unknown, label: string, map: FixedMap, errors: string[]): LevelZone | undefined {
-  const z = (raw ?? {}) as Partial<LevelZone>;
+function normZone(raw: unknown, label: string, map: FixedMap, errors: string[]): LevelZone | undefined {  const z = (raw ?? {}) as Partial<LevelZone>;
   const nums = [z.x0, z.y0, z.x1, z.y1].map((v) => Math.round(Number(v)));
   if (nums.some((v) => !Number.isFinite(v))) {
     errors.push(`${label}要写 x0/y0/x1/y1 四个数`);
@@ -828,6 +950,49 @@ function normZone(raw: unknown, label: string, map: FixedMap, errors: string[]):
     return undefined;
   }
   return { x0, y0, x1, y1 };
+}
+
+/**
+ * 校验"写死的开局设定"。
+ *
+ * 只查两件事：时代在不在这一版的范围内、先手是不是这一局坐人的席位。
+ * **不查"这一关的时代配不配它的兵"**——那是内容设计的问题，得靠实测，
+ * 校验拦不住也不该拦。
+ */
+function normalizeSetup(
+  raw: unknown,
+  seats: LevelSeats | undefined,
+  errors: string[],
+): LevelSetup | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const o = raw as Partial<LevelSetup>;
+  const out: LevelSetup = {};
+
+  if (o.startEra !== undefined) {
+    const era = Math.round(Number(o.startEra));
+    if (!Number.isFinite(era) || era < 1 || era > ERAS.length) {
+      errors.push(`开局时代要落在 1~${ERAS.length} 之间（现在 ${String(o.startEra)}）`);
+    } else {
+      out.startEra = era;
+    }
+  }
+
+  if (o.firstSide !== undefined) {
+    const seated = (seats ? SEAT_ORDER.slice(0, seats.count) : ['A', 'B']) as readonly PlayerId[];
+    const seat = String(o.firstSide).toUpperCase();
+    if (seat !== 'A' && seat !== 'B') {
+      // 多人局的先手是抽的（席位顺序牵着城位），关卡不该也不能指定 C/D 先动
+      errors.push(`先手只能是 A 或 B（现在 ${String(o.firstSide)}）：多人局的先手随种子抽`);
+    } else if (!seated.includes(seat as PlayerId)) {
+      errors.push(`先手写的是第 ${seat} 家，但这一关只坐 ${seated.join(' / ')}`);
+    } else {
+      out.firstSide = seat;
+    }
+  }
+
+  if (o.twoCities !== undefined) out.twoCities = o.twoCities === true;
+
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -959,7 +1124,16 @@ function normalizeDo(
     return { kind: 'doctrine', seat, strategy, ...(targetSeat ? { targetSeat } : {}) };
   }
 
-  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine）`);
+  if (kind === 'deploy') {
+    const seat = String(a.seat ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`事件「${id}」要让第 ${String(a.seat)} 家登场，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    return { kind: 'deploy', seat };
+  }
+
+  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy）`);
   return undefined;
 }
 
@@ -1036,5 +1210,28 @@ function normalizeSeats(
     cities[p] = pts;
   }
 
-  return { count: count as 2 | 3 | 4, ...(Object.keys(cities).length > 0 ? { cities } : {}), ai };
+  /*
+   * 未登场的席位：必须是这一局坐人的。
+   * 它有没有城由下面的 extraSeats 那段管（C/D 必须有 seats.cities，A/B 用地图的）。
+   */
+  const hidden: PlayerId[] = [];
+  for (const raw of Array.isArray(obj.hidden) ? obj.hidden : []) {
+    const seat = String(raw).toUpperCase() as PlayerId;
+    if (!SEAT_ORDER.includes(seat as 'A' | 'B' | 'C' | 'D')) {
+      errors.push(`未登场的席位「${String(raw)}」不是 A/B/C/D`);
+      continue;
+    }
+    if (!seated.includes(seat)) {
+      errors.push(`第 ${seat} 家被写成未登场，但这一关只坐 ${seated.join(' / ')}`);
+      continue;
+    }
+    if (!hidden.includes(seat)) hidden.push(seat);
+  }
+
+  return {
+    count: count as 2 | 3 | 4,
+    ...(Object.keys(cities).length > 0 ? { cities } : {}),
+    ai,
+    ...(hidden.length > 0 ? { hidden } : {}),
+  };
 }

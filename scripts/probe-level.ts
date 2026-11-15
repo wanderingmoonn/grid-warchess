@@ -19,8 +19,8 @@
 
 import { aiNextAction } from '../src/core/ai.ts';
 import { isAiSide } from '../src/core/ai-meta.ts';
-import { applyAction, runLevelEvents } from '../src/core/rules.ts';
-import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
+import { applyAction, isEliminated, runLevelEvents } from '../src/core/rules.ts';
+import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
 import { LEVELS, levelById, validateLevel } from '../src/core/level.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
@@ -702,6 +702,98 @@ line('18. 写错的胜利条件');
   for (const [label, raw] of cases) {
     const res = validateLevel(raw);
     check(!res.ok && res.errors.length > 0, `${label}：被拒并给出原因`, res.ok ? '居然通过了' : '被拒但没有原因');
+  }
+}
+
+/* ── 19. 关卡钉住的开局设定，规则层也认 ─────────────────────── */
+line('19. 时代 / 先手被关卡钉住（不是只在面板上灰掉）');
+{
+  const hold = levelById('level:hold-out')!;
+  /*
+   * 故意把 startEra 写成 6、firstSide 写成 B，模拟"一份被改过的 config"
+   * （存档、房间、分享链接都能这样传）。规则层必须只认关卡写的那一档。
+   */
+  const hacked = createMatch(
+    { ...DEFAULT_CONFIG, startEra: 6, firstSide: 'B', level: hold },
+    4242,
+  );
+  check(hacked.config.startEra === 1, `时代被压回关卡写的青铜（${hacked.config.startEra}）`,
+    `期望 1，实际 ${hacked.config.startEra}`);
+  /*
+   * 金币要和"老实按关卡开一局"完全一样。
+   *
+   * 不能直接比 `startGoldFor(1)`：开局那笔"第一回合收入"也会加到账上
+   * （见 grantOpeningIncome），所以拿同种子的正常局当基准比更实在。
+   */
+  const honest = createMatch({ ...DEFAULT_CONFIG, level: hold }, 4242);
+  check(hacked.players.A.gold === honest.players.A.gold,
+    `开局金币和老实开局一致（${hacked.players.A.gold}）`,
+    `被改过的 ${hacked.players.A.gold} ≠ 正常的 ${honest.players.A.gold}`);
+  check(honest.players.A.gold < startGoldFor(3),
+    `确实只有青铜那一档的钱（${honest.players.A.gold} < 铁器 ${startGoldFor(3)}）`,
+    '金币没被压住：这一关的难度就没了');
+  check(hacked.current === 'A', `先手是关卡写的红方（${hacked.current}）`, `期望 A，实际 ${hacked.current}`);
+
+  // 没写 setup 的关卡不受影响：面板说什么就是什么
+  const noSetup = { ...LEVELS[0]!, id: 'level:no-setup', setup: undefined };
+  const s2 = createMatch({ ...DEFAULT_CONFIG, startEra: 3, level: noSetup as never }, 4242);
+  check(s2.config.startEra === 3, `关卡没写时代时不干预（${s2.config.startEra}）`,
+    `期望 3，实际 ${s2.config.startEra}`);
+}
+
+/* ── 20. 未登场的席位（批次 5）──────────────────────────────── */
+line('20. 未登场：第三家第 8 次行动才上场');
+{
+  const lc = levelById('level:latecomer');
+  if (!lc) {
+    bad('找不到 level:latecomer', '注册表里没有这张关卡');
+  } else {
+    let s = createMatch({ ...DEFAULT_CONFIG, level: lc }, 20261115);
+    check(s.cities.filter((c) => c.owner === 'C').length === 0, '开局绿方没有城');
+    check(s.units.filter((u) => u.owner === 'C').length === 0, '开局绿方没有兵');
+    check(isEliminated(s, 'C') === false, '绿方没城，但**不算出局**');
+    check(s.winner === null, '开局没有判赢（三家局里只来了两家）');
+
+    // 前 7 次行动应该只有红蓝两家在轮
+    const order: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      order.push(s.current);
+      const r = applyAction(s, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      s = r.state;
+    }
+    check(order.every((p) => p === 'A' || p === 'B'), `未登场时不占回合（${order.join(' ')}）`,
+      `轮到了不该上场的人：${order.join(' ')}`);
+
+    // 再走一步到第 8 次行动，绿方该登场了
+    const r8 = applyAction(s, { type: 'END_TURN' } as Action);
+    if (!r8.ok) {
+      bad('第 8 次行动能走', r8.reason);
+    } else {
+      s = r8.state;
+      const cities = s.cities.filter((c) => c.owner === 'C').length;
+      const units = s.units.filter((u) => u.owner === 'C').length;
+      check(cities === 1, `登场时放下了一座城（${cities}）`);
+      check(units === 4, `登场时摆上了四个兵（${units}）`);
+      check((s.levelState?.hidden ?? []).length === 0, '"未登场"的名单空了');
+      check(s.log.some((l) => l.text.includes('登场了')), '战报里有一句登场提示');
+      check(s.winner === null, '登场不改变胜负');
+    }
+  }
+
+  // 未登场时守方就被打光：不该因为"还有一家没来"而卡住
+  {
+    let s = createMatch({ ...DEFAULT_CONFIG, level: lc! }, 20261115);
+    s.cities = s.cities.filter((c) => c.owner !== 'A');
+    const r = applyAction(s, { type: 'END_TURN' } as Action);
+    check(r.ok && r.state.winner === 'B', '未登场的那家不该拦住"只剩一家"的判定',
+      `胜方 ${r.ok ? r.state.winner ?? '无' : r.reason ?? '动作被拒'}`);
+  }
+
+  // 普通对局：完全没有这个字段
+  {
+    const plain = createMatch(DEFAULT_CONFIG, 5);
+    check(plain.levelState === undefined, '普通对局没有 levelState 字段（老行为不变）');
   }
 }
 
