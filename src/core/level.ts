@@ -534,6 +534,31 @@ export const LEVELS: LevelDef[] = [
      * 它最多多过去一两个兵，城一滴血不掉）。
      */
     ai: { riskAversion: 0, cohesion: 0, appetite: 3 },
+    /*
+     * 游骑：从地图边缘长途奔袭的骑兵，只由事件刷出，谁也造不出来。
+     *
+     * 数值贴着铁器骑士（40 血 / 17 攻 / 4 甲），但**移动力从 3 提到 4**。
+     * 不靠移动力它撑不起"包抄"：从边缘到城要跑六七格，走 3 步的骑兵能被一步步点掉，
+     * 走 4 步才真的要在两翼分兵。
+     */
+    units: {
+      raider: {
+        id: 'raider',
+        name: '游骑',
+        short: '骑',
+        era: 2,
+        category: 'combat',
+        cost: 95,
+        move: 4,
+        atk: 16,
+        armor: 3,
+        maxHp: 36,
+        range: 1,
+        vision: 3,
+        // 只此一份：不进产线、AI 也不采购
+        summonedOnly: true,
+      },
+    },
     deploy: {
       A: [
         { type: 'militia', x: 4, y: 7 },
@@ -660,6 +685,42 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'knight', x: 13, y: 7 }, { type: 'knight', x: 13, y: 8 }] },
+        ],
+      },
+      /*
+       * 两翼的骑兵。
+       *
+       * 试过"把步兵直接送到西岸"，玩家第一反应是 AI 在耍赖——人凭空出现在身边，
+       * 不是"远处来了援军"。所以改成从**地图南北边缘**进场：从画面外跑进来，
+       * 视觉上是合围，不是空投。
+       *
+       * 兵种是游骑（移动 4 的铁器骑兵）：从边缘到城要跑六七格，走 3 步的骑兵会被
+       * 一步步点掉，走 4 步才逼得玩家把兵分到两翼——中间桥头的压力就松不下来了。
+       *
+       * 时间点排在水退之后：桥没了、水退了，他们从上游下游绕过来。
+       */
+      {
+        id: 'flank-north',
+        when: { kind: 'turn', at: 6 },
+        do: [
+          { kind: 'say', text: '南北边冒出人影——是骑兵。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+        ],
+      },
+      {
+        id: 'flank-south',
+        when: { kind: 'turn', at: 12 },
+        do: [
+          { kind: 'say', text: '南北边骑兵再次绕行来了。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
+        ],
+      },
+      {
+        id: 'flank-both',
+        when: { kind: 'turn', at: 20 },
+        do: [
+          { kind: 'say', text: '两翼又是一拨。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }, { type: 'raider', x: 2, y: 0 }, { type: 'raider', x: 2, y: 13 }] },
         ],
       },
       {
