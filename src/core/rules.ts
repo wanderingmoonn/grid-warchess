@@ -4843,13 +4843,25 @@ function syncBridges(s: GameState): void {
   for (const u of s.units) {
     if (utype(s, u.type).bridges) alive.add(u.y * s.w + u.x);
   }
+  /*
+   * 地图自带的桥不参与对账。
+   *
+   * `alive` 里装的是"有桥单位撑着的格"，判据是"是桥面但没人撑着 → 塌"。
+   * 地图上画的桥（`=`）本来就没有单位，按这条判据会在**第一步结算就塌掉**，
+   * 站在上面的兵跟着落水——`断后` 关那个守桥的民兵就是这么没的。
+   *
+   * 分界线记在 `state.mapBridges`（建局时扫出来的格号）。工兵架出来的桥
+   * 不在这个集合里，照旧"没单位就塌"。
+   */
+  const statics = s.mapBridges && s.mapBridges.length > 0 ? new Set(s.mapBridges) : null;
   const collapsed: number[] = [];
   for (let i = 0; i < s.tiles.length; i++) {
     const tile = s.tiles[i];
-    if (tile && tile.terrain === 'bridge' && !alive.has(i)) {
-      tile.terrain = 'water';
-      collapsed.push(i);
-    }
+    if (!tile || tile.terrain !== 'bridge') continue;
+    if (alive.has(i)) continue;
+    if (statics?.has(i)) continue; // 地图的一部分，不塌
+    tile.terrain = 'water';
+    collapsed.push(i);
   }
   if (collapsed.length === 0) return;
 

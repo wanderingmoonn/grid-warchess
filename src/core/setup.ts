@@ -725,6 +725,19 @@ export function createMatch(
     tiles,
     cities,
     units,
+    /*
+     * 地图自带的桥面：开局时地形就是桥的那些格。
+     *
+     * 必须在**建城之后**扫（建城会把格子改成 city，但城不会压在桥上；
+     * 顺序其实无所谓，写在这里只是因为这是 tiles 定稿的地方）。
+     */
+    mapBridges: (() => {
+      const out: number[] = [];
+      for (let i = 0; i < tiles.length; i += 1) {
+        if (tiles[i]?.terrain === 'bridge') out.push(i);
+      }
+      return out;
+    })(),
     // 四个席位都建出来（这一局没坐人的席位名字和金币留着也没人读：
     // 所有遍历都走 seatsOf，不会碰它们）。这样 `players[p]` 永远是定义好的。
     players: {

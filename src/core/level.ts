@@ -448,7 +448,7 @@ export const LEVELS: LevelDef[] = [
     id: 'level:rear-guard',
     version: LEVEL_VERSION,
     name: '断后',
-    brief: '14×14，一座桥。你只有 1 个兵，对面 5 个——演示关卡可以决定开局兵力。',
+    brief: '14×14，一座桥。你只有 1 个兵，对面 5 个，守住 24 次行动等援军。',
     map: {
       id: 'levelmap:rear-guard',
       name: '断后',
@@ -506,8 +506,7 @@ export const LEVELS: LevelDef[] = [
     events: [
       {
         id: 'reinforce',
-        when: { kind: 'turn', at: 3 },
-        do: [
+        when: { kind: 'turn', at: 3 },        do: [
           { kind: 'say', text: '对岸的旌旗又多了两面——他们加了人。' },
           {
             kind: 'spawn',
@@ -541,6 +540,14 @@ export const LEVELS: LevelDef[] = [
         ],
       },
     ],
+    /*
+     * 守到第 24 次行动算赢。
+     *
+     * 没有这条，这一关会**永远打不完**：一个兵卡在唯一的桥面上，攻方再多也过不来，
+     * 而"打光对方"这个默认条件永远不成立。（2026-11-15 修好"地图桥不该自己塌"
+     * 之后才暴露出来——在那之前守桥兵第一手就淹死了，所以看着"能打完"。）
+     */
+    goals: [{ kind: 'survive', seat: 'A', untilTurn: 24 }],
   },
   {
     id: 'level:hold-out',
