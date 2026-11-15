@@ -485,7 +485,7 @@ export const LEVELS: LevelDef[] = [
     setup: { startEra: 1, firstSide: 'A' },
     deploy: {
       A: [
-        { type: 'militia', x: 3, y: 6 },
+        { type: 'militia', x: 4, y: 7 },
         { type: 'archer', x: 3, y: 7 },
         { type: 'militia', x: 4, y: 8 },
       ],
@@ -503,14 +503,14 @@ export const LEVELS: LevelDef[] = [
        * 摆在桥头会把自家过河的门口堵死。
        */
       B: [
-        { type: 'militia', x: 9, y: 3 },
-        { type: 'militia', x: 9, y: 5 },
-        { type: 'militia', x: 9, y: 10 },
-        { type: 'militia', x: 9, y: 12 },
-        { type: 'archer', x: 10, y: 2 },
+        { type: 'militia', x: 9, y: 7 },
+        { type: 'militia', x: 9, y: 8 },
+        { type: 'militia', x: 10, y: 7 },
+        { type: 'militia', x: 10, y: 8 },
         { type: 'archer', x: 10, y: 5 },
+        { type: 'archer', x: 10, y: 6 },
         { type: 'archer', x: 10, y: 9 },
-        { type: 'archer', x: 10, y: 12 },
+        { type: 'archer', x: 10, y: 10 },
         { type: 'scout', x: 13, y: 7 },
         { type: 'scout', x: 13, y: 8 },
         { type: 'tower', x: 9, y: 6 },
