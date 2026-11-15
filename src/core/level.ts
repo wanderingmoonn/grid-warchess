@@ -560,7 +560,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 5 },
         do: [
           { kind: 'say', text: '东边的路上又上来一队人。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 12, y: 5 }, { type: 'militia', x: 12, y: 6 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
         ],
       },
       {
@@ -568,7 +568,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 10 },
         do: [
           { kind: 'say', text: '对岸又有人在动。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'archer', x: 12, y: 7 }, { type: 'militia', x: 12, y: 8 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
         ],
       },
       {
@@ -576,7 +576,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 16 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 13, y: 5 }, { type: 'militia', x: 13, y: 6 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
         ],
       },
       {
@@ -584,12 +584,12 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 22 },
         do: [
           { kind: 'say', text: '又上来一队人，这次带着弓手。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'archer', x: 13, y: 10 }, { type: 'militia', x: 13, y: 11 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
         ],
       },
       {
         id: 'wave-5',
-        when: { kind: 'turn', at: 27 },
+        when: { kind: 'turn', at: 25 },
         do: [
           { kind: 'say', text: '最后一批。撑过去就是你的。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 13, y: 12 }, { type: 'militia', x: 13, y: 13 }] },
