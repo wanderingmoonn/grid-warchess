@@ -6905,6 +6905,16 @@ function doHeroSkill(
     return { ok: false, reason: `${skill.name}要先填「${skill.input.label}」` };
   }
 
+  /*
+   * 沉默这类"嘴被封住"的限制：只封法术，不封移动和普攻。
+   * 问在 `SKILL_EFFECTS` 之前——它连"这个效果有没有实现"都不该走到。
+   */
+  for (const e of activeExpansions(s)) {
+    if (!e.hooks.canCastSkill) continue;
+    const no = e.hooks.canCastSkill({ state: s, unit: u, skill: { id: skill.id, effect: skill.effect } });
+    if (no) return { ok: false, reason: no };
+  }
+
   const handler = SKILL_EFFECTS[skill.effect];
   if (!handler) return { ok: false, reason: `未实现的技能效果：${skill.effect}` };
 

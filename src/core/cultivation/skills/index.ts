@@ -466,6 +466,26 @@ export {
   restoreFromTianyan,
 } from './tianyan.ts';
 
+/* 簇 E · 绝学：不周山断 / 以气御剑 / 虚无生道 */
+export {
+  LEGACY_ROWS,
+  BU_ZHOU_SHAN_DUAN_SKILL,
+  YI_QI_YU_JIAN_SKILL,
+  XU_WU_SHENG_DAO_SKILL,
+  BU_ZHOU_SHAN_DUAN_COST,
+  BU_ZHOU_SHAN_DUAN_MIN_RANK,
+  BU_ZHOU_SHAN_DUAN_BASE,
+  BU_ZHOU_SHAN_DUAN_PER_RANK,
+  YI_QI_YU_JIAN_COST,
+  YI_QI_YU_JIAN_MIN_RANK,
+  YI_QI_YU_JIAN_BASE,
+  YI_QI_YU_JIAN_PER_RANK,
+  YI_QI_YU_JIAN_RANGE,
+  XU_WU_SHENG_DAO_COST,
+  XU_WU_SHENG_DAO_MIN_RANK,
+  XU_WU_SHENG_DAO_ROUNDS,
+} from './legacy.ts';
+
 /* 族 9 · 资源经济：场上的一份额度换修为 */
 export {
   ECONOMY_ROWS,
