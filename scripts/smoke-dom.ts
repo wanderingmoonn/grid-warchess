@@ -9235,52 +9235,69 @@ check('选「孤城」：卡片有缩略图，说明写清几城、目标、有�
   assert.ok(!!card?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
 });
 
-check('选了关卡：人数只读、时代/尺寸/先手点不动、扩展被锁', () => {
+check('选了关卡：整页变成任务简报，配置器不再出现', () => {
   click('[data-tab="battle"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('这一关是 2 家'), `人数那栏应该说明由关卡决定，实际：${body.slice(0, 200)}`);
-  assert.equal(doc.querySelector('[data-players]'), null, '关卡选着的时候不该有人数开关');
-
-  const locked = (sel: string): boolean => {
-    const list = [...doc.querySelectorAll<HTMLButtonElement>(`.modal-body ${sel}`)];
-    return list.length > 0 && list.every((b) => b.disabled);
-  };
-  assert.ok(locked('[data-era]'), '时代由关卡钉死');
-  assert.ok(locked('[data-size]'), '尺寸由关卡地图决定');
-  assert.ok(locked('[data-first]'), '先手由关卡钉死');
-
-  const eraNote = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(eraNote.includes('开局金币 120'), '要说明金币也被锁了');
-
-  const forb = doc.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
-  assert.ok(forb, '扩展列表里应该有「先后手补偿」');
-  assert.ok(!forb!.checked && forb!.disabled, '这一关禁用的包：空着且点不动');
-  const other = doc.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
-  assert.ok(other && !other.disabled, '关卡没提到的包不该被锁');
+  assert.ok(body.includes('目标'), '要写出目标');
+  assert.ok(body.includes('双方开局'), '要写出双方兵力');
+  assert.ok(body.includes('这一关固定'), '要写清这一关固定了什么');
 
   /*
-   * 下面这几条是实机撞出来的：选了关卡，居然还能开上帝模式 / 指挥官 / 选卡，
-   * 还能点地貌、还能去地图页换图。都不影响关卡地图，但每一条都在问
-   * 我这局到底在玩什么。
+   * 关键：**这些控件根本不该存在**，而不是灰掉。
+   * 灰掉的开关看起来像"差一步就能改"，玩家会反复去点、反复怀疑自己漏了什么。
    */
-  assert.ok(locked('[data-role]'), '关卡局里 亲自指挥/指挥官/上帝 都不该能点');
-  assert.ok(locked('[data-draft-mode]'), '选卡模式也不该能点');
-  assert.ok(locked('[data-mapstyle]'), '地貌由关卡地图决定，不该能点');
+  const gone = ['[data-players]', '[data-era]', '[data-size]', '[data-first]',
+                '[data-role]', '[data-draft-mode]', '[data-mapstyle]'];
+  for (const sel of gone) {
+    assert.equal(doc.querySelectorAll('.modal-body ' + sel).length, 0, '关卡简报页不该有 ' + sel);
+  }
 
-  click('[data-tab="maps"]');
-  const mapBody = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(mapBody.includes('由关卡自带'), `地图页要说明图是关卡带的，实际：${mapBody.slice(0, 200)}`);
-  assert.equal(doc.querySelectorAll('.modal-body [data-map]').length, 0, '关卡局里不该还能选别的图');
-  assert.ok(mapBody.includes('地图库'), '要说明关卡局不掺和地图库');
-  // 上传入口所在的那一段是 hidden，不是没渲染——所以要查"看得见的那一个"
-  assert.equal(
-    [...doc.querySelectorAll<HTMLElement>('.modal-body [data-act="map-file"]')].filter(
-      (b) => !b.closest('section')?.hidden,
-    ).length,
-    0,
-    '上传入口也该收起',
-  );
-  void other;
+  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
+  assert.ok(!tabs.includes('maps'), '关卡局不该有「地图」页');
+
+  const balance = doc.querySelectorAll('.level-balance > div');
+  assert.equal(balance.length, 2, '两家局应该有两张兵力卡');
+  assert.ok((balance[0].textContent ?? '').includes('兵'), '兵力卡要写几个兵');
+});
+
+check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () => {
+  const entry = doc.querySelector<HTMLElement>('[data-act="exp-drawer"]');
+  assert.ok(entry, '简报页要有「换扩展重打」入口');
+  click('[data-act="exp-drawer"]');
+
+  const drawer = doc.querySelector<HTMLElement>('.exp-drawer');
+  assert.ok(drawer, '点开应该有抽屉');
+  const text = drawer!.textContent ?? '';
+  assert.ok(text.includes('先后手补偿'), '抽屉里要说明这一关禁用了什么，实际：' + text.slice(0, 160));
+
+  const items = drawer!.querySelectorAll('.expansion-item');
+  assert.ok(items.length > 10, '抽屉里应该是完整的扩展列表，实际 ' + items.length + ' 条');
+
+  const forbidden = drawer!.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
+  assert.ok(forbidden, '列表里应该有「先后手补偿」');
+  assert.ok(!forbidden!.checked && forbidden!.disabled, '关卡禁用的包：空着且点不动');
+
+  const free = drawer!.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
+  assert.ok(free && !free.disabled, '关卡没提到的包必须还能勾');
+
+
+  // 勾一个包：抽屉要留着（不然每勾一个就得重新点开），入口那一行要跟着变
+  click('[data-act="exp-drawer"]');
+  const free2 = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]');
+  assert.ok(free2, '抽屉里能找到「血战」');
+  free2!.click();
+  assert.ok(doc.querySelector('.exp-drawer'), '勾完包抽屉不该自己关掉');
+  const entryNow = doc.querySelector<HTMLElement>('[data-act="exp-drawer"]')?.textContent ?? '';
+  // 默认配置里本来就带着「老兵不死」，所以这里只验勾上的那个出现在入口上
+  assert.ok(entryNow.includes('血战'), '入口那一行要列出已经加了什么，实际：' + entryNow);
+
+  click('[data-act="exp-close"]');
+  assert.equal(doc.querySelector('.exp-drawer'), null, '点关闭应该收起抽屉');
+
+  // 再点一次取消勾选，免得把状态带进后面开局的那一局
+  click('[data-act="exp-drawer"]');
+  doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]')!.click();
+  click('[data-act="exp-close"]');
 });
 
 check('选「斩首」：两条目标都标了归属', () => {

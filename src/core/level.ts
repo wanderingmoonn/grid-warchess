@@ -431,12 +431,26 @@ const CUT_PAINT: Array<[number, number, string]> = (() => {
  * 「孤城」的地形：一条竖河、一座桥。和「断桥」同一副骨架，但这是一张**给人玩**的图：
  * 城只有一座，河对面有两座城，压力从第一轮就在。
  */
+/**
+ * 「孤城」的地形：**两格宽的河**、**两格宽的桥**。
+ *
+ * 为什么是两格：
+ *   · 一格宽的桥等于"一个兵封死全场"，守方派一个人堵在那儿就赢了一半；
+ *   · 一格宽的河等于"弓箭手站在西岸白打东岸"（弓手射程 3，距离 2 就够）。
+ * 两格之后这两件事同时失效：桥要两个人堵，弓箭手站河岸也够不到对岸。
+ *
+ * 代价是图更挤，所以把对岸的城往后挪了两格（11 起），给前排留出缓冲。
+ */
 const SOLO_PAINT: Array<[number, number, string]> = (() => {
   const out: Array<[number, number, string]> = [];
-  for (let y = 0; y < 14; y += 1) out.push([7, y, '~']);
-  out.push([7, 7, '=']);
+  for (let y = 0; y < 14; y += 1) {
+    out.push([7, y, '~']);
+    out.push([8, y, '~']);
+  }
+  // 桥也是两格宽：要塌就一起塌，守方没法"先堵一格再看情况"
+  out.push([7, 7, '='], [8, 7, '=']);
   out.push([4, 4, 'f'], [5, 4, 'f'], [4, 5, 'f']);
-  out.push([9, 5, 'h'], [10, 6, 'h']);
+  out.push([10, 6, 'h'], [10, 5, 'h']);
   return out;
 })();
 
@@ -454,10 +468,12 @@ export const LEVELS: LevelDef[] = [
       h: 14,
       rows: rowsOf(14, 14, SOLO_PAINT),
       citiesA: [{ x: 1, y: 6 }],
-      // 两座城：产能翻倍，而且必须打两座才算赢
+      // 两座城：产能翻倍，而且必须打两座才算赢。
+      // x 从 10 挪到 11 是为了给河岸留出两列缓冲——守方弓箭手（射程 3）
+      // 站在自己河岸就该够不到这里，而不是站在岸上就能点掉城边的农民。
       citiesB: [
-        { x: 10, y: 3 },
-        { x: 10, y: 10 },
+        { x: 11, y: 3 },
+        { x: 11, y: 10 },
       ],
       source: 'builtin',
     },
@@ -469,14 +485,35 @@ export const LEVELS: LevelDef[] = [
         { type: 'archer', x: 3, y: 7 },
         { type: 'militia', x: 4, y: 8 },
       ],
+      /*
+       * 攻方起手：4 近战 + 4 远程 + 2 高机动 + 2 箭塔 + 2 农民。
+       *
+       * 四类各有分工，不能互相替代：
+       *   · 民兵占桥头、扛线；
+       *   · 弓手（射程 3）越过两格宽的河压制西岸——守方站岸边就要挨打；
+       *   · 斥候（移动 4）绕后、抢浅滩，水退之后第一批扑过去；
+       *   · 箭塔钉在桥头两侧，守方想清掉对岸的目标就得先拆塔，而拆塔要拿命换；
+       *   · 农民摆在城后，把两座城的产能真的用起来。
+       *
+       * 塔刻意放在 (9,6)/(9,9) 而不是桥头 (9,7)/(9,8)：建筑占格且不可通行，
+       * 摆在桥头会把自家过河的门口堵死。
+       */
       B: [
-        { type: 'militia', x: 8, y: 3 },
-        { type: 'militia', x: 9, y: 2 },
-        { type: 'archer', x: 9, y: 4 },
-        { type: 'militia', x: 8, y: 6 },
+        { type: 'militia', x: 9, y: 3 },
+        { type: 'militia', x: 9, y: 5 },
         { type: 'militia', x: 9, y: 10 },
-        { type: 'archer', x: 8, y: 11 },
-        { type: 'militia', x: 9, y: 11 },
+        { type: 'militia', x: 9, y: 12 },
+        { type: 'archer', x: 10, y: 2 },
+        { type: 'archer', x: 10, y: 5 },
+        { type: 'archer', x: 10, y: 9 },
+        { type: 'archer', x: 10, y: 12 },
+        { type: 'scout', x: 13, y: 7 },
+        { type: 'scout', x: 13, y: 8 },
+        { type: 'tower', x: 9, y: 6 },
+        { type: 'tower', x: 9, y: 9 },
+        // 后方农民：开局就给两座城的产能点火
+        { type: 'farmer', x: 13, y: 3 },
+        { type: 'farmer', x: 13, y: 9 },
       ],
     },
     goals: [{ kind: 'survive', seat: 'A', untilTurn: 30 }],
@@ -500,15 +537,56 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 9 },
         do: [
           { kind: 'say', text: '桥被炸断了。别再想着过河——守住这一头。' },
-          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 7, y1: 7 }, to: 'deep' },
+          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 7 }, to: 'deep' },
+        ],
+      },
+      /*
+       * 五波援军，从第 5 次行动起就没断过。
+       *
+       * 这是死守感的来源，不是数值堆料：把兵一次加多，玩家撑过第一波就能反推；
+       * **持续来人**才会让他一直处在打退了、又来了、城下又有人的状态里，
+       * 也就没有余力把兵抽出去打对面。
+       *
+       * 实测（AI 对 AI）：**加多少波都撕不开这条河**——电脑不会集结兵力强渡。
+       * 所以这五波主要是给真人玩家的压力，不能指望它改变 AI 对局的结果。
+       */
+      {
+        id: 'wave-1',
+        when: { kind: 'turn', at: 5 },
+        do: [
+          { kind: 'say', text: '东边的路上又上来一队人。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 12, y: 5 }, { type: 'militia', x: 12, y: 6 }] },
+        ],
+      },
+      {
+        id: 'wave-2',
+        when: { kind: 'turn', at: 10 },
+        do: [{ kind: 'spawn', owner: 'B', units: [{ type: 'archer', x: 12, y: 7 }, { type: 'militia', x: 12, y: 8 }] }],
+      },
+      {
+        id: 'wave-3',
+        when: { kind: 'turn', at: 16 },
+        do: [{ kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 13, y: 5 }, { type: 'militia', x: 13, y: 6 }] }],
+      },
+      {
+        id: 'wave-4',
+        when: { kind: 'turn', at: 22 },
+        do: [{ kind: 'spawn', owner: 'B', units: [{ type: 'archer', x: 13, y: 10 }, { type: 'militia', x: 13, y: 11 }] }],
+      },
+      {
+        id: 'wave-5',
+        when: { kind: 'turn', at: 27 },
+        do: [
+          { kind: 'say', text: '最后一批。撑过去就是你的。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 13, y: 12 }, { type: 'militia', x: 13, y: 13 }] },
         ],
       },
       {
         id: 'ebb',
-        when: { kind: 'turn', at: 20 },
+        when: { kind: 'turn', at: 14 },
         do: [
           { kind: 'say', text: '水位退了。整条河都能淌过去——他们不会只走桥了。' },
-          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 7, y1: 13 }, to: 'shallow' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
         ],
       },
     ],
@@ -943,7 +1021,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 4 },
         do: [
           { kind: 'say', text: '轰的一声——桥没了。' },
-          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 7, y1: 7 }, to: 'deep' },
+          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 7 }, to: 'deep' },
         ],
       },
       {

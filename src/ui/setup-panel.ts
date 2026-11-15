@@ -52,7 +52,7 @@ import {
   randomSeed,
   startGoldFor,
 } from '../core/setup.ts';
-import type { MatchConfig, UnitTypeDef } from '../core/types.ts';
+import type { MatchConfig, PlayerId, UnitTypeDef } from '../core/types.ts';
 
 export interface SetupResult {
   config: MatchConfig;
@@ -269,6 +269,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 战役页只剩一行摘要，而全表照旧在——只是要按一下才出来。
      */
     let poolOpen = false;
+    /* 关卡模式的「换扩展」抽屉：和兵种池一样，是盖在面板上的一层 */
+    let expDrawerOpen = false;
 
     /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
     const selectorFor = (el: HTMLElement): string | null => {
@@ -366,6 +368,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        </button>`;
 
     const paint = () => {
+      /*
+       * 关卡局没有「地图」页。如果玩家正停在那页时点了关卡（或上车时记着 maps），
+       * 就把他挪到简报页——否则会画出一页没有对应标签的内容，
+       * 看起来像是点了导航却跳到了别的地方。
+       */
+      if (config.level && tab === 'maps') tab = 'battle';
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
       // 点一个兵种就"弹回顶部"就是这么来的——所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
@@ -375,6 +383,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 兵种池弹层有自己的滚动区，而且它盖在上面——不单独记一份的话，
       // 在弹层里点「全选」这种会重绘的操作会把两百多个兵种弹回第一行。
       const prevPoolScroll = mask.querySelector<HTMLElement>('.pool-body')?.scrollTop ?? 0;
+      const prevDrawerScroll = mask.querySelector<HTMLElement>('.exp-drawer-body')?.scrollTop ?? 0;
       resetScroll = false;
       const prevFocusEl = document.activeElement;
       const prevFocus =
@@ -735,7 +744,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return `这一关由电脑操作：${ai.map((p) => seatLabel[p] ?? p).join('、')}；其余席位是真人。`;
       })();
 
-      const battleView = `
+      const battleViewFull = `
             <section class="field">
               <div class="field-label">
                 数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
@@ -1079,6 +1088,99 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             }`;
 
       /*
+       * ── 任务简报（选了关卡时）──
+       *
+       * 关卡模式下**不再复用那一整套配置器**：人数、时代、尺寸、先手、模式、选卡
+       * 全部由关卡决定，把它们灰一片放在这儿，玩家只会反复去点、反复想"是不是我漏了什么"。
+       * 这里只回答三件事：**这是什么关、我要面对什么、还能改什么**。
+       *
+       * 唯一留给玩家的是扩展包（换包重打同一关是一种重玩价值），它走一个抽屉，
+       * 抽屉里就是原来那份扩展列表——依赖 / 联动 / 冲突那套标记已经写好了，不要重写第二份。
+       */
+      const mySeat = (
+        (['A', 'B', 'C', 'D'] as PlayerId[]).slice(0, playerCount).find((p) => !(config.aiSeats ?? []).includes(p)) ??
+        'A'
+      ) as PlayerId;
+      const sideOf = (p: PlayerId): string => {
+        const troops = config.level?.deploy?.[p]?.length ?? 0;
+        const cities =
+          p === 'A'
+            ? config.level?.map.citiesA.length ?? 0
+            : p === 'B'
+              ? config.level?.map.citiesB.length ?? 0
+              : config.level?.seats?.cities?.[p as 'C' | 'D']?.length ?? 0;
+        const hidden = (config.level?.seats?.hidden ?? []).includes(p);
+        return `${seatLabel[p] ?? p}${hidden ? '（中途登场）' : ''}：${troops} 兵 · ${cities} 城`;
+      };
+      const others = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(0, playerCount).filter((p) => p !== mySeat);
+      const extraPacks = config.expansionIds.filter(
+        (id) =>
+          !(config.level?.expansions?.require ?? []).includes(id) &&
+          !(config.level?.expansions?.forbid ?? []).includes(id),
+      );
+      const fixedLine = [
+        `${eraDef(config.startEra).name}（开局 ${startGoldFor(config.startEra)} 金）`,
+        `${config.level?.map.w}×${config.level?.map.h}`,
+        `你执${seatLabel[mySeat] ?? mySeat}`,
+        (config.aiSeats ?? []).length > 0
+          ? `${(config.aiSeats ?? []).map((p) => seatLabel[p] ?? p).join('、')}由电脑操作`
+          : '全部真人',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      const briefingView = `
+            <section class="field level-brief">
+              <div class="level-brief-name">${esc(config.level?.name ?? '')}</div>
+              <div class="field-hint">${esc(config.level?.brief ?? '')}</div>
+            </section>
+
+            ${
+              (config.level?.goals ?? []).length > 0
+                ? `<section class="field">
+              <div class="field-label">目标</div>
+              <div class="level-goal-lines">${(config.level?.goals ?? [])
+                .map((g) => {
+                  const seat = g.kind === 'assassinate' ? g.winner : g.seat;
+                  const mine = seat === mySeat;
+                  return `<div class="${mine ? 'is-mine' : ''}"><b>${seatLabel[seat] ?? seat}</b>${goalText(g)}</div>`;
+                })
+                .join('')}</div>
+            </section>`
+                : ''
+            }
+
+            <section class="field">
+              <div class="field-label">双方开局</div>
+              <div class="level-balance">
+                <div class="is-mine"><b>你</b><span>${sideOf(mySeat).replace(/^[^：]*：/, '')}</span></div>
+                ${others.map((p) => `<div><b>${sideOf(p).split('：')[0]}</b><span>${sideOf(p).split('：')[1]}</span></div>`).join('')}
+              </div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">这一关固定</div>
+              <div class="field-hint">${fixedLine}</div>
+              ${
+                (config.level?.events ?? []).length > 0
+                  ? `<div class="field-hint">这一关有 ${(config.level?.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  : ''
+              }
+              ${expLockNote}
+            </section>
+
+            <section class="field">
+              <div class="field-label">换扩展重打 <span class="field-hint">可选，会改变难度</span></div>
+              <button type="button" class="exp-entry" data-act="exp-drawer">
+                <span class="exp-entry-main">${extraPacks.length > 0 ? `${extraPacks.length} 个额外扩展在生效` : '没有额外扩展'}</span>
+                <span class="exp-entry-sub">${extraPacks.length > 0 ? extraPacks.map((id) => expansionById(id)?.name ?? id).join('、') : '点开挑'}</span>
+                <span class="exp-entry-arrow">▸</span>
+              </button>
+            </section>`;
+
+      const battleView = levelOn ? briefingView : battleViewFull;
+
+      /*
        * 地图页：选图与传图是同一件事的两头。
        *
        * 之前"上传"藏在上帝模式侧栏里，而"选图"在开局面板里——同一条流水线的
@@ -1207,13 +1309,23 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <span>选关 · 剧情</span>
               </button>
               <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
-                <b>战役</b>
-                <span>规则 · 时代 · 兵种</span>
+                <b>${levelOn ? '简报' : '战役'}</b>
+                <span>${levelOn ? '目标 · 兵力 · 扩展' : '规则 · 时代 · 兵种'}</span>
               </button>
-              <button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
+              ${
+                /*
+                 * 关卡局不给「地图」页。
+                 *
+                 * 那张图是关卡带的，改不了；留一页只放一张不可点的卡片，
+                 * 等于请玩家进去看一遍"你不能改"。与其解释，不如不出现。
+                 */
+                levelOn
+                  ? ''
+                  : `<button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
                 <b>地图</b>
                 <span>选图 · 上传</span>
-              </button>
+              </button>`
+              }
             </nav>
             <div class="start-rail-foot">同一个种子永远生成同一张地图</div>
           </aside>
@@ -1222,7 +1334,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <div class="modal-head">
               ${
                 tab === 'battle'
-                  ? `<h2>战役</h2>
+                  ? levelOn
+                    ? `<h2>任务简报</h2>
+                       <p>这一关的图、兵力、时代都由关卡定。唯一能改的是扩展包——换一套重打，难度会变。</p>`
+                    : `<h2>战役</h2>
                      <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
@@ -1262,6 +1377,23 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                  </div>`
               : ''
           }
+          ${
+            expDrawerOpen && levelOn
+              ? `<div class="exp-drawer-layer" data-act="exp-backdrop">
+                   <div class="exp-drawer">
+                     <div class="exp-drawer-head">
+                       <div>
+                         <b>换扩展重打</b>
+                         <span>同一张关，换一套规则。改完直接开始，就是新的一局。</span>
+                       </div>
+                       <button class="btn btn-sm" data-act="exp-close">关闭</button>
+                     </div>
+                     <div class="exp-drawer-locks">${expLockNote || '<span class="field-hint">这一关没有锁定任何扩展包，全部由你决定。</span>'}</div>
+                     <div class="exp-drawer-body"><div class="expansion-list">${expItems}</div></div>
+                   </div>
+                 </div>`
+              : ''
+          }
         </div>
       `;
 
@@ -1273,6 +1405,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       const nextPool = mask.querySelector<HTMLElement>('.pool-body');
       if (nextPool) nextPool.scrollTop = prevPoolScroll;
+      const nextDrawer = mask.querySelector<HTMLElement>('.exp-drawer-body');
+      if (nextDrawer) nextDrawer.scrollTop = prevDrawerScroll;
       if (prevFocus) {
         mask.querySelector<HTMLElement>(prevFocus)?.focus({ preventScroll: true });
       }
@@ -1311,11 +1445,27 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 翻译只在 `applyLevelToConfig` 里做一次（面板和脚本共用），这里不重复读
        * `level.seats` —— 两处各读一份，迟早有一处漏掉，表现是"面板写三家、建出来两家"。
        */
+      if (target.closest('[data-act="exp-drawer"]')) {
+        expDrawerOpen = true;
+        paint();
+        return;
+      }
+      if (
+        target.closest('[data-act="exp-close"]') ||
+        (target as HTMLElement).dataset.act === 'exp-backdrop'
+      ) {
+        expDrawerOpen = false;
+        paint();
+        return;
+      }
+
       const levelBtn = target.closest<HTMLElement>('[data-level]');
       if (levelBtn) {
         const id = levelBtn.dataset.level ?? '';
         const picked = id ? allLevels().find((l) => l.id === id) ?? null : null;
         Object.assign(config, applyLevelToConfig(config, picked));
+        // 换了关，抽屉里「这一关锁定哪些包」已经变了，收起来重新看
+        expDrawerOpen = false;
         paint();
         return;
       }
