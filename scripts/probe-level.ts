@@ -1043,14 +1043,15 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
   const nearest = Math.min(...myShooters.flatMap((a) => foes.map((f) => cheb(a, f))));
   check(nearest > 3, `开局弓手够不到对岸（最近 ${nearest} 格 > 射程 3）`, `只有 ${nearest} 格：隔河白打又回来了`);
 
-  // 攻方的经济单位在后排，不在河岸射程内
-  const farmers = s.units.filter((u) => u.owner === 'B' && u.type === 'farmer');
-  check(farmers.length >= 2, `攻方开局带 ${farmers.length} 个农民`);
-  check(
-    farmers.every((f) => f.x >= 12),
-    `农民都在后排（x=${farmers.map((f) => f.x).join(',')}）`,
-    '农民靠河就会被弓手白点',
-  );
+  /*
+   * 攻方的开局构成：只查"够不够形成压力"，**不钉具体兵种**。
+   *
+   * 钉死过一版（"必须 4 近战 4 远程 2 斥候 2 农民"），作者调阵容就报红——
+   * 而阵容本来就是作者该自由调的东西。真要防的是"攻方太薄，压不过来"。
+   */
+  const foe = s.units.filter((u) => u.owner === 'B');
+  check(foe.length >= 8, `攻方开局 ${foe.length} 个兵`, '兵太少，压不过来');
+  check(foe.some((u) => u.type === 'tower'), '攻方带了箭塔', '没有塔，守方站河边不掉血');
 
   /*
    * 桥面 2×2：**通行口宽两格**。
@@ -1064,11 +1065,11 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
   const lanes = new Set(bridges.map((b) => Math.floor(b.i / s.w)));
   check(lanes.size === 2, `两条过河通道（y=${[...lanes].join('/')}）`, '桥还是只有一条通道');
 
-  // 兵种构成：4 近战 / 4 远程 / 2 高机动 / 2 塔
+  // 兵种构成：只查能不能形成压力，具体阵容归作者
   const count = (t: string): number => s.units.filter((u) => u.owner === 'B' && u.type === t).length;
-  check(count('militia') === 4 && count('archer') === 4, `攻方 4 近战 + 4 远程（${count('militia')}/${count('archer')}）`);
-  check(count('scout') === 2, `攻方 2 个高机动单位（${count('scout')}）`);
-  check(count('tower') === 2, `攻方 2 座箭塔钉在河岸（${count('tower')}）`);
+  // 近战/远程都要有：只有一种压不住（全近战过不了河，全远程守不住桥头）
+  check(count('militia') >= 2 && count('archer') >= 2, `攻方近战/远程都有（${count('militia')}/${count('archer')}）`);
+  check(count('tower') >= 1, `攻方 2 座箭塔钉在河岸（${count('tower')}）`);
 
   // 塔要够得着过桥后的第一格，否则钉在那儿没意义
   const towers = s.units.filter((u) => u.type === 'tower');
@@ -1105,7 +1106,18 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
     `骑兵全部从地图南北边缘进场（${spots.length} 个）`,
     '有骑兵落在腹地：那看起来像是凭空冒出来的',
   );
-  check(spots.every((u) => u.type === 'raider'), '骑兵用的是关卡自带的游骑');
+  /*
+   * 两翼用的兵种**必须在兵种表里**。
+   *
+   * `spawn` 遇到表里没有的兵种会静默跳过（只在战报留一句）。写个 era 更高的兵种
+   * （青铜局写铁器骑士）就会踩这个坑：事件跑了、兵一个没有。
+   */
+  const missing = [...new Set(spots.map((u) => u.type))].filter((t) => !s.unitTypes[t]);
+  check(
+    missing.length === 0,
+    `两翼兵种都在本局兵种表里（${[...new Set(spots.map((u) => u.type))].join('、')}）`,
+    `这些兵种本局不存在，刷不出来：${missing.join('、')}`,
+  );
   const silent = waves.filter((w) => !w.do.some((d) => d.kind === 'say')).map((w) => w.id);
   check(silent.length === 0, '每一波援军都有播报', `这几波是静默的：${silent.join('、')}`);
   /*
@@ -1128,6 +1140,27 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
   const want = blowTo?.to ?? 'water';
   const gone = [[7, 7], [8, 7], [7, 8], [8, 8]].filter(([x, y]) => at(cur, x!, y!) === want).length;
   check(gone === 4, `第 ${blowAt} 次行动后四格桥一起没了（${gone}/4 → ${want}）`, `四格没全塌：剩下的那行还能过河`);
+}
+
+/* ── 26. 刷兵不许静默失败 ─────────────────────────────────────── */
+line('26. 关卡刷兵：落点被占时会就近找位，不该有"站不住"');
+{
+  for (const lv of playableLevels()) {
+    const v = validateLevel(lv);
+    if (!v.ok) continue;
+    let s = createMatch({ ...DEFAULT_CONFIG, level: v.level }, 20261115);
+    for (let i = 0; i < 200 && !s.winner; i += 1) {
+      const r = applyAction(s, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      s = r.state;
+    }
+    const failed = s.log.filter((l) => l.text.includes('站不住'));
+    check(
+      failed.length === 0,
+      `${v.level.name}：刷兵全部落地`,
+      `${failed.length} 次刷兵失败（${failed.slice(0, 3).map((l) => l.text).join('；')}）`,
+    );
+  }
 }
 
 /* ── 汇总 ─────────────────────────────────────────────────────── */

@@ -4437,15 +4437,57 @@ function spawnFromEvent(s: GameState, owner: PlayerId, type: string, x: number, 
   const def = s.unitTypes[type];
   if (!def) return `本局没有「${type}」这个兵种`;
   if (x < 0 || y < 0 || x >= s.w || y >= s.h) return '坐标在棋盘外';
-  const city = cityAt(s, x, y);
-  if (city && city.owner !== owner) return `那是第 ${city.owner} 家的城，兵摆不进去`;
-  if (!canStandAt(s, x, y, type)) return '这一格站不住';
+
+  const placeable = (px: number, py: number): boolean => {
+    const c = cityAt(s, px, py);
+    if (c && c.owner !== owner) return false;
+    return canStandAt(s, px, py, type);
+  };
+
+  /*
+   * 落点被占时**就近找空位**，而不是放弃。
+   *
+   * 内容作者写波次时，坐标是"大概位置"——上一波的人还没走、或者两波写了同一个点，
+   * 兵就刷不出来，而这件事**只在战报里留一句**（"这一格站不住"），没人会去看。
+   * 表现就是"我明明写了增援，游戏里一个都没有"。
+   *
+   * 先试正上方一格圈，再试两格；都找不到才放弃（那说明这一片真的挤满了）。
+   */
+  let tx = x;
+  let ty = y;
+  if (!placeable(x, y)) {
+    let found = false;
+    for (let r = 1; r <= 2 && !found; r += 1) {
+      const ring: Array<[number, number]> = [];
+      for (let dy = -r; dy <= r; dy += 1) {
+        for (let dx = -r; dx <= r; dx += 1) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          ring.push([x + dx, y + dy]);
+        }
+      }
+      // 先近后远：同半径内按曼哈顿距离排，尽量贴着作者写的那个点
+      ring.sort(
+        (a, b) =>
+          Math.abs(a[0] - x) + Math.abs(a[1] - y) - (Math.abs(b[0] - x) + Math.abs(b[1] - y)),
+      );
+      for (const [px, py] of ring) {
+        if (px < 0 || py < 0 || px >= s.w || py >= s.h) continue;
+        if (!placeable(px, py)) continue;
+        tx = px;
+        ty = py;
+        found = true;
+        break;
+      }
+    }
+    if (!found) return '这一格站不住，附近两格也没有空位';
+  }
+
   s.units.push({
     id: `u${s.nextUnitSeq++}`,
     type: def.id,
     owner,
-    x,
-    y,
+    x: tx,
+    y: ty,
     hp: def.maxHp,
     kills: 0,
     moved: false,
