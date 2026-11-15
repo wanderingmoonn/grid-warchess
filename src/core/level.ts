@@ -525,7 +525,7 @@ export const LEVELS: LevelDef[] = [
      * 禁掉「先后手补偿」：这一关是 1 城对 2 城的不对称布防，后手再补一笔金币，
      * 等于把设计好的强弱差抹掉一截。（和「断后」同一条理由。）
      */
-    expansions: { forbid: ['turn-order-comp'] },
+    expansions: { forbid: ['turn-order-comp','high-mobility'] },
     /*
      * 三段压力：
      *   1~5 次行动：桥还在。这是玩家**唯一能主动出门换兵**的窗口，也是这关的全部乐趣；
