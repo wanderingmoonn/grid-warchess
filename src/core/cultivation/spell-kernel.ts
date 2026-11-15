@@ -39,6 +39,7 @@ import { registerSkillPreview, registerSkillReadyCheck } from '../skill-hooks.ts
 import { coversTile, distBetweenUnits, distToUnit } from '../query.ts';
 import { canSpendMana, manaOf, spendMana } from './mana.ts';
 import { daiTargetOf } from './transfer.ts';
+import { tryVoidRefill } from './legacy-status.ts';
 
 // ── 数据行 ────────────────────────────────────────────────────────
 
@@ -283,7 +284,17 @@ export function paySpellCost(c: SkillCtx, cost: number): boolean {
   for (const w of costWaivers) {
     if (w(c, cost)) return true;
   }
-  return spendMana(c.self, cost);
+  const ok = spendMana(c.self, cost);
+  /*
+   * 虚无生道：灵力扣到见底的那一刻自己续上。
+   *
+   * 挂在这里而不是每条法术的 handler 里：**付灵力只有这一处**，
+   * 挂在这里就覆盖了所有法术（包括以后新加的），也不会出现"某条法术忘了续"。
+   */
+  if (ok && tryVoidRefill(c.self, c.state.turn)) {
+    c.api.pushLog(c.state, c.self.owner, '虚无生道：灵力见底，又续了回来');
+  }
+  return ok;
 }
 
 // ── 选目标 + 校验 + 扣灵力 ────────────────────────────────────────

@@ -4555,6 +4555,107 @@ export function run() {
     assert.ok(!save.state.tianyan, '存点用掉了');
   });
 
+  // ── 簇 E · 绝学（2026-11-15）──────────────────────
+
+  test('不周山断：击退并沉默，被沉默的人念不出法术', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(5)); // 6 期，灵力 100
+    teachSpell(mage, spellOf('bu-zhou-shan-duan')!);
+    setMana(mage, 999);
+    const foe = place2(s, 'B', 'qi-cultivator', 6, 7);
+    setCultivationExp(foe, expForRank(4));
+    teachSpell(foe, spellOf('palm-thunder')!);
+    setMana(foe, 999);
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'bu-zhou-shan-duan',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const hit = byId(r.state, foe.id);
+    assert.ok(hit.hp < 500, '挨了伤害');
+    assert.equal(hit.y, 9, '被推远两格');
+    assert.ok(((hit.status?.['spell-silence'] as number) ?? 0) > 0, '挂上了沉默');
+
+    // 轮到他出手：法术放不出来，理由要说沉默
+    r.state.current = 'B';
+    const silenced = applyAction(r.state, {
+      type: 'HERO_SKILL',
+      unitId: foe.id,
+      skillId: 'palm-thunder',
+      targetX: 6,
+      targetY: 5,
+    });
+    assert.equal(silenced.ok, false, '沉默期间不能施法');
+    assert.ok((silenced.ok ? '' : silenced.reason).includes('沉默'), `理由要说沉默：${silenced.ok ? '' : silenced.reason}`);
+  });
+
+  test('以气御剑：射程从飞剑算起，没有剑就放不出来', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期
+    teachSpell(mage, spellOf('yi-qi-yu-jian')!);
+    setMana(mage, 999);
+    const foe = place2(s, 'B', 'militia', 12, 5); // 离人 6 格，超出"人的射程"
+    foe.hp = 500;
+
+    // 没剑：放不出来
+    const noSword = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'yi-qi-yu-jian',
+      targetX: 12,
+      targetY: 5,
+    });
+    assert.equal(noSword.ok, false, '青木剑不在场就御不动');
+    assert.ok((noSword.ok ? '' : noSword.reason).includes('剑'), `理由要说剑：${noSword.ok ? '' : noSword.reason}`);
+
+    // 把剑放到目标旁边：射程从剑算，够得着
+    place2(s, 'A', 'cultivation-artifact-wood', 10, 5);
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'yi-qi-yu-jian',
+      targetX: 12,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(byId(r.state, foe.id).hp < 500, '从剑的位置发出这一剑');
+  });
+
+  test('虚无生道：灵力见底的那一刻自动续满', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力上限 90
+    teachSpell(mage, spellOf('xu-wu-sheng-dao')!);
+    teachSpell(mage, spellOf('palm-thunder')!);
+    setMana(mage, 999);
+
+    // 先挂上虚无生道（70）
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'xu-wu-sheng-dao' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const caster = byId(r.state, mage.id);
+    // 手动把灵力压到"刚好够放一发掌心雷"，放完就见底
+    setMana(caster, 50);
+    const foe = place2(r.state, 'B', 'militia', 6, 7);
+    foe.hp = 500;
+
+    const hit = applyAction(r.state, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'palm-thunder',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(hit.ok, hit.ok ? '' : hit.reason);
+    assert.ok(manaOf(byId(hit.state, mage.id)) > 0, '见底之后又续回来了');
+  });
+
   // ── 吐纳术 / 罡风（2026-11-13）────────────────────
   //
   // 「用法术补强度」的头两发：一个补成长（环境灵气换修为），

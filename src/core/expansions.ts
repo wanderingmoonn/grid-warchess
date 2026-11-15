@@ -539,6 +539,18 @@ export interface ExpansionHooks {
   /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */
   modifyRangeAgainst?: (c: RangeAgainstCtx) => number;
   /**
+   * 这个单位**能不能施法**。返回字符串 = 不能，字符串是给玩家的理由。
+   *
+   * 和 `canCommand` 的分工：那条管"能不能下命令"（移动/攻击/施法一起封），
+   * 这条只封**法术**——沉默就该是"手能动、嘴不能念"，而不是整个人被钉住。
+   */
+  canCastSkill?: (c: {
+    state: GameState;
+    unit: Unit;
+    skill: { id: string; effect: string };
+  }) => string | null;
+
+  /**
    * 这个单位**能不能踏进这一格**。返回 false = 当成挡住。
    *
    * 和 `blockedFor` 的关系：那条是地形/占位/城市这些**引擎自己的**规则，

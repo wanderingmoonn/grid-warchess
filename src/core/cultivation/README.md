@@ -141,6 +141,8 @@ registerPreview([ROW]);     // 瞄准高亮：不用自己写
 - **族 7 攻击附加 `strikeBonus`**（`skills/strike-bonus.ts`）：给下一次命中挂结算，
   消费点在 `hooks.onUnitDamaged`（那里能拿到**实际伤害**）。
 - **族 9 资源经济 `economy`**（`skills/economy.ts`）：灵气/脚程换修为。
+- **簇 E 绝学 `legacy`**（`skills/legacy.ts`）：不周山断、以气御剑、虚无生道。
+  沉默走核心闸 `canCastSkill`（只封法术）；续气挂在 `paySpellCost`（唯一付灵力处）。
 - **簇 C 规则豁免 `rewrite`**（`skills/rewrite.ts`）：大道三千、一元复始、诸邪辟易、
   万族之劫、破碎虚空、天下皆白、平等图腾、绝地天通、法相天地，
   外加 `bolt` 家族的穷极（射程 99 = 全图）。

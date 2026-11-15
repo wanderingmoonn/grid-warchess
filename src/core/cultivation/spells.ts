@@ -256,6 +256,17 @@ import {
   TIAN_YAN_SI_JIU_SKILL,
 } from './skills/tianyan.ts';
 import {
+  BU_ZHOU_SHAN_DUAN_COST,
+  BU_ZHOU_SHAN_DUAN_MIN_RANK,
+  BU_ZHOU_SHAN_DUAN_SKILL,
+  XU_WU_SHENG_DAO_COST,
+  XU_WU_SHENG_DAO_MIN_RANK,
+  XU_WU_SHENG_DAO_SKILL,
+  YI_QI_YU_JIAN_COST,
+  YI_QI_YU_JIAN_MIN_RANK,
+  YI_QI_YU_JIAN_SKILL,
+} from './skills/legacy.ts';
+import {
   HUA_SHEN_FEN_SHEN_COST,
   HUA_SHEN_FEN_SHEN_MIN_RANK,
   HUA_SHEN_FEN_SHEN_SKILL,
@@ -473,6 +484,10 @@ export const SPELLS: readonly SpellDef[] = [
   { skill: LAN_KE_QI_JU_SKILL, cost: LAN_KE_QI_JU_COST, minRank: LAN_KE_QI_JU_MIN_RANK },
   // 天衍四九（2026-11-15）：只回滚棋盘，账目留下并标注
   { skill: TIAN_YAN_SI_JIU_SKILL, cost: TIAN_YAN_SI_JIU_COST, minRank: TIAN_YAN_SI_JIU_MIN_RANK },
+  // ── 簇 E · 绝学（2026-11-15）──────────────────────
+  { skill: BU_ZHOU_SHAN_DUAN_SKILL, cost: BU_ZHOU_SHAN_DUAN_COST, minRank: BU_ZHOU_SHAN_DUAN_MIN_RANK },
+  { skill: YI_QI_YU_JIAN_SKILL, cost: YI_QI_YU_JIAN_COST, minRank: YI_QI_YU_JIAN_MIN_RANK },
+  { skill: XU_WU_SHENG_DAO_SKILL, cost: XU_WU_SHENG_DAO_COST, minRank: XU_WU_SHENG_DAO_MIN_RANK },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */

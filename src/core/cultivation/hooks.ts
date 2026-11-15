@@ -20,6 +20,7 @@ import { knifeMarkOf } from './skills/record.ts';
 import { DREAM_RING_KEY, dreamRingOf, dreamRecordOf } from './skills/dream.ts';
 import { returnFromTimeGap } from './skills/timegap.ts';
 import { restoreFromTianyan } from './skills/tianyan.ts';
+import { SILENCE_STATUS } from './legacy-status.ts';
 import { daiTargetOf } from './transfer.ts';
 import { BEETLE_STATUS } from './skills/sequence.ts';
 import { SHADOW_BOARD, SHADOW_DAMAGE, BANISH_KEY, type BanishMark } from './shadow-world.ts';
@@ -505,6 +506,19 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	 * 走 `canEnterTile` 而不是 `canCommand`：他要能打、能施法，
 	 * 只是**走不出这个圈**。`canCommand` 会连攻击一起封掉，那是封印的语义。
 	 */
+	/*
+	 * 沉默：只封法术。
+	 *
+	 * 和 `canCommand` 分开：封住的是"念咒"，不是手脚——他还能走、还能普攻。
+	 * 用 `canCommand` 会变成"整个人被钉住"，那是封印。
+	 */
+	canCastSkill: ({ unit }) => {
+		if (((unit.status?.[SILENCE_STATUS] ?? 0) as number) > 0) {
+			return '被沉默封住了法门，念不出法术';
+		}
+		return null;
+	},
+
 	canEnterTile: ({ unit, x, y }) => {
 		const ring = unit.custom?.[DREAM_RING_KEY] as
 			| { cx: number; cy: number; radius: number }
