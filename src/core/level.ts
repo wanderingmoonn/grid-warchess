@@ -533,7 +533,7 @@ export const LEVELS: LevelDef[] = [
      * 配合三支过河突击队，压力才是持续的——单靠参数不够（实测过：只调参数时
      * 它最多多过去一两个兵，城一滴血不掉）。
      */
-    ai: { riskAversion: 0.6, cohesion: 0.4 },
+    ai: { riskAversion: 0, cohesion: 0, appetite: 3 },
     deploy: {
       A: [
         { type: 'militia', x: 4, y: 7 },
@@ -589,11 +589,11 @@ export const LEVELS: LevelDef[] = [
     events: [
       {
         id: 'blow',
-        when: { kind: 'turn', at: 9 },
+        when: { kind: 'turn', at: 10 },
         do: [
           { kind: 'say', text: '桥被炸断了。' },
           // 四格一起炸。区域少写一行，桥就只塌一半——看着像"炸桥没生效"
-          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'deep' },
+          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'water' },
         ],
       },
       /*
@@ -608,7 +608,7 @@ export const LEVELS: LevelDef[] = [
        */
       {
         id: 'wave-1',
-        when: { kind: 'turn', at: 5 },
+        when: { kind: 'turn', at: 3 },
         do: [
           { kind: 'say', text: '东边的路上又上来一队人。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
@@ -616,14 +616,22 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-2',
-        when: { kind: 'turn', at: 10 },
+        when: { kind: 'turn', at: 5 },
+        do: [
+          { kind: 'say', text: '东边的路上又上来一队人。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
+        ],
+      },
+      {
+        id: 'wave-3',
+        when: { kind: 'turn', at: 7 },
         do: [
           { kind: 'say', text: '对岸又有人在动。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
         ],
       },
       {
-        id: 'wave-3',
+        id: 'wave-4',
         when: { kind: 'turn', at: 12 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
@@ -631,59 +639,32 @@ export const LEVELS: LevelDef[] = [
         ],
       },
       {
-        id: 'wave-4',
-        when: { kind: 'turn', at: 22 },
+        id: 'wave-5',
+        when: { kind: 'turn', at: 15 },
         do: [
           { kind: 'say', text: '又上来一队人，这次带着弓手。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
         ],
       },
       {
-        id: 'wave-5',
-        when: { kind: 'turn', at: 25 },
-        do: [
-          { kind: 'say', text: '最后一批。撑过去就是你的。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
-        ],
-      },
-      /*
-       * 三支过河突击队。
-       *
-       * 为什么不是"让 AI 自己过来"：实测过，它不会。河把战线切两段，先过去的几个
-       * 算"在战线前面"，于是停下等队友；队友被两格宽的桥堵在另一头，整支部队就
-       * 僵在桥头。改关卡 AI 参数（`riskAversion` / `cohesion`）只能让它多过去一两个，
-       * 城照样一滴血不掉。**投送是它的硬伤，那就别让它投送──直接把突击队放到西岸。**
-       *
-       * 时间点都排在"水退"之后：桥没了、水退了，他们是涉水过来的，剧情上说得通。
-       * 每波三个民兵，落点在河岸与城之间：玩家兵力薄就守不住，厚就能吃掉。
-       */
-      {
-        id: 'cross-1',
-        when: { kind: 'turn', at: 16 },
-        do: [
-          { kind: 'say', text: '他们淌过河了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 6 }, { type: 'militia', x: 5, y: 7 }, { type: 'militia', x: 6, y: 7 }] },
-        ],
-      },
-      {
-        id: 'cross-2',
+        id: 'wave-6',
         when: { kind: 'turn', at: 15 },
         do: [
-          { kind: 'say', text: '西岸的河滩上又聚起一群人。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 8 }, { type: 'militia', x: 6, y: 8 }, { type: 'archer', x: 6, y: 9 }] },
+          { kind: 'say', text: '又上来一队人，这次带着弓手。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
         ],
       },
       {
-        id: 'cross-3',
-        when: { kind: 'turn', at: 24 },
+        id: 'wave-7',
+        when: { kind: 'turn', at: 20 },
         do: [
-          { kind: 'say', text: '又一批涉水过来了，这次带着弓手。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 5 }, { type: 'militia', x: 6, y: 5 }, { type: 'archer', x: 6, y: 6 }] },
+          { kind: 'say', text: '东岸又有人在集结。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'knight', x: 13, y: 7 }, { type: 'knight', x: 13, y: 8 }] },
         ],
       },
       {
         id: 'ebb',
-        when: { kind: 'turn', at: 14 },
+        when: { kind: 'turn', at: 15 },
         do: [
           { kind: 'say', text: '水位退了。整条河都能淌过去。' },
           { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
