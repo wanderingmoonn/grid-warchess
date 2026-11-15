@@ -3599,6 +3599,38 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   if (dctx.result.blasts > 0) sweepDead(s);
 }
 
+/**
+ * 关卡目标现在成立吗？成立就返回赢家。
+ *
+ * 只回答"谁赢"，不回答"谁输"——失败照旧走原来的出局判定（城丢光、没兵又造不起）。
+ * 这是批次 4 敢动这块地基的原因：**只加"提前宣布赢"，不改任何原有判定**。
+ */
+function levelGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): PlayerId | null {
+  if (goal.kind === 'survive') {
+    // 还没到点
+    if (s.turn < goal.untilTurn) return null;
+    // 到点了。守方要是已经出局，那就轮不到它赢（这一手之前的 checkWinner 早该判完了）
+    return isEliminated(s, goal.seat) ? null : goal.seat;
+  }
+  if (goal.kind === 'escort') {
+    const arrived = s.units.some(
+      (u) =>
+        u.owner === goal.seat &&
+        (!goal.unitType || u.type === goal.unitType) &&
+        u.x >= goal.zone.x0 &&
+        u.x <= goal.zone.x1 &&
+        u.y >= goal.zone.y0 &&
+        u.y <= goal.zone.y1,
+    );
+    return arrived ? goal.seat : null;
+  }
+  // assassinate：被斩那一方场上已经没有这个兵种的兵了
+  const stillThere = s.units.some(
+    (u) => u.owner === goal.loser && (!goal.unitType || u.type === goal.unitType),
+  );
+  return stillThere ? null : goal.winner;
+}
+
 function checkWinner(s: GameState): PlayerId | null {
   // 上帝模式不判负。
   //
@@ -3607,6 +3639,24 @@ function checkWinner(s: GameState): PlayerId | null {
   // 按城判负会让第一回合就弹出"你赢了"，沙盒直接没法用。
   // 真正的停止条件是"一方没兵了"，由界面来判（main.ts 的 runGodFight）。
   if (s.config.godMode === true) return null;
+
+  /*
+   * 关卡目标：**提前**宣布赢。
+   *
+   * 排在扩展的特殊胜利之前：扩展那条是"通用规则的一个例外"（比如占了月球就赢），
+   * 而关卡目标说的是"这一局本来是怎么设计的"，后者更该优先。
+   *
+   * 注意这里只做"提前赢"，**不接管"怎么算输"**——城丢光、没兵又造不起，
+   * 仍然由下面的老判定处理。所以守城关城破了自然输，作者不用另写一条失败条件，
+   * 普通对局也一个字都不受影响。
+   */
+  const goals = s.config.level?.goals;
+  if (goals && goals.length > 0) {
+    for (const g of goals) {
+      const winner = levelGoalWinner(s, g);
+      if (winner) return winner;
+    }
+  }
 
   // 扩展特殊胜利条件
   for (const e of activeExpansions(s)) {
@@ -4252,6 +4302,167 @@ function commandBlockedBy(s: GameState, action: Action): string | null {
   return null;
 }
 
+/* ===========================================================================
+ * 关卡事件
+ * ======================================================================== */
+
+/**
+ * 事件刷兵：不看钱、不看出兵点、不看编制，只看"这一格站不站得住"。
+ *
+ * 和沙盒的 `placeUnit` 是同一条判据（别人的城里不放兵 + 站得住），
+ * 但**没有直接复用它**：`sandbox.ts` 反过来依赖 rules，rules 再去 import sandbox
+ * 就成了环。两边各写一遍判断是这里唯一能接受的做法，所以下面这三条一旦要改，
+ * 记得 `sandbox.placeUnit` 里也有一份。
+ *
+ * 返回失败原因（null = 成功）。
+ */
+function spawnFromEvent(s: GameState, owner: PlayerId, type: string, x: number, y: number): string | null {
+  const def = s.unitTypes[type];
+  if (!def) return `本局没有「${type}」这个兵种`;
+  if (x < 0 || y < 0 || x >= s.w || y >= s.h) return '坐标在棋盘外';
+  const city = cityAt(s, x, y);
+  if (city && city.owner !== owner) return `那是第 ${city.owner} 家的城，兵摆不进去`;
+  if (!canStandAt(s, x, y, type)) return '这一格站不住';
+  s.units.push({
+    id: `u${s.nextUnitSeq++}`,
+    type: def.id,
+    owner,
+    x,
+    y,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  return null;
+}
+
+/** 一次动作里最多让多少条事件生效。防的是"写错的条件每次动作都成立"把一局刷爆 */
+const MAX_EVENTS_PER_ACTION = 12;
+
+/**
+ * 跑一遍关卡事件表。
+ *
+ * ── 三件必须记住的事 ────────────────────────────────────────────────
+ *
+ * 1. **只读局面，不读外面的东西**。电脑试走会跑同一套结算，事件也会被演练；
+ *    只读局面，演练结果才和真走一致（试完扔掉即可）。
+ *
+ * 2. **"发生过没有"记在 `s.levelState.fired` 里**，不放模块级变量。
+ *    放程序里会被试走改乱，表现是"有时候事件不触发"，而且查不出来。
+ *
+ * 3. **差量只看 `prev → cur`**，事件自己刷出来的兵不参与判断。
+ *    否则"在区域里刷一个兵"会立刻触发"有人进入区域"，自己点燃自己。
+ *
+ * 参数是"这一手之前"和"这一手之后"两份局面；`cur` 会被就地修改。
+ */
+export function runLevelEvents(prev: GameState, cur: GameState): void {
+  const events = cur.config.level?.events;
+  if (!events || events.length === 0) return;
+  /*
+   * 先把"还没触发的"挑出来，一条都没有就直接走人。
+   *
+   * 这条早退不是优化洁癖：电脑试走时**每一步**都会调用本函数，
+   * 一局里绝大多数动作都不含"新事件"（该触发的早触发了）。不早退的话，
+   * 下面那次差量比较要为每一步付一次钱——实测会把电脑想一手的耗时抬高一截。
+   */
+  const fired = new Set(cur.levelState?.fired ?? []);
+  const pending = events.filter((e) => e.repeat === true || !fired.has(e.id));
+  if (pending.length === 0) return;
+
+  /*
+   * 差量用 id 建表来算，不写 `filter + some`。
+   *
+   * 那种写法是 O(n²)：20 个兵就是 400 次比较，而它会被电脑试走的每一步调用。
+   * 换成 Map/Set 之后是一次遍历，和兵数成正比。
+   */
+  const aliveById = new Map<string, Unit>();
+  for (const u of cur.units) aliveById.set(u.id, u);
+  /** 这一手没了的兵（可能不止一个：溅射、桥塌落水） */
+  const died: Unit[] = [];
+  /** 这一手挪过位置、且挪完活着的兵 */
+  const moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }> = [];
+  for (const u of prev.units) {
+    const now = aliveById.get(u.id);
+    if (!now) {
+      died.push(u);
+      continue;
+    }
+    if (now.x !== u.x || now.y !== u.y) {
+      moved.push({ owner: u.owner, type: u.type, fromX: u.x, fromY: u.y, x: now.x, y: now.y });
+    }
+  }
+
+  let ran = 0;
+  for (const ev of pending) {
+    if (ran >= MAX_EVENTS_PER_ACTION) break;
+    if (!eventMatches(ev.when, cur, died, moved)) continue;
+
+    fired.add(ev.id);
+    ran += 1;
+    for (const act of ev.do) runEventAction(cur, act);
+  }
+
+  if (ran > 0) cur.levelState = { fired: [...fired] };
+}
+
+function eventMatches(
+  when: import('./level.ts').LevelWhen,
+  cur: GameState,
+  died: Unit[],
+  moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>,
+): boolean {
+  if (when.kind === 'turn') {
+    /*
+     * 用 `>=` 而不是 `===`。
+     *
+     * 事件的意图是"到第 N 次行动时发生"，而不是"恰好第 N 次行动那一下发生"。
+     * 用等号的话，一旦某次结算没有跑事件（比如动作被拒、或者扩展里某条路径
+     * 直接改了局面），这一刻就永远错过了，而且不报错——作者只会觉得"事件没生效"。
+     */
+    return cur.turn >= when.at;
+  }
+  if (when.kind === 'unitDied') {
+    return died.some(
+      (u) => (!when.owner || u.owner === when.owner) && (!when.type || u.type === when.type),
+    );
+  }
+  // enter：从区域外走进区域内（原本就在里面、只是挪了一格的不算"进入"）
+  return moved.some((m) => {
+    if (when.owner && m.owner !== when.owner) return false;
+    const z = when.zone;
+    const inside = (x: number, y: number): boolean => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1;
+    return !inside(m.fromX, m.fromY) && inside(m.x, m.y);
+  });
+}
+
+function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
+  if (act.kind === 'say') {
+    /*
+     * 旁白写进战报，**公开**（`open`）——这一关发生的事双方都该看到。
+     * `player` 只是给界面配色的占位：战报条目必须有这么个字段。
+     */
+    s.log.push({ turn: s.turn, player: 'A', text: act.text, open: true, system: true });
+    return;
+  }
+  if (act.kind === 'spawn') {
+    for (const u of act.units) {
+      const why = spawnFromEvent(s, act.owner, u.type, u.x, u.y);
+      // 摆不上去就说一声：静默跳过会让作者以为"我明明写了"
+      if (why) s.log.push({ turn: s.turn, player: 'A', text: `关卡刷兵：${why}（${u.type}）`, open: true, system: true });
+    }
+    return;
+  }
+  // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
+  s.orderDirectives = {
+    ...(s.orderDirectives ?? {}),
+    [act.seat]: {
+      strategy: act.strategy,
+      ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
+    },
+  };
+}
+
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
@@ -4398,6 +4609,13 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
     recordDeaths(result.state, rosterBefore, action);
     result.state.winner = result.state.winner ?? checkWinner(result.state);
     refreshMemory(result.state);
+    /*
+     * 关卡事件：**放在最后**，这一手的结算、战损、胜负全判完之后再跑。
+     *
+     * 放前面的坏处是实实在在的：事件刷出来的兵会被算进"这一手干掉了多少人"，
+     * 事件里判的胜负会被后面的 checkWinner 覆盖掉。
+     */
+    runLevelEvents(s, result.state);
   }
 
   return result;
@@ -5976,13 +6194,20 @@ function doRecruit(
  * 指挥官模式下这一方的生产序列（只读副本）。普通对局返回空数组。
  */
 /**
- * 指挥官模式下这一方"怎么打"：策略 + 进攻方向。
+ * 这一方"怎么打"：策略 + 进攻方向。
  *
- * 普通对局、或者玩家没定过，一律返回 `{ strategy: 'auto' }`——也就是"AI 按自己的
- * 判断来"，和这个机制上线之前的行为完全一致。所以老存档、旧回放读出来都不变。
+ * 两个来源，语义一样（都是"给 AI 的一句话"）：
+ *   · 指挥官模式里玩家排的；
+ *   · 关卡事件里作者写的（"第 6 回合起转猛攻"）。
+ *
+ * 2026-11-15 之前这里有一句 `if (!s.config.commanderMode) return auto`——
+ * 那是"只有指挥官模式才会有这个字段"时代的护栏。关卡事件要复用同一个字段、
+ * 让同一套 AI 读取逻辑生效，所以把护栏去掉了。
+ *
+ * 去掉是安全的：`orderDirectives` 目前只有这两处会写，普通对局读出来仍是 undefined，
+ * 返回 `{ strategy: 'auto' }` 和以前一字不差。老存档、老复盘不受影响。
  */
 export function orderDirectiveOf(s: GameState, player: PlayerId): OrderDirective {
-  if (!s.config.commanderMode) return { strategy: 'auto' };
   return s.orderDirectives?.[player] ?? { strategy: 'auto' };
 }
 

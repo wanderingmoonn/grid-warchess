@@ -374,6 +374,27 @@ body {
   font-weight: 600;
 }
 
+/*
+ * 关卡目标（"守住 20 次行动（还剩 12）"）。
+ *
+ * 和回合胶囊同一套形状，但用主色描边：它是**这一局特有的东西**，
+ * 不该和"第几回合 / 轮到谁"混成一片。普通对局这一块是 hidden，不占位。
+ */
+.level-goal {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 11px;
+  border: 1px solid var(--a);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: nowrap;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .side-dot {
   width: 7px;
   height: 7px;

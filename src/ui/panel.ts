@@ -2225,6 +2225,13 @@ export interface TopbarState {
   /** 观战位：既不是等对方，也不是轮到我 */
   spectator?: boolean;
   /**
+   * 关卡目标（"守住 20 次行动（还剩 12）"）。空串＝普通对局，不占位。
+   *
+   * 放顶栏而不是塞进战报：这是**这一局每一刻都要知道的事**，
+   * 埋在战报里等于让玩家自己记着"我到底在守到什么时候"。
+   */
+  goalLine?: string;
+  /**
    * 正在复盘（看一份回放）。
    *
    * 和观战位不是一回事：观战位至少还是**一局活着的棋**，对面可能正在走；
@@ -2265,6 +2272,8 @@ export function topbarShell(): string {
       <span class="side-dot a" data-ref="dot"></span>
       <span data-ref="who"></span>
     </div>
+    <!-- 关卡目标：普通对局没有这一块（hidden） -->
+    <span class="level-goal" data-ref="goal" hidden></span>
     <!-- 扩展的常驻徽章（季节、以后的潮汐/瘟疫……）：只读文字，由 main 填 -->
     <div class="topbar-badges" data-ref="topbar-badges"></div>
     <!--
@@ -2322,6 +2331,8 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     s.god ? 1 : 0,
     s.fog ? 1 : 0,
     s.blackout ? 1 : 0,
+    // 目标那一行里的"还剩几次"每回合都会变，进签名才会跟着重绘
+    s.goalLine ?? '',
   ].join('|');
   if (topbarSigs.get(root) === sig) return false;
   topbarSigs.set(root, sig);
@@ -2351,6 +2362,13 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
   if (room) {
     room.hidden = !s.roomCode;
     if (s.roomCode) room.textContent = `${s.spectator ? '观战' : '房间'} ${s.roomCode}`;
+  }
+
+  const goal = ref('goal');
+  if (goal) {
+    const text = s.goalLine ?? '';
+    goal.hidden = text === '';
+    if (text !== '') goal.textContent = text;
   }
 
   const pause = ref('pause');

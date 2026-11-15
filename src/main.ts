@@ -21,6 +21,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
+import { goalText } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
@@ -1026,6 +1027,26 @@ function me(): PlayerId {
 }
 
 /**
+ * 顶栏那一行"这一局的目标"。
+ *
+ * 普通对局没有关卡，返回空串，顶栏那一块就不占位。
+ * 守到第 N 次行动的那一条会带上"还剩几次"——那是玩家真正想知道的东西，
+ * 光写"守住 20 次行动"他得自己数，而顶栏的回合数是**行动序号**，本来就不好数。
+ */
+function levelGoalLine(s: GameState): string {
+  const goals = s.config.level?.goals;
+  if (!goals || goals.length === 0) return '';
+  const parts = goals.map((g) => {
+    if (g.kind === 'survive') {
+      const left = Math.max(0, g.untilTurn - s.turn + 1);
+      return `守住 ${g.untilTurn} 次行动（还剩 ${left}）`;
+    }
+    return goalText(g);
+  });
+  return `目标：${parts.join(' · ')}`;
+}
+
+/**
  * 战报用谁的眼睛看：null = 全都看得见。
  *
  * 只看自己这一方，是因为"对面造了什么、走了哪、攒了多少钱"属于迷雾该管的事。
@@ -1760,6 +1781,7 @@ function render(): void {
     god: state.config.godMode === true,
     commander: state.config.commanderMode === true,
     commanderRunning,
+    goalLine: levelGoalLine(state),
   });
   // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
   // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。

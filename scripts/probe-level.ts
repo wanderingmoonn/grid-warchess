@@ -19,7 +19,7 @@
 
 import { aiNextAction } from '../src/core/ai.ts';
 import { isAiSide } from '../src/core/ai-meta.ts';
-import { applyAction } from '../src/core/rules.ts';
+import { applyAction, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { LEVELS, levelById, validateLevel } from '../src/core/level.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
@@ -456,6 +456,253 @@ line('11. 坏部署');
     `实际 ${s.units.filter((u) => u.owner === 'A').length} 个`);
   const notes = s.log.map((l) => l.text).filter((t) => t.includes('关卡部署'));
   check(notes.length === 2, `战报里有两条说明（${notes.length}）`, `期望 2 条，实际 ${notes.length}：${notes.join(' / ')}`);
+}
+
+/* ── 12. 事件表（批次 3）────────────────────────────────────── */
+line('12. 事件表：「断后」的三件事');
+if (!rear) {
+  bad('没有断后关卡，事件测不了', '');
+} else {
+  let ev = createMatch({ ...DEFAULT_CONFIG, level: rear }, 20261114);
+  check((ev.levelState?.fired ?? []).length === 0, '开局一条事件都没触发（第 3 次行动的条件还没到）',
+    `实际已触发 ${(ev.levelState?.fired ?? []).join(' ')}`);
+
+  // 推进到第 3 次行动：两次结束回合就够了
+  for (let i = 0; i < 4 && ev.turn < 3; i++) {
+    const r = applyAction(ev, { type: 'END_TURN' } as Action);
+    if (!r.ok) break;
+    ev = r.state;
+  }
+  check(ev.turn >= 3, `推到第 ${ev.turn} 次行动`);
+  check((ev.levelState?.fired ?? []).includes('reinforce'), '第 3 次行动：援兵事件触发了',
+    `已触发 ${(ev.levelState?.fired ?? []).join(' ') || '无'}`);
+  check(ev.units.filter((u) => u.owner === 'B').length === 7, '援兵真的到场（攻方 5 → 7）',
+    `实际 ${ev.units.filter((u) => u.owner === 'B').length} 个`);
+  check(ev.log.some((l) => l.text.includes('旌旗')), '播报写进了战报');
+  const say = ev.log.find((l) => l.text.includes('旌旗'));
+  check(!!say?.open && say?.system === true, '旁白是公开的、并标了 system（双方都看得到）');
+
+  // 让电脑自己打一段：守桥兵应该会死，之后"桥丢了"和"上桥"两件事都会触发
+  for (let i = 0; i < 120; i++) {
+    if (ev.winner) break;
+    const pick = aiNextAction(ev) ?? ({ type: 'END_TURN' } as Action);
+    const r = applyAction(ev, pick);
+    if (!r.ok) {
+      const end = applyAction(ev, { type: 'END_TURN' } as Action);
+      if (!end.ok) break;
+      ev = end.state;
+    } else {
+      ev = r.state;
+    }
+  }
+  const fired = ev.levelState?.fired ?? [];
+  check(fired.includes('bridge-lost'), `守桥兵阵亡触发了事件（已触发：${fired.join(' ') || '无'}）`);
+  check(fired.includes('crossed'), `攻方踩上桥面触发了事件（已触发：${fired.join(' ') || '无'}）`);
+  check(ev.orderDirectives?.B?.strategy === 'rush', '事件改了绿/蓝方的打法（转猛攻）',
+    `实际 ${JSON.stringify(ev.orderDirectives?.B ?? null)}`);
+  check(new Set(fired).size === fired.length, '同一件事不会被记两次');
+
+  // 存档往返：触发记录必须活下来（否则读档之后事件会重放一遍）
+  const round = JSON.parse(JSON.stringify(ev)) as GameState;
+  check(
+    JSON.stringify(round.levelState?.fired ?? []) === JSON.stringify(fired),
+    '存读之后"已经触发过"的记录还在',
+  );
+  const unitsBefore = round.units.length;
+  runLevelEvents(round, round);
+  check(round.units.length === unitsBefore, '读档后再跑一遍事件不会重放（兵数没变）',
+    `重跑之后从 ${unitsBefore} 变成 ${round.units.length}`);
+}
+
+/* ── 13. enter 条件的精确语义 ─────────────────────────────────── */
+line('13. "走进区域"必须是"从外面走进去"');
+{
+  /*
+   * 这一条不靠 AI 跑，而是自己造一关、走一步。
+   * 因为「断后」里的 enter 依赖电脑愿不愿意推过来，那是关卡设计的事；
+   * 机制本身必须能确定地验：原本就在区域里的兵挪一格，不该算"进入"。
+   */
+  const mkEnter = (events: unknown[]) => ({
+    ...LEVELS[0]!,
+    id: 'level:test-enter',
+    seats: { count: 2, ai: [] },
+    deploy: {
+      A: [{ type: 'militia', x: 4, y: 5 }],
+      B: [{ type: 'militia', x: 11, y: 11 }],
+    },
+    events,
+  });
+  const s = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      level: mkEnter([
+        {
+          id: 'step',
+          when: { kind: 'enter', zone: { x0: 5, y0: 5, x1: 5, y1: 5 }, owner: 'A' },
+          do: [{ kind: 'say', text: '踩到了' }],
+        },
+      ]) as never,
+    },
+    42,
+  );
+  const u = s.units.find((x) => x.owner === 'A')!;
+  const r = applyAction(s, { type: 'MOVE', unitId: u.id, x: 5, y: 5 } as Action);
+  if (!r.ok) {
+    bad('测试局：这一手能走', r.reason);
+  } else {
+    const st = r.state;
+    check((st.levelState?.fired ?? []).includes('step'), '走进区域触发了事件',
+      `已触发 ${(st.levelState?.fired ?? []).join(' ') || '无'}`);
+    check(st.log.some((l) => l.text === '踩到了'), '播报写进战报');
+
+    // 走回 (4,5) 再走回来：不能重复触发（默认只触发一次）
+    const back = applyAction(st, { type: 'MOVE', unitId: u.id, x: 4, y: 5 } as Action);
+    const again = back.ok
+      ? applyAction(back.state, { type: 'MOVE', unitId: u.id, x: 5, y: 5 } as Action)
+      : null;
+    if (again && again.ok) {
+      const says = again.state.log.filter((l) => l.text === '踩到了').length;
+      check(says === 1, '再进一次不会重复触发（默认只发生一次）', `实际播报了 ${says} 次`);
+    }
+  }
+}
+
+/* ── 14. 事件写错了挡得住 ────────────────────────────────────── */
+line('14. 坏事件');
+{
+  const mk = (events: unknown): unknown => ({ ...rear!, id: 'level:x', events });
+  const cases: Array<[string, unknown]> = [
+    ['没写 id', mk([{ when: { kind: 'turn', at: 2 }, do: [{ kind: 'say', text: 'x' }] }])],
+    ['id 重复', mk([
+      { id: 'a', when: { kind: 'turn', at: 2 }, do: [{ kind: 'say', text: 'x' }] },
+      { id: 'a', when: { kind: 'turn', at: 3 }, do: [{ kind: 'say', text: 'y' }] },
+    ])],
+    ['条件不认识', mk([{ id: 'a', when: { kind: 'moonPhase' }, do: [{ kind: 'say', text: 'x' }] }])],
+    ['动作不认识', mk([{ id: 'a', when: { kind: 'turn', at: 2 }, do: [{ kind: 'explode' }] }])],
+    ['区域越界', mk([{
+      id: 'a',
+      when: { kind: 'enter', zone: { x0: 0, y0: 0, x1: 99, y1: 99 } },
+      do: [{ kind: 'say', text: 'x' }],
+    }])],
+    ['给不存在的席位刷兵', mk([{
+      id: 'a', when: { kind: 'turn', at: 2 },
+      do: [{ kind: 'spawn', owner: 'D', units: [{ type: 'militia', x: 1, y: 1 }] }],
+    }])],
+    ['没有动作', mk([{ id: 'a', when: { kind: 'turn', at: 2 }, do: [] }])],
+  ];
+  for (const [label, raw] of cases) {
+    const res = validateLevel(raw);
+    check(!res.ok && res.errors.length > 0, `${label}：被拒并给出原因`, res.ok ? '居然通过了' : '被拒但没有原因');
+  }
+}
+
+/* ── 15. 胜负条件（批次 4）────────────────────────────────────── */
+line('15. 胜负条件：「死守」守到第 20 次行动');
+{
+  const hold = levelById('level:hold-out');
+  if (!hold) {
+    bad('找不到 level:hold-out', '注册表里没有这张关卡');
+  } else {
+    const s = createMatch({ ...DEFAULT_CONFIG, level: hold }, 20261115);
+    check((s.config.level?.goals ?? []).length === 1, '目标进了局面');
+    check(s.log.some((l) => l.text.includes('这一关的目标')), '开局战报里写了目标');
+    check(s.winner === null, '开局没有判赢');
+
+    // 两边都只结束回合：谁也别打谁，看 20 次行动到点时会不会判守方赢
+    let cur = s;
+    let steps = 0;
+    for (; steps < 30 && !cur.winner; steps++) {
+      const r = applyAction(cur, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      cur = r.state;
+    }
+    check(cur.winner === 'A', `守满就赢（胜方 ${cur.winner ?? '无'}）`,
+      `第 ${cur.turn} 次行动时胜方是 ${cur.winner ?? '无'}`);
+    check(cur.turn >= 20 && cur.turn <= 21, `判赢的时机在第 20 次行动（实际第 ${cur.turn} 次）`);
+    // 这时候攻方明明还活着——赢不是因为把对手打光了，是目标达成了
+    check(cur.cities.filter((c) => c.owner === 'B').length > 0, '攻方还有城（不是被灭，是守住了）');
+  }
+}
+
+/* ── 16. 目标不接管"怎么输" ──────────────────────────────────── */
+line('16. 目标只管赢，输还是按老规则判');
+{
+  const hold = levelById('level:hold-out')!;
+  let cur = createMatch({ ...DEFAULT_CONFIG, level: hold }, 20261115);
+  /*
+   * 手动把守方的城抹掉，模拟"城破了"。
+   *
+   * 这里是在造一个局面，不是在测规则——所以直接改 state 合理。
+   * 想验的是：**目标没达成时，老判定照旧生效**，不会因为"这一关有目标"就不判输。
+   */
+  cur.cities = cur.cities.filter((c) => c.owner !== 'A');
+  const r = applyAction(cur, { type: 'END_TURN' } as Action);
+  check(r.ok && r.state.winner === 'B', '守方城破：攻方赢，没有因为"目标还在"就继续打',
+    `胜方 ${r.ok ? r.state.winner ?? '无' : r.reason ?? '动作被拒'}`);
+}
+
+/* ── 17. 护送 / 斩首 ─────────────────────────────────────────── */
+line('17. 另外两种目标');
+{
+  const base = LEVELS[0]!;
+  const mk = (goals: unknown[]) => ({
+    ...base,
+    id: 'level:test-goal',
+    seats: { count: 2, ai: [] },
+    deploy: {
+      A: [{ type: 'militia', x: 4, y: 5 }],
+      B: [{ type: 'militia', x: 10, y: 10 }, { type: 'scout', x: 10, y: 9 }],
+    },
+    goals,
+  });
+
+  // 护送：A 那个兵走到 (5,5) 就赢
+  const escort = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      level: mk([{ kind: 'escort', seat: 'A', zone: { x0: 5, y0: 5, x1: 5, y1: 5 } }]) as never,
+    },
+    7,
+  );
+  const u = escort.units.find((x) => x.owner === 'A')!;
+  const moved = applyAction(escort, { type: 'MOVE', unitId: u.id, x: 5, y: 5 } as Action);
+  check(moved.ok && moved.state.winner === 'A', '护送：走到终点就赢',
+    `胜方 ${moved.ok ? moved.state.winner ?? '无' : moved.reason ?? '动作被拒'}`);
+
+  // 斩首：B 的斥候没了就判 A 赢
+  const assass = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      level: mk([{ kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'scout' }]) as never,
+    },
+    7,
+  );
+  check(assass.winner === null, '斩首：目标还在，不判赢');
+  const before = assass.units.filter((x) => x.owner === 'B' && x.type === 'scout').length;
+  check(before === 1, `被斩方开局确实有那个兵（${before} 个）`);
+  // 直接从局面上拿掉那个斥候，再走一步让结算跑一遍
+  assass.units = assass.units.filter((x) => !(x.owner === 'B' && x.type === 'scout'));
+  const after = applyAction(assass, { type: 'END_TURN' } as Action);
+  check(after.ok && after.state.winner === 'A', '斩首：目标没了就判赢',
+    `胜方 ${after.ok ? after.state.winner ?? '无' : after.reason ?? '动作被拒'}`);
+}
+
+/* ── 18. 坏目标挡得住 ───────────────────────────────────────── */
+line('18. 写错的胜利条件');
+{
+  const hold = levelById('level:hold-out')!;
+  const mk = (goals: unknown): unknown => ({ ...hold, id: 'level:x', goals });
+  const cases: Array<[string, unknown]> = [
+    ['类型不认识', mk([{ kind: 'win' }])],
+    ['守方不是这一局的人', mk([{ kind: 'survive', seat: 'D', untilTurn: 10 }])],
+    ['时限越界', mk([{ kind: 'survive', seat: 'A', untilTurn: 0 }])],
+    ['护送终点越界', mk([{ kind: 'escort', seat: 'A', zone: { x0: 0, y0: 0, x1: 99, y1: 99 } }])],
+    ['斩首自己', mk([{ kind: 'assassinate', winner: 'A', loser: 'A' }])],
+  ];
+  for (const [label, raw] of cases) {
+    const res = validateLevel(raw);
+    check(!res.ok && res.errors.length > 0, `${label}：被拒并给出原因`, res.ok ? '居然通过了' : '被拒但没有原因');
+  }
 }
 
 /* ── 汇总 ─────────────────────────────────────────────────────── */

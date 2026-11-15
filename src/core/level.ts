@@ -45,6 +45,98 @@ export interface DeployUnit {
 }
 
 /**
+ * 一块矩形区域（含四边）。关卡里的"走进某片地方"就用它描述。
+ *
+ * 为什么先只做矩形：作者是拿坐标写的，矩形是唯一一种**看一眼就知道覆盖哪几格**
+ * 的形状。以后要圆形、多边形、按地形选区域，都往 `LevelWhen.enter` 里加变体，
+ * 不要另起一套。
+ */
+export interface LevelZone {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * 事件什么时候触发。
+ *
+ * 三条都是"只读局面"的判断——不读时间、不读随机、不读玩家本地的任何东西。
+ * 这条不是为了好看：电脑在决定怎么走之前会把几种走法各试一遍（试的时候跑的是
+ * 同一套结算），事件也会跟着被"演练"。只读局面的话，演练的结果和真走完全一致，
+ * 试完扔掉就行；一旦读了外面的东西，试走和真走就会算出两套答案。
+ */
+export type LevelWhen =
+  /** 行动序号到第几（1 起）。注意这是"第几次行动"，不是"第几轮" */
+  | { kind: 'turn'; at: number }
+  /** 某个单位死了。只写 owner 就是"这一家的任何一个兵死" */
+  | { kind: 'unitDied'; owner?: PlayerId; type?: string }
+  /** 某个单位从区域外走进区域内 */
+  | { kind: 'enter'; zone: LevelZone; owner?: PlayerId };
+
+/** 事件触发后做什么。一批动作按数组顺序执行。 */
+export type LevelDo =
+  /** 刷兵：不看钱、不看产线，只看"这一格站不站得住"*/
+  | { kind: 'spawn'; owner: PlayerId; units: DeployUnit[] }
+  /** 播报一句。写进战报，双方都能看到（`open`） */
+  | { kind: 'say'; text: string }
+  /** 改这一席电脑的打法（守/攻/经营/停手），AI 下一手就按它来 */
+  | { kind: 'doctrine'; seat: PlayerId; strategy: 'auto' | 'rush' | 'boom' | 'hold'; targetSeat?: PlayerId };
+
+/**
+ * 一件事：什么时候、做什么。
+ *
+ * `id` 是它在这一关里的名字，**也是"已经发生过没有"的钥匙**——这个记录写在局面里
+ * （`state.levelState.fired`），不放程序里。理由见上面 `LevelWhen` 那段：
+ * 放程序里会被试走改乱，表现是"有时候事件不触发"，而且完全查不出来。
+ */
+export interface LevelEvent {
+  id: string;
+  when: LevelWhen;
+  do: LevelDo[];
+  /** 默认只触发一次。写 `true` 才是每次都触发（同一条回合数没有意义，只对 enter 有用） */
+  repeat?: boolean;
+}
+
+/**
+ * 这一关怎么算赢。
+ *
+ * 只表达"谁赢"，**不表达"怎么输"**。这不是偷懒，是刻意的：原引擎的失败判定
+ * （城丢光、没兵又造不起）本来就在跑，关卡不需要另写一套。于是：
+ *   · 守城关：守满时限 → 提前判守方赢；城丢了 → 照普通规则判攻方赢。
+ *   · 护送关：有人到达 → 判赢；护送方被灭 → 照普通规则判输。
+ *
+ * 好处是 `checkWinner` 只多一个"提前宣布赢"的分支，**原有判定一个字不动**，
+ * 普通对局完全不受影响。这是批次 4 敢动这块地基的前提。
+ */
+export type LevelGoal =
+  /** 守到第 `untilTurn` 次行动时（守方还活着）算赢 */
+  | { kind: 'survive'; seat: PlayerId; untilTurn: number }
+  /** 这一席的任意一个兵（或指定兵种）走进区域算赢 */
+  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string }
+  /**
+   * 斩首：`loser` 场上再没有该兵种的兵时，`winner` 赢。
+   *
+   * **限制**：这个兵种必须是"造不出来、这一关独有"的（关卡部署摆上去的那个）。
+   * 否则对方一边死一边补同型兵，这个条件永远不会成立。P4 里没有关卡用它，
+   * 留待以后给单位加"标记"之后再用它做真正的首领。
+   */
+  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string };
+
+/** 胜利条件的人话版本。顶栏、选关页、开局战报都用它，免得三处各写一遍措辞 */
+export function goalText(goal: LevelGoal): string {
+  if (goal.kind === 'survive') return `守住 ${goal.untilTurn} 次行动`;
+  if (goal.kind === 'escort') {
+    const { x0, y0, x1, y1 } = goal.zone;
+    const at = x0 === x1 && y0 === y1 ? `(${x0}, ${y0})` : `(${x0}, ${y0})–(${x1}, ${y1})`;
+    const who = goal.unitType ? `「${goal.unitType}」` : '一个兵';
+    return `把${who}送到 ${at}`;
+  }
+  const what = goal.unitType ? `「${goal.unitType}」` : '主力';
+  return `消灭对方全部${what}`;
+}
+
+/**
  * 这一关对扩展的要求。
  *
  * 三档语义（面板上也是这么显示的）：
@@ -52,7 +144,7 @@ export interface DeployUnit {
  *   · `forbid` 禁用：玩家勾了也强制去掉；
  *   · 没提到的：**保留玩家自己的选择**。
  *
- * 为什么必须有这一条：关卡里的部署和（以后的）事件会点名某个兵种。
+ * 为什么必须有这一条：关卡里的部署和事件会点名某个兵种。
  * 作者写了"刷两个剑修"，玩家把修真包关了，那不是"少个兵"，是开局就查不到兵种。
  * `require` 管的就是这件事。
  */
@@ -123,6 +215,20 @@ export interface LevelDef {
   deploy?: Partial<Record<PlayerId, DeployUnit[]>>;
   /** 这一关要求 / 禁止的扩展（见 `LevelExpansionRules`）*/
   expansions?: LevelExpansionRules;
+  /**
+   * 这一关会发生什么。
+   *
+   * 按数组顺序检查；一次动作里若有多条同时成立，就按顺序全执行。
+   * 不做"事件 A 触发事件 B"这种链式依赖——那需要一个"上一件事发生过"的条件，
+   * 留给以后；现在多件事写在同一个 `do` 里就能表达同样的效果。
+   */
+  events?: LevelEvent[];
+  /**
+   * 怎么算赢。不写＝按普通规则（把对手打光）。
+   *
+   * 写了就是"**提前**宣布赢"：目标达成立刻结束，不必等对手出局。
+   */
+  goals?: LevelGoal[];
 }
 
 /**
@@ -179,10 +285,23 @@ const REAR_PAINT: Array<[number, number, string]> = (() => {
 })();
 
 /**
+ * 「死守」的地形：两片林子当掩体，一块高地给守方架弓。
+ *
+ * 没有河也没有桥——这是 P4 的样本关，要验的是"守到某时"，不是地形。
+ * 地形只负责让"守"这件事有一点讲究：弓手站高地，民兵堵缺口。
+ */
+const HOLD_PAINT: Array<[number, number, string]> = [
+  [5, 5, 'f'], [6, 5, 'f'], [5, 6, 'f'], [6, 6, 'f'],
+  [2, 3, 'f'], [3, 3, 'f'],
+  [7, 8, 'h'], [8, 8, 'h'], [7, 9, 'h'], [8, 9, 'h'],
+];
+
+/**
  * 内建关卡。
  *
- * 前两张是"测试夹具"：不追求好玩，各验证一条机制。
- * 「三岔口」是第一张能给人玩的三家混战；「断后」验证"关卡能定开局兵力 + 扩展规则"。
+ * 前三张是"测试夹具"：不追求好玩，各验证一条机制。
+ * 「三岔口」是第一张能给人玩的三家混战；「断后」验证部署与扩展规则；
+ * 「死守」验证胜负条件——这是第一张"能赢也能输"的关卡。
  */
 export const LEVELS: LevelDef[] = [
   {
@@ -271,6 +390,108 @@ export const LEVELS: LevelDef[] = [
       require: ['last-stand'],
       forbid: ['turn-order-comp'],
     },
+    /*
+     * 三个事件，把 P3 的三种条件、三种动作都跑一遍：
+     *   · 第 3 次行动时，攻方来了一队援兵（turn + spawn + say）；
+     *   · 攻方有人踩上西岸，提醒玩家"过桥了"（enter + say）；
+     *   · 守桥那个兵倒下，攻方转成猛攻（unitDied + say + doctrine）。
+     *
+     * 回合数用的是**行动序号**（`turn`），不是"第几轮"。两家局里一轮 = 两次行动，
+     * 所以写 3 显得很早——这是故意的：这一关本来就只有几个回合的缓冲。
+     */
+    events: [
+      {
+        id: 'reinforce',
+        when: { kind: 'turn', at: 3 },
+        do: [
+          { kind: 'say', text: '对岸的旌旗又多了两面——他们加了人。' },
+          {
+            kind: 'spawn',
+            owner: 'B',
+            units: [
+              { type: 'militia', x: 11, y: 5 },
+              { type: 'archer', x: 11, y: 9 },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'crossed',
+        /*
+         * 走"推到桥头"而不是"踩上桥面"。
+         *
+         * 一开始写的是"攻方踏上桥面"（甚至更早写的是"过到西岸"），结果实战里几乎不成立：
+         * 守方会不断补兵堵桥头，攻方的兵可能几十个回合都踩不到那一格。**一个永远不触发
+         * 的事件比没有还糟**——作者会以为是自己写错了。改成东岸紧贴桥那一格（7,7）：
+         * 攻方推进的第一步就会经过它。
+         */
+        when: { kind: 'enter', zone: { x0: 7, y0: 7, x1: 7, y1: 7 }, owner: 'B' },
+        do: [{ kind: 'say', text: '他们推到桥头了，桥随时会丢。' }],
+      },
+      {
+        id: 'bridge-lost',
+        when: { kind: 'unitDied', owner: 'A' },
+        do: [
+          { kind: 'say', text: '桥头那个兵倒下了。' },
+          { kind: 'doctrine', seat: 'B', strategy: 'rush' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'level:hold-out',
+    version: LEVEL_VERSION,
+    name: '死守',
+    brief: '12×12，守住 20 次行动。城破了就输——这是第一张能赢也能输的关卡。',
+    map: {
+      id: 'levelmap:hold-out',
+      name: '死守',
+      w: 12,
+      h: 12,
+      rows: rowsOf(12, 12, HOLD_PAINT),
+      citiesA: [{ x: 1, y: 8 }],
+      citiesB: [{ x: 8, y: 1 }],
+      source: 'builtin',
+    },
+    seats: { count: 2, ai: ['B'] },
+    /*
+     * 3 打 6。守方靠城、林子和高地撑着，攻方人多但要走过来。
+     * 这个比例是估的，没实测——P7 打磨内容时要按实机胜率再调。
+     */
+    deploy: {
+      A: [
+        { type: 'militia', x: 2, y: 7 },
+        { type: 'archer', x: 3, y: 8 },
+        { type: 'militia', x: 3, y: 9 },
+      ],
+      B: [
+        { type: 'militia', x: 8, y: 4 },
+        { type: 'archer', x: 9, y: 4 },
+        { type: 'militia', x: 10, y: 3 },
+        { type: 'archer', x: 7, y: 5 },
+        { type: 'militia', x: 8, y: 6 },
+        { type: 'militia', x: 9, y: 6 },
+      ],
+    },
+    /** 撑到第 20 次行动就算赢；城破了照普通规则判输 */
+    goals: [{ kind: 'survive', seat: 'A', untilTurn: 20 }],
+    events: [
+      {
+        id: 'relief',
+        when: { kind: 'turn', at: 10 },
+        do: [
+          { kind: 'say', text: '后面来人了——援军到了，堵上去。' },
+          {
+            kind: 'spawn',
+            owner: 'A',
+            units: [
+              { type: 'militia', x: 3, y: 10 },
+              { type: 'militia', x: 4, y: 10 },
+            ],
+          },
+        ],
+      },
+    ],
   },
 ];
 
@@ -343,6 +564,8 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   const seats = normalizeSeats(obj.seats, map, errors);
   const expansions = normalizeExpansions(obj.expansions, errors);
   const deploy = normalizeDeploy(obj.deploy, map, seats, errors);
+  const events = normalizeEvents(obj.events, map, seats, errors);
+  const goals = normalizeGoals(obj.goals, map, seats, errors);
   if (errors.length > 0) return { ok: false, errors };
 
   return {
@@ -358,6 +581,8 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       ...(seats ? { seats: structuredClone(seats) } : {}),
       ...(deploy ? { deploy: structuredClone(deploy) } : {}),
       ...(expansions ? { expansions: structuredClone(expansions) } : {}),
+      ...(events ? { events: structuredClone(events) } : {}),
+      ...(goals ? { goals: structuredClone(goals) } : {}),
     },
   };
 }
@@ -427,39 +652,316 @@ function normalizeDeploy(
       continue;
     }
     const list = obj[seat];
-    if (!Array.isArray(list) || list.length === 0) {
-      errors.push(`第 ${seat} 家的部署是空的：要么不写这一席，要么至少写一个兵`);
-      continue;
-    }
-    const units: DeployUnit[] = [];
-    for (const item of list) {
-      const u = item as Partial<DeployUnit>;
-      const type = typeof u?.type === 'string' ? u.type.trim() : '';
-      const x = Math.round(Number(u?.x));
-      const y = Math.round(Number(u?.y));
-      if (!type) {
-        errors.push(`第 ${seat} 家有一个部署兵没写兵种`);
-        continue;
-      }
-      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= map.w || y >= map.h) {
-        errors.push(`第 ${seat} 家的「${type}」站在 (${String(u?.x)}, ${String(u?.y)})，超出棋盘`);
-        continue;
-      }
-      const key2 = `${x},${y}`;
-      if (taken.has(key2)) {
-        errors.push(`两处部署叠在 (${x}, ${y}) 上`);
-        continue;
-      }
-      taken.add(key2);
-      units.push({ type, x, y });
-    }
+    const units = normUnits(list, `第 ${seat} 家的部署`, map, taken, errors);
     if (units.length > 0) out[seat] = units;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/**
+ * 一串"兵种 + 坐标"。部署和事件刷兵共用这一份判据。
+ *
+ * `taken` 由调用方传：部署要把**整关所有席位**摆过的格都算进去（两家不能叠），
+ * 而事件刷兵是"打到一半突然出现"，只跟同一次刷出来的兵比——那时候开局部署的兵
+ * 早就走开了。两者不能共用同一个集合，所以集合从外面进来。
+ */
+function normUnits(
+  raw: unknown,
+  label: string,
+  map: FixedMap,
+  taken: Set<string>,
+  errors: string[],
+): DeployUnit[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    errors.push(`${label}是空的：要么不写，要么至少写一个兵`);
+    return [];
+  }
+  const units: DeployUnit[] = [];
+  for (const item of raw) {
+    const u = item as Partial<DeployUnit>;
+    const type = typeof u?.type === 'string' ? u.type.trim() : '';
+    const x = Math.round(Number(u?.x));
+    const y = Math.round(Number(u?.y));
+    if (!type) {
+      errors.push(`${label}里有一个兵没写兵种`);
+      continue;
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= map.w || y >= map.h) {
+      errors.push(`${label}里的「${type}」站在 (${String(u?.x)}, ${String(u?.y)})，超出棋盘`);
+      continue;
+    }
+    const key = `${x},${y}`;
+    if (taken.has(key)) {
+      errors.push(`${label}里有两处叠在 (${x}, ${y}) 上`);
+      continue;
+    }
+    taken.add(key);
+    units.push({ type, x, y });
+  }
+  return units;
+}
+
 /** 席位顺序。和 `PLAYER_ORDER` 同一份；本地重复一遍是为了不把运行期依赖引进来 */
 const SEAT_ORDER = ['A', 'B', 'C', 'D'] as const;
+
+/**
+ * 校验事件表。
+ *
+ * 判据的原则是"**能让这一关卡住的都拦掉**"：
+ *   · id 重复 → 触发记录分不清是哪一件（`fired` 是按 id 记的）；
+ *   · 归属席位没坐人 → 给一个不存在的敌人刷兵；
+ *   · 区域越界 → 条件永远不成立，作者会以为"事件没生效"；
+ *   · 动作为空 → 触发了什么都不做，等于写错。
+ *
+ * 反过来，**兵种存不存在**这里查不了（要等建局时的兵种表），那一条在 `createMatch`
+ * 里处理：查不到就跳过那个兵并在战报里说一声，不炸整局。
+ */
+function normalizeEvents(
+  raw: unknown,
+  map: FixedMap,
+  seats: LevelSeats | undefined,
+  errors: string[],
+): LevelEvent[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    errors.push('events 应该是一串事件');
+    return undefined;
+  }
+  const seated = (seats ? SEAT_ORDER.slice(0, seats.count) : ['A', 'B']) as readonly PlayerId[];
+  const seen = new Set<string>();
+  const out: LevelEvent[] = [];
+
+  for (const item of raw) {
+    const e = (item ?? {}) as Partial<LevelEvent>;
+    const id = typeof e.id === 'string' ? e.id.trim() : '';
+    if (!id) {
+      errors.push('有一个事件没写 id');
+      continue;
+    }
+    if (seen.has(id)) {
+      errors.push(`事件 id「${id}」重复了：触发记录是按 id 存的，重名会分不清`);
+      continue;
+    }
+    seen.add(id);
+
+    const when = normalizeWhen(e.when, id, map, seated, errors);
+    const rawDo = Array.isArray(e.do) ? e.do : [];
+    if (rawDo.length === 0) {
+      errors.push(`事件「${id}」没有任何动作`);
+      continue;
+    }
+    const acts: LevelDo[] = [];
+    for (const a of rawDo) {
+      const act = normalizeDo(a, id, map, seated, errors);
+      if (act) acts.push(act);
+    }
+    if (when && acts.length > 0) {
+      out.push({ id, when, do: acts, ...(e.repeat === true ? { repeat: true } : {}) });
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeWhen(
+  raw: unknown,
+  id: string,
+  map: FixedMap,
+  seated: readonly PlayerId[],
+  errors: string[],
+): LevelWhen | undefined {
+  const w = (raw ?? {}) as Partial<LevelWhen> & Record<string, unknown>;
+  const kind = String(w.kind ?? '');
+  /* 归属席位：可写可不写，写了就必须是这一局坐人的 */
+  const ownerOf = (value: unknown): PlayerId | undefined | null => {
+    if (value === undefined || value === null || value === '') return undefined;
+    const seat = String(value).toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`事件「${id}」的条件指了第 ${String(value)} 家，但这一关只坐 ${seated.join(' / ')}`);
+      return null;
+    }
+    return seat;
+  };
+
+  if (kind === 'turn') {
+    const at = Math.round(Number(w.at));
+    if (!Number.isFinite(at) || at < 1 || at > 999) {
+      errors.push(`事件「${id}」的回合数要在 1~999（现在 ${String(w.at)}）`);
+      return undefined;
+    }
+    return { kind: 'turn', at };
+  }
+
+  if (kind === 'unitDied') {
+    const owner = ownerOf(w.owner);
+    if (owner === null) return undefined;
+    const type = typeof w.type === 'string' && w.type.trim() ? w.type.trim() : undefined;
+    return { kind: 'unitDied', ...(owner ? { owner } : {}), ...(type ? { type } : {}) };
+  }
+
+  if (kind === 'enter') {
+    const zone = normZone(w.zone, `事件「${id}」的触发区域`, map, errors);
+    if (!zone) return undefined;
+    const owner = ownerOf(w.owner);
+    if (owner === null) return undefined;
+    return { kind: 'enter', zone, ...(owner ? { owner } : {}) };
+  }
+
+  errors.push(`事件「${id}」的触发条件「${kind}」不认识（只能是 turn / unitDied / enter）`);
+  return undefined;
+}
+
+/** 一块矩形区域。事件和胜利条件共用同一份判据 */
+function normZone(raw: unknown, label: string, map: FixedMap, errors: string[]): LevelZone | undefined {
+  const z = (raw ?? {}) as Partial<LevelZone>;
+  const nums = [z.x0, z.y0, z.x1, z.y1].map((v) => Math.round(Number(v)));
+  if (nums.some((v) => !Number.isFinite(v))) {
+    errors.push(`${label}要写 x0/y0/x1/y1 四个数`);
+    return undefined;
+  }
+  const [x0, y0, x1, y1] = nums as [number, number, number, number];
+  if (x0 > x1 || y0 > y1) {
+    errors.push(`${label}的左上角应该在右下角左边/上边（现在是 (${x0},${y0}) 到 (${x1},${y1})）`);
+    return undefined;
+  }
+  if (x0 < 0 || y0 < 0 || x1 >= map.w || y1 >= map.h) {
+    errors.push(`${label}超出棋盘（棋盘是 ${map.w}×${map.h}）`);
+    return undefined;
+  }
+  return { x0, y0, x1, y1 };
+}
+
+/**
+ * 校验胜利条件。
+ *
+ * 和事件一样，只查"写错了会造出怪局面/永远不成立"的：席位认不认识、
+ * 时限在不在范围内、两块地是不是同一个席位（赢了又输）。
+ */
+function normalizeGoals(
+  raw: unknown,
+  map: FixedMap,
+  seats: LevelSeats | undefined,
+  errors: string[],
+): LevelGoal[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    errors.push('goals 应该是一串胜利条件');
+    return undefined;
+  }
+  const seated = (seats ? SEAT_ORDER.slice(0, seats.count) : ['A', 'B']) as readonly PlayerId[];
+  const seatOf = (value: unknown, label: string): PlayerId | undefined => {
+    const seat = String(value ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`${label}写的是第 ${String(value)} 家，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    return seat;
+  };
+
+  const out: LevelGoal[] = [];
+  for (const item of raw) {
+    const g = (item ?? {}) as Record<string, unknown>;
+    const kind = String(g.kind ?? '');
+
+    if (kind === 'survive') {
+      const seat = seatOf(g.seat, `胜利条件「守到第 N 次行动」的守方`);
+      if (!seat) continue;
+      const untilTurn = Math.round(Number(g.untilTurn));
+      if (!Number.isFinite(untilTurn) || untilTurn < 1 || untilTurn > 999) {
+        errors.push(`胜利条件「守到第 N 次行动」的时限要在 1~999（现在 ${String(g.untilTurn)}）`);
+        continue;
+      }
+      out.push({ kind: 'survive', seat, untilTurn });
+      continue;
+    }
+
+    if (kind === 'escort') {
+      const seat = seatOf(g.seat, '胜利条件「护送」的那一方');
+      if (!seat) continue;
+      const zone = normZone(g.zone, '胜利条件「护送」的终点区域', map, errors);
+      if (!zone) continue;
+      const unitType = typeof g.unitType === 'string' && g.unitType.trim() ? g.unitType.trim() : undefined;
+      out.push({ kind: 'escort', seat, zone, ...(unitType ? { unitType } : {}) });
+      continue;
+    }
+
+    if (kind === 'assassinate') {
+      const winner = seatOf(g.winner, '胜利条件「斩首」的获胜方');
+      const loser = seatOf(g.loser, '胜利条件「斩首」的被斩方');
+      if (!winner || !loser) continue;
+      if (winner === loser) {
+        errors.push('胜利条件「斩首」的获胜方和被斩方是同一家');
+        continue;
+      }
+      const unitType = typeof g.unitType === 'string' && g.unitType.trim() ? g.unitType.trim() : undefined;
+      out.push({ kind: 'assassinate', winner, loser, ...(unitType ? { unitType } : {}) });
+      continue;
+    }
+
+    errors.push(`胜利条件「${kind}」不认识（只能是 survive / escort / assassinate）`);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeDo(
+  raw: unknown,
+  id: string,
+  map: FixedMap,
+  seated: readonly PlayerId[],
+  errors: string[],
+): LevelDo | undefined {
+  const a = (raw ?? {}) as Record<string, unknown>;
+  const kind = String(a.kind ?? '');
+
+  if (kind === 'spawn') {
+    const owner = String(a.owner ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(owner)) {
+      errors.push(`事件「${id}」刷的兵归「${String(a.owner)}」所有，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    const units = normUnits(a.units, `事件「${id}」刷的兵`, map, new Set(), errors);
+    if (units.length === 0) return undefined;
+    return { kind: 'spawn', owner, units };
+  }
+
+  if (kind === 'say') {
+    const text = typeof a.text === 'string' ? a.text.trim() : '';
+    if (!text) {
+      errors.push(`事件「${id}」的播报是空的`);
+      return undefined;
+    }
+    if (text.length > 120) {
+      errors.push(`事件「${id}」的播报太长（最多 120 字）`);
+      return undefined;
+    }
+    return { kind: 'say', text };
+  }
+
+  if (kind === 'doctrine') {
+    const seat = String(a.seat ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`事件「${id}」要改第 ${String(a.seat)} 家的打法，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    const strategy = String(a.strategy ?? '');
+    if (strategy !== 'auto' && strategy !== 'rush' && strategy !== 'boom' && strategy !== 'hold') {
+      errors.push(`事件「${id}」的打法「${strategy}」不认识（只能是 auto / rush / boom / hold）`);
+      return undefined;
+    }
+    let targetSeat: PlayerId | undefined;
+    if (a.targetSeat !== undefined && a.targetSeat !== '') {
+      const t = String(a.targetSeat).toUpperCase() as PlayerId;
+      if (!seated.includes(t)) {
+        errors.push(`事件「${id}」指定了主攻第 ${String(a.targetSeat)} 家，但这一关没这一家`);
+        return undefined;
+      }
+      targetSeat = t;
+    }
+    return { kind: 'doctrine', seat, strategy, ...(targetSeat ? { targetSeat } : {}) };
+  }
+
+  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine）`);
+  return undefined;
+}
 
 /**
  * 校验"几家、谁托管、多出来的城在哪"。

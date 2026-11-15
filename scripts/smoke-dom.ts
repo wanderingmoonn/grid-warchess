@@ -9246,6 +9246,7 @@ check('选「断后」：开局兵力与扩展规则都被关卡钉住', () => {
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('开局兵力由关卡指定'), `关卡页要说明部署，实际：${body.slice(0, 200)}`);
   assert.ok(body.includes('必须开') && body.includes('哀兵必胜'), '要写清必须开哪一包');
+  assert.ok(body.includes('处会在特定条件下发生的事'), `关卡页要说明有事件，实际：${body.slice(0, 240)}`);
 
   click('[data-tab="battle"]');
   const req = doc.querySelector<HTMLInputElement>('[data-exp="last-stand"]');
@@ -9275,5 +9276,60 @@ check('关卡页选「自由对局」：人数开关回来，关卡不残留', (
 
 click('[data-act="cancel"]');
 
+/*
+ * 真的开一局「死守」：顶栏必须常驻一行目标。
+ *
+ * 这是批次 4 唯一"不看代码也能验"的东西——玩家得知道自己在守到什么时候。
+ * 放在整个文件最末：它会关掉面板并真的开一局，后面不能再有用例。
+ */
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level="level:hold-out"]');
+
+check('选「死守」：关卡页写明胜利条件', () => {
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
+  assert.ok(body.includes('守住 20 次行动'), '要写出具体时限');
+});
+
+click('[data-act="start"]');
+await wait(150);
+
+check('开局后顶栏常驻一行关卡目标', () => {
+  const goal = doc.querySelector<HTMLElement>('[data-ref="goal"]');
+  assert.ok(goal, '顶栏应该有目标那一块');
+  assert.ok(!goal!.hidden, '关卡局里这块不能藏着');
+  const text = goal!.textContent ?? '';
+  assert.ok(text.includes('守住 20 次行动'), `要写出守多久，实际：${text}`);
+  assert.ok(text.includes('还剩'), `要写出还剩几次，实际：${text}`);
+});
+
+// 换回自由对局再开一局，顶栏那块应该收起来
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level=""]');
+click('[data-tab="battle"]');
+// 顺手点「双人热座」：这一条要验的是顶栏，不是 AI；而且没有 AI 就没有后台定时器，
+// 测试进程能干净地自己退出（否则会挂住，被外层杀掉）
+click('[data-ai="0"]');
+click('[data-act="start"]');
+// 顶栏是一帧一帧刷的：不等这一下，读到的是上一局留下的那块
+await wait(150);
+
+check('普通对局不显示目标那一块', () => {
+  const goal = doc.querySelector<HTMLElement>('[data-ref="goal"]');
+  assert.ok(goal?.hidden !== false, `自由对局里目标那一块应该 hidden，实际 hidden=${goal?.hidden}`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
-if (failed > 0) process.exit(1);
+/*
+ * 主动退出。
+ *
+ * 最后几条用例会真的开一局（顶栏目标得在真对局里看），而关卡自带的电脑
+ * 会一直排定时器——不主动退出，这个测试进程永远不结束（被外层当超时杀掉）。
+ * 用 write 的回调再退：直接 process.exit 有可能把管道里的输出截断。
+ */
+const exitCode = failed > 0 ? 1 : 0;
+process.stdout.write('', () => process.exit(exitCode));

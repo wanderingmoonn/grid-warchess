@@ -42,7 +42,7 @@ import {
   type FixedMap,
 } from '../core/fixed-maps.ts';
 import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
-import { allLevels, applyLevelToConfig, type LevelDef } from '../core/level.ts';
+import { allLevels, applyLevelToConfig, goalText, type LevelDef } from '../core/level.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -1005,6 +1005,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   ? `<div class="field-hint">开局兵力由关卡指定，不再自动撒兵。</div>`
                   : ''
               }
+              ${
+                (config.level.events ?? []).length > 0
+                  ? `<div class="field-hint">这一关有 ${(config.level.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  : ''
+              }
+              ${
+                (config.level.goals ?? []).length > 0
+                  ? `<div class="field-hint"><b>胜利条件：</b>${(config.level.goals ?? []).map(goalText).join('；')}。没达成就算这一局还没打完；城丢了、兵打光了，照普通规则判输。</div>`
+                  : ''
+              }
             </section>`
                 : `<section class="field">
               <div class="field-label">现在是自由对局</div>
@@ -1347,6 +1357,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const mode = aiBtn.dataset.ai;
         config.aiAlly = mode === '2';
         config.aiOpponent = mode === '1' || mode === '2';
+        /*
+         * 这两个档说的就是"两边怎么分"，所以要把通用写法（`aiSeats`）清掉，
+         * 交给它们自己决定。
+         *
+         * 不清的话会出一个很隐蔽的毛病：从关卡退出来（关卡把 `aiSeats` 设成了
+         * `['B']`）、点「双人热座」、开局——**对面还是电脑**，因为 `aiSeats` 优先。
+         */
+        config.aiSeats = undefined;
         // 指挥官模式保留：双 AI 观战时两边都受"一回合一个兵"的限制，
         // 这正是用来量"这套限制下 AI 到底能打成什么样"的场景。
         paint();

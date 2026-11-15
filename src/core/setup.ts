@@ -18,8 +18,8 @@ import {
 import { createDraft } from './draft.ts';
 import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
 import { validateFixedMap } from './fixed-maps.ts';
-import { validateLevel } from './level.ts';
-import { canStandAt, refreshMemory, grantOpeningIncome } from './rules.ts';
+import { validateLevel, goalText } from './level.ts';
+import { canStandAt, refreshMemory, grantOpeningIncome, runLevelEvents } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
 import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
@@ -771,6 +771,31 @@ export function createMatch(
       });
     }
   }
+
+  /*
+   * 关卡目标先说一句。
+   *
+   * 顶栏也有一行常驻的（`levelGoalLine`），但战报里的这一条是"开局那一刻"的记录：
+   * 复盘时翻到第 1 条就知道这一局在干什么，不用去猜。
+   */
+  if (level?.goals && level.goals.length > 0) {
+    state.log.push({
+      turn: 1,
+      player: 'A',
+      open: true,
+      system: true,
+      text: `这一关的目标：${level.goals.map(goalText).join('；')}`,
+    });
+  }
+
+  /*
+   * 关卡事件：开局也要跑一遍。
+   *
+   * 为的是 `turn: 1` 那类"这一关一开始就发生"的事件（开场旁白、一开始就在场上的
+   * 第三方）。`prev` 传同一份：开局没有"上一手"，所以阵亡/进入区域都不会成立，
+   * 只有回合数条件会命中——这正是我们要的。
+   */
+  runLevelEvents(state, state);
 
   // 选卡模式：开局先打 BP。放在 state 建好之后——抽样要看 unitTypes 里的池子。
   if (draftMode) {
