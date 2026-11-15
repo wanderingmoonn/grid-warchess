@@ -24,12 +24,13 @@ import { registerSkillEffect } from '../../skill-hooks.ts';
 import type { Mark } from '../../types.ts';
 import { addMark, marksAt } from '../../marks.ts';
 import { distToUnit } from '../../query.ts';
-import { spendMana } from '../mana.ts';
+
 import { getRank } from '../progression.ts';
 import {
   blastCoords,
   defineSpellSkill,
   registerManaReady,
+  paySpellCost,
   registerPreview,
   spellCustom,
   type SpellRow,
@@ -243,7 +244,7 @@ registerSkillEffect('field', (c: SkillCtx) => {
     }
   }
 
-  if (!spendMana(self, cost)) {
+  if (!paySpellCost(c, cost)) {
     c.result.ok = false;
     c.result.reason = `灵力不足（需要 ${cost} 点）`;
     return;

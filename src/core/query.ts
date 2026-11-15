@@ -75,6 +75,16 @@ export function skillsOf(
 
 /** 占地边长：1（缺省）或 2。传单位或兵种 id 都行。 */
 export function footprintOf(s: GameState, u: Unit | string): number {
+  /*
+   * 单位自己的覆盖（法相天地）：放大之后就是 2×2。
+   *
+   * 放在兵种表之前而不是改 `unitTypes`：兵种表是**所有同类单位共用**的，
+   * 改了它等于全场同类一起变大。而这条法术只该让**这一个**人变大。
+   */
+  if (typeof u !== 'string') {
+    const over = u.custom?.['footprint'];
+    if (over === 2 || over === 1) return over;
+  }
   const type = typeof u === 'string' ? u : u.type;
   return s.unitTypes[type]?.footprint === 2 ? 2 : 1;
 }

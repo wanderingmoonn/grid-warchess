@@ -518,9 +518,14 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
    * 这个 class 只做一件事：让 CSS 把这些**逐格**的昂贵效果关掉（见 style.css
    * 的 `.board.big` 段），换成纯色块。规则一行不动。
    *
-   * 阈值选 1024：32×32 关雾打起来很流畅，64×64 才是需要保护的那一档。
+   * 阈值改成 **>= 1024**（2026-11-14）：原来写 > 1024，32×32 正好 1024 格，
+   * 落在"小图"这一侧——于是 32×32 上水面动画（每格两层渐变在动）、
+   * 逐格 `::after` 过渡全都开着，开关迷雾时要重绘一千格带贴图的元素，
+   * 实测中位 137ms、最差 242ms，就是用户说的卡顿。
+   *
+   * 32×32 上格子只有 ~40px，动画几乎看不出，关掉不亏。
    */
-  el.classList.toggle('big', s.w * s.h > 1024);
+  el.classList.toggle('big', s.w * s.h >= 1024);
 
   // 浓雾（blackout 扩展）：连地形都不给看。
   // 基础规则的雾只遮单位，地图本身永远可见；这个扩展把"地图"也遮掉——
@@ -640,7 +645,41 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
       if (memo !== undefined) cls += ' remembered';
       if (lit && tile.cityId) {
         const city = s.cities.find((c) => c.id === tile.cityId);
-        if (city) cls += ` own-${city.owner}`;
+        if (city) {
+          cls += ` own-${city.owner}`;
+          /*
+           * 城区的贴图档（`data-era`）：由这座城的**时代等级**决定（2026-11-15）。
+           *
+           * 视觉身份定成"城区"——一片屋顶与街巷，而不是一座要塞的立面。
+           * 时代一升，屋顶的形制也该跟着换：
+           *   青铜/铁器/火器 → `civil`（夯土街、木构与茅草·陶瓦）
+           *   蒸汽 → 以后补 `brick`（砖瓦、烟囱），现在先用 `civil`
+           *   机械化/信息化 → `concrete`（平顶、沥青街、玻璃格）
+           *   装甲/聚变 → 以后补 `alloy`（合金板、发光管线），现在先用 `concrete`
+           *
+           * 档位名直接用时代名派生的词（civil/brick/concrete/alloy），
+           * 别用数字：以后加时代不会让 1~8 的映射全乱。
+           */
+          node.dataset.cityEra = city.era <= 4 ? 'civil' : 'concrete';
+          /*
+           * 城市块的四条边（`data-ct/cr/cb/cl`）：邻居**不是同一座城**就是块的边界。
+           *
+           * 城市是 2×2 或 3×3 的一整块，块内四格必须连成一片；只在块的边缘画墙。
+           * 用 cityId 判，不用地形：城与城紧挨着时，中间那道墙也该在。
+           */
+          const sameCity = (tx: number, ty: number): string => {
+            if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '1';
+            return s.tiles[ty * s.w + tx]?.cityId === city.id ? '0' : '1';
+          };
+          const ct = sameCity(x, y - 1);
+          const cr = sameCity(x + 1, y);
+          const cb = sameCity(x, y + 1);
+          const cl = sameCity(x - 1, y);
+          if (node.dataset.ct !== ct) node.dataset.ct = ct;
+          if (node.dataset.cr !== cr) node.dataset.cr = cr;
+          if (node.dataset.cb !== cb) node.dataset.cb = cb;
+          if (node.dataset.cl !== cl) node.dataset.cl = cl;
+        }
       }
       if (targetPositions.has(i)) cls += ' attackable';
       else if (reachSet.has(i)) cls += ' reach';
@@ -789,20 +828,27 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
        * 朝对方铺一道半透明的对方色**，两边各铺一半，边界线上的颜色正好是
        * 两色的中点，于是接上。
        *
-       * 值 = "该往这边叠什么"：`d` 我在浅水这侧、叠深水色；`l` 我在深水这侧、
-       * 叠浅水色。浅水和"水域"算同一档（色差本来就不大），互相之间不铺。
+       * 值 = **邻居那一档的代号**：`s` 浅流、`w` 水域、`d` 深水。
+       * 以前只有 `d`/`l` 两个字母（"往深处/往浅处叠哪种色"），
+       * 因为浅流和水域被算成同一档、互相之间不铺——可它们一个是青、一个是蓝，
+       * 硬拼起来还是刀切边（2026-11-14 用户提的）。
+       *
+       * 现在三档分开排：浅流 1 / 水域 2 / 深水 3，每种邻居各有一种色，
+       * 两侧都用 0.5 的 alpha，边界线上的颜色仍是两色的中点。
        *
        * 按 `dispTerrain` 算而不是真地形：雾里看到的是记忆里的地形，
        * 拿真地形算会让"看着一样的两格"之间平白多一道坡（外缘阴影栽过这个跟头）。
        */
-      const WATER_RANK: Record<string, number> = { shallow: 1, water: 1, deep: 2 };
+      const WATER_RANK: Record<string, number> = { shallow: 1, water: 2, deep: 3 };
+      const WATER_LETTER: Record<string, string> = { shallow: 's', water: 'w', deep: 'd' };
       const rankHere = WATER_RANK[dispTerrain[i] ?? ''] ?? 0;
       if (rankHere > 0) {
         const wetSide = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
-          const r = WATER_RANK[dispTerrain[ty * s.w + tx] ?? ''] ?? 0;
+          const t = dispTerrain[ty * s.w + tx] ?? '';
+          const r = WATER_RANK[t] ?? 0;
           if (r === 0 || r === rankHere) return '0';
-          return r > rankHere ? 'd' : 'l';
+          return WATER_LETTER[t] ?? '0';
         };
         const wt = wetSide(x, y - 1);
         const wr = wetSide(x + 1, y);

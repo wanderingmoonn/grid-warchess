@@ -131,6 +131,15 @@ export function expForRank(rank: number): number {
  * 反推那一次的值——这正是"经验和等级解耦"的语义。
  */
 export function getRank(u: Unit): number {
+  /*
+   * 境界覆盖（平等图腾）。
+   *
+   * 放在缓存之前：这个值是**每一拍现算的**（视野里的敌人变了它就变了），
+   * 缓存住会造成"看到过高手就永远是高手"。真正的伤害/血量加成都读这里，
+   * 所以只要这一层认，境界就是动态的、连锁的。
+   */
+  const override = u.custom?.rankOverride;
+  if (typeof override === 'number') return override;
   const cached = u.custom?.rank;
   if (typeof cached === 'number') return cached;
   const exp = getExp(u);

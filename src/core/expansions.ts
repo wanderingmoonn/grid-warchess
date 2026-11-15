@@ -318,6 +318,14 @@ export interface KillCtx {
 export interface TurnStartCtx {
   state: GameState;
   player: PlayerId;
+  /**
+   * 能力层 api。
+   *
+   * 加它的理由和 `onUnitDamaged` 一样：回合开始的结算经常要副作用
+   * （侵蚀扣血、策反换主、写战报）。没有 api 就只能各自 `hp -=` 或直接改
+   * `owner`，正好绕开"扣血只有一个出口""换主只有一个出口"这两条纪律。
+   */
+  api: AbilityApi;
 }
 
 /**
@@ -436,7 +444,20 @@ export interface ExpansionHooks {
    * 不要在这里再扣血或杀人：死亡判定在 hurtUnit 之后的主流程里，
    * 这里动血会让"这一下到底打死了没有"变成两处口径。
    */
-  onUnitDamaged?: (c: { state: GameState; unit: Unit; amount: number; source?: Unit }) => void;
+  onUnitDamaged?: (c: {
+    state: GameState;
+    unit: Unit;
+    amount: number;
+    source?: Unit;
+    /**
+     * 能力层的那套 api（扣血、击杀、写战报……）。
+     *
+     * 加它的理由：这个钩子挂在"伤害已经落地"之后，能做的事几乎都要副作用
+     * ——把伤害传给同类、偷资源、回血。没有 api 的话这些只能各自去 `hp -=`，
+     * 正好绕开"扣血只有一个出口"那条纪律。
+     */
+    api: AbilityApi;
+  }) => void;
 
   /**
    * 这个单位现在**能不能下命令**。返回字符串 = 不能，字符串是给玩家的理由。
@@ -470,6 +491,24 @@ export interface ExpansionHooks {
     source: ProduceSource;
     target: UnitTypeDef;
   }) => string | null;
+
+  /**
+   * 护盾：在扣血之前先把伤害吃掉一部分。返回**吸收了多少点**。
+   *
+   * 和 `redirectDamage` 的分工：那条是"换个人挨打"（伤害照样落在某个单位身上），
+   * 这条是"伤害被一层没有实体的东西吃掉"，既不进任何单位的血条，也不算挨打。
+   *
+   * 几条由规则层保证的约束：
+   * - 只在**非损耗**伤害上问（中毒、维护费不该被盾挡）；
+   * - 连续问所有扩展，`amount` 是**剩余量**；某一层吸收后剩余为 0 就停；
+   * - 钩子自己负责改自己的护盾数据，引擎不碰它。
+   */
+  absorbDamage?: (c: {
+    state: GameState;
+    victim: Unit;
+    amount: number;
+    source?: Unit;
+  }) => number;
 
   /**
    * 这一次伤害由谁来接。返回 `null` = 不转移（默认）。

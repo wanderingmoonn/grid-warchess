@@ -38,12 +38,13 @@ import { coversTile, distBetweenUnits } from '../../query.ts';
 import { boardIdOf } from '../../board.ts';
 import { getRank } from '../progression.ts';
 import { trueDamageOf } from '../stats.ts';
-import { spendMana } from '../mana.ts';
+
 import { stunFor } from '../spell-statuses.ts';
 import {
   defineSpellSkill,
   rayCells,
   registerManaReady,
+  paySpellCost,
   registerPreview,
   resolveCast,
   spellCustom,
@@ -276,7 +277,7 @@ registerSkillEffect('bolt', (c) => {
       c.result.reason = '这条线上没有敌人';
       return;
     }
-    if (!spendMana(self, cost)) {
+    if (!paySpellCost(c, cost)) {
       c.result.ok = false;
       c.result.reason = `灵力不足（需要 ${cost} 点）`;
       return;

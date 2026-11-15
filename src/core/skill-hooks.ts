@@ -16,6 +16,8 @@ export interface SkillCtx {
   api: AbilityApi;
   /** 如果 UI 传了目标坐标 */
   target?: { x: number; y: number };
+  /** 玩家在界面上填的那个值（`SkillDef.input` 声明要填时才可能有） */
+  input?: string;
   result: {
     ok: boolean;
     reason?: string;

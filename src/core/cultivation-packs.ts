@@ -44,6 +44,11 @@ import {
   TELEPORT_FORMATION,
   GUARD_FORMATION,
   MINE_MOUNTAIN_STONE_BONUS,
+  // 召唤物（只能由法术造出来，建造表里没有）
+  LING_SHEN,
+  CLONE,
+  MIAO_MEN,
+  HUN_DENG,
 } from './cultivation/units.ts';
 import { CULTIVATION_ABILITIES } from './cultivation/abilities/index.ts';
 import { cultivationRank, setCultivationExp } from './cultivation/progression.ts';
@@ -110,6 +115,11 @@ export const CULTIVATION_PACK: Expansion = {
     SEAL_FORMATION,
     TELEPORT_FORMATION,
     GUARD_FORMATION,
+    // 族 8 的召唤物（cost 0，只能由法术造出来）
+    LING_SHEN,
+    CLONE,
+    MIAO_MEN,
+    HUN_DENG,
   ],
   resources: [SPIRIT_STONE_DEF],
   // 下面几条都只活在钩子里（配置表没有对应字段），规则书靠这里才能印全。

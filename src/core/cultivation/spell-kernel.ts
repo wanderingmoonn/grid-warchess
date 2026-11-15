@@ -38,6 +38,7 @@ import type { SkillCtx } from '../skill-hooks.ts';
 import { registerSkillPreview, registerSkillReadyCheck } from '../skill-hooks.ts';
 import { coversTile, distBetweenUnits, distToUnit } from '../query.ts';
 import { canSpendMana, manaOf, spendMana } from './mana.ts';
+import { daiTargetOf } from './transfer.ts';
 
 // ── 数据行 ────────────────────────────────────────────────────────
 
@@ -74,6 +75,13 @@ export interface SpellRow {
   cooldown?: number;
   /** 目标类型（不写 = 选点） */
   targeting?: 'none' | 'point' | 'direction';
+  /**
+   * 要玩家先填一个值（G5 输入通道）。
+   *
+   * 声明了它，面板就会自动多一行"输入框 + 施放"，规则层也会在空值时直接拒绝。
+   * 所以新加一条"要填数字/文字"的法术，只要在这里写一行，界面和校验都不用碰。
+   */
+  input?: { kind: 'number' | 'text'; label: string; placeholder?: string };
   /** 族的私有参数。引擎不读，族的实现自己读 */
   custom?: Record<string, unknown>;
 }
@@ -95,6 +103,7 @@ export function defineSpellSkill(row: SpellRow): SkillDef {
     targeting: row.targeting ?? 'point',
     radius: row.range,
   };
+  if (row.input) def.input = row.input;
   /*
    * 把"数"镜像进 `custom`，族的实现才能读到它们。
    *
@@ -245,6 +254,38 @@ export function rayCells(
   return cells;
 }
 
+// ── 付灵力 ────────────────────────────────────────────────────────
+
+/**
+ * 免耗判定。返回 true = 这一发不花灵力（由它自己决定要不要改状态）。
+ *
+ * 为什么要留这一层而不是让每个法术自己判断：付灵力发生在**骨架**里
+ * （`resolveCast` 和几个族的 handler 都会走到），法术自己来不及插手。
+ * 族 5（五行免耗）就靠这个钩子：它要在"扣灵力之前"把这一发免掉，
+ * 还要顺手把"剩几次"减一。
+ */
+export type CostWaiver = (c: SkillCtx, cost: number) => boolean;
+
+const costWaivers: CostWaiver[] = [];
+
+/** 注册一个免耗规则（按注册顺序问，第一个说"免"的生效） */
+export function registerCostWaiver(w: CostWaiver): void {
+  costWaivers.push(w);
+}
+
+/**
+ * 付一次灵力：先问有没有免耗，没有才真扣。
+ *
+ * 返回 false = 灵力不够（调用方据此拒绝这一发）。免耗成功一律返回 true——
+ * 免掉的这一发不需要灵力，也就无所谓"够不够"。
+ */
+export function paySpellCost(c: SkillCtx, cost: number): boolean {
+  for (const w of costWaivers) {
+    if (w(c, cost)) return true;
+  }
+  return spendMana(c.self, cost);
+}
+
 // ── 选目标 + 校验 + 扣灵力 ────────────────────────────────────────
 
 /** 一句给玩家看的理由。写成函数是因为有些理由要带兵种名、要带射程数 */
@@ -325,10 +366,18 @@ export function resolveCast(c: SkillCtx, spec: CastSpec): CastResult {
     if (from === 'victim' && distBetweenUnits(view, self, victim) > spec.range) {
       return { ok: false, reason: spec.tooFarReason(c) };
     }
-    if (!spendMana(self, spec.cost)) {
+    if (!paySpellCost(c, spec.cost)) {
       return { ok: false, reason: `灵力不足（需要 ${spec.cost} 点）` };
     }
-    return { ok: true, victims: [victim], point: { x: victim.x, y: victim.y } };
+    /*
+     * 张冠李戴：以"有替身的人"为目标的法术，改判给替身。
+     *
+     * 换在**这里**而不是每个族的 handler 里：定身、麻痹、拉拽、转化、处决
+     * 全都是"拿到 victims 之后才动手"，所以这一处就覆盖了全部单体法术。
+     * 伤害另有一条路（`redirectDamage`），两边都改才算"一切"。
+     */
+    const swapped = daiTargetOf(c.state, victim) ?? victim;
+    return { ok: true, victims: [swapped], point: { x: swapped.x, y: swapped.y } };
   }
 
   // area
@@ -338,13 +387,14 @@ export function resolveCast(c: SkillCtx, spec: CastSpec): CastResult {
   const radius = spec.radius ?? 0;
   // 圈人的口径是 `distToUnit`（点到矩形的最短距离），不是"锚点坐标相等"——
   // 2×2 的建筑只要有一角在圈里就算被扫到，这和玩家看到的范围一致。
-  const victims = s.units.filter(
+  const rawVictims = s.units.filter(
     (u) => u.hp > 0 && u.owner !== self.owner && distToUnit(s, target, u) <= radius,
   );
+  const victims = rawVictims.map((v) => daiTargetOf(c.state, v) ?? v);
   if (victims.length === 0) {
     return { ok: false, reason: (spec.emptyReason ?? spec.noTargetReason)(c) };
   }
-  if (!spendMana(self, spec.cost)) {
+  if (!paySpellCost(c, spec.cost)) {
     return { ok: false, reason: `灵力不足（需要 ${spec.cost} 点）` };
   }
   return { ok: true, victims, point: { x: target.x, y: target.y } };
