@@ -3703,6 +3703,14 @@ function levelGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): Pl
     return arrived ? goal.seat : null;
   }
   // assassinate：被斩那一方场上已经没有这个兵种的兵了
+  /*
+   * 先确认这个兵种在本局**存在**。
+   *
+   * 不确认的话，关卡把兵种 id 写错（或者那个兵根本没法部署上去），
+   * "场上没有它"就恒为真，第一手直接判玩家赢——一条配置错误变成通关。
+   * 宁可这条目标不成立，也不要白送一场胜利。
+   */
+  if (goal.unitType && !s.unitTypes[goal.unitType]) return null;
   const stillThere = s.units.some(
     (u) => u.owner === goal.loser && (!goal.unitType || u.type === goal.unitType),
   );
@@ -4576,7 +4584,13 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
  */
 function addCityFor(s: GameState, owner: PlayerId, left: number, top: number): void {
   const size = Math.max(CITY.size, Math.round(s.config.citySize ?? CITY.size));
-  const era = s.config.startEra;
+  /*
+   * 城自己的时代：**关卡给这一席写了就优先**（`seats.cityEra`）。
+   *
+   * 晚到的一家是"带着铁器时代的城进城"的——如果这里退回全局开局时代，
+   * 它进来就是一座青铜城，跟两家打了半局的对手处在同一档，"后发而强"就没了。
+   */
+  const era = Math.max(1, Math.round(s.config.level?.seats?.cityEra?.[owner] ?? s.config.startEra));
   const info = eraDef(era);
   const maxSeq = s.cities.reduce((m, c) => Math.max(m, Number(String(c.id).replace(/\D/g, '')) || 0), 0);
   const id = `c${maxSeq + 1}`;

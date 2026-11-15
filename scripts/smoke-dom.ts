@@ -9212,78 +9212,72 @@ check('左侧多了「关卡」一页，和战役 / 地图同级', () => {
   assert.deepEqual(tabs, ['levels', 'battle', 'maps'], `三页的顺序应该是 关卡 / 战役 / 地图，实际 ${tabs.join(',')}`);
 });
 
-check('关卡页是一格格卡片，默认停在「自由对局」', () => {
+check('关卡页只列玩家关，测试夹具不出现', () => {
   click('[data-tab="levels"]');
-  const cards = [...doc.querySelectorAll<HTMLElement>('[data-level]')];
-  assert.ok(cards.length >= 3, `应该至少三张：自由对局 + 两张内建关卡，实际 ${cards.length}`);
-  assert.ok(cards[0]!.textContent?.includes('自由对局'), '第一张应该是「自由对局」');
-  assert.ok(cards[0]!.classList.contains('active'), '默认选中「自由对局」');
-  // 关卡页不该把战役页那一堆开关也带过来
-  assert.equal(doc.querySelector('[data-players]'), null, '关卡页不该出现人数开关');
+  const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
+  assert.equal(ids[0], '', '第一张应该是「自由对局」');
+  const named = ids.filter(Boolean);
+  assert.equal(named.length, 3, `菜单里应该只有三关，实际 ${named.length}：${named.join(',')}`);
+  assert.ok(named.includes('level:lone-city'), '缺「孤城」');
+  assert.ok(named.includes('level:behead'), '缺「斩首」');
+  assert.ok(named.includes('level:latecomer'), '缺「黄雀」');
+  // 夹具关（断后 / 断桥 / 死守 / 三岔口 / 平地探针）不该出现在玩家的选关列表里
+  for (const dev of ['level:rear-guard', 'level:cut-bridge', 'level:hold-out', 'level:tri-corner', 'level:probe-flat']) {
+    assert.ok(!named.includes(dev), `测试夹具「${dev}」不该出现在菜单里`);
+  }
 });
 
-check('选「三岔口」：卡片上有缩略图，说明里有几家与谁托管', () => {
-  click('[data-level="level:tri-corner"]');
+check('选「孤城」：卡片有缩略图，说明写清几城、目标、有事件', () => {
+  click('[data-level="level:lone-city"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('这一关'), `要有一段"这一关"的说明，实际：${body.slice(0, 160)}`);
-  assert.ok(body.includes('3 家'), '要写清几家');
-  assert.ok(body.includes('绿方'), '要写清哪一席交给电脑');
-  const active = doc.querySelector<HTMLElement>('[data-level="level:tri-corner"]');
-  assert.ok(active?.classList.contains('active'), '选中的卡片要高亮');
-  assert.ok(!!active?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
+  assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
+  assert.ok(body.includes('守住 15 次行动'), '要写出守多久');
+  assert.ok(body.includes('红方：'), '目标要标出是谁的目标');
+  assert.ok(body.includes('处会在特定条件下发生的事'), '要说明有关卡事件');
+  const card = doc.querySelector<HTMLElement>('[data-level="level:lone-city"]');
+  assert.ok(!!card?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
 });
 
-check('选了关卡，战役页的人数与对手变成只读说明', () => {
+check('选了关卡：人数只读、时代/尺寸/先手点不动、扩展被锁', () => {
   click('[data-tab="battle"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('这一关是 3 家'), `人数那栏应该说明由关卡决定，实际：${body.slice(0, 160)}`);
+  assert.ok(body.includes('这一关是 2 家'), `人数那栏应该说明由关卡决定，实际：${body.slice(0, 200)}`);
   assert.equal(doc.querySelector('[data-players]'), null, '关卡选着的时候不该有人数开关');
-  // 底部摘要要说清"这一局打的是哪一关"
-  const foot = doc.querySelector('.start-summary')?.textContent ?? '';
-  assert.ok(foot.includes('三岔口'), `摘要里应该有关卡名，实际：${foot}`);
-});
 
-check('选「断后」：开局兵力与扩展规则都被关卡钉住', () => {
-  click('[data-tab="levels"]');
-  click('[data-level="level:rear-guard"]');
-  const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('开局兵力由关卡指定'), `关卡页要说明部署，实际：${body.slice(0, 200)}`);
-  assert.ok(body.includes('必须开') && body.includes('哀兵必胜'), '要写清必须开哪一包');
-  assert.ok(body.includes('处会在特定条件下发生的事'), `关卡页要说明有事件，实际：${body.slice(0, 240)}`);
+  const locked = (sel: string): boolean => {
+    const list = [...doc.querySelectorAll<HTMLButtonElement>(`.modal-body ${sel}`)];
+    return list.length > 0 && list.every((b) => b.disabled);
+  };
+  assert.ok(locked('[data-era]'), '时代由关卡钉死');
+  assert.ok(locked('[data-size]'), '尺寸由关卡地图决定');
+  assert.ok(locked('[data-first]'), '先手由关卡钉死');
 
-  click('[data-tab="battle"]');
-  const req = doc.querySelector<HTMLInputElement>('[data-exp="last-stand"]');
+  const eraNote = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(eraNote.includes('开局金币 120'), '要说明金币也被锁了');
+
   const forb = doc.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
-  assert.ok(req, '扩展列表里应该有「哀兵必胜」');
-  assert.ok(req!.checked && req!.disabled, '必须开的包：勾上，而且点不动');
   assert.ok(forb, '扩展列表里应该有「先后手补偿」');
-  assert.ok(!forb!.checked && forb!.disabled, '禁用的包：空着，而且点不动');
-  // 关卡没提到的包照旧归玩家
+  assert.ok(!forb!.checked && forb!.disabled, '这一关禁用的包：空着且点不动');
   const other = doc.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
   assert.ok(other && !other.disabled, '关卡没提到的包不该被锁');
-  // 锁定说明要讲清楚，不然玩家会以为界面坏了
-  const txt = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(txt.includes('这一关固定了扩展规则'), `扩展区要有锁定说明，实际：${txt.slice(0, 200)}`);
 });
 
-check('选「断桥」：说清桥会被炸掉', () => {
+check('选「斩首」：两条目标都标了归属', () => {
   click('[data-tab="levels"]');
-  click('[data-level="level:cut-bridge"]');
+  click('[data-level="level:behead"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('胜利条件'), '要写清怎么算赢');
-  assert.ok(body.includes('守住 10 次行动'), '要写出守多久');
+  assert.ok(body.includes('消灭对方全部守将'), `要写清斩首目标，实际：${body.slice(0, 240)}`);
+  assert.ok(body.includes('蓝方：守住 15 次行动'), '敌方的时限目标也要写出来，并标明是蓝方的');
 });
 
 check('选「黄雀」：说清第三家要中途才登场', () => {
-  click('[data-tab="levels"]');
   click('[data-level="level:latecomer"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('开局只有 2 家在场'), `要写清开局只有两家，实际：${body.slice(0, 260)}`);
   assert.ok(body.includes('绿方'), '要指名是哪一家晚到');
 });
 
-check('关卡页选「自由对局」：人数开关回来，关卡不残留', () => {
-  click('[data-tab="levels"]');
+check('切回「自由对局」：人数开关回来，关卡不残留', () => {
   click('[data-level=""]');
   click('[data-tab="battle"]');
   assert.ok(doc.querySelector('[data-players]'), '自由对局下应该有人数开关');
@@ -9293,39 +9287,14 @@ check('关卡页选「自由对局」：人数开关回来，关卡不残留', (
   assert.ok(!foot.includes('关卡「'), `摘要里不该再有"关卡「」，实际：${foot}`);
 });
 
-click('[data-act="cancel"]');
-
 /*
- * 真的开一局「死守」：顶栏必须常驻一行目标。
- *
- * 这是批次 4 唯一"不看代码也能验"的东西——玩家得知道自己在守到什么时候。
- * 放在整个文件最末：它会关掉面板并真的开一局，后面不能再有用例。
+ * 真的开一局「孤城」：顶栏必须常驻一行目标。
+ * 这是唯一"不看代码也能验"的东西——玩家得知道自己在守到什么时候。
  */
 openSetup();
 await wait(40);
 click('[data-tab="levels"]');
-click('[data-level="level:hold-out"]');
-
-check('选「死守」：关卡页写明胜利条件', () => {
-  const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
-  assert.ok(body.includes('守住 20 次行动'), '要写出具体时限');
-});
-
-check('选了「死守」：时代、尺寸、先手都点不动', () => {
-  click('[data-tab="battle"]');
-  const eras = [...doc.querySelectorAll<HTMLButtonElement>('.modal-body [data-era]')];
-  assert.ok(eras.length > 0, '应该有时代按钮');
-  assert.ok(eras.every((b) => b.disabled), '关卡钉住时代之后，每个时代按钮都该禁用');
-  assert.ok(eras.some((b) => b.classList.contains('active')), '仍然要能看出当前是哪一档');
-  const sizes = [...doc.querySelectorAll<HTMLButtonElement>('.modal-body [data-size]')];
-  assert.ok(sizes.length > 0 && sizes.every((b) => b.disabled), '尺寸由关卡地图决定，也该禁用');
-  const firsts = [...doc.querySelectorAll<HTMLButtonElement>('.modal-body [data-first]')];
-  assert.ok(firsts.length > 0 && firsts.every((b) => b.disabled), '先手是这一关规定的，也该禁用');
-  const txt = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(txt.includes('开局金币 120'), `要说明金币也被锁了，实际：${txt.slice(0, 260)}`);
-});
-
+click('[data-level="level:lone-city"]');
 click('[data-act="start"]');
 await wait(150);
 
@@ -9334,7 +9303,7 @@ check('开局后顶栏常驻一行关卡目标', () => {
   assert.ok(goal, '顶栏应该有目标那一块');
   assert.ok(!goal!.hidden, '关卡局里这块不能藏着');
   const text = goal!.textContent ?? '';
-  assert.ok(text.includes('守住 20 次行动'), `要写出守多久，实际：${text}`);
+  assert.ok(text.includes('守住 15 次行动'), `要写出守多久，实际：${text}`);
   assert.ok(text.includes('还剩'), `要写出还剩几次，实际：${text}`);
 });
 

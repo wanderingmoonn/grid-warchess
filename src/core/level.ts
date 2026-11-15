@@ -31,7 +31,7 @@ import { expansionById } from './expansions.ts';
 import { ERAS } from './config.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
-import type { MatchConfig, PlayerId, Terrain } from './types.ts';
+import type { MatchConfig, PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
 /**
  * 关卡规定的一个开局兵。
@@ -187,7 +187,7 @@ export type LevelGoal =
    * 否则对方一边死一边补同型兵，这个条件永远不会成立。P4 里没有关卡用它，
    * 留待以后给单位加"标记"之后再用它做真正的首领。
    */
-  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string };
+  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string; label?: string };
 
 /** 胜利条件的人话版本。顶栏、选关页、开局战报都用它，免得三处各写一遍措辞 */
 export function goalText(goal: LevelGoal): string {
@@ -198,7 +198,7 @@ export function goalText(goal: LevelGoal): string {
     const who = goal.unitType ? `「${goal.unitType}」` : '一个兵';
     return `把${who}送到 ${at}`;
   }
-  const what = goal.unitType ? `「${goal.unitType}」` : '主力';
+  const what = goal.label ?? (goal.unitType ? `「${goal.unitType}」` : '主力');
   return `消灭对方全部${what}`;
 }
 
@@ -238,6 +238,16 @@ export interface LevelSeats {
   /** 哪些席位由电脑操作。不写＝全是真人；写了 B 就是 B 交给电脑 */
   ai?: PlayerId[];
   /**
+   * 逐席的开局时代。没写的席位用全局 `setup.startEra`。
+   *
+   * 只对"晚到的第三方"有意思：两家打了半局，第三家带着铁器时代的城和兵进场。
+   * 注意城的 `era` 本来就逐城独立（收入、可造兵种、升级都读它），
+   * 这里只是让建局时给某一席的城写一个别的数字，不是新机制。
+   *
+   * **时代的领先是暂时的**：玩家花钱升两三次城就追平。所以想让第三方真的强，
+   * 要落在"入场那一刻的兵力和兵种"上，别指望科技差一直压着。
+   */
+  cityEra?: Partial<Record<PlayerId, number>>;  /**
    * 开局**不在场上**的席位。
    *
    * 和"出局"是两件事：出局是打没了，未登场是还没来。所以它不占回合、不算出局、
@@ -280,6 +290,24 @@ export interface LevelDef {
   seats?: LevelSeats;
   /** 写死的开局设定（时代 / 先手 / 双城）。没写的仍然归玩家 */
   setup?: LevelSetup;
+  /**
+   * 测试夹具：**不进玩家菜单**，只留给探针和自检。
+   *
+   * 这些图的存在意义是各验一条机制（部署、改地形、晚到的一家……），
+   * 不追求好玩。放在选关列表里，玩家点进去只会觉得是半成品。
+   * 关掉标记也不会删掉它们——探针二十多段全靠它们，删了等于把回归覆盖一起删。
+   */
+  dev?: boolean;
+  /**
+   * 这一关自带、别的对局里没有的兵种。
+   *
+   * 为什么不用全局兵种表加：`守将`这种是关卡概念，不该出现在别的对局的规则书、
+   * 兵种池、AI 采购表里。放在这里，只在建局时合并进本局的 `unitTypes`。
+   *
+   * 想做"只此一个、谁也造不出"的单位，用 `summonedOnly: true`——那条标记
+   * 的语义正好是"不进产线、AI 不采购"，引擎里已经跑通（AI 三处都跳过它）。
+   */
+  units?: Record<string, UnitTypeDef>;
   /**
    * 每席开局的兵。**没写的席位照旧按规则自动撒**（这是"加字段不改变老行为"的写法：
    * 关卡没提这件事，就等于这件事不存在）。
@@ -393,14 +421,265 @@ const CUT_PAINT: Array<[number, number, string]> = (() => {
 /**
  * 内建关卡。
  *
- * 前四张是"测试夹具"：不追求好玩，各验证一条机制。
- * 「三岔口」是第一张能给人玩的三家混战；「断后」验证部署与扩展规则；
- * 「死守」验证胜负条件；「黄雀」验证晚到的一家；「断桥」验证改地形。
+ * 分两层，别混：
+ *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀。三类各一关，
+ *     每类教一件事——用地形换时间、集中兵力打一点、第三方与时机。
+ *   · **测试夹具**（`dev: true`）：平地探针、断后、断桥、三岔口、死守。
+ *     各验一条机制，不进玩家菜单，探针二十多段靠它们跑。
  */
+/**
+ * 「孤城」的地形：一条竖河、一座桥。和「断桥」同一副骨架，但这是一张**给人玩**的图：
+ * 城只有一座，河对面有两座城，压力从第一轮就在。
+ */
+const SOLO_PAINT: Array<[number, number, string]> = (() => {
+  const out: Array<[number, number, string]> = [];
+  for (let y = 0; y < 14; y += 1) out.push([7, y, '~']);
+  out.push([7, 7, '=']);
+  out.push([4, 4, 'f'], [5, 4, 'f'], [4, 5, 'f']);
+  out.push([9, 5, 'h'], [10, 6, 'h']);
+  return out;
+})();
+
 export const LEVELS: LevelDef[] = [
+  /* ── 玩家关 1：孤城（防守）────────────────────────────────── */
+  {
+    id: 'level:lone-city',
+    version: LEVEL_VERSION,
+    name: '孤城',
+    brief: '14×14。你只有一座城，河对岸有两座。桥会被炸，水会退——撑到第 15 次行动。',
+    map: {
+      id: 'levelmap:lone-city',
+      name: '孤城',
+      w: 14,
+      h: 14,
+      rows: rowsOf(14, 14, SOLO_PAINT),
+      citiesA: [{ x: 1, y: 6 }],
+      // 两座城：产能翻倍，而且必须打两座才算赢
+      citiesB: [
+        { x: 10, y: 3 },
+        { x: 10, y: 10 },
+      ],
+      source: 'builtin',
+    },
+    seats: { count: 2, ai: ['B'] },
+    setup: { startEra: 1, firstSide: 'A' },
+    deploy: {
+      A: [
+        { type: 'militia', x: 3, y: 6 },
+        { type: 'archer', x: 3, y: 7 },
+        { type: 'militia', x: 4, y: 8 },
+      ],
+      B: [
+        { type: 'militia', x: 8, y: 3 },
+        { type: 'archer', x: 9, y: 4 },
+        { type: 'militia', x: 8, y: 6 },
+        { type: 'militia', x: 9, y: 10 },
+        { type: 'archer', x: 8, y: 11 },
+      ],
+    },
+    goals: [{ kind: 'survive', seat: 'A', untilTurn: 15 }],
+    /*
+     * 禁掉「先后手补偿」：这一关是 1 城对 2 城的不对称布防，后手再补一笔金币，
+     * 等于把设计好的强弱差抹掉一截。（和「断后」同一条理由。）
+     */
+    expansions: { forbid: ['turn-order-comp'] },
+    /*
+     * 三段压力：
+     *   1~5 次行动：桥还在。这是玩家**唯一能主动出门换兵**的窗口，也是这关的全部乐趣；
+     *   第 6 次行动：桥被炸成深水，只能守桥头；
+     *   第 11 次行动：整条河退成浅流——防线从 1 格变成 14 格，逼他把人收拢到城下硬撑。
+     *
+     * 第二段刻意**不写 `only`**：整条河一起变，包括桥墩那一格。
+     * 留着桥墩是深坑也没用——那格谁都过不去，等于少一个突破点，压力反而不够。
+     */
+    events: [
+      {
+        id: 'blow',
+        when: { kind: 'turn', at: 6 },
+        do: [
+          { kind: 'say', text: '桥被炸断了。别再想着过河——守住这一头。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 7, y1: 7 }, to: 'deep' },
+        ],
+      },
+      {
+        id: 'ebb',
+        when: { kind: 'turn', at: 11 },
+        do: [
+          { kind: 'say', text: '水位退了。整条河都能淌过去——他们不会只走桥了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 7, y1: 13 }, to: 'shallow' },
+        ],
+      },
+    ],
+  },
+
+  /* ── 玩家关 2：斩首（进攻）────────────────────────────────── */
+  {
+    id: 'level:behead',
+    version: LEVEL_VERSION,
+    name: '斩首',
+    brief: '12×12。敌方主帅缩在城下的箭塔后面。第 15 次行动之前杀掉他，否则他撑住了。',
+    map: {
+      id: 'levelmap:behead',
+      name: '斩首',
+      w: 12,
+      h: 12,
+      rows: rowsOf(12, 12, [
+        [4, 3, 'f'], [5, 3, 'f'], [4, 4, 'f'],
+        [7, 8, 'h'], [8, 8, 'h'], [7, 9, 'h'],
+      ]),
+      citiesA: [{ x: 1, y: 8 }],
+      citiesB: [{ x: 9, y: 1 }],
+      source: 'builtin',
+    },
+    seats: { count: 2, ai: ['B'] },
+    setup: { startEra: 1, firstSide: 'A' },
+    /*
+     * 守将是一条 `summonedOnly` 的兵种：不进产线、AI 不采购，全图只有部署上来的这一个。
+     * 这样"斩杀某个单位"才有确定的判定对象——用普通兵种的话，对面会一直补同型的兵。
+     */
+    units: {
+      warden: {
+        id: 'warden',
+        name: '守将',
+        short: '将',
+        era: 1,
+        category: 'combat',
+        // 不可建造：钱数只是占位，产线根本不列它
+        cost: 60,
+        move: 2,
+        atk: 16,
+        armor: 5,
+        maxHp: 45,
+        range: 1,
+        vision: 3,
+        summonedOnly: true,
+      },
+    },
+    deploy: {
+      A: [
+        { type: 'militia', x: 2, y: 7 },
+        { type: 'archer', x: 3, y: 8 },
+        { type: 'militia', x: 2, y: 9 },
+        { type: 'militia', x: 4, y: 6 },
+        { type: 'archer', x: 3, y: 10 },
+      ],
+      B: [
+        { type: 'warden', x: 9, y: 3 },
+        // 箭塔：强杀守将要先吃它的火力，除非先花两三个兵把塔拆了
+        { type: 'tower', x: 8, y: 3 },
+        { type: 'militia', x: 8, y: 4 },
+        { type: 'archer', x: 8, y: 2 },
+        { type: 'militia', x: 10, y: 4 },
+      ],
+    },
+    /*
+     * 两条目标同时挂着，按顺序判：
+     *   1. 杀掉守将 → 玩家赢（写在前面，同一手同时成立时玩家优先）；
+     *   2. 敌方撑满 15 次行动 → 敌方赢。
+     *
+     * 这样就得到了"限时击杀"，**不需要给胜负判定加任何新东西**——
+     * 用的是已有的 assassinate + survive。
+     */
+    goals: [
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'warden', label: '守将' },
+      { kind: 'survive', seat: 'B', untilTurn: 15 },
+    ],
+    events: [
+      {
+        /*
+         * 让守将待在城里别乱跑。
+         *
+         * 电脑不会保护特定单位——不给它这条，它会自己把守将推上前线送掉，
+         * 玩家三个回合就赢了，这关等于没有难度。
+         */
+        id: 'hold',
+        when: { kind: 'turn', at: 1 },
+        do: [{ kind: 'doctrine', seat: 'B', strategy: 'hold' }],
+      },
+    ],
+  },
+
+  /* ── 玩家关 3：黄雀（混战）────────────────────────────────── */
+  {
+    id: 'level:latecomer',
+    version: LEVEL_VERSION,
+    name: '黄雀',
+    brief: '16×16。先和对面打。第 8 次行动，第三家带着铁器时代的兵从东南角进场。',
+    map: {
+      id: 'levelmap:latecomer',
+      name: '黄雀',
+      w: 16,
+      h: 16,
+      // 和「三岔口」同一副地形（一条竖河、中间一个渡口），换的是规则不是图
+      rows: rowsOf(16, 16, TRI_PAINT),
+      citiesA: [{ x: 1, y: 6 }],
+      citiesB: [{ x: 12, y: 1 }],
+      source: 'builtin',
+    },
+    seats: {
+      count: 3,
+      cities: { C: [{ x: 12, y: 12 }] },
+      ai: ['B', 'C'],
+      /*
+       * 绿方开局**不在场上**：没有城、没有兵、不占回合。
+       * 前 8 次行动就是红蓝两家的事。
+       */
+      hidden: ['C'],
+      /*
+       * 它一进城就是**铁器时代**的城：能直接造长枪兵、长弓手，
+       * 不用像玩家那样先攒钱升城。这是它"后发而强"的全部来源。
+       */
+      cityEra: { C: 2 },
+    },
+    setup: { startEra: 1, firstSide: 'A' },
+    deploy: {
+      A: [
+        { type: 'militia', x: 2, y: 6 },
+        { type: 'archer', x: 3, y: 7 },
+        { type: 'militia', x: 2, y: 8 },
+        { type: 'militia', x: 3, y: 5 },
+      ],
+      B: [
+        { type: 'militia', x: 11, y: 2 },
+        { type: 'archer', x: 10, y: 3 },
+        { type: 'militia', x: 11, y: 4 },
+        { type: 'archer', x: 10, y: 5 },
+      ],
+      /*
+       * 绿方入场时的兵：五个铁器兵。对它来说这是"开局"，对打了 8 次行动的
+       * 两家来说这是**压过来的一堵墙**——所以数量不再给多，强在兵种和那座城。
+       */
+      C: [
+        { type: 'spearman', x: 10, y: 11 },
+        { type: 'spearman', x: 11, y: 11 },
+        { type: 'longbow', x: 10, y: 13 },
+        { type: 'longbow', x: 11, y: 13 },
+        { type: 'knight', x: 9, y: 12 },
+      ],
+    },
+    events: [
+      {
+        id: 'arrive',
+        when: { kind: 'turn', at: 8 },
+        do: [
+          { kind: 'say', text: '东南角立起一座城——旌旗是铁器时代的。第三家来了。' },
+          { kind: 'deploy', seat: 'C' },
+          /*
+           * 直接扑向人数最多的那一家。
+           *
+           * 光靠"时代高"不足以让 AI 把它当威胁（它算的是当下的兵力和威胁，
+           * 不是科技），所以用一句指令把压力做实，而不是指望数值。
+           */
+          { kind: 'doctrine', seat: 'C', strategy: 'rush' },
+        ],
+      },
+    ],
+  },
+
   {
     id: 'level:probe-flat',
     version: LEVEL_VERSION,
+    dev: true,
     name: '平地探针',
     brief: '12×12 全平地，两座城。不是给人玩的关卡，用来验证链路。',
     map: {
@@ -421,6 +700,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:tri-corner',
     version: LEVEL_VERSION,
+    dev: true,
     name: '三岔口',
     brief: '16×16，三家分立：红蓝两家由真人操作，绿方是电脑，见谁都打。',
     map: {
@@ -447,6 +727,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:rear-guard',
     version: LEVEL_VERSION,
+    dev: true,
     name: '断后',
     brief: '14×14，一座桥。你只有 1 个兵，对面 5 个，守住 24 次行动等援军。',
     map: {
@@ -552,6 +833,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:hold-out',
     version: LEVEL_VERSION,
+    dev: true,
     name: '死守',
     brief: '12×12，守住 20 次行动。城破了就输——这是第一张能赢也能输的关卡。',
     map: {
@@ -612,68 +894,9 @@ export const LEVELS: LevelDef[] = [
     ],
   },
   {
-    id: 'level:latecomer',
-    version: LEVEL_VERSION,
-    name: '黄雀',
-    brief: '16×16，先两家对打。第 8 次行动，第三家从东南角登场——它一直在等你们打完。',
-    map: {
-      id: 'levelmap:latecomer',
-      name: '黄雀',
-      w: 16,
-      h: 16,
-      // 和「三岔口」同一副地形（一条竖河、中间一个渡口），换的是规则不是图
-      rows: rowsOf(16, 16, TRI_PAINT),
-      citiesA: [{ x: 1, y: 6 }],
-      citiesB: [{ x: 12, y: 1 }],
-      source: 'builtin',
-    },
-    seats: {
-      count: 3,
-      cities: { C: [{ x: 12, y: 12 }] },
-      ai: ['B', 'C'],
-      /*
-       * 绿方开局**不在场上**：没有城、没有兵、不占回合。
-       *
-       * 前 8 次行动就是红蓝两家的事。绿方的城位和兵都写在这儿，但只有
-       * `deploy` 事件真的调用它们时才会出现——所以它登场那一下是有画面的：
-       * 一座城凭空立起来，四个兵围在城边。
-       */
-      hidden: ['C'],
-    },
-    setup: { startEra: 1, firstSide: 'A' },
-    deploy: {
-      A: [
-        { type: 'militia', x: 2, y: 6 },
-        { type: 'archer', x: 3, y: 7 },
-        { type: 'militia', x: 2, y: 8 },
-      ],
-      B: [
-        { type: 'militia', x: 11, y: 2 },
-        { type: 'archer', x: 10, y: 3 },
-        { type: 'militia', x: 11, y: 4 },
-      ],
-      // 绿方登场时才摆的这些
-      C: [
-        { type: 'militia', x: 10, y: 11 },
-        { type: 'militia', x: 11, y: 11 },
-        { type: 'archer', x: 10, y: 13 },
-        { type: 'archer', x: 11, y: 13 },
-      ],
-    },
-    events: [
-      {
-        id: 'arrive',
-        when: { kind: 'turn', at: 8 },
-        do: [
-          { kind: 'say', text: '东南角的地平线上立起了一座城——第三家来了。' },
-          { kind: 'deploy', seat: 'C' },
-        ],
-      },
-    ],
-  },
-  {
     id: 'level:cut-bridge',
     version: LEVEL_VERSION,
+    dev: true,
     name: '断桥',
     brief: '14×14，一座桥。第 4 次行动桥被炸掉，第 8 次行动水退了——守住 10 次行动。',
     map: {
@@ -731,8 +954,19 @@ export const LEVELS: LevelDef[] = [
   },
 ];
 
+/**
+ * 全部关卡（含测试夹具）。探针、自检、内部跳转用它。
+ *
+ * **玩家菜单不该用它**——那种地方要用 `playableLevels()`，否则"1 个兵打 5 个"
+ * 这种专门用来验机制的图会出现在选关列表里，玩家点进去只会觉得是半成品。
+ */
 export function allLevels(): LevelDef[] {
   return LEVELS;
+}
+
+/** 玩家能选到的关卡（去掉 `dev` 那些测试夹具） */
+export function playableLevels(): LevelDef[] {
+  return LEVELS.filter((l) => l.dev !== true);
 }
 
 export function levelById(id: string | null | undefined): LevelDef | null {
@@ -808,6 +1042,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   const events = normalizeEvents(obj.events, map, seats, errors);
   const goals = normalizeGoals(obj.goals, map, seats, errors);
   const setup = normalizeSetup(obj.setup, seats, errors);
+  const units = normalizeLevelUnits(obj.units, errors);
   if (errors.length > 0) return { ok: false, errors };
 
   return {
@@ -826,6 +1061,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       ...(events ? { events: structuredClone(events) } : {}),
       ...(goals ? { goals: structuredClone(goals) } : {}),
       ...(setup ? { setup: structuredClone(setup) } : {}),
+      ...(units ? { units: structuredClone(units) } : {}),
     },
   };
 }
@@ -1053,6 +1289,43 @@ function normalizeWhen(
   return undefined;
 }
 
+/**
+ * 校验"这一关自带的兵种"。
+ *
+ * 只查"能不能用"：名字、时代、类别。数值不查——那是作者调平衡的事，
+ * 校验拦不住也不该拦。`id` 一律以 map 的 key 为准，免得出现
+ * "key 叫 warden、def.id 叫 hero"这种对不上的情况。
+ */
+function normalizeLevelUnits(
+  raw: unknown,
+  errors: string[],
+): Record<string, UnitTypeDef> | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const out: Record<string, UnitTypeDef> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, UnitTypeDef>)) {
+    const def = val;
+    if (!def || typeof def !== 'object') {
+      errors.push(`关卡兵种「${key}」不是一份定义`);
+      continue;
+    }
+    if (typeof def.name !== 'string' || !def.name.trim()) {
+      errors.push(`关卡兵种「${key}」没写名字`);
+      continue;
+    }
+    const era = Math.round(Number(def.era));
+    if (!Number.isFinite(era) || era < 1 || era > ERAS.length) {
+      errors.push(`关卡兵种「${key}」的时代要落在 1~${ERAS.length}（现在 ${String(def.era)}）`);
+      continue;
+    }
+    if (!def.category) {
+      errors.push(`关卡兵种「${key}」没写类别（combat / economy / builder / building）`);
+      continue;
+    }
+    out[key] = { ...def, id: key, era };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** 一块矩形区域。事件和胜利条件共用同一份判据 */
 function normZone(raw: unknown, label: string, map: FixedMap, errors: string[]): LevelZone | undefined {  const z = (raw ?? {}) as Partial<LevelZone>;
   const nums = [z.x0, z.y0, z.x1, z.y1].map((v) => Math.round(Number(v)));
@@ -1178,7 +1451,8 @@ function normalizeGoals(
         continue;
       }
       const unitType = typeof g.unitType === 'string' && g.unitType.trim() ? g.unitType.trim() : undefined;
-      out.push({ kind: 'assassinate', winner, loser, ...(unitType ? { unitType } : {}) });
+      const label = typeof g.label === 'string' && g.label.trim() ? g.label.trim() : undefined;
+      out.push({ kind: 'assassinate', winner, loser, ...(unitType ? { unitType } : {}), ...(label ? { label } : {}) });
       continue;
     }
 
@@ -1356,6 +1630,29 @@ function normalizeSeats(
   }
 
   /*
+   * 逐席的开局时代（只有"晚到的一家"会用）。
+   *
+   * 必须在这里过一遍再带出去：`validateLevel` 返回的是一份**重新拼的对象**，
+   * 不在这里收，`cityEra` 就在校验那一步丢了——表现是"第三方进城还是青铜"，
+   * 而关卡里明明写的是铁器，查半天查不出原因。
+   */
+  const rawCityEra = (obj.cityEra ?? {}) as Partial<Record<PlayerId, unknown>>;
+  const cityEra: Partial<Record<PlayerId, number>> = {};
+  for (const [rawSeat, rawEra] of Object.entries(rawCityEra)) {
+    const seat = String(rawSeat).toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`第 ${seat} 家的开局时代写了，但这一关没这一家`);
+      continue;
+    }
+    const era = Math.round(Number(rawEra));
+    if (!Number.isFinite(era) || era < 1 || era > ERAS.length) {
+      errors.push(`第 ${seat} 家的开局时代要落在 1~${ERAS.length}（现在 ${String(rawEra)}）`);
+      continue;
+    }
+    cityEra[seat] = era;
+  }
+
+  /*
    * 未登场的席位：必须是这一局坐人的。
    * 它有没有城由下面的 extraSeats 那段管（C/D 必须有 seats.cities，A/B 用地图的）。
    */
@@ -1378,5 +1675,6 @@ function normalizeSeats(
     ...(Object.keys(cities).length > 0 ? { cities } : {}),
     ai,
     ...(hidden.length > 0 ? { hidden } : {}),
+    ...(Object.keys(cityEra).length > 0 ? { cityEra } : {}),
   };
 }

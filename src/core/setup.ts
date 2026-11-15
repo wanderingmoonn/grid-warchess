@@ -211,6 +211,13 @@ export function createMatch(
   const extraUnits: Record<string, UnitTypeDef> = {
     ...customUnits,
     ...expansionUnitsFor(expansionIds),
+    /*
+     * 关卡自带的兵种（`LevelDef.units`）最后合并。
+     *
+     * 放最后是因为它可能是对某个兵种的有意改写（"这一关的守将比民兵强一点"），
+     * 作者意图该压过通用表。它们**不进全局**，别的对局看不到、也造不出。
+     */
+    ...(level?.units ?? {}),
   };
   // 城市边长那边还要按包查一次，所以这份集合留着
   const liveExpansions = enabledExpansionIds(expansionIds);
@@ -463,6 +470,19 @@ export function createMatch(
     unitTypes[id] = { ...def, builds: def.builds ? [...def.builds] : undefined };
   }
 
+  /*
+   * 关卡自带的兵种（`LevelDef.units`）**必须在这里再兜一次**。
+   *
+   * 上面那份是从 `pool`（玩家能造的兵）来的，而关卡兵种多半是 `summonedOnly`——
+   * 谁都造不出、只用部署摆上去，它压根不在池子里。不补这一步，部署里写的 `warden`
+   * 会被当成"本局没有这个兵种"跳过；而 `assassinate` 的判据是"对手场上没有这个兵种"，
+   * 于是开局第一手就判玩家赢——一条配置错误直接变成通关。
+   */
+  for (const [id, def] of Object.entries(level?.units ?? {})) {
+    if (unitTypes[id]) continue;
+    unitTypes[id] = { ...def, builds: def.builds ? [...def.builds] : undefined };
+  }
+
   // ---- 城市 ----
   const cities: City[] = [];
   let citySeq = 1;
@@ -480,20 +500,31 @@ export function createMatch(
     1,
     Math.min(eraCeilingFor(expansionIds), level?.setup?.startEra ?? config.startEra),
   );
-  const eraInfo = eraDef(startEra);
 
   const placeCity = (owner: PlayerId, left: number, top: number) => {
     const id = `c${citySeq++}`;
+    /*
+     * 这一座城自己的时代。
+     *
+     * 城的 `era` 本来就是逐城独立（收入、可造兵种、升级都读它），建局时统一写
+     * `startEra` 只是"没人给它别的值"。关卡可以让某一席晚点上班、带着高一级的城进城
+     * （`seats.cityEra`）——它进来那一刻就是铁器的城，不用先攒钱升。
+     */
+    const cityEra = Math.max(
+      1,
+      Math.min(eraCeilingFor(expansionIds), level?.seats?.cityEra?.[owner] ?? startEra),
+    );
+    const info = eraDef(cityEra);
     cities.push({
       id,
       x: left,
       y: top,
       size: citySize,
       owner,
-      era: startEra,
-      hp: eraInfo.cityMaxHp,
-      maxHp: eraInfo.cityMaxHp,
-      armor: eraInfo.cityArmor,
+      era: cityEra,
+      hp: info.cityMaxHp,
+      maxHp: info.cityMaxHp,
+      armor: info.cityArmor,
     });
     for (let dy = 0; dy < citySize; dy++) {
       for (let dx = 0; dx < citySize; dx++) {

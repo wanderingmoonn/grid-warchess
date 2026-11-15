@@ -42,7 +42,7 @@ import {
   type FixedMap,
 } from '../core/fixed-maps.ts';
 import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
-import { allLevels, applyLevelToConfig, goalText, type LevelDef } from '../core/level.ts';
+import { allLevels, applyLevelToConfig, goalText, playableLevels, type LevelDef } from '../core/level.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -999,7 +999,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   <b>自由对局</b>
                   <i>自己选地图和对手</i>
                 </button>
-                ${allLevels().map(levelCard).join('')}
+                ${playableLevels().map(levelCard).join('')}
               </div>
               <div class="field-hint">关卡由我们预制，暂时不能自己改。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。</div>
             </section>
@@ -1054,7 +1054,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               }
               ${
                 (config.level.goals ?? []).length > 0
-                  ? `<div class="field-hint"><b>胜利条件：</b>${(config.level.goals ?? []).map(goalText).join('；')}。没达成就算这一局还没打完；城丢了、兵打光了，照普通规则判输。</div>`
+                  ? `<div class="field-hint"><b>胜利条件：</b>${(config.level.goals ?? [])
+                      /*
+                       * 每条目标都标上"这是谁的目标"。
+                       *
+                       * 不标的话，一眼看过去全是命令句——"守住 15 次行动"明明是敌方的
+                       * 目标（他撑住就赢），写在玩家眼前像是在让他去守。进攻关里尤其误导。
+                       */
+                      .map((g) => {
+                        const seat = g.kind === 'assassinate' ? g.winner : g.seat;
+                        return `${seatLabel[seat] ?? seat}：${goalText(g)}`;
+                      })
+                      .join('；')}。没达成就算这一局还没打完；城丢了、兵打光了，照普通规则判输。</div>`
                   : ''
               }
             </section>`

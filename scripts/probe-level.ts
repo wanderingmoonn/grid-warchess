@@ -21,7 +21,7 @@ import { aiNextAction } from '../src/core/ai.ts';
 import { isAiSide } from '../src/core/ai-meta.ts';
 import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
-import { LEVELS, levelById, validateLevel } from '../src/core/level.ts';
+import { allLevels, levelById, playableLevels, validateLevel } from '../src/core/level.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
 
@@ -52,8 +52,8 @@ function line(text: string): void {
 
 /* ── 1. 注册表自检 ─────────────────────────────────────────────── */
 line('1. 关卡注册表');
-check(LEVELS.length > 0, `${LEVELS.length} 张关卡`);
-for (const def of LEVELS) {
+check(allLevels().length > 0, `${allLevels().length} 张关卡`);
+for (const def of allLevels()) {
   const res = validateLevel(def);
   if (!res.ok) {
     bad(`${def.id} 过不了校验`, res.errors.join('；'));
@@ -66,7 +66,13 @@ for (const def of LEVELS) {
     `${def.id} 双方各有城`);
 }
 
-const probe = LEVELS[0];
+/*
+ * 探针的基准关卡：**按 id 取**，不要用 LEVELS[0]。
+ *
+ * 用下标的话，往注册表前面加一张玩家关，整份探针就会悄悄换成另一张图跑——
+ * 断言大多还能过（它们只关心"有城、有兵"），但已经不是在测原来那张图了。
+ */
+const probe = levelById('level:probe-flat');
 if (!probe) {
   console.log('\n没有关卡可测，结束。');
   process.exit(1);
@@ -523,7 +529,7 @@ line('13. "走进区域"必须是"从外面走进去"');
    * 机制本身必须能确定地验：原本就在区域里的兵挪一格，不该算"进入"。
    */
   const mkEnter = (events: unknown[]) => ({
-    ...LEVELS[0]!,
+    ...levelById('level:probe-flat')!,
     id: 'level:test-enter',
     seats: { count: 2, ai: [] },
     deploy: {
@@ -644,7 +650,7 @@ line('16. 目标只管赢，输还是按老规则判');
 /* ── 17. 护送 / 斩首 ─────────────────────────────────────────── */
 line('17. 另外两种目标');
 {
-  const base = LEVELS[0]!;
+  const base = levelById('level:probe-flat')!;
   const mk = (goals: unknown[]) => ({
     ...base,
     id: 'level:test-goal',
@@ -735,7 +741,7 @@ line('19. 时代 / 先手被关卡钉住（不是只在面板上灰掉）');
   check(hacked.current === 'A', `先手是关卡写的红方（${hacked.current}）`, `期望 A，实际 ${hacked.current}`);
 
   // 没写 setup 的关卡不受影响：面板说什么就是什么
-  const noSetup = { ...LEVELS[0]!, id: 'level:no-setup', setup: undefined };
+  const noSetup = { ...levelById('level:probe-flat')!, id: 'level:no-setup', setup: undefined };
   const s2 = createMatch({ ...DEFAULT_CONFIG, startEra: 3, level: noSetup as never }, 4242);
   check(s2.config.startEra === 3, `关卡没写时代时不干预（${s2.config.startEra}）`,
     `期望 3，实际 ${s2.config.startEra}`);
@@ -774,7 +780,8 @@ line('20. 未登场：第三家第 8 次行动才上场');
       const cities = s.cities.filter((c) => c.owner === 'C').length;
       const units = s.units.filter((u) => u.owner === 'C').length;
       check(cities === 1, `登场时放下了一座城（${cities}）`);
-      check(units === 4, `登场时摆上了四个兵（${units}）`);
+      const wantUnits = lc.deploy?.C?.length ?? 0;
+      check(units === wantUnits, `登场时摆上了关卡写的那几个兵（${units}/${wantUnits}）`);
       check((s.levelState?.hidden ?? []).length === 0, '"未登场"的名单空了');
       check(s.log.some((l) => l.text.includes('登场了')), '战报里有一句登场提示');
       check(s.winner === null, '登场不改变胜负');
@@ -845,7 +852,7 @@ line('21. 改地形：桥塌、水退、兵被挤走');
    * 城格：改成什么都不动。
    */
   const mkTerrainLevel = (events: unknown[], deploy: unknown) => ({
-    ...LEVELS[0]!,
+    ...levelById('level:probe-flat')!,
     id: 'level:test-terrain',
     seats: { count: 2, ai: [] },
     setup: { startEra: 1 },
@@ -974,6 +981,45 @@ line('23. 地图上的桥不该自己塌');
     const gone = applyAction(without, { type: 'END_TURN' } as Action);
     check(gone.ok && gone.state.tiles[spot]?.terrain === 'water', '工兵没了：桥面照旧塌回水面',
       `实际 ${gone.ok ? gone.state.tiles[spot]?.terrain : '动作被拒'}`);
+  }
+}
+
+/* ── 24. 玩家关冒烟：三关都能建、都能跑 ─────────────────────── */
+line('24. 玩家关：孤城 / 斩首 / 黄雀');
+{
+  const menu = playableLevels();
+  check(menu.length === 3, `菜单里正好三关（${menu.map((l) => l.name).join(' / ')}）`);
+  check(
+    allLevels().length > menu.length,
+    `夹具关还在注册表里（全 ${allLevels().length} 张，玩家可见 ${menu.length} 张）`,
+    '夹具被删了：探针二十多段会一起失效',
+  );
+
+  for (const lv of menu) {
+    const v = validateLevel(lv);
+    if (!v.ok) {
+      bad(`${lv.name}：校验通过`, v.errors.slice(0, 3).join('；'));
+      continue;
+    }
+    let s = createMatch({ ...DEFAULT_CONFIG, level: lv }, 20261115);
+    const built = { cities: s.cities.length, units: s.units.length };
+    let crashed = '';
+    try {
+      for (let i = 0; i < 24 && !s.winner; i++) {
+        const a = aiNextAction(s) ?? ({ type: 'END_TURN' } as Action);
+        const r = applyAction(s, a);
+        s = r.ok ? r.state : (applyAction(s, { type: 'END_TURN' } as Action) as { state: GameState }).state;
+      }
+    } catch (err) {
+      crashed = String(err);
+    }
+    check(crashed === '', `${lv.name}：跑 24 步不炸`, crashed);
+    check(built.cities > 0 && built.units > 0, `${lv.name}：开局有城有兵（${built.cities} 城 / ${built.units} 兵）`);
+    console.log(
+      `      · ${lv.name}：${built.units} 兵起手 → 第 ${s.turn} 次行动，${
+        s.winner ? `胜方 ${s.winner}` : '未分胜负'
+      }`,
+    );
   }
 }
 
