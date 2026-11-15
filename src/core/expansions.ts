@@ -538,6 +538,22 @@ export interface ExpansionHooks {
   modifyRange?: (c: RangeCtx) => number;
   /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */
   modifyRangeAgainst?: (c: RangeAgainstCtx) => number;
+  /**
+   * 这个单位**能不能踏进这一格**。返回 false = 当成挡住。
+   *
+   * 和 `blockedFor` 的关系：那条是地形/占位/城市这些**引擎自己的**规则，
+   * 这条是扩展额外加的"软墙"。问的地方就在 `blockedFor` 里，所以寻路高亮、
+   * 实际移动、上船下船三处口径一致——不会出现"看着能走、点了走不过去"。
+   *
+   * 梦境相位就是用它：被困住的单位出不了梦的半径。
+   */
+  canEnterTile?: (c: {
+    state: GameState;
+    unit: { type: string; owner: PlayerId; id?: string; custom?: Record<string, unknown> };
+    x: number;
+    y: number;
+  }) => boolean;
+
   /** 纯函数：修正进入某一格的真实步耗（爬坡） */
   modifyStepCost?: (c: StepCostCtx) => number | undefined;
   /**
