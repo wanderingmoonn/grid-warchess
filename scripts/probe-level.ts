@@ -1079,6 +1079,17 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
     '塔离桥头太远，过桥的人不会被压',
   );
 
+  /*
+   * 每一波援军都必须有播报。
+   *
+   * 援军刷在图的东边缘（x=12/13），玩家在西岸，隔着河和两座城——开着迷雾
+   * 那就是纯视野盲区。只 spawn 不播报，玩家的体验就是"敌方所谓的援兵都没来"：
+   * 看不见、也没人告诉他。这条断言防的就是这个。
+   */
+  const waves = (lv.events ?? []).filter((e) => e.id.startsWith('wave'));
+  check(waves.length >= 3, `援军分 ${waves.length} 波`);
+  const silent = waves.filter((w) => !w.do.some((d) => d.kind === 'say')).map((w) => w.id);
+  check(silent.length === 0, '每一波援军都有播报', `这几波是静默的：${silent.join('、')}`);
   // 两格桥一起塌
   let cur = s;
   for (let i = 0; i < 10 && cur.turn < 9 && !cur.winner; i++) {
