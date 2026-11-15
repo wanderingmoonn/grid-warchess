@@ -126,6 +126,46 @@ export interface LevelEvent {
  *
  * 规矩和扩展规则一样：**写了就锁，没写就归玩家**。
  */
+/**
+ * 这一关专属的 AI 参数。
+ *
+ * 同一套 AI 要在"渡过一条窄河的攻坚"和"守着一个人别送死"里都表现正常，靠全局参数是做不到的：
+ * 前者需要它**不管战线、各打各的**，后者需要它**极度惜命**。所以让关卡自己带一份。
+ *
+ * 只影响这一局（`config.level.ai` 是快照），别的对局照旧。
+ */
+export interface LevelAiTuning {
+  /**
+   * 战线收拢强度，0~2，默认 1。
+   *
+   * AI 有一条"跑得太靠前的停下来等队友"的规则：超过战线的人，推进分砍到 15%。
+   * 这在开阔地是对的（整条线一起压），但**河会把战线切成两段**——先过去的几个
+   * 永远算"在战线前面"，于是永远停着等，而后面的大部队被窄桥堵着过不来，
+   * 整支部队就僵在桥头。
+   *
+   * 0  = 完全不管战线，谁快谁先上（攻坚图要的）；
+   * 1  = 默认；
+   * 2  = 收得更紧（守将这类"不能死"的场面）。
+   */
+  cohesion?: number;
+  /**
+   * 战意：放大/缩小"朝目标推进"的分数，0.2~3，默认 1。
+   *
+   * 和 `cohesion` 分工：那个管"要不要等队友"，这个管"值不值得往前走"。
+   */
+  appetite?: number;
+  /**
+   * 风险厌恶，0.2~2，默认 1。**这是"进攻性"的主旋钮。**
+   *
+   * AI 每走一格都要算"这个落点会被几个人打到、会掉多少血"，再拿这个惩罚去抵消
+   * "朝目标推进"的收益。推进一格只值几分，而站进对方射程要扣二十分往上——
+   * 所以守方只要摆出几个兵，它就宁可待在桥头不动。这是"AI 太胆小"的真正来源，
+   * 和战术档（rush/hold）无关，那些只改倾向，改不动这笔账。
+   *
+   * 0.4 左右 = 愿意用伤亡换推进（攻坚图）；1 = 默认；1.5 以上 = 极度惜命（护主）。
+   */
+  riskAversion?: number;
+}
 export interface LevelSetup {
   /** 开局时代（1 起）。锁了它，开局金币、可造兵种也就一起锁了 */
   startEra?: number;
@@ -308,6 +348,8 @@ export interface LevelDef {
    * 的语义正好是"不进产线、AI 不采购"，引擎里已经跑通（AI 三处都跳过它）。
    */
   units?: Record<string, UnitTypeDef>;
+  /** 这一关专属的 AI 参数（见 `LevelAiTuning`）。不写＝用默认 AI */
+  ai?: LevelAiTuning;
   /**
    * 每席开局的兵。**没写的席位照旧按规则自动撒**（这是"加字段不改变老行为"的写法：
    * 关卡没提这件事，就等于这件事不存在）。
@@ -483,6 +525,15 @@ export const LEVELS: LevelDef[] = [
     },
     seats: { count: 2, ai: ['B'] },
     setup: { startEra: 1, firstSide: 'A' },
+    /*
+     * 这一关的 AI 比默认更敢冲（`riskAversion: 0.6`）。
+     *
+     * 默认 AI 走一格要算"这个落点会挨多少打"，抵掉推进的收益；只要守方摆出几个兵，
+     * 它就宁可待在桥头。这张图要的是"压过来"，所以让它愿意用伤亡换推进。
+     * 配合三支过河突击队，压力才是持续的——单靠参数不够（实测过：只调参数时
+     * 它最多多过去一两个兵，城一滴血不掉）。
+     */
+    ai: { riskAversion: 0.6, cohesion: 0.4 },
     deploy: {
       A: [
         { type: 'militia', x: 4, y: 7 },
@@ -573,7 +624,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-3',
-        when: { kind: 'turn', at: 16 },
+        when: { kind: 'turn', at: 12 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
@@ -592,7 +643,42 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 25 },
         do: [
           { kind: 'say', text: '最后一批。撑过去就是你的。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 13, y: 12 }, { type: 'militia', x: 13, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }] },
+        ],
+      },
+      /*
+       * 三支过河突击队。
+       *
+       * 为什么不是"让 AI 自己过来"：实测过，它不会。河把战线切两段，先过去的几个
+       * 算"在战线前面"，于是停下等队友；队友被两格宽的桥堵在另一头，整支部队就
+       * 僵在桥头。改关卡 AI 参数（`riskAversion` / `cohesion`）只能让它多过去一两个，
+       * 城照样一滴血不掉。**投送是它的硬伤，那就别让它投送──直接把突击队放到西岸。**
+       *
+       * 时间点都排在"水退"之后：桥没了、水退了，他们是涉水过来的，剧情上说得通。
+       * 每波三个民兵，落点在河岸与城之间：玩家兵力薄就守不住，厚就能吃掉。
+       */
+      {
+        id: 'cross-1',
+        when: { kind: 'turn', at: 16 },
+        do: [
+          { kind: 'say', text: '他们淌过河了。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 6 }, { type: 'militia', x: 5, y: 7 }, { type: 'militia', x: 6, y: 7 }] },
+        ],
+      },
+      {
+        id: 'cross-2',
+        when: { kind: 'turn', at: 15 },
+        do: [
+          { kind: 'say', text: '西岸的河滩上又聚起一群人。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 8 }, { type: 'militia', x: 6, y: 8 }, { type: 'archer', x: 6, y: 9 }] },
+        ],
+      },
+      {
+        id: 'cross-3',
+        when: { kind: 'turn', at: 24 },
+        do: [
+          { kind: 'say', text: '又一批涉水过来了，这次带着弓手。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 5, y: 5 }, { type: 'militia', x: 6, y: 5 }, { type: 'archer', x: 6, y: 6 }] },
         ],
       },
       {
@@ -1149,6 +1235,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   const goals = normalizeGoals(obj.goals, map, seats, errors);
   const setup = normalizeSetup(obj.setup, seats, errors);
   const units = normalizeLevelUnits(obj.units, errors);
+  const aiTuning = normalizeAiTuning(obj.ai, errors);
   if (errors.length > 0) return { ok: false, errors };
 
   return {
@@ -1168,6 +1255,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       ...(goals ? { goals: structuredClone(goals) } : {}),
       ...(setup ? { setup: structuredClone(setup) } : {}),
       ...(units ? { units: structuredClone(units) } : {}),
+      ...(aiTuning ? { ai: aiTuning } : {}),
     },
   };
 }
@@ -1393,6 +1481,29 @@ function normalizeWhen(
 
   errors.push(`事件「${id}」的触发条件「${kind}」不认识（只能是 turn / unitDied / enter）`);
   return undefined;
+}
+
+/** 关卡的 AI 参数：两个数都夹在合理区间，写错了退回默认而不是拒整张图 */
+function normalizeAiTuning(raw: unknown, errors: string[]): LevelAiTuning | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const obj = raw as Partial<LevelAiTuning> & Record<string, unknown>;
+  const out: LevelAiTuning = {};
+  const num = (v: unknown, min: number, max: number, label: string): number | undefined => {
+    if (v === undefined) return undefined;
+    const n = Number(v);
+    if (!Number.isFinite(n)) {
+      errors.push(`关卡的 AI 参数「${label}」不是数字（现在 ${String(v)}）`);
+      return undefined;
+    }
+    return Math.min(max, Math.max(min, n));
+  };
+  const cohesion = num(obj.cohesion, 0, 2, 'cohesion');
+  const appetite = num(obj.appetite, 0.2, 3, 'appetite');
+  const riskAversion = num(obj.riskAversion, 0.2, 2, 'riskAversion');
+  if (cohesion !== undefined) out.cohesion = cohesion;
+  if (appetite !== undefined) out.appetite = appetite;
+  if (riskAversion !== undefined) out.riskAversion = riskAversion;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
