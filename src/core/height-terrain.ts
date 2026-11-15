@@ -58,6 +58,8 @@ function airborne(state: GameState, unit: Unit | undefined): boolean {
  */
 export const TERRAIN_HEIGHT: Record<Terrain, number> = {
   water: 0,
+  // 阴影乱流是平的一片（阴面没有任何起伏）
+  shadow: 0,
   deep: 0,
   shallow: 0,
   valley: -1,
@@ -90,6 +92,8 @@ export const TERRAIN_HEIGHT: Record<Terrain, number> = {
 export const TERRAIN_VISION_MOD: Record<Terrain, number> = {
   // 水面上没有遮挡，也没有制高点
   water: 0,
+  // 阴面没有遮挡
+  shadow: 0,
   deep: 0,
   shallow: 0,
   // 洼地：被两侧坡挡住

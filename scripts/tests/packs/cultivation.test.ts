@@ -4146,6 +4146,415 @@ export function run() {
     assert.ok(isStunned(byId(hit.state, decoy.id)), '麻痹转到替身身上');
   });
 
+  // ── 簇 A · 时间与序列（2026-11-14，先做四条）────────
+
+  test('一颗金丹：把这一回合的行动额度全还回来，整场只能用一次', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('yi-ke-jin-dan')!);
+    setMana(mage, 999);
+    // 先把这一回合"花光"：走过、打过、额度清空
+    mage.moved = true;
+    mage.acted = true;
+    mage.moveSpent = 2;
+    mage.attacksLeft = 0;
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'yi-ke-jin-dan' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const u = byId(r.state, mage.id);
+    assert.equal(u.moved, false, '当作没走');
+    assert.equal(u.acted, false, '当作没出手');
+    assert.equal(u.moveSpent, 0, '脚程清零');
+    assert.ok((u.attacksLeft ?? 0) > 0, '攻击次数回满');
+
+    // 第二次：整场只能吞一次
+    setMana(byId(r.state, mage.id), 999);
+    r.state.current = 'A';
+    const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'yi-ke-jin-dan' });
+    assert.equal(again.ok, false, '一颗金丹只能用一次');
+  });
+
+  test('缩地成寸：落点记下后，下一回合瞬移过去', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(3)); // 4 期，灵力 80
+    teachSpell(mage, spellOf('suo-di-cheng-cun')!);
+    setMana(mage, 999);
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'suo-di-cheng-cun',
+      targetX: 8,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.equal(byId(r.state, mage.id).x, 6, '当回合不动');
+
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.equal(byId(cur, mage.id).x, 8, '下一回合开始就到位');
+    assert.equal(byId(cur, mage.id).y, 5, '纵坐标也对');
+  });
+
+  test('天外飞仙：蓄力一回合，下一回合移动力拉满', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('tian-wai-fei-xian')!);
+    setMana(mage, 999);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'tian-wai-fei-xian' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const before = movePower(r.state, byId(r.state, mage.id));
+
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.ok(movePower(cur, byId(cur, mage.id)) > before + 50, '下一回合一步千里');
+  });
+
+  test('苍蜣登阶：每 5 回合检定一次，还活着就长修为', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期
+    teachSpell(mage, spellOf('cang-qiang-deng-jie')!);
+    setMana(mage, 999);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'cang-qiang-deng-jie' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const expBefore = getExp(byId(r.state, mage.id));
+
+    /*
+     * 修士每回合本来就会涨修为（打坐/传承），所以只能比**增量差**：
+     * 普通回合涨多少 vs 第 5 回合涨多少，差的正好是检定的那一份。
+     */
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const passive = getExp(byId(cur, mage.id)) - expBefore;
+    assert.ok(passive >= 0, '没到第 5 回合，只有日常增长');
+
+    cur.turn = 5;
+    const expAt5 = getExp(byId(cur, mage.id));
+    let at5 = applyAction(cur, { type: 'END_TURN' }).state;
+    at5 = applyAction(at5, { type: 'END_TURN' }).state;
+    const onCheck = getExp(byId(at5, mage.id)) - expAt5;
+    assert.equal(onCheck - passive, 15, '第 5 回合多出检定的那 15 点');
+  });
+
+  // ── 世界阴面（2026-11-14）────────────────────────
+
+  test('世界阴面：第一发法术才建图，尺寸与阳面一致、全境阴影乱流', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6)); // 7 期，灵力 110
+    teachSpell(mage, spellOf('xu-kong-fang-zhu')!);
+    setMana(mage, 999);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+    foe.hp = 500;
+
+    assert.ok(!s.boards?.['shadow-world'], '没人碰它之前不建图');
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'xu-kong-fang-zhu',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const board = r.state.boards!['shadow-world'];
+    assert.ok(board, '第一发就把它建出来');
+    assert.equal(board.w, r.state.w, '宽和阳面一样');
+    assert.equal(board.h, r.state.h, '高和阳面一样');
+    assert.ok(board.tiles.every((t) => t.terrain === 'shadow'), '全境阴影乱流');
+
+    const banished = byId(r.state, foe.id);
+    assert.equal(banished.board, 'shadow-world', '人已经在阴面了');
+    assert.ok(!r.state.units.some((u) => u.id === foe.id && (u.board ?? 'earth') === 'earth'), '阳面那格空出来了');
+  });
+
+  test('世界阴面：每回合被撕一次，三回合后自己爬回阳面', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(6));
+    teachSpell(mage, spellOf('xu-kong-fang-zhu')!);
+    setMana(mage, 999);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+    foe.hp = 500;
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'xu-kong-fang-zhu',
+      targetX: 6,
+      targetY: 7,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // B 的回合开始被撕一次（一回合 = 两个 END_TURN）
+    let cur = applyAction(r.state, { type: 'END_TURN' }).state;
+    cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const afterOne = byId(cur, foe.id);
+    assert.equal(afterOne.board, 'shadow-world', '还在阴面');
+    assert.equal(afterOne.hp, 500 - 6, '被乱流撕掉 6 点（真伤）');
+
+    // 再转两轮：三回合到了就回来
+    for (let i = 0; i < 4; i++) cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const back = byId(cur, foe.id);
+    assert.equal(back.board ?? 'earth', 'earth', '回到阳面');
+    assert.ok(back.hp < 500, '阴面的伤不会白挨');
+  });
+
+  // ── 冥天大梦（2026-11-14）────────────────────────
+
+  test('冥天大梦：被困的人走不出圈，外面的人可以进来', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8)); // 9 期，灵力 130
+    teachSpell(mage, spellOf('ming-tian-da-meng')!);
+    setMana(mage, 999);
+    const ally = place2(s, 'A', 'body-cultivator', 6, 6);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ming-tian-da-meng' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    const trapped = byId(r.state, ally.id);
+
+    // 圈内可以走，圈外不行（半径 3，圆心在施法者）
+    assert.equal(
+      CULTIVATION_HOOKS.canEnterTile!({ state: r.state, unit: trapped, x: 7, y: 6 }),
+      true,
+      '圈内可以走',
+    );
+    assert.equal(
+      CULTIVATION_HOOKS.canEnterTile!({ state: r.state, unit: trapped, x: 9, y: 9 }),
+      false,
+      '圈外走不过去',
+    );
+    // 没被困的人不受限制
+    const outsider = place2(r.state, 'B', 'militia', 2, 2);
+    assert.equal(
+      CULTIVATION_HOOKS.canEnterTile!({ state: r.state, unit: outsider, x: 9, y: 9 }),
+      true,
+      '圈外的人随便走',
+    );
+  });
+
+  test('冥天大梦：打死施术者，梦里的人回到入梦那一刻，施术者自己也被拉回来', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8));
+    teachSpell(mage, spellOf('ming-tian-da-meng')!);
+    setMana(mage, 999);
+    const ally = place2(s, 'A', 'body-cultivator', 6, 6);
+    ally.hp = 30;
+    const killer = place2(s, 'B', 'militia', 6, 8);
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ming-tian-da-meng' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 梦里被打了一顿、还挪了位置
+    const a = byId(r.state, ally.id);
+    a.hp = 5;
+    a.x = 7;
+    a.y = 6;
+    const hpBefore = 30;
+
+    // 打死施术者
+    abilityApi.killUnit(r.state, byId(r.state, mage.id), byId(r.state, killer.id), '测试击杀');
+
+    const back = byId(r.state, ally.id);
+    assert.equal(back.hp, hpBefore, '血量回到入梦那一刻');
+    assert.equal(back.x, 6, '位置也回到入梦那一刻（x）');
+    assert.equal(back.y, 6, '位置也回到入梦那一刻（y）');
+    assert.ok(r.state.units.some((u) => u.id === mage.id), '施术者自己也被拉回来');
+  });
+
+  test('冥天大梦：死在梦里的人不会因为梦醒而复活', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8));
+    teachSpell(mage, spellOf('ming-tian-da-meng')!);
+    setMana(mage, 999);
+    const ally = place2(s, 'A', 'body-cultivator', 6, 6);
+    const killer = place2(s, 'B', 'militia', 6, 8);
+    ally.hp = 500;
+
+    const r = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'ming-tian-da-meng' });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 先在梦里死一个（真死）
+    abilityApi.killUnit(r.state, byId(r.state, ally.id), byId(r.state, killer.id), '测试击杀');
+    assert.ok(!r.state.units.some((u) => u.id === ally.id), '梦里死了就是死了');
+
+    // 再打死施术者：回滚不该把尸体也拉回来
+    abilityApi.killUnit(r.state, byId(r.state, mage.id), byId(r.state, killer.id), '测试击杀');
+    assert.ok(!r.state.units.some((u) => u.id === ally.id), '梦醒了也换不回已经死透的人');
+  });
+
+  // ── 烂柯棋局（2026-11-15）────────────────────────
+
+  test('烂柯棋局：从盘上抹掉（不挡路、不挨打），到期原样回来', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4)); // 5 期，灵力 90
+    teachSpell(mage, spellOf('lan-ke-qi-ju')!);
+    setMana(mage, 999);
+    const ally = place2(s, 'A', 'body-cultivator', 6, 6);
+    ally.hp = 22;
+    setCultivationExp(ally, expForRank(2));
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'lan-ke-qi-ju',
+      targetX: 6,
+      targetY: 6,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+    assert.ok(!r.state.units.some((u) => u.id === ally.id), '盘上没有它了：不挡路也不挨打');
+    assert.ok((r.state.timeGap ?? []).some((g) => g.unit.id === ally.id), '快照存在局上');
+
+    // 三个自己的回合后回来
+    let cur = r.state;
+    for (let i = 0; i < 6; i++) cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const back = cur.units.find((u) => u.id === ally.id);
+    assert.ok(back, '回来了');
+    assert.equal(back!.x, 6, '回原位（x）');
+    assert.equal(back!.y, 6, '回原位（y）');
+    assert.equal(back!.hp, 22, '血量原样（快照复制回来）');
+    assert.equal(getRank(back!), 3, '境界也原样');
+  });
+
+  test('烂柯棋局：归来时格子被占就把对方挤开', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4));
+    teachSpell(mage, spellOf('lan-ke-qi-ju')!);
+    setMana(mage, 999);
+    const ally = place2(s, 'A', 'body-cultivator', 8, 5); // 射程 5 之内
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'lan-ke-qi-ju',
+      targetX: 8,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 趁它不在，有人站到了那个格子上
+    const squatter = place2(r.state, 'B', 'militia', 8, 5);
+
+    let cur = r.state;
+    for (let i = 0; i < 6; i++) cur = applyAction(cur, { type: 'END_TURN' }).state;
+    const back = cur.units.find((u) => u.id === ally.id)!;
+    const pushed = cur.units.find((u) => u.id === squatter.id);
+    assert.equal(back.x, 8, '归位');
+    assert.equal(back.y, 5, '归位');
+    assert.ok(pushed, '对方只是被挤开，没有消失');
+    assert.ok(pushed!.x !== 8 || pushed!.y !== 5, '对方被挪开了');
+  });
+
+  test('烂柯棋局：挤不开的人被时间乱流卷走', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(4));
+    teachSpell(mage, spellOf('lan-ke-qi-ju')!);
+    setMana(mage, 999);
+    const ally = place2(s, 'A', 'body-cultivator', 8, 5); // 射程 5 之内
+
+    const r = applyAction(s, {
+      type: 'HERO_SKILL',
+      unitId: mage.id,
+      skillId: 'lan-ke-qi-ju',
+      targetX: 8,
+      targetY: 5,
+    });
+    assert.ok(r.ok, r.ok ? '' : r.reason);
+
+    // 把落点的人和它周围两圈全站满：挤不开
+    const squatter = place2(r.state, 'B', 'militia', 8, 5);
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        place2(r.state, 'B', 'militia', 8 + dx, 5 + dy);
+      }
+    }
+
+    let cur = r.state;
+    for (let i = 0; i < 6; i++) cur = applyAction(cur, { type: 'END_TURN' }).state;
+    assert.ok(!cur.units.some((u) => u.id === squatter.id), '挤不开就被时间乱流卷走');
+    assert.ok(cur.units.some((u) => u.id === ally.id), '归来的那位站住了');
+    assert.ok(
+      (cur.log ?? []).some((l) => JSON.stringify(l).includes('时间乱流')),
+      '战报要写清楚是被乱流卷走的',
+    );
+  });
+
+  // ── 天衍四九（2026-11-15）────────────────────────
+
+  test('天衍四九：再放一次回到存点，只回滚棋盘、账目照旧', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8)); // 9 期，灵力 130
+    teachSpell(mage, spellOf('tian-yan-si-jiu')!);
+    setMana(mage, 200);
+    const ally = place2(s, 'A', 'body-cultivator', 7, 5);
+    const foe = place2(s, 'B', 'militia', 6, 7);
+
+    // 第一次：存点
+    const save = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'tian-yan-si-jiu' });
+    assert.ok(save.ok, save.ok ? '' : save.reason);
+    assert.ok(save.state.tianyan, '存点留下了');
+
+    // 存点之后世界变了：友军挪位、另一个友军被打死、回合数也走了
+    let cur = save.state;
+    const a = byId(cur, ally.id);
+    a.x = 10;
+    a.y = 10;
+    byId(cur, mage.id).hp = 3;
+    cur.turn = 9;
+    const turnBefore = cur.turn;
+
+    // 第二次：回档
+    setMana(byId(cur, mage.id), 200);
+    const back = applyAction(cur, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'tian-yan-si-jiu' });
+    assert.ok(back.ok, back.ok ? '' : back.reason);
+
+    const restored = byId(back.state, ally.id);
+    assert.equal(restored.x, 7, '位置回到存点（x）');
+    assert.equal(restored.y, 5, '位置回到存点（y）');
+    assert.equal(byId(back.state, mage.id).hp, 20, '血量回到存点');
+    assert.equal(back.state.turn, turnBefore, '回合数不回滚（账目留着）');
+    assert.ok(!back.state.tianyan, '存点用掉了');
+    assert.ok(
+      (back.state.log ?? []).some((l) => JSON.stringify(l).includes('抹去')),
+      '战报要写明这几回合被抹去',
+    );
+  });
+
+  test('天衍四九：施法者倒下时自动回档（人遁其一）', () => {
+    const { s } = spellScene();
+    const mage = place2(s, 'A', 'qi-cultivator', 6, 5);
+    setCultivationExp(mage, expForRank(8));
+    teachSpell(mage, spellOf('tian-yan-si-jiu')!);
+    setMana(mage, 200);
+    const killer = place2(s, 'B', 'militia', 6, 7);
+
+    const save = applyAction(s, { type: 'HERO_SKILL', unitId: mage.id, skillId: 'tian-yan-si-jiu' });
+    assert.ok(save.ok, save.ok ? '' : save.reason);
+    const ally = place2(save.state, 'A', 'body-cultivator', 8, 5);
+    byId(save.state, ally.id).hp = 7;
+
+    // 他被打死：存点还在，自动回档
+    abilityApi.killUnit(save.state, byId(save.state, mage.id), byId(save.state, killer.id), '测试击杀');
+    const back = save.state.units.find((u) => u.id === mage.id);
+    assert.ok(back, '人回来了');
+    assert.equal(back!.hp, 20, '血量是存点那一刻的');
+    assert.ok(!save.state.tianyan, '存点用掉了');
+  });
+
   // ── 吐纳术 / 罡风（2026-11-13）────────────────────
   //
   // 「用法术补强度」的头两发：一个补成长（环境灵气换修为），

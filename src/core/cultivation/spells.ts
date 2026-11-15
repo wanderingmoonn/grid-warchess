@@ -222,6 +222,40 @@ import {
   ZHANG_GUAN_LI_DAI_SKILL,
 } from './skills/transfer.ts';
 import {
+  CANG_QIANG_DENG_JIE_COST,
+  CANG_QIANG_DENG_JIE_MIN_RANK,
+  CANG_QIANG_DENG_JIE_SKILL,
+  SUO_DI_CHENG_CUN_COST,
+  SUO_DI_CHENG_CUN_MIN_RANK,
+  SUO_DI_CHENG_CUN_SKILL,
+  TIAN_WAI_FEI_XIAN_COST,
+  TIAN_WAI_FEI_XIAN_MIN_RANK,
+  TIAN_WAI_FEI_XIAN_SKILL,
+  YI_KE_JIN_DAN_COST,
+  YI_KE_JIN_DAN_MIN_RANK,
+  YI_KE_JIN_DAN_SKILL,
+} from './skills/sequence.ts';
+import {
+  XU_KONG_FANG_ZHU_COST,
+  XU_KONG_FANG_ZHU_MIN_RANK,
+  XU_KONG_FANG_ZHU_SKILL,
+} from './skills/banish.ts';
+import {
+  MING_TIAN_DA_MENG_COST,
+  MING_TIAN_DA_MENG_MIN_RANK,
+  MING_TIAN_DA_MENG_SKILL,
+} from './skills/dream.ts';
+import {
+  LAN_KE_QI_JU_COST,
+  LAN_KE_QI_JU_MIN_RANK,
+  LAN_KE_QI_JU_SKILL,
+} from './skills/timegap.ts';
+import {
+  TIAN_YAN_SI_JIU_COST,
+  TIAN_YAN_SI_JIU_MIN_RANK,
+  TIAN_YAN_SI_JIU_SKILL,
+} from './skills/tianyan.ts';
+import {
   HUA_SHEN_FEN_SHEN_COST,
   HUA_SHEN_FEN_SHEN_MIN_RANK,
   HUA_SHEN_FEN_SHEN_SKILL,
@@ -423,6 +457,22 @@ export const SPELLS: readonly SpellDef[] = [
   { skill: HU_MING_LUO_MA_SKILL, cost: HU_MING_LUO_MA_COST, minRank: HU_MING_LUO_MA_MIN_RANK },
   // 簇 D · 效果转移（2026-11-14）：改的是两个"目标入口"，不是一张影响清单
   { skill: ZHANG_GUAN_LI_DAI_SKILL, cost: ZHANG_GUAN_LI_DAI_COST, minRank: ZHANG_GUAN_LI_DAI_MIN_RANK },
+  // ── 簇 A · 时间与序列（2026-11-14，先做四条）──────────────
+  //
+  // 不依赖"真消失"（隐含寻路）和"阴世界"（等于第二张地图）的四条先落地；
+  // 烂柯棋局、虚空放逐、天衍四九 等各自的机制想清楚再说。
+  { skill: YI_KE_JIN_DAN_SKILL, cost: YI_KE_JIN_DAN_COST, minRank: YI_KE_JIN_DAN_MIN_RANK },
+  { skill: SUO_DI_CHENG_CUN_SKILL, cost: SUO_DI_CHENG_CUN_COST, minRank: SUO_DI_CHENG_CUN_MIN_RANK },
+  { skill: TIAN_WAI_FEI_XIAN_SKILL, cost: TIAN_WAI_FEI_XIAN_COST, minRank: TIAN_WAI_FEI_XIAN_MIN_RANK },
+  { skill: CANG_QIANG_DENG_JIE_SKILL, cost: CANG_QIANG_DENG_JIE_COST, minRank: CANG_QIANG_DENG_JIE_MIN_RANK },
+  // 世界阴面（2026-11-14）：照太空包"新建一张图"的做法，不是隐藏单位
+  { skill: XU_KONG_FANG_ZHU_SKILL, cost: XU_KONG_FANG_ZHU_COST, minRank: XU_KONG_FANG_ZHU_MIN_RANK },
+  // 冥天大梦（2026-11-14）：不是复活，是**回滚一群人**
+  { skill: MING_TIAN_DA_MENG_SKILL, cost: MING_TIAN_DA_MENG_COST, minRank: MING_TIAN_DA_MENG_MIN_RANK },
+  // 烂柯棋局（2026-11-15）：从盘上删掉、存快照、到期复制回来
+  { skill: LAN_KE_QI_JU_SKILL, cost: LAN_KE_QI_JU_COST, minRank: LAN_KE_QI_JU_MIN_RANK },
+  // 天衍四九（2026-11-15）：只回滚棋盘，账目留下并标注
+  { skill: TIAN_YAN_SI_JIU_SKILL, cost: TIAN_YAN_SI_JIU_COST, minRank: TIAN_YAN_SI_JIU_MIN_RANK },
 ];
 
 /** 每座生效中的藏经阁给本阵营加几个**可研发**的法术位 */
