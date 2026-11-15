@@ -1023,6 +1023,65 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀');
   }
 }
 
+/* ── 25. 孤城：守方没有"安全位"（2026-11-15 实机复盘后）─────── */
+line('25. 孤城：隔河白打与一夫当关都不成立');
+{
+  const lv = levelById('level:lone-city')!;
+  const s = createMatch({ ...DEFAULT_CONFIG, level: lv }, 3);
+  const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+    Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+
+  /*
+   * 实机复盘：守方曾经把弓箭手摆在河岸，越过一格宽的河把对岸的农民和部队
+   * 一个个点掉——对面过不来也够不到，于是"守"变成了零代价收割。
+   *
+   * 现在河宽两格、弓手射程 3：站在自家河岸最多够到河边，
+   * 想打到对岸就得先站进河里。这条断言把那个位置彻底钉死。
+   */
+  const myShooters = s.units.filter((u) => u.owner === 'A' && u.type === 'archer');
+  const foes = s.units.filter((u) => u.owner === 'B');
+  const nearest = Math.min(...myShooters.flatMap((a) => foes.map((f) => cheb(a, f))));
+  check(nearest > 3, `开局弓手够不到对岸（最近 ${nearest} 格 > 射程 3）`, `只有 ${nearest} 格：隔河白打又回来了`);
+
+  // 攻方的经济单位在后排，不在河岸射程内
+  const farmers = s.units.filter((u) => u.owner === 'B' && u.type === 'farmer');
+  check(farmers.length >= 2, `攻方开局带 ${farmers.length} 个农民`);
+  check(
+    farmers.every((f) => f.x >= 12),
+    `农民都在后排（x=${farmers.map((f) => f.x).join(',')}）`,
+    '农民靠河就会被弓手白点',
+  );
+
+  // 桥是两格宽：一个人堵不住，塌的时候一起塌
+  const bridges = s.tiles.map((t, i) => ({ t, i })).filter((x) => x.t.terrain === 'bridge');
+  check(bridges.length === 2, `桥是两格宽（${bridges.length} 格）`, '一格宽的桥＝一个兵封死全场');
+
+  // 兵种构成：4 近战 / 4 远程 / 2 高机动 / 2 塔
+  const count = (t: string): number => s.units.filter((u) => u.owner === 'B' && u.type === t).length;
+  check(count('militia') === 4 && count('archer') === 4, `攻方 4 近战 + 4 远程（${count('militia')}/${count('archer')}）`);
+  check(count('scout') === 2, `攻方 2 个高机动单位（${count('scout')}）`);
+  check(count('tower') === 2, `攻方 2 座箭塔钉在河岸（${count('tower')}）`);
+
+  // 塔要够得着过桥后的第一格，否则钉在那儿没意义
+  const towers = s.units.filter((u) => u.type === 'tower');
+  const bridgeHeads = [{ x: 9, y: 7 }, { x: 9, y: 8 }];
+  check(
+    towers.every((t) => bridgeHeads.some((b) => cheb(t, b) <= 3)),
+    '每座塔都覆盖桥头',
+    '塔离桥头太远，过桥的人不会被压',
+  );
+
+  // 两格桥一起塌
+  let cur = s;
+  for (let i = 0; i < 10 && cur.turn < 9 && !cur.winner; i++) {
+    const r = applyAction(cur, { type: 'END_TURN' } as Action);
+    if (!r.ok) break;
+    cur = r.state;
+  }
+  const at = (st: GameState, x: number, y: number): string => st.tiles[y * st.w + x]?.terrain ?? '?';
+  check(at(cur, 7, 7) === 'deep' && at(cur, 8, 7) === 'deep', `第 ${cur.turn} 次行动后两格桥一起没了`);
+}
+
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
 if (failed === 0) {
