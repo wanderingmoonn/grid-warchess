@@ -448,7 +448,7 @@ const SOLO_PAINT: Array<[number, number, string]> = (() => {
     out.push([8, y, '~']);
   }
   // 桥也是两格宽：要塌就一起塌，守方没法"先堵一格再看情况"
-  out.push([7, 7, '='], [8, 7, '=']);
+  out.push([7, 7, '='], [8, 7, '='], [7, 8, '='], [8, 8, '=']);
   out.push([4, 4, 'f'], [5, 4, 'f'], [4, 5, 'f']);
   out.push([10, 6, 'h'], [10, 5, 'h']);
   return out;
@@ -536,7 +536,7 @@ export const LEVELS: LevelDef[] = [
         id: 'blow',
         when: { kind: 'turn', at: 9 },
         do: [
-          { kind: 'say', text: '桥被炸断了。别再想着过河——守住这一头。' },
+          { kind: 'say', text: '桥被炸断了。' },
           { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 7 }, to: 'deep' },
         ],
       },
@@ -585,7 +585,7 @@ export const LEVELS: LevelDef[] = [
         id: 'ebb',
         when: { kind: 'turn', at: 14 },
         do: [
-          { kind: 'say', text: '水位退了。整条河都能淌过去——他们不会只走桥了。' },
+          { kind: 'say', text: '水位退了。整条河都能淌过去。' },
           { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
         ],
       },
