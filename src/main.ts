@@ -351,6 +351,19 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
  * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
  * 导入一局、进房间接手一局，都把它置 true。
  */
+/*
+ * `?fresh=1`：作者验证新版关卡时的一键清档。
+ *
+ * 默认**不清**。发布给玩家之后，"静默丢掉存档"是破坏性行为——「继续上一局」会消失，
+ * 配置也会跟着回到默认（新开局的默认配置寄生在这一局的 `state.config` 上）。
+ * 但作者每改一次关卡就进开发者工具清 localStorage 也很烦，所以留一个显式开关：
+ * 地址栏带上 `?fresh=1` 才清，玩家永远碰不到。
+ */
+if (new URLSearchParams(location.search).has('fresh')) {
+  clearMatch();
+  console.info('[存档] 已按 ?fresh=1 清掉本机存档');
+}
+
 let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 
