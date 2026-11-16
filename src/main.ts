@@ -975,6 +975,8 @@ let pushOkCount = 0;
 /** 诊断用：最近一次拉到云端快照的时刻与它的 updated_at */
 let lastSnapAt = 0;
 let lastSnapUpdated = '';
+/** 诊断用：最近一次拉到的云端那一局是什么样 */
+let lastSnapHead = '';
 /**
  * 观战人数的心跳与轮询。
  *
@@ -1628,7 +1630,7 @@ function renderDebugHud(): void {
     `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
     `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
     `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
-      ` 上次拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'}`,
+      ` 拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'} 远端=${lastSnapHead || '-'}`,
   ].join('\n');
 }
 
@@ -7506,6 +7508,7 @@ async function pollRoom(): Promise<void> {
     if (!snapshot || room?.code !== seat.code) return;
     lastSnapAt = Date.now();
     lastSnapUpdated = snapshot.updatedAt;
+    lastSnapHead = `code=${snapshot.code} turn=${snapshot.turn} current=${snapshot.current}`;
 
     // "别人入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
     if (!seat.spectator) {
