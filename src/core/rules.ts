@@ -722,11 +722,30 @@ export function isHiddenSeat(s: GameState, p: PlayerId): boolean {
   return s.levelState?.hidden?.includes(p) === true;
 }
 
+/**
+ * 这一席是不是"没有城"的席位（关卡 `seats.cityless`，2026-11-16）。
+ *
+ * 和"未登场"（hidden）是两件不同的事：**它在场、占回合、要打仗，只是没有城**。
+ * 所以它的出局条件是"兵打光"，而不是"城全丢光"——它从来没有城。
+ * 普通对局没有这个字段，这个函数恒为 false。
+ */
+export function isCitylessSeat(s: GameState, p: PlayerId): boolean {
+  return s.config.level?.seats?.cityless?.includes(p) === true;
+}
+
 export function isEliminated(s: GameState, p: PlayerId): boolean {
   // 未登场：没城是正常的，判成出局会让整局在第一回合就结束
   if (isHiddenSeat(s, p)) return false;
   if (hasQuit(s, p)) return true;
   if (s.config.godMode === true) return false;
+  /*
+   * 无城席位：兵打光才算输。
+   *
+   * 这是"没城＝出局"的第三个豁免（前两个是 godMode 和 hidden）。
+   * 注意它和 hidden 不能同时成立——那样开局就没有任何东西，谁也不知道该按哪条判；
+   * 关卡校验会把这种组合拦住。
+   */
+  if (isCitylessSeat(s, p)) return unitsOf(s, p).length === 0;
   return citiesOf(s, p).length === 0;
 }
 
@@ -3796,6 +3815,14 @@ function checkWinner(s: GameState): PlayerId | null {
   const alive = playing.filter((p) => {
     if (isEliminated(s, p)) return false;
     if (unitsOf(s, p).length > 0) return true;
+    /*
+     * 无城席位没有产线：**买得起也造不出来**。
+     *
+     * 少了这一条会出一个很难查的现象——无城方兵打光了，`isEliminated` 说它出局，
+     * 但这里的"买得起一个兵"又把它算成活着，于是这局**永远收不了场**。
+     * 两条腿里必须砍掉这一条。
+     */
+    if (isCitylessSeat(s, p)) return false;
     return Object.values(s.unitTypes).some(
       (d) =>
         d.category !== 'building' &&
@@ -3905,12 +3932,21 @@ export function unitYieldAt(s: GameState, u: Unit, x: number, y: number): Resour
 /**
  * 这一方现在每回合能收多少（**全部资源**）。纯函数，不写状态。
  *
+ * **没有"底薪"**（2026-11-16 删掉）。以前每方每回合先拿 20 金、与城无关，
+ * 于是"没有城"也能攒钱——那让"无城对战"这种玩法在数据上说不通
+ * （攒着钱却造不出兵，界面上一栏数字还在涨）。现在收入全部来自：
+ * 城（按各自时代）、经济单位（按脚下地形）、扩展钩子。
+ * 于是"没有城市 = 没有产出"成了一句话就能讲清的规则。
+ *
+ * 各时代 `cityIncome` 已经各自 +20 补回原来的底薪，**单城局的总收入没有变**；
+ * 双城局每回合多 20（见 `DESIGN-CITYLESS-2026-11-16.md` 2.5）。
+ *
  * 金币那一段仍然过一遍 modifyIncome 钩子（战争经济之类的老扩展读它），
  * 其它资源暂时没有钩子——它们本来就只在多资源扩展里出现，
  * 而那个扩展自己就是唯一的生产者。
  */
 export function incomeResOf(s: GameState, p: PlayerId): ResourceCost {
-  const out: ResourceCost = { gold: CONFIG.baseIncome };
+  const out: ResourceCost = {};
   const add = (id: ResourceId, n: number | undefined): void => {
     if (!n) return;
     out[id] = (out[id] ?? 0) + n;
@@ -4291,8 +4327,9 @@ function finishBuild(s: GameState, u: Unit): void {
  * 往沼泽上架桥会"桥立起来了、路面没变"——陆军照样按沼泽的移动力 2 走，
  * 玩家只会觉得"这桥白造了"。
  *
- * 顺手记下原地形（`custom.deckFrom`）：迷雾里要按原样还回去。
- * 全都还原成水域的话，沼泽上那座桥在看不见的时候会凭空多出一条河。
+ * 原地形记两份：单位上的 `custom.deckFrom`（迷雾里按原样还回去用）和
+ * 局面的 `bridgeDeck`（桥塌之后按它还原）。后者必须存在局面上——
+ * 桥单位被摧毁后就不在 `s.units` 里了，那时再去问单位"你原来架在哪"是问不到的。
  */
 function deckBridge(s: GameState, bridge: Unit): void {
   const def = utype(s, bridge.type);
@@ -4301,6 +4338,7 @@ function deckBridge(s: GameState, bridge: Unit): void {
   if (!tile || tile.terrain === 'bridge') return;
   if (!(def.buildOn ?? []).includes(tile.terrain)) return;
   bridge.custom = { ...(bridge.custom ?? {}), deckFrom: tile.terrain };
+  s.bridgeDeck = { ...(s.bridgeDeck ?? {}), [String(bridge.y * s.w + bridge.x)]: tile.terrain };
   tile.terrain = 'bridge';
 }
 
@@ -4740,6 +4778,44 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
       const tile = s.tiles[i];
       if (!tile) continue;
       if (tile.cityId) continue; // 城格归城市管
+      /*
+       * 桥格：**桥面不动，桥下的地跟着水位走**。
+       *
+       * 事件改地形说的是"这一片的地貌变了"（水位退了、河断流了），
+       * 桥底下那块河床当然也在这一片里。但桥面本身不能改成浅水——那会得到
+       * 一座"架在浅水上的桥"，而且桥单位会因为脚下不再是桥面被挤掉：
+       * 玩家看到的是"我的桥被一个改水位的事件吃了"，完全没有道理。
+       *
+       * 判断 `only` 时看的是**桥下那块地**，不是桥面：作者写
+       * `only: ['water']` 的意思是"只改变水域"，而这座桥下的河床正是水域。
+       * 拿 'bridge' 去比白名单的话，只要写了 `only` 就永远命中不了桥，
+       * 水位退了之后拆桥又会原地冒出一条河。
+       */
+      if (tile.terrain === 'bridge') {
+        const key = String(i);
+        const bed = s.bridgeDeck?.[key] ?? 'water';
+        if (act.only && !act.only.includes(bed as never)) continue;
+        /*
+         * 改成**深水**会把桥冲垮——这是"事件拆桥"的唯一出口。
+         *
+         * 桥面能架在水上，也能在浅水/干河床上留着（水位退、河断流），但撑不住深水。
+         * 孤城关第 10 次行动那句"桥被洪水冲垮了"就靠这条：不写 only、to: 'deep'。
+         * 作者要拆桥时记得配一句播报，否则桥会安静地消失。
+         */
+        if (act.to === 'deep') {
+          s.units = s.units.filter((u) => !(u.x === x && u.y === y && utype(s, u.type).bridges));
+          if (s.bridgeDeck) delete s.bridgeDeck[key];
+          tile.terrain = act.to;
+          cells.add(i);
+          continue;
+        }
+        if (bed === act.to) continue;
+        s.bridgeDeck = { ...(s.bridgeDeck ?? {}), [key]: act.to };
+        // 迷雾里按 `custom.deckFrom` 还原桥面，两份记录要一起更新
+        const bridgeUnit = s.units.find((u) => u.x === x && u.y === y && utype(s, u.type).bridges);
+        if (bridgeUnit) bridgeUnit.custom = { ...(bridgeUnit.custom ?? {}), deckFrom: act.to };
+        continue; // 桥面没变，不算进"地形变了 N 格"
+      }
       if (act.only && !act.only.includes(tile.terrain as never)) continue;
       if (tile.terrain === act.to) continue;
       tile.terrain = act.to;
@@ -5003,16 +5079,32 @@ function syncBridges(s: GameState): void {
     if (!tile || tile.terrain !== 'bridge') continue;
     if (alive.has(i)) continue;
     if (statics?.has(i)) continue; // 地图的一部分，不塌
-    tile.terrain = 'water';
+    /*
+     * 还原成**桥下那块地**，不是一律还原成水域。
+     *
+     * 以前写死 `water`：水位退成浅水之后，桥一塌，脚下凭空冒出一条河，
+     * 而周围全是能淌过去的浅水。沼泽上架的桥同理。
+     * `bridgeDeck` 是建桥那一刻记下的；旧存档没有这个字段，退回水域（和以前一致）。
+     */
+    const key = String(i);
+    tile.terrain = s.bridgeDeck?.[key] ?? 'water';
+    if (s.bridgeDeck) delete s.bridgeDeck[key];
     collapsed.push(i);
   }
   if (collapsed.length === 0) return;
 
-  // 桥塌的时候站在桥上的陆军一起没：那一格已经变回水面了，
-  // 留着会得到一个"漂在水上的步兵"，后续所有寻路和攻击判定都会错乱。
+  /*
+   * 桥塌的时候**站不住**的兵一起没。
+   *
+   * 判据是"塌完之后这一格还站得住吗"，不是"桥塌了就一定落水"：
+   * 桥塌成浅水/沼泽时那是能站的地，兵应当留在原地——否则会出现
+   * "水退了，桥断了，站在桥上的兵反而淹死"这种没道理的事。
+   */
   const drowned = s.units.filter((u) => {
     if (utype(s, u.type).domain === 'water') return false; // 船本来就在水上
-    return collapsed.includes(u.y * s.w + u.x);
+    const i = u.y * s.w + u.x;
+    if (!collapsed.includes(i)) return false;
+    return !canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true });
   });
   if (drowned.length === 0) return;
   for (const u of drowned) {
@@ -7557,6 +7649,8 @@ function retireLostSeat(s: GameState, p: PlayerId): void {
   if (seatsOf(s).length === 2) return;
   if (s.config.godMode === true) return;
   if (hasQuit(s, p)) return;
+  // 无城席位天生 0 城，别把它的军队当成"丢城撤离"撤走
+  if (isCitylessSeat(s, p)) return;
   if (citiesOf(s, p).length > 0) return;
   const gone = withdrawUnits(s, p);
   if (gone === 0) return;

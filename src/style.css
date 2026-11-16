@@ -1066,6 +1066,10 @@ body {
    *   · 容器查询（100cqh）在不支持的客户端上整条声明失效，退回 100% 宽，
    *     容器比它矮时就被裁掉最后一行。
    * 量一次、写死像素，就没有"支持不支持"这回事了。
+   *
+   * `aspect-ratio` 只在 JS 还没跑（或者跑失败）时当兜底：`fitBoard()` 会同时写
+   * width 和 height，那时它不生效。**别把它当成"棋盘就是正方形"的断言**——
+   * 地图允许 12×10 / 8×40，格局由 `fitBoardBox()` 按地图长宽算。
    */
   width: 100%;
   max-width: 100%;
@@ -4941,6 +4945,7 @@ a.btn {
 .editor-toolbar {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 4px;
 }
 
@@ -5068,6 +5073,940 @@ a.btn {
 
 .editor-check input {
   accent-color: var(--a);
+}
+
+/* ── 关卡编辑器（2026-11-16，E1）───────────────────────────────────────
+ * 左边数据、右边问题列表。两栏都给 minmax(0, …)，否则 JSON 那栏会把
+ * 整行撑破（pre 内容的 min-width 是内容宽度，不是 0）。
+ */
+.level-editor-head {
+  margin-bottom: 10px;
+}
+
+.level-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 12px;
+  margin: 10px 0 8px;
+  align-items: start;
+}
+
+.level-json {
+  width: 100%;
+  min-height: 360px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+  resize: vertical;
+}
+
+.level-json:focus {
+  outline: 2px solid rgba(47, 110, 168, 0.35);
+  outline-offset: 1px;
+}
+
+.level-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.level-summary {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  line-height: 1.6;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.level-summary-line b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.level-summary-id {
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.level-draft-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+  padding: 6px 9px;
+  border: 1px dashed var(--warn-deep);
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-draft-bar[hidden] {
+  display: none;
+}
+
+.level-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.level-issue {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-2);
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.level-issue b {
+  display: block;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.level-issue.is-error {
+  border-left-color: var(--danger-strong);
+}
+
+.level-issue.is-warn {
+  border-left-color: var(--warn-deep);
+}
+
+.level-issue.is-ok {
+  border-left-color: var(--ok);
+}
+
+.level-issue-meta {
+  color: var(--text-3);
+}
+
+/* ── 地图画布（E2）───────────────────────────────────────────────────
+ * 格子本身不在这儿上色：直接套 `.tile.t-<地形>`，和棋盘用同一份样式。
+ * 自己配一套颜色的话，迟早出现"画布上是沼泽、进局变沙丘"。
+ * 正方形的保证来自容器的 `aspect-ratio: w / h`（JS 按地图尺寸写），
+ * 格子按 1fr 均分——和对局棋盘是同一条道理。
+ */
+.level-canvas-wrap {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 8px 0;
+}
+
+.level-palette {
+  flex: 0 0 142px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.level-brushes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.level-brush {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.level-brush.active {
+  border-color: var(--a);
+  color: var(--text);
+}
+
+.level-swatch {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.level-brush-char {
+  color: var(--text-3);
+  font-style: normal;
+  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.level-canvas-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.level-canvas {
+  display: grid;
+  width: 100%;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #cfc9bc;
+  touch-action: none;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.level-canvas .tile,
+.lv-grid .tile {
+  display: grid;
+  place-items: center;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.level-canvas-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+/* ── 摆兵（E3）──────────────────────────────────────────────────────
+ * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
+ * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
+ */
+/* ── 关卡管理（E6）────────────────────────────────────────────────── */
+.level-manage-btn {
+  margin-left: auto;
+}
+
+.level-mgr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 12px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.level-mgr-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.level-mgr-row.is-editing {
+  border-color: var(--a);
+}
+
+.level-mgr-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.level-mgr-name i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.level-mgr-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.level-mgr-cloud {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+
+.level-mgr-cloud [data-cloud]:empty {
+  display: none;
+}
+
+/* ── 扩展三档 + AI 旋钮 ───────────────────────────────────────────── */
+.level-rules-filter {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0 8px;
+}
+
+.level-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.level-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-rule-row:hover {
+  background: var(--panel-2);
+}
+
+.level-rule-row.is-set {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--a);
+}
+
+.level-rule-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--text);
+}
+
+.level-rule-name i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.level-rules-ai-title {
+  margin-top: 14px;
+}
+
+.level-rules-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 8px;
+}
+
+.level-rule-knob {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 180px;
+}
+
+.level-rule-knob input {
+  flex: 1 1 auto;
+  accent-color: var(--a);
+}
+
+.level-rule-knob b {
+  min-width: 28px;
+  text-align: right;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* 自打结果：不抢眼，但要能读 */
+.level-tryout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-tryout[hidden] {
+  display: none;
+}
+
+.level-tryout-line.is-running {
+  color: var(--text-3);
+}
+
+/* ── 胜负条件 / 关卡独有兵种 ────────────────────────────────────────
+ * 两块都沿用事件表单的骨架（左列 + 右地图 / 左列表 + 右表单），
+ * 免得每个面板长一个样。
+ */
+.level-goals-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 8px 0;
+}
+
+.level-goals-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 430px;
+  overflow: auto;
+}
+
+.level-goal-card .level-event-head {
+  align-items: center;
+}
+
+.level-goal-order {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.level-goal-row {
+  margin: 6px 0 4px 26px;
+}
+
+.level-unit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 10px;
+}
+
+.level-unit-row .level-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.level-unit-nums {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 8px 0;
+}
+
+@media (max-width: 860px) {
+  .level-goals-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .level-unit-nums {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── 事件表单（E4a）─────────────────────────────────────────────────
+ * 左卡片、右地图。卡片按"当…就…"排，不追求一屏看十条——事件本来就不多，
+ * 而每条都要能就地看清区域和落点。
+ */
+.level-events-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 8px 0;
+}
+
+.level-events-col,
+.level-events-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-events-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.level-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.level-event-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 8px 10px;
+}
+
+.level-event-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.level-event-no,
+.level-do-no {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: var(--text-3);
+  color: var(--panel);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.level-event-when,
+.level-when-arg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-event-del {
+  margin-left: auto;
+}
+
+.level-event-repeat {
+  margin: 6px 0 0 26px;
+}
+
+.level-event-dos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 6px 0;
+}
+
+.level-do-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.level-event-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  border-top: 1px dashed var(--line);
+  padding-top: 6px;
+}
+
+.level-mini-select,
+.level-mini-num {
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 3px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.level-mini-num {
+  width: 56px;
+}
+
+.level-say-input {
+  flex: 1 1 200px;
+  min-width: 120px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.level-spawn-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.level-spawn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--panel);
+}
+
+.level-spawn-chip button {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+}
+
+.level-spawn-empty {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+/* ── 事件时间轴（E4b）─────────────────────────────────────────────
+ * 一条竖线上的节点：左边"第几次行动 / 约第几轮"，右边"会发生什么"。
+ * 它的价值是**一眼看出节奏**——这个信息以前只能靠读代码。
+ */
+.level-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.level-timeline-group {
+  margin: 10px 0 2px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.level-timeline-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  text-align: left;
+  color: var(--text-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--a);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.level-timeline-row:hover {
+  border-color: var(--line-strong);
+}
+
+.level-timeline-at {
+  flex: 0 0 92px;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.level-timeline-at i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.level-timeline-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.level-timeline-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.level-tl-chip {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.level-timeline-detail {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.level-event-card.is-focus {
+  border-color: var(--a);
+  box-shadow: 0 0 0 1px var(--a);
+}
+
+.level-pick-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+/* 选区高亮：用内阴影而不是外框，免得把格子撑大 */
+.level-canvas .tile.is-selected {
+  box-shadow: inset 0 0 0 2px var(--a);
+}
+
+.lv-spawn-dot {
+  display: grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 500;
+}
+
+@media (max-width: 860px) {
+  .level-events-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── 席位面板 ───────────────────────────────────────────────────── */
+.level-seat-start {
+  max-width: 420px;
+  margin-bottom: 4px;
+}
+
+.level-seat-count {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 8px;
+}
+
+.level-seat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.level-seat-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--lv-seat, var(--line));
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-seat-row .editor-check {
+  margin-bottom: 0;
+}
+
+.level-seat-name {
+  min-width: 42px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.level-seat-era {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.level-seat-era select {
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.level-seat-city {
+  margin-left: auto;
+  color: var(--text-3);
+}
+
+.level-seat-city.is-missing {
+  color: var(--danger-strong);
+}
+
+.lv-A {
+  --lv-seat: #c0392b;
+}
+
+.lv-B {
+  --lv-seat: #2f6ea8;
+}
+
+.lv-C {
+  --lv-seat: #3f7a54;
+}
+
+.lv-D {
+  --lv-seat: #a8761a;
+}
+
+.level-army-seats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.level-seat-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--lv-seat, var(--line));
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.level-seat-tab.active {
+  color: var(--text);
+  border-color: var(--a);
+  border-left-color: var(--lv-seat, var(--a));
+}
+
+.level-seat-tab i {
+  font-style: normal;
+  color: var(--text-3);
+}
+
+.level-army-units {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.level-army-group {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  margin: 6px 0 2px;
+}
+
+.lv-unit-swatch {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: var(--lv-seat, #5f5e5a);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.level-canvas .lv-unit {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--lv-seat, #5f5e5a);
+  color: #fff;
+  font-size: 0.8em;
+  font-weight: 500;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65);
+}
+
+/* 尺寸行放在画布**上方**：之前塞在画布底下，玩家根本找不到（实机反馈过）。
+   改小是破坏性的，所以不跟着输入实时改，要按「改尺寸」或回车。 */
+.level-size-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-size-label {
+  color: var(--text-3);
+}
+
+.level-size-x {
+  color: var(--text-3);
+}
+
+.level-size-row input {
+  width: 62px;
+  font: inherit;
+  font-size: var(--fs-body);
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .level-canvas-wrap {
+    flex-direction: column;
+  }
+
+  .level-palette {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .level-brushes {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
 }
 
 .editor-checks {

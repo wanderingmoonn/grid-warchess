@@ -21,7 +21,7 @@ import { validateFixedMap } from './fixed-maps.ts';
 import { validateLevel, goalText } from './level.ts';
 import { canStandAt, refreshMemory, grantOpeningIncome, runLevelEvents } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
-import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, MatchConfig, PlayerId, Terrain, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
 import { registerResource } from './resources.ts';
 import { nextRandom } from './rng.ts';
@@ -376,7 +376,16 @@ export function createMatch(
    */
   const levelMap = level?.map ?? null;
   const fixedSource = levelMap ?? config.fixedMap ?? null;
-  const fixed = fixedSource ? validateFixedMap(fixedSource) : null;
+  /*
+   * 第二道校验**必须带上 allowEmpty**。
+   *
+   * 不带的话，无城关卡的地图在这里被判无效 → `fixedMap` 变 null →
+   * 静默退回生成器，棋盘尺寸也跟着变（作者会看到"我做的 10×10 图变成了 12×12"）。
+   * 这正是"关卡校验失败会静默回落成随机地图"那一类坑，只是藏在更深一层。
+   */
+  const fixed = fixedSource
+    ? validateFixedMap(fixedSource, { allowEmpty: level?.seats?.cityless ?? [] })
+    : null;
   /*
    * 城位可能"贴边"，而本局的城可能是 3×3（「城郭」扩展）。
    *
@@ -605,10 +614,19 @@ export function createMatch(
    * 是配置决定的事实。它靠事件里的 `deploy` 上场。
    */
   const hiddenSeatList = (level?.seats?.hidden ?? []).filter((p) => seatList.includes(p));
+  /**
+   * **没有城的席位**（关卡 `seats.cityless`）。
+   *
+   * 和"未登场"不同：它在场、占回合、要打仗，只是没有城。所以这里只是不摆城，
+   * 出兵照旧走 `deploy`。出局条件在 rules.ts 里单独判（兵打光即出局）。
+   */
+  const citylessList = (level?.seats?.cityless ?? []).filter((p) => seatList.includes(p));
 
   for (const p of seats) {
     // 未登场的席位：地图上不给它城（要靠事件里的 deploy 放）
     if (hiddenSeatList.includes(p)) continue;
+    // 无城席位：本来就不该有城，直接跳过
+    if (citylessList.includes(p)) continue;
     for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
   }
 
@@ -784,6 +802,20 @@ export function createMatch(
       }
       return out;
     })(),
+    /*
+     * 地图桥的"河床"：一律按水域记。
+     *
+     * 地图字符只有一个 `=`，它不表达桥下是水还是沼泽，而现有三张内置关的桥
+     * 都是跨水的。记下来是为了让"事件把这一片水位改浅之后，拆桥能还原成浅水"
+     * 这条路对地图桥也成立（以前只有工兵桥才有原地形记录）。
+     */
+    bridgeDeck: (() => {
+      const out: Record<string, Terrain> = {};
+      for (let i = 0; i < tiles.length; i += 1) {
+        if (tiles[i]?.terrain === 'bridge') out[String(i)] = 'water';
+      }
+      return out;
+    })(),
     // 四个席位都建出来（这一局没坐人的席位名字和金币留着也没人读：
     // 所有遍历都走 seatsOf，不会碰它们）。这样 `players[p]` 永远是定义好的。
     players: {
@@ -860,6 +892,23 @@ export function createMatch(
         acted: false,
       });
     }
+  }
+
+  /*
+   * 无城席位：开局先说一句。
+   *
+   * 玩家看到对面"没有城"时第一反应是"这是 bug 吧"。一句话讲清三件事：
+   * 它没有产线、没有收入、兵打光就输——这样后面看到它不造兵才不会以为是坏了。
+   */
+  if (citylessList.length > 0) {
+    const names = citylessList.map((p) => state.players[p].name).join('、');
+    state.log.push({
+      turn: 1,
+      player: citylessList[0]!,
+      text: `${names}没有城：没有产线、没有收入，兵打光就输。`,
+      open: true,
+      system: true,
+    });
   }
 
   /*

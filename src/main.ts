@@ -86,7 +86,8 @@ import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
-import { cellAtPoint, coordsFromEvent, refreshCellVar, renderBoard } from './ui/board.ts';
+import { cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard } from './ui/board.ts';
+import { toast } from './ui/toast.ts';
 import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
@@ -1942,8 +1943,15 @@ const boardCameras = new Map<BoardId, { zoom: number; left: number; top: number 
  * 本质上就是这两个值悄悄分家了，却没人负责把它们捏回去。
  */
 let lastFitZoom = 0;
-/** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
-let baseBoardSize = 0;
+/**
+ * 1× 时棋盘外框该是多大（像素）。放大只是在这两个数上乘，不改它们。
+ *
+ * 是**两个**数而不是一个边长：地图允许长宽不等（12×10 / 8×40），
+ * 写成一个边长就等于宣布"棋盘必须是正方形"，那会把格子压成长方形。
+ * 见 `ui/board.ts` 的 `fitBoardBox()`。
+ */
+let baseBoardW = 0;
+let baseBoardH = 0;
 
 /**
  * 棋盘尺寸还有效吗。
@@ -1997,13 +2005,19 @@ function fitBoard(): void {
   // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
   const viewportH = appEl.clientHeight || window.innerHeight;
   const availH = viewportH - chrome - padY;
-  // 160 是地板：窗口被压到极窄时也别让棋盘缩成一个点
-  baseBoardSize = Math.max(160, Math.round(Math.min(width, availH)));
+  /*
+   * 先算一格多大，再反推外框——不能直接把 `min(宽, 可用高)` 当边长。
+   * 那个写法只在正方形地图上成立；12×10 的图会被拉成长方格（玩家实机发现过）。
+   */
+  const fit = fitBoardBox(state?.w ?? 12, state?.h ?? 12, width, availH);
+  baseBoardW = fit.w;
+  baseBoardH = fit.h;
 
   const zoomed = boardZoom > 1;
-  const px = Math.round(baseBoardSize * boardZoom);
-  boardEl.style.width = `${px}px`;
-  boardEl.style.height = `${px}px`;
+  const pxW = Math.round(baseBoardW * boardZoom);
+  const pxH = Math.round(baseBoardH * boardZoom);
+  boardEl.style.width = `${pxW}px`;
+  boardEl.style.height = `${pxH}px`;
   boardEl.classList.toggle('zoomed', zoomed);
   boardScrollEl.classList.toggle('zoomed', zoomed);
 
@@ -2013,8 +2027,8 @@ function fitBoard(): void {
   // 放大之后整块会跟着长大，被 .app 的 overflow:hidden 裁掉——
   // 表现就是"一放大就只能看见左上角，剩下的永远看不到"。
   if (zoomed) {
-    boardScrollEl.style.width = `${baseBoardSize}px`;
-    boardScrollEl.style.height = `${baseBoardSize}px`;
+    boardScrollEl.style.width = `${baseBoardW}px`;
+    boardScrollEl.style.height = `${baseBoardH}px`;
   } else {
     boardScrollEl.style.width = '';
     boardScrollEl.style.height = '';
@@ -3340,14 +3354,6 @@ function onDraftClick(typeId: string): void {
     }
     dispatchDraft({ type: 'DRAFT_PICK', unitId: typeId, at: Date.now() }, seat);
   }
-}
-
-function toast(msg: string): void {
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = msg;
-  document.body.appendChild(el);
-  window.setTimeout(() => el.remove(), 2200);
 }
 
 /**
