@@ -188,32 +188,53 @@ export async function uploadSharedLevel(level: LevelDef, author?: string): Promi
   try {
     const db = (await cloudDatabase()) as unknown as {
       from(name: string): {
-        insert(row: Record<string, unknown>): {
-          select(): PromiseLike<{ data?: unknown; error?: DbFailure }>;
-        };
+        insert(row: Record<string, unknown>): PromiseLike<{ data?: unknown; error?: DbFailure }>;
       };
     };
-    const res = await db
-      .from(TABLE)
-      .insert({
+    // 先把这一行原样组出来：出错时要拿它当证据（见下面 42501 那段）
+    const row: Record<string, unknown> = {
         // 存的是**去掉本机 id 的那一份**：id 是"这一台设备上的第几张"，
         // 传到云端没有意义，云端有自己的行号
-        name: data.name,
-        author: (author ?? '').slice(0, 24) || null,
-        w: data.map.w,
-        h: data.map.h,
-        seats: data.seats?.count ?? 2,
-        events: data.events?.length ?? 0,
-        data: { ...data, id: 'pending' },
-        // 关键一行：没审核之前不给别人看
-        listed: false,
-        created_at: new Date().toISOString(),
-      })
-      .select();
+      name: data.name,
+      author: (author ?? '').slice(0, 24) || null,
+      w: data.map.w,
+      h: data.map.h,
+      seats: data.seats?.count ?? 2,
+      events: data.events?.length ?? 0,
+      data: { ...data, id: 'pending' },
+      // 关键一行：没审核之前不给别人看
+      listed: false,
+      created_at: new Date().toISOString(),
+    };
+    /*
+     * **不要 `.select()`**（2026-11-16）。
+     *
+     * 加上它就是 `INSERT ... RETURNING`，而 PostgreSQL 会把**读策略**也套在
+     * 返回的那一行上：新插入的行是 `listed = false`，读策略 `using (listed)`
+     * 恰好不放行，于是整条语句报 `42501 new row violates row-level security
+     * policy`——看着像"插入被拒"，其实是"插进去了，但不许你看回来"。
+     * 快照上传一直是裸 insert，所以那边从来不出这个问题。
+     * 上传不需要回执：有 error 就是失败，没 error 就是成功。
+     */
+    const res = await db.from(TABLE).insert(row);
     if (res?.error) {
       // 原文也留一份在控制台：提示条会被截断，这里不会
-      console.warn('[levels] 上传被拒', res.error);
+      console.warn('[levels] 上传被拒', res.error, row);
+      /*
+       * RLS 拒绝时，把**这一行实际长什么样**一并报出来（2026-11-16）。
+       *
+       * 数据库只会说"违反行级安全策略"，不会说是哪一条；而界面上看到的
+       * （24×24、2 家、3 事件）和真正提交的字段不一定一致——上一轮就卡在这里：
+       * 同样的值我手动插能过，客户端插不过，却没有一个数可以对照。
+       */
+      const bytes = Math.round(JSON.stringify(row.data).length / 1024);
+      const brief = `w=${String(row.w)} h=${String(row.h)} seats=${String(row.seats)} events=${String(
+        row.events,
+      )} 名字${String(row.name).length}字 数据${bytes}KB listed=${String(row.listed)}`;
       const f = failure(res.error, '上传');
+      if (/row-level security/i.test(res.error.message ?? '')) {
+        f.reason += `（本次提交：${brief}）`;
+      }
       return { ok: false, reason: f.reason, howTo: f.retryable ? '稍后再试一次' : '需要先开通关卡库' };
     }
     return { ok: true, pending: true, level: data };
