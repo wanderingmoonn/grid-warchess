@@ -565,6 +565,19 @@ line('14. 点亮区域');
       // 别把整张图都点亮：同一条事件没点的地方仍然不可见
       const other = 0 * 10 + 0; // (0,0)
       check(!after.visible.includes(other), '没点亮的格子不会被顺带点亮');
+
+      // 到期：默认亮 1 次，够当下 + 下一手；再往后就该重新没入迷雾
+      let cur = r.state;
+      for (let k = 0; k < 4 && !cur.winner; k += 1) {
+        const rr = applyAction(cur, { type: 'END_TURN' });
+        if (!rr.ok) break;
+        cur = rr.state;
+      }
+      check(
+        !playerView(cur, 'A').visible.includes(far),
+        '点亮到期之后重新被迷雾遮住（不是永久可见）',
+        `turn=${cur.turn}，仍在 ${(cur.revealed ?? []).filter((x) => x.i === far).length} 条记录里`,
+      );
     }
   }
 }

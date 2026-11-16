@@ -281,7 +281,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (act.kind === 'reveal') {
       return `${kindSel}<span class="level-when-arg">
           点亮 <button class="btn btn-sm" data-pick-do-zone="${i}:${j}">${esc(zoneText(act.zone))}</button>
-          <span class="field-hint">（这片区域此后一直可见，不再被迷雾遮住）</span>
+          持续 <input type="number" min="1" max="99" class="level-mini-num" data-reveal-turns="${i}:${j}" value="${act.turns ?? 1}">
+          次行动
+          <span class="field-hint">（到期重新没入迷雾；1 次 ≈ 亮到下一手）</span>
         </span>`;
     }
     return `${kindSel}<span class="level-when-arg">
@@ -307,7 +309,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       } else if (act.kind === 'reveal') {
         const z = act.zone;
         const n = (Math.abs(z.x1 - z.x0) + 1) * (Math.abs(z.y1 - z.y0) + 1);
-        chips.push(`点亮 ${n} 格`);
+        chips.push(`点亮 ${n} 格${act.turns ? ` · ${act.turns} 次` : ''}`);
       } else if (act.kind === 'doctrine') chips.push('换打法');
       else if (act.kind === 'deploy') chips.push(`第 ${act.seat} 家登场`);
       else if (act.kind === 'terrain') {
@@ -635,6 +637,18 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       const [i, j] = say.split(':').map(Number);
       const act = events[i!]?.do[j!];
       if (act && act.kind === 'say') act.text = (el as HTMLInputElement).value;
+      return;
+    }
+    const rvTurns = el.getAttribute('data-reveal-turns');
+    if (rvTurns) {
+      const [i, j] = rvTurns.split(':').map(Number);
+      const act = events[i!]?.do[j!];
+      if (act && act.kind === 'reveal') {
+        const n = Math.max(1, Math.min(99, Math.round(Number((el as HTMLInputElement).value) || 1)));
+        // 1 是默认值，不写进 JSON（少一个字段少一句要解释的话）
+        if (n === 1) delete act.turns;
+        else act.turns = n;
+      }
       return;
     }
     const at = el.getAttribute('data-when-at');

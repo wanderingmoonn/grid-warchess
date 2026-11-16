@@ -4668,7 +4668,7 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
     return;
   }
   if (act.kind === 'reveal') {
-    revealZone(s, act.zone);
+    revealZone(s, act.zone, act.turns);
     return;
   }
   // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
@@ -4779,20 +4779,37 @@ function deploySeat(s: GameState, seat: PlayerId): void {
 function revealZone(
   s: GameState,
   zone: Extract<import('./level.ts').LevelDo, { kind: 'reveal' }>['zone'],
+  turns = 1,
 ): void {
-  const put = new Set(s.revealed ?? []);
+  /*
+   * 亮到"第几次行动"。
+   *
+   * `until = turn + turns`：默认 1 的时候，这一手和下一手都还看得见——
+   * 事件常常在**对方的回合**触发（伏兵刷出来那一刻），只亮当前这一手的话，
+   * 轮到玩家时早就灭了，等于没点。
+   * 判定在 `fog.ts` 里是 `until >= turn`，所以 turns=1 实际覆盖两个行动序号，
+   * 两家局正好是一个完整的轮次。
+   */
+  const until = s.turn + Math.max(1, Math.round(turns));
+  // 同格取更晚的那个过期点；顺手把已经过期的清掉，别让状态无限长
+  const keep = new Map<number, number>();
+  for (const r of s.revealed ?? []) {
+    if (r.until < s.turn) continue;
+    keep.set(r.i, Math.max(keep.get(r.i) ?? 0, r.until));
+  }
   let added = 0;
   for (let y = zone.y0; y <= zone.y1; y += 1) {
     for (let x = zone.x0; x <= zone.x1; x += 1) {
       if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
       const i = y * s.w + x;
-      if (put.has(i)) continue;
-      put.add(i);
-      added += 1;
+      const prev = keep.get(i);
+      if (prev !== undefined && prev >= until) continue;
+      if (prev === undefined) added += 1;
+      keep.set(i, until);
     }
   }
-  if (added === 0) return;
-  s.revealed = [...put];
+  if (added === 0 && keep.size === (s.revealed ?? []).length) return;
+  s.revealed = [...keep].map(([i, at]) => ({ i, until: at }));
 }
 
 function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').LevelDo, { kind: 'terrain' }>): void {
@@ -7990,6 +8007,17 @@ function doEndTurn(s: GameState): ActionResult {
   const nextPlayer = nextSeat(s, s.current);
   s.current = nextPlayer;
   s.turn += 1;
+
+  /*
+   * 到期的点亮直接丢掉。
+   *
+   * `fog` 那边已经按 `until` 过滤了，所以这一步**不影响"看得见什么"**——
+   * 它只是不让 `revealed` 随着一局越打越长（每波伏兵都留一条永远过期的记录）。
+   */
+  if (s.revealed && s.revealed.length > 0) {
+    const live = s.revealed.filter((r) => r.until >= s.turn);
+    if (live.length !== s.revealed.length) s.revealed = live;
+  }
 
   // 回合末钩子（天气、维护费一类）。钩子只负责把血扣到 0，
   // 清场仍然由下面的 sweepDead 统一做——扩展不该各自造一套死亡逻辑。

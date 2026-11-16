@@ -109,8 +109,12 @@ export type LevelDo =
    * **这就是开关**：想点亮就加这条动作，不想让玩家看见的隐秘事件就别加。
    * 它是"信息"不是"效果"——不改地形、不刷兵、不造成任何规则变化，
    * 只是把这片从迷雾里揭出来。没开迷雾的对局里它无害（本来就全可见）。
+   *
+   * `turns`：亮几次行动（默认 1）。1 已经覆盖"当下 + 下一手"两个行动序号
+   * （事件常在对方回合触发，只亮当下一手等于玩家没看见）。要一直看到终点
+   * 这类长期信息就写大一点（比如 30）。
    */
-  | { kind: 'reveal'; zone: LevelZone };
+  | { kind: 'reveal'; zone: LevelZone; turns?: number };
 
 /**
  * 一件事：什么时候、做什么。
@@ -972,12 +976,13 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' },
           /*
-           * 开局把**终点那一片**点亮。
+           * 开局把**终点那一片**点亮，亮 10 次行动（约 5 轮）。
            *
            * 这张关默认开雾：不点亮的话，玩家只知道"往东"，看不到终点在哪一格、
-           * 也不知道城前那排箭塔压着什么位置。`reveal` 是永久的信息，不会随视野收回去。
+           * 也不知道城前那排箭塔压着什么位置。但它**不是永久信息**——
+           * 亮够看清路线就熄，后面仍然得靠自己的视野。
            */
-          { kind: 'reveal', zone: { x0: 14, y0: 1, x1: 17, y1: 6 } },
+          { kind: 'reveal', zone: { x0: 14, y0: 1, x1: 17, y1: 6 }, turns: 10 },
         ],
       },
       /*
@@ -992,7 +997,7 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '北边的林子后头窜出一队追兵！' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 8, y: 2 }, { type: 'archer', x: 9, y: 2 }] },
-          // 伏兵的位置一起点亮：不然玩家在雾里只听到"有人"，看不见人在哪
+          // 伏兵的位置亮一下就走（默认 1 次）：玩家看清"那儿有人"，下一手重新没入迷雾
           { kind: 'reveal', zone: { x0: 7, y0: 1, x1: 10, y1: 3 } },
         ],
       },
@@ -2003,7 +2008,16 @@ function normalizeDo(
   if (kind === 'reveal') {
     const zone = normZone(a.zone, `事件「${id}」点亮区域的范围`, map, errors);
     if (!zone) return undefined;
-    return { kind: 'reveal', zone };
+    let turns: number | undefined;
+    if (a.turns !== undefined && a.turns !== '') {
+      const n = Math.round(Number(a.turns));
+      if (!Number.isFinite(n) || n < 1 || n > 99) {
+        errors.push(`事件「${id}」点亮要持续「${String(a.turns)}」次行动，只能写 1~99`);
+      } else {
+        turns = n;
+      }
+    }
+    return { kind: 'reveal', zone, ...(turns ? { turns } : {}) };
   }
 
   errors.push(

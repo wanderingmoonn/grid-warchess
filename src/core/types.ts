@@ -1925,6 +1925,14 @@ export interface Transit {
   cargo: Unit[];
 }
 
+/** 一次点亮留下的痕迹：这一格亮到 `until` 那个行动序号（含）为止 */
+export interface RevealMark {
+  /** 地球格号 */
+  i: number;
+  /** 亮到第几次行动（含）。`turn > until` 就灭 */
+  until: number;
+}
+
 export interface GameState {
   version: number;
   /** 种子化随机的种子，所有随机都必须从这里派生 */
@@ -1963,16 +1971,16 @@ export interface GameState {
    */
   mapBridges?: number[];
   /**
-   * **被事件点亮的地球格**（格号）。
+   * **被事件点亮的格子**（地球格号 + 亮到哪个行动序号）。
    *
-   * 「点亮」是关卡事件的一种动作（`{ kind: 'reveal', zone }`）：写进来的格子
-   * 此后对所有人**一直可见**，不再被迷雾遮住。用在"终点在哪""伏兵从哪儿冒出来"
-   * 这类不该让玩家瞎猜的地方。
+   * 「点亮」是关卡事件的一种动作（`{ kind: 'reveal', zone, turns? }`）：写进来的
+   * 格子在一段时间内对所有人可见，到了 `until` 那个行动序号之后就重新没入迷雾。
+   * 用在"终点在哪""伏兵从哪儿冒出来"这类不该让玩家瞎猜、但也不该白送情报的地方。
    *
    * 只记地球：关卡事件本来就只作用于地球那张图（`applyTerrainEvent` 同理）。
    * 旧存档 / 没点亮过的对局是 undefined，等于"一格都没点亮"。
    */
-  revealed?: number[];
+  revealed?: RevealMark[];
   /**
    * 桥面**底下那块地**该是什么（地球格号 → 地形）。
    *

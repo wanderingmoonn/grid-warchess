@@ -112,7 +112,8 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
      */
     if (id === EARTH && !reveal && (s.revealed?.length ?? 0) > 0) {
       const merged = new Set(set);
-      for (const i of s.revealed!) merged.add(i);
+      // 只并**还没过期**的：`until >= turn` 表示"亮到这一手为止"
+      for (const r of s.revealed!) if (r.until >= s.turn) merged.add(r.i);
       set = merged;
     }
     visibleSets[id] = set;
