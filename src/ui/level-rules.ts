@@ -37,9 +37,9 @@ const KNOBS: Array<{
   {
     key: 'riskAversion',
     name: '风险厌恶',
-    min: 0.2,
+    min: 0,
     max: 2,
-    hint: '小 = 敢用伤亡换推进；大 = 惜命。默认 1。',
+    hint: '0 = 完全不计伤亡；小 = 敢用伤亡换推进；大 = 惜命。默认 1。',
   },
   {
     key: 'cohesion',

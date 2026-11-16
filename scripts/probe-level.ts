@@ -1091,10 +1091,17 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
       check(fine.ok, '邪龙：没禁的兵种照常能造', fine.ok ? '' : (fine as { reason: string }).reason);
     }
 
-    // 完全体要在第 26 次行动之后下场
-    let wave = s;
+    /*
+     * 完全体要在第 26 次行动之后下场。
+     *
+     * 这里**另开一局带 `godMode`**：AI 的攻击性拉满之后，两家由电脑代打的玩家
+     * 撑不到第 26 次行动（实测第 24 次就打崩了），循环提前退出，boss 自然还没刷。
+     * 那测的就不是"事件会不会触发"，而是"这关难不难"——后者不该由探针来判。
+     * `godMode` 让玩家席位不判负，于是能稳定跑到完全体那一波。
+     */
+    let wave = createMatch({ ...DEFAULT_CONFIG, level: v.level, godMode: true }, 7);
     try {
-      for (let i = 0; i < 160 && !wave.winner && wave.turn < 27; i += 1) {
+      for (let i = 0; i < 200 && !wave.winner && wave.turn < 27; i += 1) {
         const a = aiNextAction(wave) ?? ({ type: 'END_TURN' } as Action);
         const r = applyAction(wave, a);
         wave = r.ok ? r.state : (applyAction(wave, { type: 'END_TURN' } as Action) as { state: GameState }).state;

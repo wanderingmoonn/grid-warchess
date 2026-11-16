@@ -2129,7 +2129,15 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * `riskAversion` 是关卡级的"愿意用多少伤亡换推进"。
    * 默认 1 就是原来的算法；攻坚图写 0.4，它就肯顶着火力往前走。
    */
-  const riskMul = Math.min(2, Math.max(0.2, s.config.level?.ai?.riskAversion ?? 1));
+  /*
+   * 下限放到 **0**（2026-11-16）：0 = 完全不计伤亡。
+   *
+   * 原来卡在 0.2，本意是"别让 AI 蠢到站火里送死"。但落到「邪龙」这种关就很怪：
+   * 飞龙在城火力圈外停住不动，只靠邪龙王隔空下蛋——因为"逼近一格"只值五六分，
+   * 而"这一步会挨打/可能会死"即使乘 0.2 也有十几分。作者要的是"它们就是不怕死"，
+   * 那就得留一个真能关掉这笔账的档位。默认仍是 1，普通对局一个字不变。
+   */
+  const riskMul = Math.min(2, Math.max(0, s.config.level?.ai?.riskAversion ?? 1));
   score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4) * riskMul;
   if (risk.lethal) score -= (30 + Math.min(75,cost*0.2)) * riskMul;
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
@@ -2142,7 +2150,12 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * 罚得比眼前那一刀轻（同样的伤害在这里只算 12~42 分），够用它躲开空地就行。
    */
   const soonRisk = all.tactical.soon(moved, killed);
-  score -= Math.max(0, soonRisk.damage - risk.damage) / Math.max(1,def.maxHp) * (12 + Math.min(30,cost*0.1));
+  // 这一项也要跟着 `riskAversion` 走：只管"眼前这一刀"的话，0 档仍然会被
+  // "下下回合够得着"劝退，冲不进去。
+  score -=
+    (Math.max(0, soonRisk.damage - risk.damage) / Math.max(1, def.maxHp)) *
+    (12 + Math.min(30, cost * 0.1)) *
+    riskMul;
 
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
   for (const city of s.cities) {
