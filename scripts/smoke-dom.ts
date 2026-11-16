@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
 import { addMark } from '../src/core/marks.ts';
-import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
+import { EXPANSIONS, conflictsWith, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
@@ -9271,36 +9271,73 @@ check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () =
   const drawer = doc.querySelector<HTMLElement>('.exp-drawer');
   assert.ok(drawer, '点开应该有抽屉');
   const text = drawer!.textContent ?? '';
-  assert.ok(text.includes('先后手补偿'), '抽屉里要说明这一关禁用了什么，实际：' + text.slice(0, 160));
+  assert.ok(text.includes('固定了扩展规则'), '抽屉里要说明这一关固定了哪些扩展，实际：' + text.slice(0, 160));
 
   const items = drawer!.querySelectorAll('.expansion-item');
   assert.ok(items.length > 10, '抽屉里应该是完整的扩展列表，实际 ' + items.length + ' 条');
 
-  const forbidden = drawer!.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
-  assert.ok(forbidden, '列表里应该有「先后手补偿」');
-  assert.ok(!forbidden!.checked && forbidden!.disabled, '关卡禁用的包：空着且点不动');
+  /*
+   * 下面几条**不再钉死具体的扩展 id**。
+   *
+   * 原来写的是 `[data-exp="bloodbath"]` 和 `[data-exp="turn-order-comp"]`，
+   * 它们假设"血战是关卡没提到的包""先后手补偿一定被禁用"。2026-11-16
+   * 孤城关把血战提成了 `require`（必须开），于是"没提到的包还能勾"这条
+   * 当场变红——而功能其实完全正确：它现在就该是勾着且点不动的。
+   *
+   * 判据改成从**抽屉自己的标记**反推：
+   *   · 锁定的条目一定带 `.expansion-req` 且 disabled；
+   *   · "还能勾"的条目 = 没锁、没被关卡点名（没有任何 `.expansion-req`）、
+   *     而且当前没勾（这样点一下必然是"加"，入口上才会出现它的名字）。
+   */
+  const locked = [...drawer!.querySelectorAll<HTMLInputElement>('[data-exp]:disabled')];
+  assert.ok(locked.length > 0, '这一关锁定的包要在列表里点不动');
+  assert.ok(
+    locked.some((el) => (el.closest('.expansion-item')?.textContent ?? '').includes('必须开')),
+    `「必须开」的包要写出来，实际锁定 ${locked.length} 条`,
+  );
+  assert.ok(
+    locked.some((el) => (el.closest('.expansion-item')?.textContent ?? '').includes('禁用')),
+    '「禁用」的包也要写出来',
+  );
 
-  const free = drawer!.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
-  assert.ok(free && !free.disabled, '关卡没提到的包必须还能勾');
-
+  /*
+   * 还得"不跟已经开着的包打架"。
+   *
+   * 抽屉里有一批互斥包（战争经济 × 老兵不死 之类）：勾上去会被直接拒掉并提示冲突，
+   * 入口那一行当然不会变。这不是功能坏了，是选到了一个不能同开的候选。
+   */
+  const onIds = [...drawer!.querySelectorAll<HTMLInputElement>('[data-exp]')]
+    .filter((el) => el.checked)
+    .map((el) => el.dataset.exp!);
+  const freeInput = [...drawer!.querySelectorAll<HTMLInputElement>('[data-exp]')].find(
+    (el) =>
+      !el.disabled &&
+      !el.checked &&
+      !el.closest('.expansion-item')?.querySelector('.expansion-req') &&
+      conflictsWith(onIds, el.dataset.exp!).length === 0,
+  );
+  assert.ok(freeInput, '关卡没提到的包必须还能勾（抽屉里应该至少有一个）');
+  const freeId = freeInput!.dataset.exp!;
+  const freeName = freeInput!.closest('.expansion-item')?.querySelector('b')?.textContent ?? '';
+  assert.ok(freeName.length > 0, '条目上要有包名');
 
   // 勾一个包：抽屉要留着（不然每勾一个就得重新点开），入口那一行要跟着变
   click('[data-act="exp-drawer"]');
-  const free2 = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]');
-  assert.ok(free2, '抽屉里能找到「血战」');
+  const free2 = doc.querySelector<HTMLInputElement>(`.exp-drawer [data-exp="${freeId}"]`);
+  assert.ok(free2, `抽屉里能找到「${freeName}」`);
   free2!.click();
   assert.ok(doc.querySelector('.exp-drawer'), '勾完包抽屉不该自己关掉');
   const entryNow = doc.querySelector<HTMLElement>('[data-act="exp-drawer"]')?.textContent ?? '';
-  // 默认配置里本来就带着「老兵不死」，所以这里只验勾上的那个出现在入口上
-  assert.ok(entryNow.includes('血战'), '入口那一行要列出已经加了什么，实际：' + entryNow);
-
+  assert.ok(entryNow.includes(freeName), `入口那一行要列出已经加了什么，实际：${entryNow}`);
 
   // 警告档：能开、不锁，但要说清"会变难"
   click('[data-act="exp-drawer"]');
-  const warned = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="high-mobility"]');
-  assert.ok(warned, '抽屉里应该有「高机动性」');
+  const warned = [...doc.querySelectorAll<HTMLInputElement>('.exp-drawer [data-exp]')].find(
+    (el) => !el.disabled && !!el.closest('.expansion-item')?.querySelector('.expansion-req.is-warn'),
+  );
+  assert.ok(warned, '警告档的包要在列表里（孤城配了「会变难」的包）');
   assert.ok(!warned!.disabled, '警告不是禁用：还得能勾');
-  const warnTag = warned!.closest('.expansion-item')?.querySelector('.is-warn');
+  const warnTag = warned!.closest('.expansion-item')?.querySelector('.expansion-req.is-warn');
   assert.ok(warnTag, '这一档要在条目上标出来');
   assert.ok((warnTag!.textContent ?? '').includes('变难'), '标签要写清楚是变难，不是禁用');
 
@@ -9311,7 +9348,7 @@ check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () =
 
   // 再点一次取消勾选，免得把状态带进后面开局的那一局
   click('[data-act="exp-drawer"]');
-  doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]')!.click();
+  doc.querySelector<HTMLInputElement>(`.exp-drawer [data-exp="${freeId}"]`)!.click();
   click('[data-act="exp-close"]');
 });
 

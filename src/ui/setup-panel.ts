@@ -112,6 +112,21 @@ function saveRecordPref(on: boolean): void {
   }
 }
 
+/**
+ * 关卡没固定、由玩家自己加的那些扩展。
+ *
+ * 入口那一行（"N 个额外扩展在生效"）和抽屉里的勾选状态都看这一份。
+ * `require` 是关卡强制的、`forbid` 是关卡禁掉的，都不算"玩家加的"，
+ * 列进入口会让玩家以为那是自己选的。
+ */
+function extraPacksOf(cfg: MatchConfig): string[] {
+  return cfg.expansionIds.filter(
+    (id) =>
+      !(cfg.level?.expansions?.require ?? []).includes(id) &&
+      !(cfg.level?.expansions?.forbid ?? []).includes(id),
+  );
+}
+
 export function openSetupPanel(initial: MatchConfig, seed: number): Promise<SetupResult | null> {
   return new Promise((resolve) => {
     const config: MatchConfig = {
@@ -1200,11 +1215,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return `${seatLabel[p] ?? p}${hidden ? '（中途登场）' : ''}：${troops} 兵 · ${cities} 城`;
       };
       const others = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(0, playerCount).filter((p) => p !== mySeat);
-      const extraPacks = config.expansionIds.filter(
-        (id) =>
-          !(config.level?.expansions?.require ?? []).includes(id) &&
-          !(config.level?.expansions?.forbid ?? []).includes(id),
-      );
+      const extraPacks = extraPacksOf(config);
       const fixedLine = [
         `${eraDef(config.startEra).name}（开局 ${startGoldFor(config.startEra)} 金）`,
         `${config.level?.map.w}×${config.level?.map.h}`,
@@ -2084,6 +2095,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       }
       // 让卡片边框跟着变，不重绘整个面板（否则 checkbox 会闪）
       input.closest('.expansion-item')?.classList.toggle('on', input.checked);
+      /*
+       * 入口那一行单独刷一次。
+       *
+       * 有些包只改数值（战争经济这类），勾上不会让兵种池 / 时代 / 地貌的**数量**变，
+       * 上面于是走了"只改边框、不整块重绘"那条快路——入口那一行还是旧的。
+       * 玩家刚勾完，回头看见"没有额外扩展"，会以为没勾上，再点一次又取消了。
+       */
+      const packs = extraPacksOf(config);
+      const mainEl = mask.querySelector('.exp-entry-main');
+      const subEl = mask.querySelector('.exp-entry-sub');
+      if (mainEl) {
+        mainEl.textContent = packs.length > 0 ? `${packs.length} 个额外扩展在生效` : '没有额外扩展';
+      }
+      if (subEl) {
+        subEl.textContent = packs.length > 0 ? packs.map((x) => expansionById(x)?.name ?? x).join('、') : '点开挑';
+      }
     });
 
     paint();
