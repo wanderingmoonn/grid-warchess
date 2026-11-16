@@ -5212,6 +5212,66 @@ a.btn {
  * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
  * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
  */
+/* ── 关卡管理（E6）────────────────────────────────────────────────── */
+.level-manage-btn {
+  margin-left: auto;
+}
+
+.level-mgr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 12px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.level-mgr-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.level-mgr-row.is-editing {
+  border-color: var(--a);
+}
+
+.level-mgr-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.level-mgr-name i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.level-mgr-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.level-mgr-cloud {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+
+.level-mgr-cloud [data-cloud]:empty {
+  display: none;
+}
+
 /* ── 扩展三档 + AI 旋钮 ───────────────────────────────────────────── */
 .level-rules-filter {
   display: flex;

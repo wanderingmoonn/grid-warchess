@@ -52,6 +52,7 @@ import {
 } from '../core/level.ts';
 import { cloneAsUserLevel, deleteUserLevel, isUserLevelId, userLevelList } from '../core/userLevels.ts';
 import { openLevelEditor } from './level-editor.ts';
+import { openLevelManager } from './level-manager.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -1068,6 +1069,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <section class="field">
               <div class="field-label">
                 我的关卡 <span class="field-hint">自己做，只存在这台设备上</span>
+                <button class="btn btn-sm level-manage-btn" data-level-manage="1">管理 / 导入导出</button>
               </div>
               <div class="map-gallery">
                 ${myLevels.map((it) => levelCard(it.level)).join('')}
@@ -1555,6 +1557,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         }
         paint();
       };
+
+      if (target.closest('[data-level-manage]')) {
+        openLevelManager({
+          onClose: (changed) => {
+            // 关掉时如果动过（改名/删除/导入），把选中的那份按 id 重新对一次：
+            // 删掉的那张要退出选中，改名的要显示新名字
+            if (changed && config.level && isUserLevelId(config.level.id)) {
+              const fresh = levelById(config.level.id);
+              if (fresh) config.level = fresh;
+              else Object.assign(config, applyLevelToConfig(config, null));
+            }
+            paint();
+          },
+        });
+        return;
+      }
 
       if (target.closest('[data-level-new]')) {
         // 不传 level = 编辑器自己给一张能开打的模板（关掉不留垃圾）

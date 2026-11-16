@@ -16,6 +16,8 @@ import { LEVELS, allLevels, levelById, playableLevels } from '../src/core/level.
 import { lintLevel } from '../src/core/level-lint.ts';
 import { applyAction } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
+import { downloadLevelFile, downloadLevelsFile, parseLevelFileText } from '../src/core/level-io.ts';
+import { levelUploadBlocker } from '../src/net/levels.ts';
 import {
   cloneAsUserLevel,
   deleteUserLevel,
@@ -283,6 +285,51 @@ check(
   levelById('user:probe-reload')?.name === '读盘关',
   '重新读之后 levelById 照样能查到',
   levelById('user:probe-reload')?.name ?? 'null',
+);
+
+/* ── 10. 文件进出（E6） ────────────────────────────────────────── */
+line('10. 文件进出');
+
+const one = sample({ id: 'user:probe-file', name: '文件关' });
+const single = parseLevelFileText(JSON.stringify(one));
+check(single.ok, '单个关卡对象能读', single.ok ? '' : single.errors.join('；'));
+
+const envelope = parseLevelFileText(
+  JSON.stringify({ v: 1, kind: 'warchess-levels', levels: [one, sample({ id: 'user:probe-file-2', name: '文件关二' })] }),
+);
+check(envelope.ok, '多关文件（带外壳）能读');
+if (envelope.ok) check(envelope.levels.length === 2, '两条都读进来了', `实际 ${envelope.levels.length}`);
+
+const bareArray = parseLevelFileText(JSON.stringify([one]));
+check(bareArray.ok, '裸数组也收（手攒的文件不该被迫背外壳）');
+
+// 一条坏的不拖累好的：批量导入最气人的就是"第 3 个坏了所以 1、2 也没进来"
+const mixed = parseLevelFileText(
+  JSON.stringify({ v: 1, kind: 'warchess-levels', levels: [one, { id: '', name: '' }] }),
+);
+check(mixed.ok, '好坏混在一起时，好的那条照样读进来', mixed.ok ? '' : mixed.errors.join('；'));
+if (mixed.ok) {
+  check(mixed.levels.length === 1, '只收下能用的那条', `实际 ${mixed.levels.length}`);
+  check(mixed.errors.length === 1, '坏的那条单独报错', `实际 ${mixed.errors.length}`);
+}
+
+check(!parseLevelFileText('{"id":').ok, '坏 JSON 被拦住');
+check(!parseLevelFileText('').ok, '空文件被拦住');
+
+// node 里没有 URL.createObjectURL；下载函数必须安静地什么都不做，而不是抛错
+let threw = false;
+try {
+  downloadLevelFile(one);
+  downloadLevelsFile([one], '批量');
+} catch {
+  threw = true;
+}
+check(!threw, '没有下载能力的环境里，导出不抛错（安静跳过）');
+
+check(levelUploadBlocker(one) === null, '合规关卡可以上传');
+check(
+  levelUploadBlocker(sample({ name: '' })) !== null,
+  '不合规关卡在上传前就被拦下（不占用一次审核名额）',
 );
 
 /* ── 汇总 ──────────────────────────────────────────────────────── */

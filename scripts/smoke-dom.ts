@@ -10183,6 +10183,88 @@ check('点「试玩」：编辑器关掉、直接进对局，进的就是这张�
   assert.equal(tiles, 120, `棋盘应该是模板的 12×10（120 格），实际 ${tiles}`);
 });
 
+/* ------------------------------------------------------------------ */
+/* 关卡管理（E6）                                                      */
+/* ------------------------------------------------------------------ */
+
+console.log('\n关卡管理');
+
+// 先清场再开一个干净的面板（理由和「扩展与 AI」那段一样：避免点到旧面板）
+for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+
+check('选关页有「管理 / 导入导出」入口', () => {
+  assert.ok(!!doc.querySelector('[data-level-manage]'), '「我的关卡」分组里要有管理入口');
+});
+
+check('管理面板：列出我的关卡，每人一行，带尺寸/几家/事件数', () => {
+  doc.querySelector<HTMLElement>('[data-level-manage]')?.click();
+  const layer = topMask()!;
+  const rows = layer.querySelectorAll('.level-mgr-row');
+  assert.ok(rows.length > 0, '前面用例存过关卡，这里应该列出来');
+  const meta = rows[0]?.querySelector('.level-mgr-name i')?.textContent ?? '';
+  assert.ok(/\d+×\d+/.test(meta), `元信息里要有尺寸，实际：${meta}`);
+  assert.ok(meta.includes('家'), `还要写几家，实际：${meta}`);
+  assert.ok(meta.includes('事件'), `还要写事件数，实际：${meta}`);
+});
+
+check('改名：只换名字，id 不变', () => {
+  const layer = topMask()!;
+  const firstRow = layer.querySelector<HTMLElement>('.level-mgr-row');
+  const oldMeta = firstRow?.querySelector('.level-mgr-name i')?.textContent ?? '';
+  firstRow?.querySelector<HTMLElement>('[data-rename]')?.click();
+
+  const input = topMask()!.querySelector<HTMLInputElement>('[data-rename-input]')!;
+  input.value = '改过名的关';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  topMask()!.querySelector<HTMLElement>('[data-rename-save]')?.click();
+
+  const row = topMask()!.querySelector<HTMLElement>('.level-mgr-row');
+  assert.ok((row?.textContent ?? '').includes('改过名的关'), `列表里要显示新名字，实际：${row?.textContent?.slice(0, 80)}`);
+  // 元信息（尺寸/几家/事件）不该因为改名而变化
+  const newMeta = row?.querySelector('.level-mgr-name i')?.textContent ?? '';
+  assert.equal(newMeta, oldMeta, '改名不该动到关卡数据');
+});
+
+check('复制：多一张，原名那张还在', () => {
+  const layer = topMask()!;
+  const before = layer.querySelectorAll('.level-mgr-row').length;
+  layer.querySelector<HTMLElement>('[data-copy]')?.click();
+  const after = topMask()!.querySelectorAll('.level-mgr-row').length;
+  assert.equal(after, before + 1, `复制之后应该多一行，实际 ${before} → ${after}`);
+});
+
+check('删除：少一张（二次确认走的是 confirm，用例里已 stub 成 true）', () => {
+  const layer = topMask()!;
+  const before = layer.querySelectorAll('.level-mgr-row').length;
+  layer.querySelector<HTMLElement>('[data-del]')?.click();
+  const after = topMask()!.querySelectorAll('.level-mgr-row').length;
+  assert.equal(after, before - 1, `删除之后应该少一行，实际 ${before} → ${after}`);
+});
+
+check('导出与云端入口都在，且云端会说明"没开通"而不是静默失败', () => {
+  const layer = topMask()!;
+  assert.ok(layer.querySelector('[data-export]'), '每行要有「导出」');
+  assert.ok(layer.querySelector('[data-act="export-all"]'), '要有「全部导出」');
+  assert.ok(layer.querySelector('[data-act="import"]'), '要有「从文件导入」');
+  assert.ok(layer.querySelector('[data-act="cloud-load"]'), '要有云端入口');
+  // 云端按钮点了会去连；测试环境连不上，界面要给一句原因而不是空白
+  layer.querySelector<HTMLElement>('[data-act="cloud-load"]')?.click();
+});
+
+await wait(400);
+
+check('云端拉不到时，给的是原因而不是空白', () => {
+  const text = topMask()?.querySelector('[data-cloud]')?.textContent ?? '';
+  assert.ok(text.trim().length > 0, '不该是空白');
+  assert.ok(/开通|失败|网络|凭据|还没有/.test(text), `要说明为什么没有，实际：${text.slice(0, 120)}`);
+});
+
+// 收尾
+topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。
