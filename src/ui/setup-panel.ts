@@ -1648,7 +1648,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const levelBtn = target.closest<HTMLElement>('[data-level]');
       if (levelBtn) {
         const id = levelBtn.dataset.level ?? '';
-        const picked = id ? allLevels().find((l) => l.id === id) ?? null : null;
+        /*
+         * 云端关卡**不在 `allLevels()` 里**（那个注册表只放内置关卡和"我的关卡"）。
+         * 原来这里只查它，于是点云端卡片永远查到 null → 被当成"自由对局"，
+         * 玩家点了半天等于没选（2026-11-16 用户报的就是这个）。
+         * 云端关卡去缓存里补一次；`cloud:` 前缀保证不会和本机关卡撞 id。
+         */
+        const picked = id
+          ? (allLevels().find((l) => l.id === id) ?? cachedCloudLevels().find((l) => l.id === id) ?? null)
+          : null;
         Object.assign(config, applyLevelToConfig(config, picked));
         // 换了关，抽屉里「这一关锁定哪些包」已经变了，收起来重新看
         expDrawerOpen = false;
