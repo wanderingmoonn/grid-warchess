@@ -194,6 +194,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       resolve(result);
     };
 
+    /**
+     * 编辑器的「试玩」：把这一份关卡挂上去、直接开局。
+     *
+     * 和点「开始对局」走同一条收尾（补前置扩展、按注册顺序排、带上当前种子）——
+     * 两条路各写一份的话，迟早出现"试玩进去的扩展和正常开局不一样"。
+     */
+    const startWithLevel = (level: LevelDef): void => {
+      Object.assign(config, applyLevelToConfig(config, level));
+      const ids = new Set(config.expansionIds);
+      for (const id of Array.from(ids)) {
+        for (const need of expansionById(id)?.requires ?? []) ids.add(need);
+      }
+      const ordered = EXPANSIONS.filter((e) => ids.has(e.id)).map((e) => e.id);
+      close({ config: { ...config, expansionIds: ordered }, seed: currentSeed });
+    };
+
     /*
      * ── 兵种池：一张"这一局能造什么"的全表 ──
      *
@@ -1542,7 +1558,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       if (target.closest('[data-level-new]')) {
         // 不传 level = 编辑器自己给一张能开打的模板（关掉不留垃圾）
-        openLevelEditor({ onClose: afterEditor });
+        openLevelEditor({ onClose: afterEditor, onTryPlay: startWithLevel });
         return;
       }
 
@@ -1552,6 +1568,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         openLevelEditor({
           level: isUserLevelId(src.id) ? levelById(src.id) ?? src : cloneAsUserLevel(src),
           onClose: afterEditor,
+          onTryPlay: startWithLevel,
         });
         return;
       }

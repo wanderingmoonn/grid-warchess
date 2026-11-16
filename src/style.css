@@ -5212,6 +5212,112 @@ a.btn {
  * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
  * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
  */
+/* ── 扩展三档 + AI 旋钮 ───────────────────────────────────────────── */
+.level-rules-filter {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0 8px;
+}
+
+.level-rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.level-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-rule-row:hover {
+  background: var(--panel-2);
+}
+
+.level-rule-row.is-set {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--a);
+}
+
+.level-rule-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--text);
+}
+
+.level-rule-name i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.level-rules-ai-title {
+  margin-top: 14px;
+}
+
+.level-rules-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 8px;
+}
+
+.level-rule-knob {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 180px;
+}
+
+.level-rule-knob input {
+  flex: 1 1 auto;
+  accent-color: var(--a);
+}
+
+.level-rule-knob b {
+  min-width: 28px;
+  text-align: right;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* 自打结果：不抢眼，但要能读 */
+.level-tryout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 4px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-tryout[hidden] {
+  display: none;
+}
+
+.level-tryout-line.is-running {
+  color: var(--text-3);
+}
+
 /* ── 胜负条件 / 关卡独有兵种 ────────────────────────────────────────
  * 两块都沿用事件表单的骨架（左列 + 右地图 / 左列表 + 右表单），
  * 免得每个面板长一个样。

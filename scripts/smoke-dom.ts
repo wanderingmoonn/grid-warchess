@@ -10091,6 +10091,98 @@ check('点时间轴的一行：回到卡片并高亮那一条', () => {
   topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
 }
 
+/* ------------------------------------------------------------------ */
+/* 扩展三档 / AI 旋钮 / 试玩                                           */
+/* ------------------------------------------------------------------ */
+
+console.log('\n扩展与 AI');
+
+/*
+ * 这一段要验"试玩真的开了这一局"，所以必须保证只存在**一个**开局面板。
+ *
+ * 前面几段各自 openSetup() 过、也留过没关的窗口；`click()` 取的是文档里第一个
+ * 同名按钮，于是会点到旧面板上——旧面板的 promise 早就 settle 了，`resolve` 是空操作，
+ * 表现就是"编辑器关了、但没开新局"（棋盘还是上一局那张）。这不是功能问题，
+ * 是测试没清场。所以这里直接把残留窗口摘掉，再开一个新的。
+ */
+for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level-new]');
+
+check('规则面板：扩展能选四档，AI 三个旋钮都在', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="rules"]')?.click();
+  const layer = topMask()!;
+  const rows = layer.querySelectorAll('[data-exp-id]');
+  assert.ok(rows.length >= 6, `应该列出全部扩展，实际 ${rows.length}`);
+  const knob = layer.querySelectorAll('[data-knob]');
+  assert.equal(knob.length, 3, `三个旋钮，实际 ${knob.length}`);
+  // 每一档都要能选（不是所有包都只有"必须开/禁用"）
+  const opts = [...(rows[0] as HTMLSelectElement).options].map((o) => o.value);
+  assert.deepEqual(opts, ['none', 'require', 'forbid', 'warn'], `四档：${opts.join(',')}`);
+});
+
+check('选一个"必须开" + 把风险厌恶调到 0.5：写进 expansions / ai', () => {
+  const layer = topMask()!;
+  const first = layer.querySelector<HTMLSelectElement>('[data-exp-id]')!;
+  const expId = first.dataset.expId!;
+  first.value = 'require';
+  first.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const knob = layer.querySelector<HTMLInputElement>('[data-knob="riskAversion"]')!;
+  knob.value = '0.5';
+  knob.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+  layer.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    expansions?: { require?: string[] };
+    ai?: { riskAversion?: number };
+  };
+  assert.ok(
+    (data.expansions?.require ?? []).includes(expId),
+    `必须开的扩展要写进 require，实际 ${JSON.stringify(data.expansions)}`,
+  );
+  assert.equal(data.ai?.riskAversion, 0.5, `风险厌恶应该是 0.5，实际 ${data.ai?.riskAversion}`);
+});
+
+check('AI 三个都回默认：不写 ai 字段（少一句要解释的话）', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="rules"]')?.click();
+  topMask()?.querySelector<HTMLElement>('[data-act="reset-ai"]')?.click();
+  topMask()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { ai?: unknown };
+  assert.equal(data.ai, undefined, `默认值不该写进 JSON，实际 ${JSON.stringify(data.ai)}`);
+});
+
+/*
+ * 试玩：点一下编辑器关掉、开局面板也关掉、直接进对局。
+ * 这条真的会开一局（面板 promise 被 resolve，主流程走 createMatch），所以放在最后。
+ */
+/*
+ * 试玩要真的开一局。注意 `resolve()` 的回调是**微任务**：点完之后必须等一下，
+ * 否则读到的是上一局留下的棋盘（这次就踩了：400 格＝20×20 的旧局）。
+ */
+let tryLayer: HTMLElement | null = null;
+{
+  tryLayer = topMask()!;
+  assert.ok(tryLayer.querySelector('[data-act="tryout"]'), '编辑器里要有「试玩」');
+  assert.ok(tryLayer.querySelector('[data-act="selfplay"]'), '还要有「自打 3 局」');
+  tryLayer.querySelector<HTMLElement>('[data-act="tryout"]')?.click();
+}
+await wait(120);
+
+check('点「试玩」：编辑器关掉、直接进对局，进的就是这张图', () => {
+  assert.ok(!tryLayer!.isConnected, '点「试玩」的那个编辑器窗口应该被移除');
+  assert.ok(!!doc.querySelector('.board'), '应该已经在棋盘上了');
+
+  const tiles = doc.querySelectorAll('.tiles .tile').length;
+  assert.equal(tiles, 120, `棋盘应该是模板的 12×10（120 格），实际 ${tiles}`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。

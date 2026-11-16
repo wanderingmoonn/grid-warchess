@@ -33,7 +33,12 @@ import { openLevelSeats } from './level-seats.ts';
 import { openLevelEvents } from './level-events.ts';
 import { openLevelGoals } from './level-goals.ts';
 import { openLevelUnits } from './level-units.ts';
+import { openLevelRules } from './level-rules.ts';
 import type { LevelDef } from '../core/level.ts';
+import { aiNextAction } from '../core/ai.ts';
+import { applyAction } from '../core/rules.ts';
+import { DEFAULT_CONFIG, createMatch } from '../core/setup.ts';
+import { loadCustomUnits } from '../core/customUnits.ts';
 
 export interface LevelEditorResult {
   saved: boolean;
@@ -45,6 +50,11 @@ export interface LevelEditorOptions {
   /** 要编辑的关卡。不传 = 新建 */
   level?: LevelDef;
   onClose?: (result: LevelEditorResult) => void;
+  /**
+   * 试玩：把这一份关卡交给外面去开局（开局面板会直接关掉、开始对局）。
+   * 不传就不显示「试玩」——探针和别处调用不需要它。
+   */
+  onTryPlay?: (level: LevelDef) => void;
 }
 
 const esc = (t: string) =>
@@ -147,6 +157,9 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           <button class="btn btn-sm" data-act="events">事件</button>
           <button class="btn btn-sm" data-act="goals">胜负</button>
           <button class="btn btn-sm" data-act="units">兵种</button>
+          <button class="btn btn-sm" data-act="rules">扩展与 AI</button>
+          <button class="btn btn-sm" data-act="tryout">试玩</button>
+          <button class="btn btn-sm" data-act="selfplay">自打 3 局</button>
           <button class="btn btn-sm" data-act="copy">复制 JSON</button>
           <button class="btn btn-sm" data-act="reset">恢复成${readOnly ? '原版' : '初始模板'}</button>
         </div>
@@ -161,6 +174,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
             <div class="level-issues"></div>
           </div>
         </div>
+        <div class="level-tryout" data-tryout hidden></div>
         <div class="level-draft-bar" data-draft-bar hidden>
           <span>这儿有一份上次没写完的草稿。</span>
           <button class="btn btn-sm" data-act="draft-restore">接着改那份</button>
@@ -182,6 +196,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
   const footEl = q<HTMLDivElement>('[data-foot]');
   const saveBtn = q<HTMLButtonElement>('[data-act="save"]');
   const draftBar = q<HTMLDivElement>('[data-draft-bar]');
+  const tryoutEl = q<HTMLDivElement>('[data-tryout]');
   if (pendingDraft) draftBar.hidden = false;
 
   ta.value = text;
@@ -258,6 +273,110 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
     if (timer !== null) clearTimeout(timer);
     mask.remove();
     opts.onClose?.({ saved: !!level, level: level ?? undefined });
+  };
+
+  /**
+   * 当前文本 → 一份"能拿去开局"的关卡。
+   *
+   * 保存、试玩、自打三条路都先过它。分开写的话迟早出现"保存拦住了、试玩没拦"，
+   * 而那意味着玩家会拿一张坏图去开局。
+   */
+  const readyToPlay = (): LevelDef | null => {
+    const parsed = parseLevelText(ta.value);
+    if (!parsed.ok) {
+      renderIssues(parsed.errors, []);
+      footEl.textContent = '还有问题没改完，先看右边那栏。';
+      return null;
+    }
+    const issues = lintLevel(parsed.level);
+    const blocking = issues.filter((i) => i.severity === 'error');
+    if (blocking.length > 0) {
+      // 错误**拦**，警告**不拦**：警告是"你可能没想到"，不是"你不能这么做"
+      renderIssues([], issues);
+      footEl.textContent = `还有 ${blocking.length} 处会出问题的地方，改完再试。`;
+      return null;
+    }
+    return parsed.level;
+  };
+
+  const commit = (): { level: LevelDef; persisted: boolean } | null => {
+    const level = readyToPlay();
+    if (!level) return null;
+    // 文本没动过就别再存一遍：试玩一下涨一个版本号，作者会看不懂这个数字
+    if (key === level.id && ta.value === savedText) return { level, persisted: true };
+    const saved = saveUserLevel(level);
+    if (!saved.ok) {
+      renderIssues(saved.errors, []);
+      footEl.textContent = '存不进去：上面这些字段有问题。';
+      return null;
+    }
+    clearDraft(key);
+    lastSaved = saved.level;
+    key = saved.level.id;
+    savedText = ta.value;
+    return { level: saved.level, persisted: saved.persisted };
+  };
+
+  /** 试玩前要准备的那一份：自己的关卡顺便存一下，内置关卡直接用（只读不存） */
+  const prepareForPlay = (): LevelDef | null => (readOnly ? readyToPlay() : (commit()?.level ?? null));
+
+  /**
+   * 自打几局：同一套 AI 对打，回答"这关能不能跑完、大概多长"。
+   *
+   * **它不能回答"好不好玩"**：电脑不会集结兵力撕口子、不会保护关键单位、
+   * 地形一变也不会重新选路。所以结果旁边必须写清这一点，否则下次一定有人
+   * 拿"AI 打了 3 局都赢"当成难度结论。
+   *
+   * 分帧跑：一局上千步，同步跑会把界面冻住（玩家会以为崩了）。
+   */
+  const runSelfPlay = async (level: LevelDef): Promise<void> => {
+    tryoutEl.hidden = false;
+    const seeds = [11, 22, 33];
+    const MAX_TURN = 1200;
+    const lines: string[] = [];
+
+    const paint = (cur?: string): void => {
+      tryoutEl.innerHTML = `${lines
+        .map((t) => `<div class="level-tryout-line">${esc(t)}</div>`)
+        .join('')}${cur ? `<div class="level-tryout-line is-running">${esc(cur)}</div>` : ''}`;
+    };
+
+    for (const seed of seeds) {
+      let s = createMatch({ ...DEFAULT_CONFIG, level }, seed, loadCustomUnits());
+      let guard = 0;
+      try {
+        while (!s.winner && s.turn < MAX_TURN && guard < MAX_TURN * 2) {
+          const r = applyAction(s, aiNextAction(s) ?? { type: 'END_TURN' });
+          if (r.ok) s = r.state;
+          else {
+            const fallback = applyAction(s, { type: 'END_TURN' });
+            if (!fallback.ok) break;
+            s = fallback.state;
+          }
+          guard += 1;
+          // 每 40 步让一次主线程：既能让进度条动，也不至于慢到看不出来
+          if (guard % 40 === 0) {
+            paint(`种子 ${seed}：已走到第 ${s.turn} 次行动…`);
+            await new Promise((r2) => window.setTimeout(r2, 0));
+          }
+        }
+      } catch (err) {
+        lines.push(`种子 ${seed}：跑崩了（${err instanceof Error ? err.message : String(err)}）`);
+        paint();
+        continue;
+      }
+      if (s.winner) {
+        const who = s.players[s.winner]?.name ?? s.winner;
+        lines.push(`种子 ${seed}：${who}赢，第 ${s.turn} 次行动结束`);
+      } else {
+        lines.push(`种子 ${seed}：跑到 ${MAX_TURN} 次行动还没分出胜负（可能卡住了）`);
+      }
+      paint();
+      await new Promise((r2) => window.setTimeout(r2, 0));
+    }
+    lines.push('这只是"能不能跑完"，不是"好不好玩"——电脑不会集结、不会护人，也看不懂地形。');
+    paint();
+    footEl.textContent = '自打完了。要判断难不难，还得自己打一局。';
   };
 
   /**
@@ -378,6 +497,14 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       return;
     }
 
+    if (act === 'rules') {
+      openPanel(
+        (level) => openLevelRules({ level, onApply: (next) => applyFromPanel(next, '规则') }),
+        '改扩展和 AI',
+      );
+      return;
+    }
+
     if (act === 'goals') {
       openPanel(
         (level) => openLevelGoals({ level, onApply: (next) => applyFromPanel(next, '胜负条件') }),
@@ -454,28 +581,8 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
     }
 
     if (act === 'save') {
-      const parsed = parseLevelText(ta.value);
-      if (!parsed.ok) {
-        renderIssues(parsed.errors, []);
-        footEl.textContent = '还有问题没改完，先看右边那栏。';
-        return;
-      }
-      const issues = lintLevel(parsed.level);
-      const blocking = issues.filter((i) => i.severity === 'error');
-      if (blocking.length > 0) {
-        // 错误**拦**，警告**不拦**：警告是"你可能没想到"，不是"你不能这么做"
-        renderIssues([], issues);
-        footEl.textContent = `还有 ${blocking.length} 处会出问题的地方，改完再存。`;
-        return;
-      }
-      const saved = saveUserLevel(parsed.level);
-      if (!saved.ok) {
-        renderIssues(saved.errors, []);
-        footEl.textContent = '存不进去：上面这些字段有问题。';
-        return;
-      }
-      clearDraft(key);
-      lastSaved = saved.level;
+      const saved = commit();
+      if (!saved) return;
       /*
        * 存完**立刻关窗**，并给一句提示。
        *
@@ -490,6 +597,30 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           ? `已保存「${saved.level.name}」，在选关页的「我的关卡」里`
           : `「${saved.level.name}」只在这次打开期间有效（这台设备存不住）`,
       );
+      return;
+    }
+
+    if (act === 'tryout') {
+      if (!opts.onTryPlay) {
+        footEl.textContent = '这个入口没法直接开局（只有从选关页打开时才行）。';
+        return;
+      }
+      try {
+        const ready = prepareForPlay();
+        if (!ready) return;
+        mask.remove();
+        opts.onTryPlay(ready);
+      } catch (err) {
+        // 走到这儿说明"关窗之前就出错了"。窗口这会儿已经没了，只能靠 toast 说话
+        toast(`试玩起不来：${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    if (act === 'selfplay') {
+      const ready = readyToPlay();
+      if (!ready) return;
+      void runSelfPlay(ready);
       return;
     }
   });
