@@ -376,7 +376,16 @@ export function createMatch(
    */
   const levelMap = level?.map ?? null;
   const fixedSource = levelMap ?? config.fixedMap ?? null;
-  const fixed = fixedSource ? validateFixedMap(fixedSource) : null;
+  /*
+   * 第二道校验**必须带上 allowEmpty**。
+   *
+   * 不带的话，无城关卡的地图在这里被判无效 → `fixedMap` 变 null →
+   * 静默退回生成器，棋盘尺寸也跟着变（作者会看到"我做的 10×10 图变成了 12×12"）。
+   * 这正是"关卡校验失败会静默回落成随机地图"那一类坑，只是藏在更深一层。
+   */
+  const fixed = fixedSource
+    ? validateFixedMap(fixedSource, { allowEmpty: level?.seats?.cityless ?? [] })
+    : null;
   /*
    * 城位可能"贴边"，而本局的城可能是 3×3（「城郭」扩展）。
    *

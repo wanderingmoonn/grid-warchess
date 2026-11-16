@@ -422,6 +422,80 @@ if (checked.ok) {
   check(isEliminated(sb, 'A') === false, '内置关开局不会有人被误判出局');
 }
 
+/* ── 13. 无城局的 AI（F1 第四步） ───────────────────────────────── */
+line('13. 无城局的 AI');
+
+/*
+ * 这条是拿实测换来的：一开始双方无城的关，AI 六百步只动了一次。
+ * 原因有三个，都不是"权重没调好"：
+ *   ① 没有敌城 → 距离场是空的 → 推进算不出值；
+ *   ② 迷雾里看不见敌人 → foeVal=0 → "我比对面强"恒真 → 一开局就进"全军压城"，
+ *      而压的对象不存在；
+ *   ③ 什么都看不见时没有搜索行为（给两个点它就各守一个角，永远碰不到面）。
+ * 所以断言不能只看"有没有赢"，要看**有没有真的在动**。
+ */
+const duel = sample({
+  id: 'user:probe-duel',
+  name: '决斗探针',
+  map: {
+    id: 'levelmap:probe-duel',
+    name: '决斗探针',
+    w: 10,
+    h: 10,
+    rows: Array.from({ length: 10 }, () => '..........'),
+    citiesA: [],
+    citiesB: [],
+    source: 'user',
+  },
+  seats: { count: 2, ai: ['A', 'B'], cityless: ['A', 'B'] },
+  deploy: {
+    A: [
+      { type: 'militia', x: 2, y: 3 },
+      { type: 'militia', x: 3, y: 3 },
+      { type: 'archer', x: 4, y: 3 },
+      { type: 'militia', x: 2, y: 4 },
+    ],
+    B: [
+      { type: 'militia', x: 7, y: 6 },
+      { type: 'militia', x: 6, y: 6 },
+      { type: 'archer', x: 5, y: 6 },
+      { type: 'militia', x: 7, y: 5 },
+    ],
+  },
+});
+
+const duelChecked = validateLevel(duel);
+check(duelChecked.ok, '双方无城的关能过校验', duelChecked.ok ? '' : duelChecked.errors.join('；'));
+if (duelChecked.ok) {
+  let st = createMatch({ ...DEFAULT_CONFIG, level: duelChecked.level }, 7);
+  const snap = () => st.units.map((u) => `${u.id}:${u.x},${u.y}`).join('|');
+  let last = snap();
+  let moves = 0;
+  let worstIdle = 0;
+  let idle = 0;
+  for (let i = 0; i < 900 && !st.winner; i += 1) {
+    const act = aiNextAction(st) ?? { type: 'END_TURN' as const };
+    const r = applyAction(st, act);
+    st = r.ok ? r.state : applyAction(st, { type: 'END_TURN' }).state ?? st;
+    const now = snap();
+    if (now !== last) {
+      moves += 1;
+      idle = 0;
+    } else {
+      idle += 1;
+      worstIdle = Math.max(worstIdle, idle);
+    }
+    last = now;
+  }
+  check(moves >= 10, '双方无城时 AI 会动（不是全军立正）', `有位移的行动只有 ${moves} 次`);
+  check(worstIdle <= 60, '不会长时间完全不动', `最长连续无位移 ${worstIdle} 步`);
+  check(
+    !!st.winner || st.turn >= 300,
+    '这一局能推进到有结果（或者在时间上限前一直在打）',
+    `winner=${st.winner ?? '-'} turn=${st.turn}`,
+  );
+}
+
 /* ── 汇总 ──────────────────────────────────────────────────────── */
 console.log('');
 if (failed === 0) {
