@@ -581,7 +581,7 @@ export const LEVELS: LevelDef[] = [
     events: [
       {
         id: 'flank-1',
-        when: { kind: 'turn', at: 5 },
+        when: { kind: 'turn', at: 6 },
         do: [
           { kind: 'say', text: '北边冒出斥候，小心之后更多的援兵。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'scout', x: 2, y: 0 }] },
@@ -589,7 +589,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-1',
-        when: { kind: 'turn', at: 5 },
+        when: { kind: 'turn', at: 8 },
         do: [
           { kind: 'say', text: '对岸有人在动。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }] },
@@ -653,7 +653,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-5',
-        when: { kind: 'turn', at: 24 },
+        when: { kind: 'turn', at: 22 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'knight', x: 13, y: 7 }, { type: 'knight', x: 13, y: 8 }] },
