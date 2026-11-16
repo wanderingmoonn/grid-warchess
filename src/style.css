@@ -1515,27 +1515,42 @@ html[data-terrain='on'] .tile.t-city {
     linear-gradient(var(--city-tint), var(--city-tint)),
     var(--city-tex);
   /*
-   * **一座城铺一整张图**（2026-11-16 定案）。
+   * 默认（七档）：**5 格平铺 + 按格坐标偏移**。
    *
-   * 走过三条死路，都记在这里，免得再走：
-   *   ① 平铺 + 调倍数：512 图不是无缝图，每隔 N 格必露一条接缝；
-   *      倍数越小（镜头越近）缝越容易穿过城内，就是用户说的"断层"。
-   *   ② 边缘渐变换边：缝没消掉（混完两侧仍差 40+ 个色阶）。
-   *   ③ 镜像拼接：四条边确实接上了（边缘差 1.7），但整张图变成万花筒，
-   *      一眼就是"左右对称的蝴蝶"，比缝难看十倍。
-   *
-   * 现在：`background-size` 按**城市块边长**算（2×2 或 3×3），
-   * `background-position` 按格在块内的偏移算。接缝只可能落在城块边界上——
-   * 那儿本来就有一圈城墙阴影，看不出来。
-   * 代价是同代城市图案相同，用 `--city-jitter` 做一点明暗差区分。
+   * 相邻格取图上相邻的一块，同代的城摊开是连续的。前提是那张图自己首尾相接；
+   * 接不上的那一档（信息化）会单独覆盖，见下面。
    */
+  --wx: calc(var(--x, 0) * var(--cell, 44px) * -1);
+  --wy: calc(var(--y, 0) * var(--cell, 44px) * -1);
+  background-size:
+    100% 100%,
+    calc(var(--cell, 44px) * 5) calc(var(--cell, 44px) * 5);
+  background-position: 0 0, var(--wx) var(--wy);
+  background-repeat: repeat;
+}
+
+/*
+ * **只有信息化用"一整张图铺满一座城"**（`--cs/--cx/--cy` 由 board.ts 写到格子上）。
+ *
+ * 为什么单给它开小灶：那张图主体是"一大片玻璃屋顶 + 周边场地"，5 格平铺时
+ * 它的接缝正好穿过城内部（用户截图里那条竖线），而渐变混合消不掉、
+ * 镜像拼接会变万花筒。铺满整座城之后，接缝只可能落在城块边界上——
+ * 那儿有城墙阴影，看不见。
+ *
+ * 其它七档不用：它们纹理细碎，平铺看不出周期，保留平铺还能让相邻的城连成一片。
+ */
+html[data-terrain='on'] .tile.t-city[data-city-era='info'] {
   background-size:
     100% 100%,
     calc(var(--cell, 44px) * var(--cs, 2)) calc(var(--cell, 44px) * var(--cs, 2));
   background-position:
     0 0,
     calc(var(--cx, 0) * var(--cell, 44px) * -1) calc(var(--cy, 0) * var(--cell, 44px) * -1);
-  background-repeat: repeat;
+  /*
+   * 整张图铺满后同代城市会一模一样，一排城看过去就是盖章。
+   * 这点偏移小到看不出"不同"，只够打散机械感：明暗 ±3%、色相 ±6 度。
+   */
+  filter: brightness(calc(1 + var(--cj, 0) * 0.01)) hue-rotate(calc(var(--cj, 0) * 2deg));
 }
 
 /*
