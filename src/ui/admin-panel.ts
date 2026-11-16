@@ -177,7 +177,22 @@ export function openAdminPanel(): void {
     try {
       const res = await (await db()).rpc('warchess_admin_list', { t: token });
       if (res.error) {
-        msg = res.error.message ?? '读取失败';
+        /*
+         * 口令错时**把输入框放回来**（2026-11-16）。
+         *
+         * 原来只是把 "bad admin token" 原样显示在统计条下面，人看到的是一句英文、
+         * 而且界面还停在"已登录"的样子（没有输入框可改）——只能点「清除口令」重来，
+         * 而那句话没提示这一点。口令是手打的（`1` 和 `l` 这种字最容易抄错），
+         * 所以这条路必须好走。
+         */
+        const raw = res.error.message ?? '读取失败';
+        if (/bad admin token/i.test(raw)) {
+          localStorage.removeItem(TOKEN_KEY);
+          token = '';
+          msg = '口令不对，已清空——重新输入一次';
+        } else {
+          msg = raw;
+        }
         data = null;
       } else {
         data = res.data as AdminData;
