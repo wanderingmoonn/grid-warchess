@@ -15,6 +15,7 @@
  */
 
 import { cloudDatabase } from '../net/room.ts';
+import { mapThumbSvg } from './map-thumb.ts';
 
 interface AdminRow {
   id: number;
@@ -79,10 +80,69 @@ export function openAdminPanel(): void {
   let data: AdminData | null = null;
   let busy = false;
   let msg = '';
-  /** 点「查看」时抓回来的一行（原样 JSON，截断显示） */
-  let detail = '';
+  /** 点「查看」时抓回来的一行：用来画地图缩略图 + 关键信息 */
+  let detailRow: { kind: string; row: Record<string, any> } | null = null;
+  let detailErr = '';
 
   const db = async (): Promise<Db> => (await cloudDatabase()) as unknown as Db;
+
+  /**
+   * 「查看」面板：**先给一眼能看懂的东西**（地图缩略图 + 关键数字），
+   * 原始 JSON 折在下面。
+   *
+   * 只丢一坨 JSON 是偷懒：审核要看的是"这张图能不能玩、是不是刷屏的垃圾"，
+   * 而 `{"w":24,...}` 这种字符串谁也读不出形状。缩略图复用的是选关卡片
+   * 同一个函数（`mapThumbSvg`），所以这里看到的和玩家选关时看到的完全一致。
+   */
+  const detailHtml = (): string => {
+    if (detailErr) return `<pre class="admin-detail">${esc(detailErr)}</pre>`;
+    if (!detailRow) return '';
+    const { kind, row } = detailRow;
+    const lv = kind === 'level' ? (row.data as Record<string, any>) : null;
+    const map =
+      kind === 'level'
+        ? (lv?.map as Record<string, any> | undefined)
+        : kind === 'map'
+          ? {
+              name: row.name,
+              w: row.w,
+              h: row.h,
+              rows: row.rows,
+              citiesA: row.cities_a,
+              citiesB: row.cities_b,
+              source: 'user',
+            }
+          : null;
+    const thumb = map
+      ? `<div class="admin-thumb">${mapThumbSvg(map as never, 2, lv?.seats?.cities as never)}</div>`
+      : '';
+    const facts: string[] = [];
+    if (kind === 'level' && lv) {
+      facts.push(`${lv.map?.w ?? '?'}×${lv.map?.h ?? '?'}`);
+      facts.push(`${lv.seats?.count ?? 2} 家`);
+      const ai = Array.isArray(lv.seats?.ai) ? lv.seats.ai.join('/') : '';
+      facts.push(ai ? `电脑：${ai}` : '全真人');
+      facts.push(`${Array.isArray(lv.events) ? lv.events.length : 0} 条事件`);
+      if (Array.isArray(lv.goals) && lv.goals.length) facts.push(`${lv.goals.length} 个目标`);
+    } else if (kind === 'map') {
+      facts.push(`${row.w}×${row.h}`);
+      facts.push(`${Array.isArray(row.cities_a) ? row.cities_a.length : 0}+${
+        Array.isArray(row.cities_b) ? row.cities_b.length : 0
+      } 城`);
+    } else {
+      facts.push(`回合 ${row.turns ?? '?'}`);
+      facts.push(`种子 ${row.seed ?? '?'}`);
+      if (row.build) facts.push(String(row.build));
+    }
+    const raw = JSON.stringify(row, null, 2);
+    return `
+      ${thumb}
+      <div class="admin-facts">${facts.map((t) => `<span class="admin-chip">${esc(t)}</span>`).join('')}</div>
+      <details class="admin-raw">
+        <summary>原始 JSON（${Math.round(raw.length / 1024)}KB）</summary>
+        <pre class="admin-detail">${esc(raw.slice(0, 6000))}</pre>
+      </details>`;
+  };
 
   const paint = (): void => {
     const stats = data?.stats;
@@ -163,11 +223,7 @@ export function openAdminPanel(): void {
                       .join('')
             }
           </div>
-          ${
-            detail
-              ? `<pre class="admin-detail">${esc(detail)}</pre>`
-              : ''
-          }
+          ${detailHtml()}
           ${
             (data?.log ?? []).length > 0
               ? `<div class="admin-log"><b>最近操作</b>${(data?.log ?? [])
@@ -277,18 +333,21 @@ export function openAdminPanel(): void {
       msg = '';
       paint();
     } else if (a === 'view') {
+      const kind = el.dataset.kind ?? 'level';
       void (async () => {
+        detailErr = '';
+        detailRow = null;
         try {
           const res = await (await db()).rpc('warchess_admin_one', {
             t: token,
-            kind: el.dataset.kind ?? 'level',
+            kind,
             rid: Number(el.dataset.id),
           });
-          detail = res.error
-            ? `读取失败：${res.error.message ?? ''}`
-            : JSON.stringify(res.data, null, 2).slice(0, 4000);
+          if (res.error) detailErr = `读取失败：${res.error.message ?? ''}`;
+          else if (res.data) detailRow = { kind, row: res.data as Record<string, any> };
+          else detailErr = '这一条已经不在了（刚被删掉？）';
         } catch (err) {
-          detail = err instanceof Error ? err.message : '读取失败';
+          detailErr = err instanceof Error ? err.message : '读取失败';
         }
         paint();
       })();
