@@ -103,10 +103,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>关卡事件</h2>
-        <p>
-          一条事件就是一句话：<b>当</b>什么发生，<b>就</b>做什么。动作按从上到下的顺序执行。
-          区域和落点在右边地图上点，不用填坐标。
-        </p>
+        <p>一条事件就是「当…就…」，动作按顺序执行。区域和落点在右边地图上点。</p>
       </div>
       <div class="modal-body">
         <div class="level-events-wrap">
@@ -127,10 +124,10 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
             <div class="level-canvas-foot"><span data-coord>第 -, - 格</span><span data-pick-state></span></div>
           </div>
         </div>
-        <div class="field-hint" data-foot>改完点「用这套事件」，编辑器里的数据会跟着变（还要再点一次「保存」）。</div>
+        <div class="field-hint" data-foot>改完点「保存」。</div>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-primary btn-sm" data-act="apply">用这套事件</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;
@@ -285,7 +282,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         <select class="level-mini-select" data-terr-to="${i}:${j}">${LEVEL_TERRAINS.map(
           (t) => `<option value="${t}" ${act.to === t ? 'selected' : ''}>${esc(CONFIG.terrainName[t] ?? t)}</option>`,
         ).join('')}</select>
-        <span class="field-hint">（城格不动；桥面也不动——水位变浅只改桥下的河床，改成<b>深水</b>才会把桥冲垮）</span>
+        <span class="field-hint">（城和桥改不了；改成<b>深水</b>会把桥冲垮）</span>
       </span>`;
   }
 

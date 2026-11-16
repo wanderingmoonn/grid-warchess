@@ -62,10 +62,7 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>胜负条件</h2>
-        <p>
-          这些是<b>额外的胜负捷径</b>，按从上到下的顺序判定，<b>先成立的赢</b>。
-          城丢光、兵打光照普通规则判输——不用另写失败条件。
-        </p>
+        <p>额外的胜负捷径，按顺序判定，先成立的赢。</p>
       </div>
       <div class="modal-body">
         <div class="level-goals-wrap">
@@ -87,10 +84,10 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
             <div class="level-canvas-foot"><span data-coord>第 -, - 格</span><span data-pick-state></span></div>
           </div>
         </div>
-        <div class="field-hint" data-foot>改完点「用这套条件」，编辑器里的数据会跟着变（还要再点一次「保存」）。</div>
+        <div class="field-hint" data-foot>改完点「保存」。</div>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-primary btn-sm" data-act="apply">用这套条件</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;

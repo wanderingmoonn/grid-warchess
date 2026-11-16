@@ -56,10 +56,7 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>席位</h2>
-        <p>
-          几家、谁交给电脑、谁中途才登场、每家的城开局是第几级——都在这一页。
-          第三四家的城位要先去「画地图」里摆，这里只显示有没有。
-        </p>
+        <p>几家、谁交给电脑、谁中途登场、每家的城是第几级。</p>
       </div>
       <div class="modal-body">
         <label class="editor-field level-seat-start">
@@ -72,7 +69,7 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
         <div class="field-hint" data-foot></div>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-primary btn-sm" data-act="apply">用这套席位</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;

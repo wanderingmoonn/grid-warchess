@@ -93,10 +93,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>画地图</h2>
-        <p>
-          左边挑笔刷，右边直接在格子上涂。城是<b>整块占位</b>的，用「红方城」这类笔刷点一下左上角就摆一座，
-          再点一次同一座城就撤掉。
-        </p>
+        <p>左边挑笔刷，右边涂格子。城是整块占位，点一下摆一座，再点撤掉。</p>
       </div>
       <div class="modal-body">
         <div class="level-canvas-wrap">
@@ -124,12 +121,12 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
           </div>
         </div>
         <div class="level-issues" data-issues></div>
-        <div class="field-hint" data-foot>画完点「用这张图」，编辑器里那份数据会跟着变（还要再点一次「保存」才算存下来）。</div>
+        <div class="field-hint" data-foot>改完点「保存」。</div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-sm" data-act="undo">撤销</button>
         <button class="btn btn-sm" data-act="redo">重做</button>
-        <button class="btn btn-primary btn-sm" data-act="apply">用这张图</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;
@@ -470,7 +467,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
         issuesEl.innerHTML = checked.errors
           .map((e) => `<div class="level-issue is-error"><b>这张图还不能用</b>${esc(e)}</div>`)
           .join('');
-        footEl.textContent = '先改完上面这些再点「用这张图」。';
+        footEl.textContent = '先改完上面这些再点「保存」。';
         return;
       }
       opts.onApply(buildLevel(checked.map));
