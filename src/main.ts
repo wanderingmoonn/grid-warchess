@@ -3451,6 +3451,14 @@ function dispatch(action: Action): boolean {
     if (room) {
       // 联机里"结束回合"就等于提交：把整局推上去，然后等对面
       void pushTurn(room, prevTurn);
+      /*
+       * **交棒之后如果是电脑，把它点起来**（2026-11-16）。
+       *
+       * 这一支在房间里 submit 完就 return 了，下面那串"轮到谁"的分支根本走不到。
+       * 普通联机没问题（对面是人，等轮询把他的棋拉下来就行），但关卡/单人局的
+       * 房间里对面是 AI：没人点它，棋盘就停在"轮到蓝方"一动不动。
+       */
+      if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
       return true;
     }
     if (!state.winner) {
