@@ -6573,6 +6573,15 @@ export function produceAt(
   if (!eraWindowOk(s, target, era)) {
     return { ok: false, reason: `${target.name} 需要「${eraDef(target.era).name}」时代` };
   }
+  /*
+   * 关卡禁用：单独给一句话。
+   *
+   * 不分开的话，玩家看到的是 `canUseType` 那句"不在本局选用的名单里"——
+   * 那是**选卡模式**的措辞，会让人以为"我还没抽到它"，而不是"这一关不许造"。
+   */
+  if (s.config.level?.banUnits?.includes(target.id)) {
+    return { ok: false, reason: `这一关禁用「${target.name}」` };
+  }
   if (!canUseType(s, owner, target.id)) {
     return { ok: false, reason: `${target.name} 不在本局选用的名单里` };
   }
