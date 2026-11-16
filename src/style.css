@@ -10247,3 +10247,11 @@ a.btn {
   color: #7c766a;
   font-size: 12px;
 }
+
+/* 审核台：查看面板里的「试玩」一行 */
+.admin-play {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
