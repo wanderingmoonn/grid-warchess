@@ -28,7 +28,7 @@
 
 import { validateFixedMap, type FixedMap, type MapPoint } from './fixed-maps.ts';
 import { expansionById } from './expansions.ts';
-import { ERAS } from './config.ts';
+import { ERAS, UNIT_TYPES } from './config.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
 import type { MatchConfig, PlayerId, Terrain, UnitTypeDef } from './types.ts';
@@ -234,7 +234,13 @@ export type LevelGoal =
   /** 守到第 `untilTurn` 次行动时（守方还活着）算赢 */
   | { kind: 'survive'; seat: PlayerId; untilTurn: number }
   /** 这一席的任意一个兵（或指定兵种）走进区域算赢 */
-  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string }
+  /**
+   * 这一席的任意一个兵（或指定兵种）走进区域算赢。
+   *
+   * `label` 是显示给人看的名字（"信使"）。不写就用 `unitType` 去全局兵种表查；
+   * 关卡独有兵种查不到，那就只能显示 id —— 顶栏会写成"把「messenger」送到…"。
+   */
+  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string; label?: string }
   /**
    * 斩首：`loser` 场上再没有该兵种的兵时，`winner` 赢。
    *
@@ -250,7 +256,11 @@ export function goalText(goal: LevelGoal): string {
   if (goal.kind === 'escort') {
     const { x0, y0, x1, y1 } = goal.zone;
     const at = x0 === x1 && y0 === y1 ? `(${x0}, ${y0})` : `(${x0}, ${y0})–(${x1}, ${y1})`;
-    const who = goal.unitType ? `「${goal.unitType}」` : '一个兵';
+    const who = goal.label
+      ? `「${goal.label}」`
+      : goal.unitType
+        ? `「${UNIT_TYPES[goal.unitType]?.name ?? goal.unitType}」`
+        : '一个兵';
     return `把${who}送到 ${at}`;
   }
   const what = goal.label ?? (goal.unitType ? `「${goal.unitType}」` : '主力');
@@ -986,9 +996,9 @@ export const LEVELS: LevelDef[] = [
        */
       cityEra: { B: 1 },
     },
-    setup: { startEra: 2, firstSide: 'A' },
+    setup: { startEra: 3, firstSide: 'A' },
     /*
-     * 开局兵力：一支铁器时代的护卫队 + 一个信使。
+     * 开局兵力：一支**火器时代**的护卫队 + 一个信使。
      *
      * 玩家兵种领先（时代 2 铁器，对面青铜），但**没有城**——领先只体现在这
      * 几个兵身上，打完就没了。信使是护送目标，弱、跑不快，得有人护着。
@@ -997,10 +1007,18 @@ export const LEVELS: LevelDef[] = [
       A: [
         // 信使单独在前，东边留出通道；护卫队散在两侧和后头，别把路堵死
         { type: 'messenger', x: 2, y: 3 },
-        { type: 'knight', x: 1, y: 2 },
-        { type: 'knight', x: 1, y: 5 },
-        { type: 'longbow', x: 0, y: 4 },
-        { type: 'crossbow', x: 0, y: 2 },
+        /*
+         * 护卫队是**火器（第 3 代）**，敌城压在青铜：这是这一关的"科技优势"。
+         *
+         * 以前给的是铁器（骑士/长弓/弩兵），只领先一代——实机里 AI 开局就把城
+         * 升上去，优势当场没了。两把火枪（射程 4、破甲）配戟兵顶线、骠骑兵收尾，
+         * 对青铜的民兵/弓手是压着打；但只要 AI 把钱花在升级上，这个差距还是会被抹平
+         * （见 `cityEra` 那段注释）。
+         */
+        { type: 'musketeer', x: 1, y: 2 },
+        { type: 'musketeer', x: 1, y: 5 },
+        { type: 'halberdier', x: 0, y: 4 },
+        { type: 'hussar', x: 0, y: 2 },
       ],
       /*
        * 城防 = 五座箭塔围住城（射程 3，覆盖两条绕城通道）。
@@ -1051,13 +1069,14 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' },
           /*
-           * 开局把**终点那一片**点亮，亮 10 次行动（约 5 轮）。
+           * 开局把**终点区域**点亮，亮 10 次行动（约 5 轮）。
            *
-           * 这张关默认开雾：不点亮的话，玩家只知道"往东"，看不到终点在哪一格、
-           * 也不知道城前那排箭塔压着什么位置。但它**不是永久信息**——
-           * 亮够看清路线就熄，后面仍然得靠自己的视野。
+           * 区域必须和 `goals[].zone` **一模一样**（15..17 × 2..5）。以前这里写成
+           * 14..17 × 1..6，比真正的终点大一圈——玩家看着"信使已经在亮着的区域里了"，
+           * 其实还差一列（x=14 不算），于是"到了却没赢"。亮区就是判定区，
+           * 别让它俩有任何差别。
            */
-          { kind: 'reveal', zone: { x0: 14, y0: 1, x1: 17, y1: 6 }, turns: 10 },
+          { kind: 'reveal', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, turns: 10 },
         ],
       },
       /*
@@ -1108,7 +1127,15 @@ export const LEVELS: LevelDef[] = [
      * escort 的 unitType 指向信使，所以只有它到达才算赢，护卫队到没用。
      * 失败不用另写：cityless 的"兵打光即输"自动兜住。
      */
-    goals: [{ kind: 'escort', seat: 'A', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, unitType: 'messenger' }],
+    goals: [
+      {
+        kind: 'escort',
+        seat: 'A',
+        zone: { x0: 15, y0: 2, x1: 17, y1: 5 },
+        unitType: 'messenger',
+        label: '信使',
+      },
+    ],
   },
 
   /* ── 玩家关 5：邪龙（两人合作）────────────────────────────── */
@@ -2249,7 +2276,14 @@ function normalizeGoals(
       const zone = normZone(g.zone, '胜利条件「护送」的终点区域', map, errors);
       if (!zone) continue;
       const unitType = typeof g.unitType === 'string' && g.unitType.trim() ? g.unitType.trim() : undefined;
-      out.push({ kind: 'escort', seat, zone, ...(unitType ? { unitType } : {}) });
+      const label = typeof g.label === 'string' && g.label.trim() ? g.label.trim().slice(0, 12) : undefined;
+      out.push({
+        kind: 'escort',
+        seat,
+        zone,
+        ...(unitType ? { unitType } : {}),
+        ...(label ? { label } : {}),
+      });
       continue;
     }
 
