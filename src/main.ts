@@ -969,6 +969,8 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+/** 诊断用：进房以来成功提交过几次（?debug=1 里看） */
+let pushOkCount = 0;
 /**
  * 观战人数的心跳与轮询。
  *
@@ -1620,7 +1622,7 @@ function renderDebugHud(): void {
     `aiControl=${JSON.stringify(state.aiControl)} isAiSide(${state.current})=${isAiSide(state, state.current)}`,
     `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
     `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
-    `level=${state.config.level?.id ?? '-'} dirty=${dirty}`,
+    `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
   ].join('\n');
 }
 
@@ -7359,6 +7361,7 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
       return;
     }
     dirty = false;
+    pushOkCount += 1;
     toast(okText ?? '这一回合已提交，等对方行动');
     render();
   } catch (err) {
@@ -7368,7 +7371,15 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
 
 function startRoomPolling(): void {
   window.clearInterval(roomTimer);
-  roomTimer = window.setInterval(() => void pollRoom(), 15000);
+  /*
+   * 观战端拉得勤一些（2026-11-16）。
+   *
+   * 15 秒是给"两个人在下"定的：对面走完会提交，我这边等一拍无所谓。
+   * 但观战是**看别人的棋**——房主那边电脑刚走完一回合，观战端最多要等 15 秒
+   * 才看见，感觉上就是"永远慢一步"。观战只读、不写云端，拉勤一点没有副作用。
+   */
+  const beat = watching() ? 4000 : 15000;
+  roomTimer = window.setInterval(() => void pollRoom(), beat);
   startPresence();
 }
 
