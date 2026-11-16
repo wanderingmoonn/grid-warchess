@@ -96,6 +96,8 @@ import {
   adjacentRequirementText,
   hidesInFog,
   hiddenFromAllFoes,
+  sameTeam,
+  teamNameOf,
 } from '../core/rules.ts';
 import { upgradeTargetOf } from '../core/era-routes.ts';
 import { seatsOf } from '../core/types.ts';
@@ -366,8 +368,14 @@ function panelHtml(input: PanelInput): string {
   const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
 
 
+  /*
+   * 终局那一格写"谁赢了"，不再只写"对局结束"。
+   *
+   * 同盟局必须写**队名**（`teamNameOf`）：`winner` 只是队里第一个还活着的席位，
+   * 直接用它会让"两个人合作打赢了"显示成"只有红方赢了"，蓝方看着像输了。
+   */
   const turnBadge = s.winner
-    ? `<span class="turn-badge">对局结束</span>`
+    ? `<span class="turn-badge">${escapeHtml(teamNameOf(s, s.winner))} 胜利</span>`
     : spectator
       ? `<span class="turn-badge watching">${input.replay ? '复盘 · 全图视角' : '观战中 · 全图视角'}</span>`
       : quit
@@ -429,6 +437,14 @@ function panelHtml(input: PanelInput): string {
        * 于是这一行一直把红方标成"（你）"——复盘别人的棋时，第一眼就以为自己是其中一方。
        */
       const mine = !spectator && p === me;
+      /*
+       * 同队的那几家要标出来。
+       *
+       * 合作关里两个真人各看各的屏（视野不共享），但席位栏如果不写"盟友"，
+       * 玩家就得靠记位数才知道"蓝方是自己人"——尤其 3 家局里绿方一出来，
+       * 很容易把队友当成第三个敌人。
+       */
+      const mate = !spectator && p !== me && sameTeam(s, p, me);
       const cities = citiesOf(s, p).length;
       /*
        * 出局有两张脸：主动认输，和最后一座城被人接管。
@@ -438,7 +454,7 @@ function panelHtml(input: PanelInput): string {
       const on = p === s.current;
       return `<div class="seat-row${on ? ' active' : ''}${quit ? ' quit' : ''}">
         <span class="vs-dot ${p.toLowerCase()}"></span>
-        <b>${escapeHtml(s.players[p].name)}${mine ? '（你）' : ''}</b>
+        <b>${escapeHtml(s.players[p].name)}${mine ? '（你）' : mate ? '（盟友）' : ''}</b>
         <span class="seat-stats">${resLine(p)} · 城 ${cities}</span>
       </div>`;
     })

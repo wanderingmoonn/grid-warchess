@@ -408,8 +408,21 @@ export function createMatch(
    * "有一家没城、第一回合就出局"的局面（那看起来像 bug，其实是配置错）。
    */
   const extraCities = level?.seats?.cities ?? {};
+  /*
+   * "没有城"的席位不算缺城。
+   *
+   * 以前这里一刀切要求第三四席都有城，于是三家局里只要有一家是 cityless
+   * （合作关的邪龙军团），条件就不成立 → 关卡地图被丢掉、**静默退回随机图**
+   * （玩家看到 28×18 变成了 12×12，而日志里一个字都没有）。
+   */
+  const citylessSeats = level?.seats?.cityless ?? [];
   const multiOk =
-    playerCount === 2 || seatList.slice(2).every((p) => (extraCities[p as 'C' | 'D']?.length ?? 0) > 0);
+    playerCount === 2 ||
+    seatList
+      .slice(2)
+      .every(
+        (p) => citylessSeats.includes(p) || (extraCities[p as 'C' | 'D']?.length ?? 0) > 0,
+      );
   /* 第三四席的城也要夹一次：理由和 A/B 完全相同（开城郭之后 3×3 会伸出棋盘） */
   const clampExtraCities = (): Partial<Record<'C' | 'D', Array<{ x: number; y: number }>>> => {
     const out: Partial<Record<'C' | 'D', Array<{ x: number; y: number }>>> = {};

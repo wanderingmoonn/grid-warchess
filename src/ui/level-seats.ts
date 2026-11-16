@@ -43,6 +43,19 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
   const cityless = new Set<PlayerId>(level.seats?.cityless ?? []);
   /** 只记"和开局时代不一样"的那些 */
   const cityEra: Partial<Record<PlayerId, number>> = { ...(level.seats?.cityEra ?? {}) };
+  /**
+   * 同盟：勾上之后每家行尾多一个「第 N 队」，队号相同的互为友军。
+   *
+   * 为什么用"队号"而不是"和谁一队"的下拉：同盟是**组关系**，不是单家属性。
+   * 用队号，作者一眼就能看出"A、B 都是第 1 队"，也能表达 2v2（1、1、2、2）；
+   * 用"和谁一队"则要传递闭包，A 选 B、B 选 C 到底是几人一队，谁都说不清。
+   */
+  let allied = (level.seats?.teams?.length ?? 0) > 0;
+  /** 席位 → 队号。只有 `allied` 为真时才有意义 */
+  const teamNo: Partial<Record<PlayerId, number>> = {};
+  for (const [gi, group] of (level.seats?.teams ?? []).entries()) {
+    for (const seat of group) teamNo[seat] = gi + 1;
+  }
   /** C / D 的城位（A / B 在地图里） */
   const extraCities: Partial<Record<'C' | 'D', MapPoint[]>> = {
     ...(level.seats?.cities?.C ? { C: level.seats.cities.C.map((p) => ({ ...p })) } : {}),
@@ -56,10 +69,7 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>席位</h2>
-        <p>
-          几家、谁交给电脑、谁中途才登场、每家的城开局是第几级——都在这一页。
-          第三四家的城位要先去「画地图」里摆，这里只显示有没有。
-        </p>
+        <p>几家、谁交给电脑、谁中途登场、每家的城是第几级。</p>
       </div>
       <div class="modal-body">
         <label class="editor-field level-seat-start">
@@ -68,11 +78,15 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
         </label>
         <div class="field-hint" data-start-hint></div>
         <div class="level-seat-count" data-count></div>
+        <div class="level-seat-allies">
+          <label class="editor-check"><input type="checkbox" data-allies> 同盟（同一队的互为友军）</label>
+          <span class="field-hint" data-allies-hint></span>
+        </div>
         <div class="level-seat-list" data-rows></div>
         <div class="field-hint" data-foot></div>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-primary btn-sm" data-act="apply">用这套席位</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;
@@ -83,6 +97,8 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
   const startSel = q<HTMLSelectElement>('[data-start-era]');
   const startHintEl = q<HTMLDivElement>('[data-start-hint]');
   const footEl = q<HTMLDivElement>('[data-foot]');
+  const alliesBox = q<HTMLInputElement>('[data-allies]');
+  const alliesHintEl = q<HTMLSpanElement>('[data-allies-hint]');
 
   startSel.innerHTML =
     `<option value="">跟面板走（玩家自己选）</option>` +
@@ -90,6 +106,12 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
   startSel.value = startEra === undefined ? '' : String(startEra);
 
   const seated = (): PlayerId[] => SEAT_ORDER.slice(0, count);
+
+  /**
+   * 这一席的队号。没设过的按"自己一队"算（第 index+1 队）——
+   * 这样打开同盟开关的瞬间不会出现"没选队"的空档，作者看到的就是明确的第 N 队。
+   */
+  const teamNoOf = (seat: PlayerId): number => teamNo[seat] ?? seated().indexOf(seat) + 1;
 
   /** 现有全部城位（含 A/B），用来判断新加的城会不会压上去 */
   const allCityPoints = (): MapPoint[] => [
@@ -150,14 +172,28 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
         if (seat === 'C' || seat === 'D') delete extraCities[seat];
         hidden.delete(seat);
         delete cityEra[seat];
+        delete teamNo[seat];
       }
     }
     count = n;
     for (const seat of [...ai]) if (!seated().includes(seat)) ai.delete(seat);
+    // 两家局谈不上一同盟（一队就没有敌人），减到 2 家时把开关和队号一起关掉
+    if (count < 3 && allied) {
+      allied = false;
+      for (const seat of Object.keys(teamNo) as PlayerId[]) delete teamNo[seat];
+    }
     render();
   };
 
   const render = (): void => {
+    alliesBox.checked = allied;
+    alliesBox.disabled = count < 3;
+    alliesHintEl.textContent =
+      count < 3
+        ? '（至少 3 家才谈得上同盟：两家一队就没有敌人了）'
+        : allied
+          ? '队号相同的互为友军：不能互打、可以穿过对方的兵、按队判胜负。视野仍然各看各的。'
+          : '不勾就是各自为战。勾上之后每家行尾会出现「第 N 队」。';
     countEl.innerHTML = [2, 3, 4]
       .map(
         (n) => `<button type="button" class="chip ${count === n ? 'active' : ''}" data-count-btn="${n}">${n} 家</button>`,
@@ -193,6 +229,18 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
                 : `<label class="level-seat-era">城的时代 ${eraSel}</label>
                    <span class="level-seat-city ${hasCity ? '' : 'is-missing'}">${hasCity ? '有城' : '没有城'}</span>`
             }
+            ${
+              allied
+                ? `<label class="level-seat-era">队伍 <select data-team-for="${seat}">${seated()
+                    .map(
+                      (_, k) =>
+                        `<option value="${k + 1}" ${teamNoOf(seat) === k + 1 ? 'selected' : ''}>第 ${
+                          k + 1
+                        } 队</option>`,
+                    )
+                    .join('')}</select></label>`
+                : ''
+            }
           </div>`;
       })
       .join('');
@@ -216,6 +264,37 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
 
   mask.addEventListener('change', (ev) => {
     const el = ev.target as HTMLElement;
+    if (el === alliesBox) {
+      if (!alliesBox.checked) {
+        allied = false;
+        for (const seat of Object.keys(teamNo) as PlayerId[]) delete teamNo[seat];
+        render();
+        return;
+      }
+      if (count < 3) {
+        // 按钮已经 disabled，这里是兜底（键盘/脚本触发）
+        render();
+        return;
+      }
+      /*
+       * 打开同盟：默认把前两家并成一队，其余各自一队。
+       * 合作关最常见的形状就是"两个玩家打第三家"，默认值直接是它，
+       * 省得作者每次都要改两遍下拉。
+       */
+      allied = true;
+      for (const seat of Object.keys(teamNo) as PlayerId[]) delete teamNo[seat];
+      const seats = seated();
+      teamNo[seats[0]!] = 1;
+      teamNo[seats[1]!] = 1;
+      for (let k = 2; k < seats.length; k += 1) teamNo[seats[k]!] = k === 2 ? 2 : k;
+      render();
+      return;
+    }
+    const teamSeat = el.getAttribute('data-team-for') as PlayerId | null;
+    if (teamSeat) {
+      teamNo[teamSeat] = Number((el as HTMLSelectElement).value) || 1;
+      return;
+    }
     if (el === startSel) {
       startEra = startSel.value === '' ? undefined : Number(startSel.value);
       render();
@@ -285,9 +364,32 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
         };
       }
 
+      /*
+       * 同盟：队号分组。校验三条，都是"写错就造出坏局面"的：
+       * 队数不足 2（没有敌人）、某队只剩已出局的人（这里不涉及）、
+       * 或者把 2 家勾成一队。
+       */
+      let teams: PlayerId[][] | undefined;
+      if (allied) {
+        const groups = new Map<number, PlayerId[]>();
+        for (const seat of seated()) {
+          const n = teamNoOf(seat);
+          const list = groups.get(n) ?? [];
+          list.push(seat);
+          groups.set(n, list);
+        }
+        const list = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([, g]) => g);
+        if (list.length < 2) {
+          footEl.textContent = '所有席位都被分进了同一个队——那样就没有敌人了。至少留一家在外面。';
+          return;
+        }
+        teams = list;
+      }
+
       const seats: LevelSeats = {
         count,
         ...(cityless.size > 0 ? { cityless: [...cityless] } : {}),
+        ...(teams ? { teams } : {}),
         // 显式写出来（含空数组）：这是"这一关的硬设定"，不留给面板去猜
         ai: [...ai],
         ...(hidden.size > 0 ? { hidden: [...hidden] } : {}),

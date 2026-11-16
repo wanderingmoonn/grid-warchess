@@ -4555,6 +4555,12 @@ a.btn {
   background: var(--panel-2);
 }
 
+/* 编辑器底栏：辅助动作（另存为副本 / 重置 / 试玩 / 跑局）居左，保存和关闭居右。
+   中间的空格把两组推开，让「保存」永远贴着「关闭」。 */
+.modal-foot-gap {
+  flex: 1 1 auto;
+}
+
 .field-label {
   display: flex;
   align-items: baseline;
@@ -4650,21 +4656,29 @@ a.btn {
   aspect-ratio: 1 / 1;
   border-radius: 6px;
   overflow: hidden;
-  background: var(--plain);
-  border: 1px solid var(--line);
-}
-
-/* 随机地形没有缩略图，给一块"问号"质感的占位 */
-.map-card-thumb.is-random {
-  display: grid;
-  place-items: center;
-  font-size: var(--fs-sm);
-  color: var(--text-3);
+  /*
+   * 底色用**斜条纹**，不用平原色。
+   *
+   * 缩略图里认不出/没配色的格子是透明的（`mapThumbSvg` 跳过它们）。
+   * 以前底色写的是 `--plain`（和平原一模一样），于是"空/无"和"平原"
+   * 在预览里完全分不出来——玩家会以为那片是草地。条纹是"这里没有内容"
+   * 的通用表示，和「自由对局」的占位框同一套语言。
+   */
+  background-color: var(--panel-2);
   background-image: repeating-linear-gradient(
     45deg,
     var(--panel-2) 0 6px,
     var(--panel) 6px 12px
   );
+  border: 1px solid var(--line);
+}
+
+/* 随机地形没有缩略图，给一块"问号"质感的占位（底色条纹沿基础类，这里只管文字居中） */
+.map-card-thumb.is-random {
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
 }
 
 .map-thumb {
@@ -5522,6 +5536,42 @@ a.btn {
   font-size: 12px;
 }
 
+/*
+ * 兵种面板底部的「禁用兵种」区。
+ *
+ * 它和上面的"关卡独有兵种"是两个相反的清单（一个是只在这一关存在的兵，
+ * 一个是这一关不许造的兵），所以用一条上边线隔开，别让人以为是同一张表。
+ */
+.level-ban {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.level-ban-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.level-ban-item {
+  margin-bottom: 0;
+  padding: 2px 0;
+}
+
+.level-ban-item small {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
 .level-unit-nums {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 8px 0;
@@ -5823,6 +5873,27 @@ a.btn {
   display: flex;
   gap: 6px;
   margin: 10px 0 8px;
+}
+
+/*
+ * 同盟开关那一行。
+ *
+ * 它和上面的"几家"是两个层级：几家是**这一局有几个人**，同盟是**谁跟谁一伙**。
+ * 靠一条上边线隔开，别让人误以为它是第四个"几家"按钮。
+ */
+.level-seat-allies {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.level-seat-allies .editor-check {
+  margin-bottom: 0;
+  white-space: nowrap;
 }
 
 .level-seat-list {
@@ -10181,10 +10252,16 @@ a.btn {
 
 .admin-log b { color: #554f45; font-weight: 600; }
 
+/*
+ * 审核台的这两块底色是**写死的浅色**（审核台不跟主题走，它就是一张值班表）。
+ * 所以文字也必须钉成 `--on-light`——不写的话会继承 `--text`，
+ * modern 主题下那是近白色，浅底白字直接看不见（对比度 1.05:1）。
+ */
 .admin-log-item {
   padding: 1px 7px;
   border-radius: 999px;
   background: #f1eee6;
+  color: var(--on-light);
 }
 
 /* 审核台：查看面板里的地图缩略图与折叠 JSON */
@@ -10192,6 +10269,7 @@ a.btn {
   padding: 6px;
   border-radius: 8px;
   background: #efece5;
+  color: var(--on-light);
 }
 
 .admin-thumb svg {

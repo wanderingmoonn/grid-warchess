@@ -693,6 +693,14 @@ export function createDraft(state: GameState): DraftState {
  * 所以名单过滤宁可多绕一层函数，也不在界面和规则里各写一遍。
  */
 export function canUseType(state: GameState, side: PlayerId, typeId: string): boolean {
+  /*
+   * 关卡禁用兵种：**放在最前面**，不受"跳过选卡"影响。
+   *
+   * 这是所有"能不能造"的共同出口（产线面板、军营、AI 采购、建造单位盖房子
+   * 全都问它），所以禁用挂在这里，规则层和界面就自动同一个口径——
+   * 不会出现"面板列得出来、点下去被拒"。
+   */
+  if (state.config.level?.banUnits?.includes(typeId)) return false;
   const draft = state.draft;
   if (!draft) return true;
   // 跳过选卡＝这一局按原版打，名单限制整个不生效

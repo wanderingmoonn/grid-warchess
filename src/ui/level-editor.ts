@@ -142,15 +142,12 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       <div class="modal-head">
         <h2>关卡编辑器</h2>
         <p>
-          这一版改的是<b>数据</b>：地图、兵力、事件、胜负全在一份 JSON 里。
-          改完点「保存」，它就会出现在选关页的「我的关卡」里。
+          地图、兵力、事件、胜负都在这里改。点「保存」后出现在选关页「我的关卡」。
           ${restored ? '<br><b>已恢复上次没写完的草稿。</b>' : ''}
         </p>
       </div>
       <div class="modal-body">
         <div class="editor-toolbar">
-          <button class="btn btn-primary btn-sm" data-act="save">保存到我的关卡</button>
-          <button class="btn btn-sm" data-act="clone">${readOnly ? '复制成我的关卡' : '另存为副本'}</button>
           <button class="btn btn-sm" data-act="canvas">画地图</button>
           <button class="btn btn-sm" data-act="army">摆兵</button>
           <button class="btn btn-sm" data-act="seats">席位</button>
@@ -158,10 +155,6 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           <button class="btn btn-sm" data-act="goals">胜负</button>
           <button class="btn btn-sm" data-act="units">兵种</button>
           <button class="btn btn-sm" data-act="rules">扩展与 AI</button>
-          <button class="btn btn-sm" data-act="tryout">试玩</button>
-          <button class="btn btn-sm" data-act="selfplay">自打 3 局</button>
-          <button class="btn btn-sm" data-act="copy">复制 JSON</button>
-          <button class="btn btn-sm" data-act="reset">恢复成${readOnly ? '原版' : '初始模板'}</button>
         </div>
         <div class="editor-grid level-editor-head">
           <label class="editor-field"><span>名称</span><input data-name maxlength="24"></label>
@@ -183,6 +176,13 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
         <div class="field-hint" data-foot></div>
       </div>
       <div class="modal-foot">
+        <button class="btn btn-sm" data-act="clone">${readOnly ? '复制成我的关卡' : '另存为副本'}</button>
+        <button class="btn btn-sm" data-act="reset">重置</button>
+        <button class="btn btn-sm" data-act="tryout">试玩</button>
+        <button class="btn btn-sm" data-act="selfplay">跑 3 局</button>
+        <button class="btn btn-sm" data-act="copy">复制 JSON</button>
+        <span class="modal-foot-gap"></span>
+        <button class="btn btn-primary" data-act="save">保存</button>
         <button class="btn" data-act="close">关闭</button>
       </div>
     </div>`;

@@ -10,6 +10,7 @@
  */
 
 import { ERAS, isPseudoUnit } from '../core/config.ts';
+import { expansionById, unitSourceIdOf } from '../core/expansions.ts';
 import { unitStatLine } from '../core/info.ts';
 import { allAvailableUnits } from './unit-editor.ts';
 import type { LevelDef } from '../core/level.ts';
@@ -51,6 +52,10 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
   let draft: UnitTypeDef | null = null;
   /** 正在编辑原来的 id（改 id 时要先删旧的） */
   let editingId: string | null = null;
+  /** 这一关禁用的兵种 id（可变工作副本） */
+  const ban = new Set<string>(level.banUnits ?? []);
+  /** 禁用区的搜索词：空着时只列"已经禁掉的"，输入后才从全表里找 */
+  let banQuery = '';
 
   const catalog = allAvailableUnits();
   const builtinIds = new Set(Object.keys(catalog));
@@ -86,15 +91,79 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
     summonedOnly: true,
   });
 
+  /** 一个兵种的"出处"小字：包名 · 第 N 代（关卡独有兵种就没有包名） */
+  const originOf = (d: UnitTypeDef): string => {
+    const pack = unitSourceIdOf(d.id);
+    const name = pack ? expansionById(pack)?.name ?? pack : '关卡自带';
+    return `${name} · 第 ${d.era} 代`;
+  };
+
+  /**
+   * 禁用区的那份列表。
+   *
+   * 空搜索时**只列已经禁掉的**——全表七十多个兵种铺在这儿，光是滚到"关卡独有
+   * 兵种"那一块都要翻三屏。输入关键词之后才开始从全表里找，这是"想禁谁就搜谁"。
+   */
+  const banListHtml = (): string => {
+    const q = banQuery.trim();
+    const rows: UnitTypeDef[] = [];
+    if (q) {
+      for (const d of Object.values(catalog)) {
+        if (isPseudoUnit(d.id)) continue;
+        if (!d.name.includes(q) && !d.id.toLowerCase().includes(q.toLowerCase())) continue;
+        rows.push(d);
+        if (rows.length >= 30) break;
+      }
+    } else {
+      for (const id of ban) {
+        const d = catalog[id];
+        // 已经在全表里找不到的（未开对应扩展、或者关卡兵种改了 id）也要列出来，
+        // 否则作者会看到"禁了 5 个、列表里只有 3 个"，不知道剩下两个是什么
+        rows.push(
+          d ?? {
+            id,
+            name: `${id}（本局没有这个兵种）`,
+            short: '?',
+            era: 0,
+            category: 'combat',
+            cost: 0,
+            move: 0,
+            atk: 0,
+            armor: 0,
+            maxHp: 0,
+            range: 0,
+            vision: 0,
+          },
+        );
+      }
+    }
+    if (rows.length === 0) {
+      return q
+        ? `<div class="editor-empty">没有名字里带「${esc(q)}」的兵种。</div>`
+        : '<div class="editor-empty">还没有禁用任何兵种。搜一个名字，或者点「禁用本关刷出来的兵」。</div>';
+    }
+    return rows
+      .map(
+        (d) => `<label class="editor-check level-ban-item">
+          <input type="checkbox" data-ban="${esc(d.id)}" ${ban.has(d.id) ? 'checked' : ''}>
+          <b>${esc(d.name)}</b><small>${esc(originOf(d))}</small>
+        </label>`,
+      )
+      .join('');
+  };
+
+  /** 只刷禁用区，不动整块面板——否则搜索框每敲一个字都会失焦 */
+  const paintBanList = (): void => {
+    const box = mask.querySelector('[data-ban-list]');
+    if (box) box.innerHTML = banListHtml();
+  };
+
   const listView = (): string => {
     const rows = Object.values(units);
     return `
       <div class="modal-head">
         <h2>关卡独有兵种</h2>
-        <p>
-          这些兵只属于这一关：别的对局看不到、规则书里没有、电脑也不会采购。
-          做「斩杀某个目标」时必须用它们——普通兵种对面会一直补，条件永远不成立。
-        </p>
+        <p>这些兵只属于这一关，别的对局看不到。「斩首」目标要用它们。</p>
       </div>
       <div class="modal-body">
         <div class="editor-toolbar">
@@ -128,10 +197,24 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
                   .join('')
           }
         </div>
-        <div class="field-hint">id 撞上内置兵种时不算错（这一关会覆盖它），但容易让人误会，建议换个名字。</div>
+        <div class="field-hint">id 撞内置兵种时建议换个名字。</div>
+
+        <div class="level-ban">
+          <div class="field-label">禁用兵种</div>
+          <div class="field-hint">
+            这一关两边都不能造它们——**事件刷兵不受影响**。用来挡"玩家拿敌人的招牌兵反打敌人"，
+            比如邪龙关里那条邪龙王。
+          </div>
+          <div class="level-rules-filter">
+            <input class="level-say-input" data-ban-query placeholder="搜兵种名（空着只显示已禁用的）" value="${esc(banQuery)}">
+            <button class="btn btn-sm" data-act="ban-spawned">禁用本关刷出来的兵</button>
+            <button class="btn btn-sm" data-act="ban-clear">全部恢复</button>
+          </div>
+          <div class="level-ban-list" data-ban-list>${banListHtml()}</div>
+        </div>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-primary btn-sm" data-act="apply">用这张兵种表</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>`;
   };
@@ -141,7 +224,7 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
     return `
       <div class="modal-head">
         <h2>${editingId ? '编辑兵种' : '新建兵种'}</h2>
-        <p>数值按这关的手感调。存下来之后，「摆兵」和「事件」里都能选到它。</p>
+        <p>存下来后，「摆兵」和「事件」里都能选到它。</p>
       </div>
       <div class="modal-body">
         <div class="editor-grid">
@@ -163,11 +246,9 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
         </div>
         <label class="editor-check">
           <input type="checkbox" data-f="summonedOnly" ${d.summonedOnly ? 'checked' : ''}>
-          只能由部署/事件出现（不进产线、电脑不采购）
+          只能由部署/事件出现
         </label>
-        <div class="field-hint">
-          做「斩首」的目标时**必须**勾上：不勾的话对面会一边死一边补，条件永远不会成立。
-        </div>
+        <div class="field-hint">做「斩首」目标时必须勾上，否则对面会一直补。</div>
         <div class="level-issues" data-issues></div>
       </div>
       <div class="modal-foot">
@@ -216,6 +297,38 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
         .join('');
     }
     return issues.length === 0;
+  };
+
+  /*
+   * 禁用区是**单独一块**，不跟上面的"关卡独有兵种"共用 render()。
+   * 它自己的勾选和搜索只刷新那一块——整块重绘会让搜索框每敲一个字就失焦。
+   */
+  mask.addEventListener('change', (ev) => {
+    const el = ev.target as HTMLInputElement;
+    const id = el.getAttribute('data-ban');
+    if (!id) return;
+    if (el.checked) ban.add(id);
+    else ban.delete(id);
+    paintBanList();
+  });
+
+  mask.addEventListener('input', (ev) => {
+    const el = ev.target as HTMLInputElement;
+    if (!el.hasAttribute('data-ban-query')) return;
+    banQuery = el.value;
+    paintBanList();
+  });
+
+  /** 关卡事件里刷过的兵种（敌人靠事件进场，这几样最该禁） */
+  const spawnedTypes = (): string[] => {
+    const out: string[] = [];
+    for (const e of level.events ?? []) {
+      for (const act of e.do) {
+        if (act.kind !== 'spawn') continue;
+        for (const u of act.units) if (!out.includes(u.type)) out.push(u.type);
+      }
+    }
+    return out;
   };
 
   mask.addEventListener('click', (ev) => {
@@ -267,6 +380,30 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
       render();
       return;
     }
+    if (act === 'ban-spawned') {
+      const list = spawnedTypes();
+      if (list.length === 0) {
+        toast('这一关没有用事件刷过兵，没东西可禁');
+        return;
+      }
+      for (const id of list) ban.add(id);
+      banQuery = '';
+      mask.querySelectorAll<HTMLInputElement>('[data-ban-query]').forEach((el) => {
+        el.value = '';
+      });
+      paintBanList();
+      toast(`禁了 ${list.length} 个刷出来的兵种`);
+      return;
+    }
+    if (act === 'ban-clear') {
+      ban.clear();
+      banQuery = '';
+      mask.querySelectorAll<HTMLInputElement>('[data-ban-query]').forEach((el) => {
+        el.value = '';
+      });
+      paintBanList();
+      return;
+    }
     if (act === 'back') {
       draft = null;
       editingId = null;
@@ -293,6 +430,8 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
       const next: LevelDef = { ...level };
       if (Object.keys(units).length > 0) next.units = structuredClone(units);
       else delete (next as { units?: unknown }).units;
+      if (ban.size > 0) next.banUnits = [...ban];
+      else delete (next as { banUnits?: unknown }).banUnits;
       opts.onApply(next);
       mask.remove();
       toast('兵种表已更新，别忘了点「保存到我的关卡」');
