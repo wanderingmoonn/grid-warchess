@@ -28,6 +28,7 @@ import {
 import { lintLevel, type LevelIssue } from '../core/level-lint.ts';
 import { toast } from './toast.ts';
 import { openLevelCanvas } from './level-canvas.ts';
+import { openLevelArmy } from './level-army.ts';
 import type { LevelDef } from '../core/level.ts';
 
 export interface LevelEditorResult {
@@ -130,6 +131,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           <button class="btn btn-primary btn-sm" data-act="save">保存到我的关卡</button>
           <button class="btn btn-sm" data-act="clone">${readOnly ? '复制成我的关卡' : '另存为副本'}</button>
           <button class="btn btn-sm" data-act="canvas">画地图</button>
+          <button class="btn btn-sm" data-act="army">摆兵</button>
           <button class="btn btn-sm" data-act="copy">复制 JSON</button>
           <button class="btn btn-sm" data-act="reset">恢复成${readOnly ? '原版' : '初始模板'}</button>
         </div>
@@ -300,32 +302,48 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       return;
     }
 
-    if (act === 'canvas') {
-      /*
-       * 内置关卡不给画：画完也存不下来（保存按钮是禁用的），只会白忙一场。
-       * 说清楚"先复制"比灰掉按钮好——灰掉的话玩家会以为是坏了。
-       */
+    /*
+     * 画布和摆兵面板都只产出"一份新的关卡数据"，写回文本这条路由编辑器统一管。
+     * 代码改 textarea.value 不会触发 input 事件，所以草稿要手动补一次——
+     * 少了这一句，画完地图直接关窗，改动就没了（草稿里还是上一次的文本）。
+     */
+    const applyFromPanel = (next: LevelDef, what: string): void => {
+      ta.value = exportLevelText(next);
+      refresh();
+      saveDraft(key, ta.value);
+      footEl.textContent = `${what}换了。点「保存到我的关卡」才会真的存下来。`;
+    };
+
+    /** 画布 / 摆兵共用的一段前置：只读拦截 + JSON 先得能解析 */
+    const openPanel = (open: (level: LevelDef) => void, verb: string): void => {
       if (readOnly) {
-        footEl.textContent = '内置关卡只读。先点「复制成我的关卡」，再画。';
+        // 内置关卡不给改：改完也存不下来（保存是禁用的），只会白忙一场。
+        // 说清"先复制"比灰掉按钮好——灰掉的话玩家会以为是坏了。
+        footEl.textContent = `内置关卡只读。先点「复制成我的关卡」，再${verb}。`;
         return;
       }
       const parsed = parseLevelText(ta.value);
       if (!parsed.ok) {
         renderIssues(parsed.errors, []);
-        footEl.textContent = '先把 JSON 修好再画地图。';
+        footEl.textContent = `先把 JSON 修好再${verb}。`;
         return;
       }
-      openLevelCanvas({
-        level: parsed.level,
-        onApply: (next) => {
-          // 画布只负责产出"一份新的关卡数据"，写回文本这条路由编辑器统一管
-          ta.value = exportLevelText(next);
-          refresh();
-          // 代码改的值不会触发 input 事件，草稿得手动补一次，否则关窗就丢
-          saveDraft(key, ta.value);
-          footEl.textContent = '地图换了。点「保存到我的关卡」才会真的存下来。';
-        },
-      });
+      open(parsed.level);
+    };
+
+    if (act === 'canvas') {
+      openPanel(
+        (level) => openLevelCanvas({ level, onApply: (next) => applyFromPanel(next, '地图') }),
+        '画地图',
+      );
+      return;
+    }
+
+    if (act === 'army') {
+      openPanel(
+        (level) => openLevelArmy({ level, onApply: (next) => applyFromPanel(next, '兵力') }),
+        '摆兵',
+      );
       return;
     }
 

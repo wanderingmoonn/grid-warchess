@@ -57,12 +57,15 @@ function cityCells(level: LevelDef): Array<{ x: number; y: number; owner: Player
 /**
  * 这个兵种能不能站在这种地形上。
  *
+ * **导出的**：摆兵面板（`ui/level-army.ts`）要用同一条判据。两边各写一份的话，
+ * 会出现"编辑器说能放、建局时被静默跳过"——那是最难查的一类不一致。
+ *
  * 判据和引擎的 `tileStandsOk` 对齐到"不会虚报"的程度：
  *   · 水域单位（船）只能待在水面；
  *   · 其它单位不能上山；
  *   · 水面**只警告**——飞行和掠水单位是能停的，而那是兵种属性，这里不一定知道。
  */
-function standReport(def: UnitTypeDef | undefined, t: Terrain): 'ok' | 'warn' | 'bad' {
+export function standState(def: UnitTypeDef | undefined, t: Terrain): 'ok' | 'warn' | 'bad' {
   if (!def) return 'ok'; // 未知兵种另有一条警告，别在这儿重复说
   if (def.domain === 'water') return navigable(t) ? 'ok' : 'bad';
   if (!passable(t)) return t === 'mountain' ? 'bad' : 'warn';
@@ -124,7 +127,7 @@ function checkSpots(
     const t = terrainAt(level, u.x, u.y);
     if (!t) continue; // 越界归 validateLevel 管，它已经报过一条
     const def = known[u.type];
-    const spot = standReport(def, t);
+    const spot = standState(def, t);
 
     if (spot === 'bad') {
       out.push({

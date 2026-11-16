@@ -5174,7 +5174,8 @@ a.btn {
   user-select: none;
 }
 
-.level-canvas .tile {
+.level-canvas .tile,
+.lv-grid .tile {
   display: grid;
   place-items: center;
   font-weight: 500;
@@ -5189,9 +5190,121 @@ a.btn {
   color: var(--text-3);
 }
 
-.level-canvas-size {
-  max-width: 340px;
-  margin-bottom: 6px;
+/* ── 摆兵（E3）──────────────────────────────────────────────────────
+ * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
+ * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
+ */
+.lv-A {
+  --lv-seat: #c0392b;
+}
+
+.lv-B {
+  --lv-seat: #2f6ea8;
+}
+
+.lv-C {
+  --lv-seat: #3f7a54;
+}
+
+.lv-D {
+  --lv-seat: #a8761a;
+}
+
+.level-army-seats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.level-seat-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--lv-seat, var(--line));
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.level-seat-tab.active {
+  color: var(--text);
+  border-color: var(--a);
+  border-left-color: var(--lv-seat, var(--a));
+}
+
+.level-seat-tab i {
+  font-style: normal;
+  color: var(--text-3);
+}
+
+.level-army-units {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.level-army-group {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  margin: 6px 0 2px;
+}
+
+.lv-unit-swatch {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: var(--lv-seat, #5f5e5a);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.level-canvas .lv-unit {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--lv-seat, #5f5e5a);
+  color: #fff;
+  font-size: 0.8em;
+  font-weight: 500;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65);
+}
+
+/* 尺寸行放在画布**上方**：之前塞在画布底下，玩家根本找不到（实机反馈过）。
+   改小是破坏性的，所以不跟着输入实时改，要按「改尺寸」或回车。 */
+.level-size-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-size-label {
+  color: var(--text-3);
+}
+
+.level-size-x {
+  color: var(--text-3);
+}
+
+.level-size-row input {
+  width: 62px;
+  font: inherit;
+  font-size: var(--fs-body);
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
 }
 
 @media (max-width: 720px) {

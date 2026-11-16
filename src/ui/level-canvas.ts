@@ -109,16 +109,20 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
             <label class="editor-check"><input type="checkbox" data-rect> 矩形框选（拖一个矩形一次刷满）</label>
           </div>
           <div class="level-canvas-box">
+            <div class="level-size-row">
+              <span class="level-size-label">地图尺寸</span>
+              <input type="number" data-w min="${MIN_SIZE}" max="${MAX_SIZE}" aria-label="宽">
+              <span class="level-size-x">×</span>
+              <input type="number" data-h min="${MIN_SIZE}" max="${MAX_SIZE}" aria-label="高">
+              <button class="btn btn-sm" data-act="resize">改尺寸</button>
+              <span class="field-hint">${MIN_SIZE}~${MAX_SIZE}；缩小会裁掉边缘</span>
+            </div>
             <div class="level-canvas" data-canvas></div>
             <div class="level-canvas-foot">
               <span data-coord>第 -, - 格</span>
               <span data-size-line></span>
             </div>
           </div>
-        </div>
-        <div class="editor-grid level-canvas-size">
-          <label class="editor-field"><span>宽（${MIN_SIZE}~${MAX_SIZE}）</span><input type="number" data-w min="${MIN_SIZE}" max="${MAX_SIZE}"></label>
-          <label class="editor-field"><span>高（${MIN_SIZE}~${MAX_SIZE}）</span><input type="number" data-h min="${MIN_SIZE}" max="${MAX_SIZE}"></label>
         </div>
         <div class="level-issues" data-issues></div>
         <div class="field-hint" data-foot>画完点「用这张图」，编辑器里那份数据会跟着变（还要再点一次「保存」才算存下来）。</div>
@@ -370,8 +374,15 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
     // 尺寸输入只在失焦/回车时应用，边输边改会把 8 打成 80 再打回来
   });
 
-  mask.addEventListener('change', (ev) => {
+  /*
+   * 尺寸**不跟着输入改**，要按「改尺寸」或回车。
+   *
+   * 改小是破坏性的（裁掉边缘），跟着每次按键改就成了定时炸弹：
+   * 想把 12 改成 21，敲到"2"的那一瞬间就缩到 8 了，而且已经裁掉了。
+   */
+  mask.addEventListener('keydown', (ev) => {
     const el = ev.target as HTMLElement;
+    if (ev.key !== 'Enter') return;
     if (!el.hasAttribute('data-w') && !el.hasAttribute('data-h')) return;
     applySize(Number(wInput.value), Number(hInput.value));
   });
@@ -428,6 +439,11 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
     }
 
     const act = t.closest<HTMLElement>('[data-act]')?.dataset.act;
+    if (act === 'resize') {
+      applySize(Number(wInput.value), Number(hInput.value));
+      return;
+    }
+
     if (act === 'undo') {
       const snap = undoStack.pop();
       if (!snap) {

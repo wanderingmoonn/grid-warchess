@@ -9558,6 +9558,36 @@ check('编辑器里有「画地图」入口，打开就是一整张格子', () =
   );
 });
 
+/*
+ * 尺寸这事被实机投诉过一次：控件在画布**底下**，玩家根本没找到。
+ * 现在挪到画布上方、带一个明确的「改尺寸」按钮，这条用例钉的就是"它在那儿、且真的生效"。
+ */
+check('画布上方能改地图尺寸，按「改尺寸」立刻生效', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const wIn = mask?.querySelector<HTMLInputElement>('[data-w]');
+  const hIn = mask?.querySelector<HTMLInputElement>('[data-h]');
+  assert.ok(!!wIn && !!hIn, '画布上方要有宽/高两个输入框');
+
+  const before = canvas.querySelectorAll('[data-x]').length;
+  const w0 = Number(wIn!.value);
+  const h0 = Number(hIn!.value);
+  // 只改宽：格子数必须跟着变成 (w+2)×h，宽高比也要跟着变
+  wIn!.value = String(w0 + 2);
+  mask?.querySelector<HTMLElement>('[data-act="resize"]')?.click();
+
+  const after = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  assert.equal(
+    after.querySelectorAll('[data-x]').length,
+    (w0 + 2) * h0,
+    `改宽之后格子数应该是 ${w0 + 2}×${h0}，实际 ${after.querySelectorAll('[data-x]').length}（改之前 ${before}）`,
+  );
+  assert.ok(
+    (after.style.aspectRatio ?? '').replace(/\s/g, '') === `${w0 + 2}/${h0}`,
+    `宽高比要跟着变，实际 ${after.style.aspectRatio}`,
+  );
+});
+
 /** 在画布上点一格（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
 const paintAt = (x: number, y: number): void => {
   const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
@@ -9616,6 +9646,96 @@ check('点「用这张图」：编辑器里的数据跟着变（但还要自己�
 });
 
 // 收尾：关掉编辑器（confirm 被 stub 成 true），别把窗口留给后面的用例
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 摆兵（E3）                                                          */
+/* ------------------------------------------------------------------ */
+
+console.log('\n摆兵');
+
+click('[data-level-new]');
+
+check('编辑器里有「摆兵」入口：席位页签 + 按时代过滤的货架', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="army"]')?.click();
+
+  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-own]')].map((el) => el.dataset.own);
+  assert.deepEqual(tabs, ['A', 'B'], `两家局应该只有 A/B 两个页签，实际 ${tabs.join(',')}`);
+
+  // 货架里必须有青铜时代的基础兵；高时代的不该出现（模板锁了 startEra: 1）
+  assert.ok(doc.querySelector('[data-unit="militia"]'), '缺民兵');
+  assert.ok(doc.querySelector('[data-unit="archer"]'), '缺弓手');
+  assert.ok(!doc.querySelector('[data-unit="knight"]'), '青铜关不该能直接摆铁器兵');
+});
+
+/** 在摆兵面板里点一格（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
+const armyClick = (x: number, y: number): void => {
+  const grid = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  grid
+    .querySelector<HTMLElement>(`[data-x="${x}"][data-y="${y}"]`)
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+};
+const armyCount = (seat: string): number =>
+  Number(doc.querySelector<HTMLElement>(`[data-own="${seat}"] i`)?.textContent ?? '0');
+
+let before = 0;
+check('选兵种点空格：棋子落下，这一家的计数 +1', () => {
+  doc.querySelector<HTMLElement>('[data-unit="militia"]')?.click();
+  before = armyCount('A');
+  armyClick(5, 5);
+  const cell = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(!!cell?.querySelector('.lv-unit'), '格子上应该出现一枚棋子');
+  assert.ok(cell!.className.includes('lv-A'), `棋子要按家上色，实际 ${cell!.className}`);
+  assert.equal(armyCount('A'), before + 1, '这一家的计数应该 +1');
+});
+
+check('点自己已经摆好的兵：撤掉', () => {
+  armyClick(5, 5);
+  const cell = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(!cell?.querySelector('.lv-unit'), '再点一次应该撤掉');
+  assert.equal(armyCount('A'), before, '计数应该回到原值');
+});
+
+check('往别人城里放：当场拒绝，并说清是谁的城', () => {
+  // 模板里蓝方的城在 (9,7)，占 2×2
+  armyClick(9, 7);
+  const cell = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="9"][data-y="7"]');
+  assert.ok(!cell?.querySelector('.lv-unit'), '别人城里不该放下兵');
+  // 两个弹窗都有 [data-foot]，必须取最上面那一层（摆兵面板），否则读到的是编辑器那句
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('放不了') && foot.includes('蓝方'), `要说清为什么，实际：${foot}`);
+  assert.equal(armyCount('A'), before, '被拒绝的放置不该改计数');
+});
+
+check('点「用这份兵力」：编辑器里的 deploy 跟着变', () => {
+  doc.querySelector<HTMLElement>('[data-unit="militia"]')?.click();
+  armyClick(4, 4);
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  assert.ok(!doc.querySelector('[data-own]'), '应用之后面板应该关掉');
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { deploy?: Record<string, Array<{ type: string; x: number; y: number }>> };
+  const list = data.deploy?.A ?? [];
+  assert.ok(
+    list.some((u) => u.type === 'militia' && u.x === 4 && u.y === 4),
+    `deploy.A 里应该有 (4,4) 的民兵，实际 ${JSON.stringify(list)}`,
+  );
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('保存'), `要提醒还没保存，实际：${foot}`);
+});
+
+// 收尾：关掉编辑器，别把窗口留给后面的用例
 {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
   mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
