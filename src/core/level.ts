@@ -180,6 +180,21 @@ export interface LevelAiTuning {
    * 0.4 左右 = 愿意用伤亡换推进（攻坚图）；1 = 默认；1.5 以上 = 极度惜命（护主）。
    */
   riskAversion?: number;
+  /**
+   * **僵局压力**，0~3，默认 0（不启用）。
+   *
+   * 有些关会停在一个"谁都不动"的稳定态：攻方压在火力圈外、守方缩在城里，
+   * 双方每回合的最优解都是"别动"。这个值让"朝目标推进"的分**随回合数加码**
+   * （`1 + pressure × turn/25`，封顶 4 倍），越拖越往对面压。
+   *
+   * 和 `riskAversion` 分工不同：那个管"怕不怕死"，这个管"拖下去值不值得动"。
+   * 0.5~1 是"慢慢加压"，2 以上是"这一关不允许僵持"。
+   *
+   * **只对没有城的席位生效**：有城的 AI 是防守方，给它加码只会让它丢下城墙去送。
+   * 另外它还会打开一层"督战"：核心 AI 认为这一回合没事可做时，替它挑一个
+   * 还能动、且这一步真的更接近敌城的单位走一步（否则二十多个单位里只有三四个在动）。
+   */
+  pressure?: number;
 }
 export interface LevelSetup {
   /** 开局时代（1 起）。锁了它，开局金币、可造兵种也就一起锁了 */
@@ -1203,21 +1218,17 @@ export const LEVELS: LevelDef[] = [
       'sword-saint',
     ],
     /*
-     * 邪龙军团的 AI：**攻击性三个旋钮全部拉满**。
-     *
-     * 只写 `doctrine: 'rush'` 是不够的——它改的是"倾向"，改不动每一格的那笔账：
-     * AI 每走一格都会算"这个落点会被几个人打到、掉多少血"，再用它抵消
-     * "朝目标推进"的收益。推进一格只值几分，站进射程要扣二十分往上，所以它
-     * 宁可停在山脊上不动。这三个旋钮就是改那笔账的：
-     *
-     *   · riskAversion 0（最小，**完全不计伤亡**）：它们就是不怕死，一路压到城下；
-     *     0.2 还不够——实测那一档仍然会在城火力圈外停住；
-     *   · cohesion 0：谁快谁先上，不等队友——一群飞龙本来就该各打各的；
-     *   · appetite 3（最大）：把"朝目标推进"的分数放大三倍。
-     *
-     * 这一关要的就是"它们真的会压过来"，而不是在山脊上排队。
+     * 三个旋钮 + 一个僵局压力：
+     *   · riskAversion 0.3：愿意用伤亡换推进，但不至于站着送；
+     *   · cohesion 0：不等队友，谁快谁先上；
+     *   · appetite 3：推进分放大三倍；
+     *   · pressure 2：**越拖越压**。观战里出现过"三方都不动"的稳定态——
+     *     攻方压在圈外、守方缩在城里，每回合的最优解都是"别动"。
+     *     光把前面三项拉满治不了这个（它们改的是"怕不怕死"，不是"拖下去值不值得动"），
+     *     所以再加一条随回合加码的推进分：turn 25 时 ×2、turn 50 时 ×3、封顶 ×4；
+     *     核心 AI 认为"没事可做"时还会督战推进一步（见 ai.ts 的 `pressureAdvance`）。
      */
-    ai: { riskAversion: 0, cohesion: 0, appetite: 3 },
+    ai: { riskAversion: 0.3, cohesion: 0, appetite: 3, pressure: 1 },
     /*
      * 开局兵力：每城一辆坦克、两个步兵班、两个重机枪组、一个建筑队，
      * 外加两只侦察气球。
@@ -2093,10 +2104,19 @@ function normalizeAiTuning(raw: unknown, errors: string[]): LevelAiTuning | unde
   };
   const cohesion = num(obj.cohesion, 0, 2, 'cohesion');
   const appetite = num(obj.appetite, 0.2, 3, 'appetite');
-  const riskAversion = num(obj.riskAversion, 0.2, 2, 'riskAversion');
+  /*
+   * 区间必须和 `LevelAiTuning` 的注释、编辑器的滑杆**同一份**。
+   *
+   * 这里曾经卡在 0.2，而文档和界面上早就写着"0 = 完全不计伤亡"——于是关卡里
+   * 写 `riskAversion: 0`，被这一行悄悄夹回 0.2，作者看到的和实际生效的不是一回事。
+   * 同一个坑还让 `pressure` 整个丢掉（normalize 不认识它）。
+   */
+  const riskAversion = num(obj.riskAversion, 0, 2, 'riskAversion');
+  const pressure = num(obj.pressure, 0, 3, 'pressure');
   if (cohesion !== undefined) out.cohesion = cohesion;
   if (appetite !== undefined) out.appetite = appetite;
   if (riskAversion !== undefined) out.riskAversion = riskAversion;
+  if (pressure !== undefined) out.pressure = pressure;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
