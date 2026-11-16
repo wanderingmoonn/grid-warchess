@@ -2594,6 +2594,34 @@ export function sameTeam(s: GameState, a: PlayerId, b: PlayerId): boolean {
   return teams.some((group) => group.includes(a) && group.includes(b));
 }
 
+/**
+ * 这一席所在的队伍（含自己）。
+ *
+ * 没写 `seats.teams` 的对局返回 `[p]` —— 一个人一队，界面上"队名"就等于人名，
+ * 所以下面那个 `teamNameOf` 在既有对局里输出和以前一模一样。
+ *
+ * 只在有队伍的对局里，返回值才可能多于一个。席位顺序跟着 `teams` 走（作者写的顺序），
+ * 这样"红方 + 蓝方"这类文案不会因为遍历顺序不同而在两次渲染里换位置。
+ */
+export function teamOf(s: GameState, p: PlayerId): PlayerId[] {
+  const teams = s.config.level?.seats?.teams;
+  if (!teams || teams.length === 0) return [p];
+  return teams.find((group) => group.includes(p)) ?? [p];
+}
+
+/**
+ * 这一席所在队伍的名字。
+ *
+ * 单人队就是那个席位名；同盟队用「 + 」连起来（"红方 + 蓝方"）。
+ * 界面层所有"谁赢了"的地方都该走这个函数，别直接写 `players[winner].name`——
+ * 那会让"两个真人合作打赢了"显示成"只有红方赢了"，蓝方看着像输了。
+ */
+export function teamNameOf(s: GameState, p: PlayerId): string {
+  return teamOf(s, p)
+    .map((x) => s.players[x]?.name ?? `${x} 方`)
+    .join(' + ');
+}
+
 export function blockedFor(
   s: GameState,
   x: number,
@@ -2796,7 +2824,8 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
       if (air) {
         // 敌方（未成废墟的）城市仍然拦：那一段是防空火力，不是地形
         const city = ft.cityId ? cityById(s, ft.cityId) : null;
-        if (!city || city.owner === unit.owner || city.ruined) continue;
+        // 同队豁免（和地面单位走同一个判据，否则友军的城会拦住空军）
+        if (!city || sameTeam(s, city.owner, unit.owner) || city.ruined) continue;
         return false;
       }
       // 掠水（不是空中层）曾经在这里单独放行水面——那条豁免现在在

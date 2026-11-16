@@ -355,7 +355,10 @@ import {
   hasQuit,
   produceAt,
   sameTeam,
+  teamOf,
+  teamNameOf,
 } from '../src/core/rules.ts';
+import { buildBattleCard } from '../src/core/battle-card.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
@@ -20552,6 +20555,28 @@ test('同盟：同队不能互打、能穿行，打光敌人就收场', () => {
       end.state.winner === 'A' || end.state.winner === 'B',
       `只剩一个队时应当收场并判给队里的人，实际 winner=${end.state.winner ?? 'null'}`,
     );
+
+    // 队伍信息：A/B 一队、C 自己一队；队名要把两个名字都写出来
+    assert.deepEqual(teamOf(end.state, 'A'), ['A', 'B'], 'teamOf 要给出整队');
+    assert.deepEqual(teamOf(end.state, 'C'), ['C'], '单人队就是自己');
+    assert.ok(
+      teamNameOf(end.state, 'A').includes(' + '),
+      `同盟队名要用 + 连起来，实际：${teamNameOf(end.state, 'A')}`,
+    );
+    assert.equal(teamNameOf(plain, 'A'), plain.players.A.name, '没写 teams 时队名就是人名');
+
+    /*
+     * 战报卡：winner 是 A，但看卡的是 B（同队）。
+     * 以前 `iWon: winner === me` 会让 B 看到"失败"——合作关里最刺眼的那句假话。
+     */
+    const card = buildBattleCard({ ...end.state, winner: 'A' }, 'B', 'test');
+    assert.equal(card.iWon, true, '队友赢了也是你赢了');
+    assert.equal(card.sides.length, 2, '敌方按队算：C 一队，队友不该被列成敌人');
+    assert.ok(
+      card.sides[0]!.name.includes(' + '),
+      `我方那一边要写队名，实际：${card.sides[0]!.name}`,
+    );
+    assert.equal(card.sides[1]!.side, 'C', '对面只有 C');
   }
 });
 

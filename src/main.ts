@@ -62,6 +62,7 @@ import {
   unitsOf,
   upgradeCostOf,
   utype,
+  teamNameOf,
 } from './core/rules.ts';
 import {
   clearUnits,
@@ -1355,7 +1356,8 @@ function replayUiOf(): ReplayUi {
   const m = s.meta;
   const parts = [`${m.size}×${m.size}`, `${m.players} 人`, m.expansionsText, `种子 ${m.seed}`];
   if (m.build) parts.push(`v${m.build}`);
-  const winner = state.winner ? state.players[state.winner].name : null;
+  // 同盟局要写队名：`winner` 只是队里第一个活着的席位
+  const winner = state.winner ? teamNameOf(state, state.winner) : null;
   return {
     name: replayName,
     index: replayIndex,

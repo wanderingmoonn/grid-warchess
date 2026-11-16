@@ -5839,6 +5839,27 @@ a.btn {
   margin: 10px 0 8px;
 }
 
+/*
+ * 同盟开关那一行。
+ *
+ * 它和上面的"几家"是两个层级：几家是**这一局有几个人**，同盟是**谁跟谁一伙**。
+ * 靠一条上边线隔开，别让人误以为它是第四个"几家"按钮。
+ */
+.level-seat-allies {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.level-seat-allies .editor-check {
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
 .level-seat-list {
   display: flex;
   flex-direction: column;
