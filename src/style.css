@@ -10045,3 +10045,205 @@ a.btn {
 .field-hint.is-warn::before {
   content: '⚠ ';
 }
+
+/* ── 审核台（`&admin=1`）─────────────────────────────────────────────────
+ *
+ * 只在需要放行/下架时打开，所以样式不跟主题走太深：浅底深字，和设置弹窗同一套
+ * 尺寸感。列表用「行 + 右侧按钮」而不是表格——手机上表格会横向溢出，
+ * 而这几栏（关卡/地图/快照）每行只有四五项，不值得上表格。
+ */
+.admin-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(20 22 26 / 55%);
+  backdrop-filter: blur(2px);
+}
+
+.admin-card {
+  width: min(760px, 100%);
+  max-height: min(84vh, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 14px;
+  background: #fbfaf7;
+  color: #23201b;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 28%);
+  font-size: 13px;
+}
+
+.admin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-head h2 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: .02em;
+}
+
+.admin-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #efece5;
+  color: #554f45;
+  font-size: 12px;
+}
+
+.admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-msg {
+  min-height: 18px;
+  color: #8a6a3a;
+  font-size: 12px;
+}
+
+.admin-list {
+  flex: 1;
+  min-height: 90px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.admin-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e6e1d6;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.admin-row-main {
+  min-width: 0;
+}
+
+.admin-row-main b {
+  font-weight: 600;
+}
+
+.admin-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.admin-badge.ok { background: #e6f2e6; color: #2f6b34; }
+.admin-badge.wait { background: #fdeedd; color: #94550f; }
+
+.admin-meta {
+  margin-top: 2px;
+  color: #7c766a;
+  font-size: 12px;
+}
+
+.admin-row-act {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.admin-empty {
+  margin: 12px 0;
+  color: #8b8579;
+  text-align: center;
+}
+
+.admin-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #ece7dc;
+}
+
+.admin-note { color: #8b8579; font-size: 12px; }
+
+.admin-token {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ddd7c9;
+  border-radius: 8px;
+  font: inherit;
+}
+
+/* 审核台：详情与操作留痕（`&admin=1`） */
+.admin-detail {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #2b2925;
+  color: #e8e2d4;
+  font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.admin-log {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #7c766a;
+  font-size: 12px;
+}
+
+.admin-log b { color: #554f45; font-weight: 600; }
+
+.admin-log-item {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f1eee6;
+}
+
+/* 审核台：查看面板里的地图缩略图与折叠 JSON */
+.admin-thumb {
+  padding: 6px;
+  border-radius: 8px;
+  background: #efece5;
+}
+
+.admin-thumb svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 220px;
+}
+
+.admin-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-raw summary {
+  cursor: pointer;
+  color: #7c766a;
+  font-size: 12px;
+}

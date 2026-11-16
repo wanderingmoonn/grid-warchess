@@ -7,6 +7,7 @@
 
 import './style.css';
 import * as tutorial from './ui/tutorial.ts';
+import { openAdminPanel } from './ui/admin-panel.ts';
 import { openBattleCard } from './ui/battle-card.ts';
 import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
@@ -8887,6 +8888,14 @@ if (drift) {
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
 if (forceHome || invited.length < 4) showTitle();
+
+/*
+ * 审核台：`&admin=1` 打开（2026-11-16）。
+ *
+ * 不做独立入口/独立包：这东西只有审核时用，而且要读的云端凭据和游戏是同一套，
+ * 拆出去反而多一类"域名和 publishableKey 对不上"的坑。
+ */
+if (new URLSearchParams(location.search).has('admin')) openAdminPanel();
 
 /* ── 设置弹窗 ────────────────────────────────────────────────────────────
  *

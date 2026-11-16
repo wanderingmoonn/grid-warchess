@@ -261,9 +261,7 @@ export async function uploadSharedMap(
   try {
     const db = (await cloudDatabase()) as unknown as {
       from(name: string): {
-        insert(row: Record<string, unknown>): {
-          select(): PromiseLike<{ data?: unknown; error?: DbFailure }>;
-        };
+        insert(row: Record<string, unknown>): PromiseLike<{ data?: unknown; error?: DbFailure }>;
       };
     };
     const res = await db
@@ -279,17 +277,22 @@ export async function uploadSharedMap(
         // 关键一行：没审核之前不给别人看
         listed: !pending,
         created_at: new Date().toISOString(),
-      })
-      // 让服务端回报实际写入的行：没有 select 就分不清"写成功"和"被策略挡了"。
-      // 待审核的那次这里会**回空**（读策略看不见未列出的行），这是预期的，
-      // 所以下面 id 有兜底，不能因为回空就判失败。
-      .select();
+      });
+    /*
+     * **不要 `.select()`**（2026-11-16，和关卡同一处坑）。
+     *
+     * `insert().select()` 等于 `INSERT ... RETURNING`，PostgreSQL 会把**读策略**
+     * 套在返回行上：待审核的那一行 `listed = false`，读策略看不见，整条语句于是
+     * 报 `42501 new row violates row-level security policy`——插入其实成功了，
+     * 报错只是"不许你看回来"。这里原来还想靠回执拿 id，但那个 id 对客户端毫无
+     * 用处（本地用的是 `user:<时间戳>` 兜底），不值得为它换一个假失败。
+     */
     if (res?.error) {
       const f = failure(res.error, '上传');
       return { ok: false, reason: f.reason, howTo: f.retryable ? '稍后再试一次' : '需要先开通地图库' };
     }
-    const row = Array.isArray(res?.data) ? (res.data[0] as Row | undefined) : undefined;
-    const id = row?.id !== undefined ? `user:${row.id}` : `user:${Date.now()}`;
+    // 没有回执了：本地 id 用时间戳兜底（它只是这台设备上的临时身份）
+    const id = `user:${Date.now()}`;
     const got: FixedMap = { ...parsed.map, id, source: 'user', author: author ?? undefined };
     // 待审核的图服务端读不回来，只能靠本机这份保住"我刚画的那张"
     rememberMine(got, pending);
