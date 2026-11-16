@@ -1128,6 +1128,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   : ''
               }
               ${
+                (config.level.seats?.cityless ?? []).length > 0
+                  ? `<div class="field-hint"><b>没有城的席位：</b>${(config.level.seats?.cityless ?? [])
+                      .map((p) => seatLabel[p] ?? p)
+                      .join('、')}——没有产线、没有收入，兵打光就输。</div>`
+                  : ''
+              }
+              ${
                 config.level.deploy
                   ? `<div class="field-hint">开局兵力由关卡指定，不再自动撒兵。</div>`
                   : ''

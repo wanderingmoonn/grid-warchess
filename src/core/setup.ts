@@ -881,6 +881,23 @@ export function createMatch(
   }
 
   /*
+   * 无城席位：开局先说一句。
+   *
+   * 玩家看到对面"没有城"时第一反应是"这是 bug 吧"。一句话讲清三件事：
+   * 它没有产线、没有收入、兵打光就输——这样后面看到它不造兵才不会以为是坏了。
+   */
+  if (citylessList.length > 0) {
+    const names = citylessList.map((p) => state.players[p].name).join('、');
+    state.log.push({
+      turn: 1,
+      player: citylessList[0]!,
+      text: `${names}没有城：没有产线、没有收入，兵打光就输。`,
+      open: true,
+      system: true,
+    });
+  }
+
+  /*
    * 关卡目标先说一句。
    *
    * 顶栏也有一行常驻的（`levelGoalLine`），但战报里的这一条是"开局那一刻"的记录：
