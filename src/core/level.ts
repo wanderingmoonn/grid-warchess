@@ -489,8 +489,8 @@ const CUT_PAINT: Array<[number, number, string]> = (() => {
  * 内建关卡。
  *
  * 分两层，别混：
- *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀。三类各一关，
- *     每类教一件事——用地形换时间、集中兵力打一点、第三方与时机。
+ *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀 / 护送。四张各教一件事——
+ *     用地形换时间、集中兵力打一点、第三方与时机、无城护送穿越。
  *   · **测试夹具**（`dev: true`）：平地探针、断后、断桥、三岔口、死守。
  *     各验一条机制，不进玩家菜单，探针二十多段靠它们跑。
  */
@@ -522,6 +522,27 @@ const SOLO_PAINT: Array<[number, number, string]> = (() => {
   out.push([7, 7, '='], [8, 7, '='], [7, 8, '='], [8, 8, '=']);
   out.push([4, 4, 'f'], [5, 4, 'f'], [4, 5, 'f']);
   out.push([10, 6, 'h'], [10, 5, 'h']);
+  return out;
+})();
+
+/**
+ * 「护送」的地形：一条横长 18×8 的走廊。
+ *
+ * 没有河——这一关的主题是"快"不是"堵"。地形只做三件事：
+ *   1. 中段几片林子和丘陵，是**天然的伏击点**（经过那里会刷追兵）；
+ *   2. 上下两排丘陵把走廊压窄，逼护送队走中间、没法贴边绕；
+ *   3. 右端 B 的城压住出口，玩家必须从城旁冲过去，而不是绕过去。
+ */
+const ESCORT_PAINT: Array<[number, number, string]> = (() => {
+  const out: Array<[number, number, string]> = [];
+  // 上下两排丘陵：把地图压成一条 3 格高的走廊（y=2..5 是主路）
+  for (let x = 4; x < 15; x += 1) {
+    out.push([x, 0, 'h'], [x, 1, 'h']);
+    out.push([x, 6, 'h'], [x, 7, 'h']);
+  }
+  // 中段伏击点：一片林子 + 一块高地
+  out.push([7, 3, 'f'], [8, 3, 'f'], [7, 4, 'f']);
+  out.push([11, 4, 'h'], [11, 5, 'h']);
   return out;
 })();
 
@@ -834,6 +855,142 @@ export const LEVELS: LevelDef[] = [
         ],
       },
     ],
+  },
+
+  /* ── 玩家关 4：护送（无城 + 护送目标）────────────────────── */
+  {
+    id: 'level:escort',
+    version: LEVEL_VERSION,
+    name: '护送',
+    brief: '18×8。你没有城，带着一个信使穿过走廊。他到东边就赢，路上会不断刷出追兵。',
+    map: {
+      id: 'levelmap:escort',
+      name: '护送',
+      w: 18,
+      h: 8,
+      rows: rowsOf(18, 8, ESCORT_PAINT),
+      citiesA: [],
+      citiesB: [{ x: 15, y: 3 }],
+      source: 'builtin',
+    },
+    seats: {
+      count: 2,
+      ai: ['B'],
+      /*
+       * 玩家**没有城**：没有产线、没有收入，开局这几个兵就是全部家底。
+       *
+       * 这正是这一关想展示的"孤军"玩法——护送一个目标穿越敌境，打不起也守不起，
+       * 只能靠移动和走位。兵打光就输（cityless 的出局条件），所以护卫队不能乱送。
+       */
+      cityless: ['A'],
+      /*
+       * 敌方的城是**铁器时代**的：血 42、甲 6，比青铜城硬一档。
+       *
+       * "城防高"落在这里——玩家铁器兵打青铜城几下就破，打这座铁器城得磨很久，
+       * 于是"护送到达"才是唯一现实的路。但不能把城时代抬太高：城时代决定
+       * **造兵时代**，抬到机械化会让 AI 刷出坦克，护送队一碰就没（实测踩过）。
+       * 铁器城 = 比玩家起点硬、但造出来的还是铁器兵，公平里带一点压力。
+       */
+      cityEra: { B: 2 },
+    },
+    setup: { startEra: 2, firstSide: 'A' },
+    /*
+     * 开局兵力：一支铁器时代的护卫队 + 一个信使。
+     *
+     * 玩家兵种领先（时代 2 铁器，对面青铜），但**没有城**——领先只体现在这
+     * 几个兵身上，打完就没了。信使是护送目标，弱、跑不快，得有人护着。
+     */
+    deploy: {
+      A: [
+        // 信使单独在前，东边留出通道；护卫队散在两侧和后头，别把路堵死
+        { type: 'messenger', x: 2, y: 3 },
+        { type: 'knight', x: 1, y: 2 },
+        { type: 'knight', x: 1, y: 5 },
+        { type: 'longbow', x: 0, y: 4 },
+        { type: 'crossbow', x: 0, y: 2 },
+      ],
+      B: [
+        { type: 'militia', x: 13, y: 2 },
+        { type: 'archer', x: 13, y: 5 },
+        { type: 'militia', x: 14, y: 3 },
+      ],
+    },
+    /*
+     * 关卡独有兵种：信使。
+     *
+     * 护送目标必须是一个**造不出来**的兵种（summonedOnly），否则 escort 的
+     * unitType 指向一个普通兵种时，AI 也能造出来、场面就乱了。
+     * 它弱（跑不快、没攻击力），存在感全在"别让它死"这件事上。
+     */
+    units: {
+      messenger: {
+        id: 'messenger',
+        name: '信使',
+        short: '信',
+        era: 2,
+        category: 'combat',
+        cost: 1,
+        move: 2,
+        atk: 1,
+        armor: 3,
+        maxHp: 30,
+        range: 1,
+        vision: 2,
+        summonedOnly: true,
+      },
+    },
+    events: [
+      {
+        id: 'first-gate',
+        when: { kind: 'turn', at: 1 },
+        do: [{ kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' }],
+      },
+      /*
+       * 经过中段伏击点（x=7 那片林子）时，追兵从北边冒出来。
+       *
+       * 用 `enter` + 指定 owner：只有当**你的兵**踩进那片区域才触发，
+       * 追兵不会因为自己的兵路过就自己刷自己。
+       */
+      {
+        id: 'ambush-1',
+        when: { kind: 'enter', zone: { x0: 7, y0: 3, x1: 8, y1: 4 }, owner: 'A' },
+        do: [
+          { kind: 'say', text: '北边的林子后头窜出一队追兵！' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 8, y: 2 }, { type: 'archer', x: 9, y: 2 }] },
+        ],
+      },
+      /*
+       * 再往前走，接近出口时又来一拨——这一拨从**身后**追，堵住退路。
+       */
+      {
+        id: 'ambush-2',
+        when: { kind: 'enter', zone: { x0: 11, y0: 3, x1: 12, y1: 5 }, owner: 'A' },
+        do: [
+          { kind: 'say', text: '身后又追上来一队——退路被断了。' },
+          /*
+           * 追兵用**青铜兵**（民兵），比玩家的铁器兵弱：玩家单挑打得过，
+           * 但它们是**从身后堵退路**的，逼玩家往前、不能回头磨。
+           */
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 6, y: 4 }, { type: 'militia', x: 6, y: 5 }] },
+        ],
+      },
+      /*
+       * 信使一旦倒下，这一关就输了（escort 目标永远不成立）。
+       * 兵死触发一句播报，让玩家立刻知道"护送目标没了"。
+       */
+      {
+        id: 'messenger-down',
+        when: { kind: 'unitDied', type: 'messenger' },
+        do: [{ kind: 'say', text: '信使倒下了——护送失败了。' }],
+      },
+    ],
+    /*
+     * 胜利：信使走进东边终点区（x≥15）。
+     *
+     * escort 的 unitType 指向信使，所以只有它到达才算赢，护卫队到没用。
+     * 失败不用另写：cityless 的"兵打光即输"自动兜住。
+     */
+    goals: [{ kind: 'escort', seat: 'A', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, unitType: 'messenger' }],
   },
 
   {

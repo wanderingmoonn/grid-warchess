@@ -9217,10 +9217,11 @@ check('关卡页只列玩家关，测试夹具不出现', () => {
   const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
   assert.equal(ids[0], '', '第一张应该是「自由对局」');
   const named = ids.filter(Boolean);
-  assert.equal(named.length, 3, `菜单里应该只有三关，实际 ${named.length}：${named.join(',')}`);
+  assert.equal(named.length, 4, `菜单里应该只有四关，实际 ${named.length}：${named.join(',')}`);
   assert.ok(named.includes('level:lone-city'), '缺「孤城」');
   assert.ok(named.includes('level:behead'), '缺「斩首」');
   assert.ok(named.includes('level:latecomer'), '缺「黄雀」');
+  assert.ok(named.includes('level:escort'), '缺「护送」');
   // 夹具关（断后 / 断桥 / 死守 / 三岔口 / 平地探针）不该出现在玩家的选关列表里
   for (const dev of ['level:rear-guard', 'level:cut-bridge', 'level:hold-out', 'level:tri-corner', 'level:probe-flat']) {
     assert.ok(!named.includes(dev), `测试夹具「${dev}」不该出现在菜单里`);

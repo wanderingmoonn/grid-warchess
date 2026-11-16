@@ -62,8 +62,11 @@ for (const def of allLevels()) {
   ok(`${def.id}（${res.level.name} ${res.level.map.w}×${res.level.map.h}）`);
   check(res.level.map.rows.every((r) => r.length === res.level.map.w),
     `${def.id} 每行长度一致`);
-  check(res.level.map.citiesA.length > 0 && res.level.map.citiesB.length > 0,
-    `${def.id} 双方各有城`);
+  // cityless 席位（护送关的 A）**没有城是故意的**，不能拿"双方各有城"卡它
+  const cityless = new Set(res.level.seats?.cityless ?? []);
+  const aOk = res.level.map.citiesA.length > 0 || cityless.has('A');
+  const bOk = res.level.map.citiesB.length > 0 || cityless.has('B');
+  check(aOk && bOk, `${def.id} 非无城席位各有城`);
 }
 
 /*
@@ -985,10 +988,10 @@ line('23. 地图上的桥不该自己塌');
 }
 
 /* ── 24. 玩家关冒烟：三关都能建、都能跑 ─────────────────────── */
-line('24. 玩家关：孤城 / 斩首 / 黄雀');
+line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送');
 {
   const menu = playableLevels();
-  check(menu.length === 3, `菜单里正好三关（${menu.map((l) => l.name).join(' / ')}）`);
+  check(menu.length === 4, `菜单里正好四关（${menu.map((l) => l.name).join(' / ')}）`);
   check(
     allLevels().length > menu.length,
     `夹具关还在注册表里（全 ${allLevels().length} 张，玩家可见 ${menu.length} 张）`,
