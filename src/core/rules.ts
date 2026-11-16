@@ -722,11 +722,30 @@ export function isHiddenSeat(s: GameState, p: PlayerId): boolean {
   return s.levelState?.hidden?.includes(p) === true;
 }
 
+/**
+ * 这一席是不是"没有城"的席位（关卡 `seats.cityless`，2026-11-16）。
+ *
+ * 和"未登场"（hidden）是两件不同的事：**它在场、占回合、要打仗，只是没有城**。
+ * 所以它的出局条件是"兵打光"，而不是"城全丢光"——它从来没有城。
+ * 普通对局没有这个字段，这个函数恒为 false。
+ */
+export function isCitylessSeat(s: GameState, p: PlayerId): boolean {
+  return s.config.level?.seats?.cityless?.includes(p) === true;
+}
+
 export function isEliminated(s: GameState, p: PlayerId): boolean {
   // 未登场：没城是正常的，判成出局会让整局在第一回合就结束
   if (isHiddenSeat(s, p)) return false;
   if (hasQuit(s, p)) return true;
   if (s.config.godMode === true) return false;
+  /*
+   * 无城席位：兵打光才算输。
+   *
+   * 这是"没城＝出局"的第三个豁免（前两个是 godMode 和 hidden）。
+   * 注意它和 hidden 不能同时成立——那样开局就没有任何东西，谁也不知道该按哪条判；
+   * 关卡校验会把这种组合拦住。
+   */
+  if (isCitylessSeat(s, p)) return unitsOf(s, p).length === 0;
   return citiesOf(s, p).length === 0;
 }
 
@@ -3796,6 +3815,14 @@ function checkWinner(s: GameState): PlayerId | null {
   const alive = playing.filter((p) => {
     if (isEliminated(s, p)) return false;
     if (unitsOf(s, p).length > 0) return true;
+    /*
+     * 无城席位没有产线：**买得起也造不出来**。
+     *
+     * 少了这一条会出一个很难查的现象——无城方兵打光了，`isEliminated` 说它出局，
+     * 但这里的"买得起一个兵"又把它算成活着，于是这局**永远收不了场**。
+     * 两条腿里必须砍掉这一条。
+     */
+    if (isCitylessSeat(s, p)) return false;
     return Object.values(s.unitTypes).some(
       (d) =>
         d.category !== 'building' &&
@@ -7566,6 +7593,8 @@ function retireLostSeat(s: GameState, p: PlayerId): void {
   if (seatsOf(s).length === 2) return;
   if (s.config.godMode === true) return;
   if (hasQuit(s, p)) return;
+  // 无城席位天生 0 城，别把它的军队当成"丢城撤离"撤走
+  if (isCitylessSeat(s, p)) return;
   if (citiesOf(s, p).length > 0) return;
   const gone = withdrawUnits(s, p);
   if (gone === 0) return;

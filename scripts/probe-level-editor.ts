@@ -16,7 +16,7 @@ import { LEVELS, allLevels, levelById, playableLevels, validateLevel } from '../
 import { validateFixedMap } from '../src/core/fixed-maps.ts';
 import { citiesOf } from '../src/core/rules.ts';
 import { lintLevel } from '../src/core/level-lint.ts';
-import { applyAction } from '../src/core/rules.ts';
+import { applyAction, isCitylessSeat, isEliminated } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { downloadLevelFile, downloadLevelsFile, parseLevelFileText } from '../src/core/level-io.ts';
 import { levelUploadBlocker } from '../src/net/levels.ts';
@@ -395,6 +395,32 @@ check(
   '写了兵力的无城关卡没有错误',
   okLint.filter((i) => i.severity === 'error').map((i) => i.text).join(' | '),
 );
+
+/* ── 12. 无城席位的出局与收场（F1 第三步） ─────────────────────── */
+line('12. 无城席位的出局与收场');
+
+if (checked.ok) {
+  const s0 = createMatch({ ...DEFAULT_CONFIG, level: checked.level }, 37);
+  check(isCitylessSeat(s0, 'A'), '局面里认得出 A 是无城席位');
+  check(!isCitylessSeat(s0, 'B'), 'B 不是无城席位');
+  check(!isEliminated(s0, 'A'), '有兵就不算出局（哪怕一座城都没有）');
+  check(!isEliminated(s0, 'B'), '有城的 B 正常');
+
+  // 把 A 的兵拿掉：应当判出局
+  const s1 = { ...s0, units: s0.units.filter((u) => u.owner !== 'A') };
+  check(isEliminated(s1, 'A'), '兵打光 → 出局');
+  check(!isEliminated(s0, 'A') === true, '（对照）同一份关卡里有兵时不出局');
+
+  // 收场：推一次回合，应当由 B 拿下
+  const r = applyAction(s1, { type: 'END_TURN' });
+  check(r.ok && r.state.winner === 'B', '兵打光之后这一局能收场（不会永远打不完）', r.ok ? `winner=${r.state.winner}` : r.reason);
+
+  // 正常有城的局不受影响：三张内置关里随便取一张
+  const builtin = LEVELS.find((l) => l.dev !== true)!;
+  const sb = createMatch({ ...DEFAULT_CONFIG, level: builtin }, 5);
+  check(!isCitylessSeat(sb, 'A') && !isCitylessSeat(sb, 'B'), '内置关两张都不是无城席位');
+  check(isEliminated(sb, 'A') === false, '内置关开局不会有人被误判出局');
+}
 
 /* ── 汇总 ──────────────────────────────────────────────────────── */
 console.log('');
