@@ -36,6 +36,7 @@ interface AdminData {
   levels: AdminRow[];
   maps: AdminRow[];
   snapshots: AdminRow[];
+  log?: Array<{ at: string; kind: string; rid: number; action: string }>;
   stats: Record<string, number>;
 }
 
@@ -78,6 +79,8 @@ export function openAdminPanel(): void {
   let data: AdminData | null = null;
   let busy = false;
   let msg = '';
+  /** 点「查看」时抓回来的一行（原样 JSON，截断显示） */
+  let detail = '';
 
   const db = async (): Promise<Db> => (await cloudDatabase()) as unknown as Db;
 
@@ -136,12 +139,16 @@ export function openAdminPanel(): void {
                                 tab === 'levels' ? ` · ${esc(r.seats ?? 2)} 家 · ${esc(r.events ?? 0)} 事件` : ''
                               }`;
                         const badge = r.listed ? '已放行' : '待审';
+                        const viewBtn = `<button class="btn btn-sm" data-act="view" data-kind="${
+                          tab === 'snapshots' ? 'snapshot' : kind
+                        }" data-id="${r.id}">查看</button>`;
                         const actions =
                           tab === 'snapshots'
-                            ? ''
-                            : `<button class="btn btn-sm" data-act="toggle" data-kind="${kind}" data-id="${r.id}" data-listed="${
-                                r.listed ? '1' : '0'
-                              }">${r.listed ? '下架' : '放行'}</button>
+                            ? viewBtn
+                            : `${viewBtn}
+                               <button class="btn btn-sm" data-act="toggle" data-kind="${kind}" data-id="${r.id}" data-listed="${
+                                 r.listed ? '1' : '0'
+                               }">${r.listed ? '下架' : '放行'}</button>
                                <button class="btn btn-sm btn-danger" data-act="del" data-kind="${kind}" data-id="${r.id}">删除</button>`;
                         return `
                           <div class="admin-row">
@@ -156,6 +163,22 @@ export function openAdminPanel(): void {
                       .join('')
             }
           </div>
+          ${
+            detail
+              ? `<pre class="admin-detail">${esc(detail)}</pre>`
+              : ''
+          }
+          ${
+            (data?.log ?? []).length > 0
+              ? `<div class="admin-log"><b>最近操作</b>${(data?.log ?? [])
+                  .slice(0, 6)
+                  .map(
+                    (g) =>
+                      `<span class="admin-log-item">${esc(g.action)} ${esc(g.kind)} #${g.rid} · ${esc(ago(g.at))}</span>`,
+                  )
+                  .join('')}</div>`
+              : ''
+          }
           <div class="admin-foot">
             <button class="btn btn-sm" data-act="forget">清除口令</button>
             <span class="admin-note">放行后别人就能看到；删除不可恢复。</span>
@@ -253,6 +276,22 @@ export function openAdminPanel(): void {
       data = null;
       msg = '';
       paint();
+    } else if (a === 'view') {
+      void (async () => {
+        try {
+          const res = await (await db()).rpc('warchess_admin_one', {
+            t: token,
+            kind: el.dataset.kind ?? 'level',
+            rid: Number(el.dataset.id),
+          });
+          detail = res.error
+            ? `读取失败：${res.error.message ?? ''}`
+            : JSON.stringify(res.data, null, 2).slice(0, 4000);
+        } catch (err) {
+          detail = err instanceof Error ? err.message : '读取失败';
+        }
+        paint();
+      })();
     } else if (a === 'toggle' || a === 'del') {
       void act(el.dataset.kind ?? 'level', Number(el.dataset.id), a, el.dataset.listed === '1');
     }

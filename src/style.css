@@ -10155,3 +10155,34 @@ a.btn {
   border-radius: 8px;
   font: inherit;
 }
+
+/* 审核台：详情与操作留痕（`&admin=1`） */
+.admin-detail {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #2b2925;
+  color: #e8e2d4;
+  font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.admin-log {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #7c766a;
+  font-size: 12px;
+}
+
+.admin-log b { color: #554f45; font-weight: 600; }
+
+.admin-log-item {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f1eee6;
+}

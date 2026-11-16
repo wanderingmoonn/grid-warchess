@@ -51,6 +51,8 @@ import {
   type LevelDef,
 } from '../core/level.ts';
 import { cloneAsUserLevel, deleteUserLevel, isUserLevelId, userLevelList } from '../core/userLevels.ts';
+import { cachedCloudLevels, listSharedLevels } from '../net/levels.ts';
+import { toast } from './toast.ts';
 import { openLevelEditor } from './level-editor.ts';
 import { openLevelManager } from './level-manager.ts';
 import { mapThumbSvg } from './map-thumb.ts';
@@ -1063,6 +1065,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 不摘的话同一张关会在"预制"和"我的"两个分组里各出现一次。
        */
       const myLevels = userLevelList();
+      // 云端关卡：读缓存（同步、不联网），点「从云端刷新」才真去拉
+      const cloudLevels = cachedCloudLevels();
       const presetLevels = playableLevels().filter((l) => !isUserLevelId(l.id));
       const editingMine = !!config.level && isUserLevelId(config.level.id);
       const levelsView = `
@@ -1085,6 +1089,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-label">
                 我的关卡 <span class="field-hint">自己做，只存在这台设备上</span>
                 <button class="btn btn-sm level-manage-btn" data-level-manage="1">管理 / 导入导出</button>
+                <button class="btn btn-sm" data-cloud-levels="1">别人的关卡：刷新</button>
               </div>
               <div class="map-gallery">
                 ${myLevels.map((it) => levelCard(it.level)).join('')}
@@ -1093,6 +1098,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   <b>新建关卡</b>
                   <i>改数据，不做图</i>
                 </button>
+                ${
+                  cloudLevels.length > 0
+                    ? `<div class="field-hint" style="flex-basis:100%">别人的（云端，只读）：</div>` +
+                      cloudLevels.map((l) => levelCard(l)).join('')
+                    : ''
+                }
               </div>
               ${
                 config.level
@@ -1588,6 +1599,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             }
             paint();
           },
+        });
+        return;
+      }
+
+      if (target.closest('[data-cloud-levels]')) {
+        paint();
+        void listSharedLevels().then((r) => {
+          paint();
+          toast(
+            r.ok
+              ? r.levels.length > 0
+                ? `已拉到 ${r.levels.length} 张云端关卡`
+                : '云端关卡库是空的（还没人上传，或都还没放行）'
+              : `拉取失败：${r.reason ?? '网络不通'}`,
+          );
         });
         return;
       }
