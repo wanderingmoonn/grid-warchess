@@ -1125,31 +1125,31 @@ export const LEVELS: LevelDef[] = [
       teams: [['A', 'B'], ['C']],
     },
     /*
-     * 开局时代定在 3（火器）：玩家一上来就有火枪兵（射程 4，能打空军）可用。
+     * 开局时代定在 6（信息化）：玩家一上来就有打得动重甲、够得着空中的兵，
+     * 收入也够连着造——这就是"发育准备"的起点。
      *
-     * 这是这一关"发育准备"的起点——不是白送，是让玩家从第一回合就有
-     * **能对空的手段**。要是从青铜起手，敌人第一批龙飞到时玩家还在攒弓箭手。
+     * 不是白送：敌人是第五、六代的飞行单位（恶魔 78 血 42 攻、骷髅飞龙 92 血、
+     * 邪龙王 190 血）。从青铜/铁器起手的话，第一批龙飞到时玩家还在攒弓箭手。
      */
     setup: { startEra: 6, firstSide: 'A' },
     /*
-     * 固定开奇想。
-     *
-     * 邪龙王**不用原版**：它是 700 金的第六代英雄（190 血、陨卵每三回合下一条魔龙），
-     * 用它当这一关的 boss，玩家会被滚雪球压死——实测 18 个机械化兵也翻不回来。
-     * 所以这里用关卡独有兵种 `dragon-king` 复刻一个"只会喷火的邪龙王"：
-     * 150 血、去掉陨卵技能。名字和定位不变，压力从"打不完"变成"打得动"。
-     *
-     * `pack-contemporary` 是给**玩家**的：开局第六代（信息化）才有 atk 66 一级的
-     * 兵和够用的收入；靠第五代的机械化兵打这条龙，实测是把钱花光也只造得起弓手。
+     * 固定三个包：
+     *   · **fantasy**：邪龙王、恶魔、骷髅飞龙、龙骑兵全在奇想里，这是这一关的主角；
+     *   · **air**：玩家的"眼睛"。开局送的两只侦察气球（9 格视野）负责看见北面
+     *     裂隙里什么时候出来东西——没有它，开雾的图上玩家只能干等；
+     *   · **pack-contemporary**：玩家开局第六代（信息化）要靠它，邪龙王自己也是
+     *     兵种级 requiresPack（不写这个包，`s.unitTypes['evil-dragon-king']` 不存在，
+     *     事件刷兵只会留一句系统日志）。
      */
-    expansions: { require: ['fantasy', 'pack-contemporary'] },
+    expansions: { require: ['fantasy', 'air', 'pack-contemporary'] },
     /*
-     * 开局兵力：每城两个火枪兵 + 一个劳工。
+     * 开局兵力：每城一辆坦克、两个步兵班、两个重机枪组、一个建筑队，
+     * 外加两只侦察气球。
      *
-     * 为什么只给火枪：敌人**全是飞行单位**，近战（戟兵、骠骑兵）射程 1，
-     * 按 canStrike 的"地面打空中要够得着"根本打不到。给了也是白给，
-     * 玩家会以为"我有一队兵"然后看着它们站着不动。
-     * 劳工负责把经济拉起来——这关的钱要花在造兵上，不是造农民。
+     * **一个近战都不给**：敌人全是飞行单位，射程 1 的兵（戟兵、骠骑兵）
+     * 按 canStrike 的"地面打空中要够得着"根本打不到，给了只会让玩家以为
+     * "我有一队兵"然后看着它们站着不动。
+     * 坦克（88 血 10 甲）顶在前面，步兵班/重机枪是输出，建筑队拉经济。
      */
     deploy: {
       A: [
@@ -1159,6 +1159,15 @@ export const LEVELS: LevelDef[] = [
         { type: 'hmg', x: 11, y: 13 },
         { type: 'hmg', x: 10, y: 11 },
         { type: 'crew', x: 8, y: 14 },
+        /*
+         * 两只侦察气球：不能打、一碰就掉，但视野 9——全游戏最便宜的"看见"。
+         *
+         * 这一关开雾，敌人的空军从北面十几格外飞过来。没有气球的话，玩家只能
+         * 盯着雾等第一波砸到脸上；有了它，至少能提前两三个回合知道"来了几条、
+         * 从哪个方向绕"。气球迷失不影响胜负，掉了再造（空军包已经强制开）。
+         */
+        { type: 'af_balloon', x: 10, y: 10 },
+        { type: 'af_balloon', x: 12, y: 13 },
       ],
       B: [
         { type: 'tank', x: 16, y: 12 },
@@ -1167,6 +1176,8 @@ export const LEVELS: LevelDef[] = [
         { type: 'hmg', x: 15, y: 13 },
         { type: 'hmg', x: 16, y: 11 },
         { type: 'crew', x: 18, y: 14 },
+        { type: 'af_balloon', x: 16, y: 10 },
+        { type: 'af_balloon', x: 14, y: 13 },
       ],
       /*
        * 邪龙开局就有一个先遣：一条龙骑兵在北面裂隙外。
@@ -1176,38 +1187,6 @@ export const LEVELS: LevelDef[] = [
        * 开局一个兵都没有的话，第一帧就判 C 出局、玩家什么都没干就赢了。
        */
       C: [{ type: 'dragoon-rider', x: 13, y: 1 }],
-    },
-    /*
-     * 这一关的邪龙王：**原版裁掉陨卵**。
-     *
-     * 原版是第六代英雄（190 血 / 8 甲 / range 4 / 魔抗 12），每三回合下一颗
-     * 140 血的卵、两回合后孵成 150 血的魔龙。AI 用它的时候是"越打越多"，
-     * 实测让 18 个机械化兵也翻不回来。这里保留它的面板和压迫感，只去掉
-     * "无限下蛋"那条——boss 仍然是全场最硬的那一个，但玩家能靠集火打死。
-     */
-    units: {
-      'dragon-king': {
-        id: 'dragon-king',
-        name: '邪龙王',
-        short: '邪',
-        era: 6,
-        category: 'combat',
-        cost: 1,
-        move: 2,
-        atk: 32,
-        armor: 8,
-        maxHp: 150,
-        range: 4,
-        vision: 10,
-        magicAtk: 20,
-        magicRes: 12,
-        element: 'dark',
-        flight: true,
-        layer: 'air',
-        weak: { light: 2 },
-        resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
-        summonedOnly: true,
-      },
     },
     events: [
       /*
@@ -1294,7 +1273,7 @@ export const LEVELS: LevelDef[] = [
             kind: 'spawn',
             owner: 'C',
             units: [
-              { type: 'dragon-king', x: 13, y: 1 },
+              { type: 'evil-dragon-king', x: 13, y: 1 },
               { type: 'bone-dragon', x: 11, y: 1 },
               { type: 'demon', x: 15, y: 1 },
               { type: 'dragoon-rider', x: 12, y: 2 },
@@ -1314,7 +1293,7 @@ export const LEVELS: LevelDef[] = [
        */
       {
         id: 'dragon-down',
-        when: { kind: 'unitDied', type: 'dragon-king' },
+        when: { kind: 'unitDied', type: 'evil-dragon-king' },
         do: [{ kind: 'say', text: '邪龙王栽下去了。剩下的不过是一群没了主人的野兽——清干净。' }],
       },
     ],

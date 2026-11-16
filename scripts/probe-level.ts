@@ -1047,6 +1047,11 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
       '邪龙：要求开奇想',
       JSON.stringify(v.level.expansions?.require),
     );
+    check(
+      (v.level.expansions?.require ?? []).includes('air'),
+      '邪龙：强制开空军（开局那两只侦察气球要靠它）',
+      JSON.stringify(v.level.expansions?.require),
+    );
 
     const s = createMatch({ ...DEFAULT_CONFIG, level: v.level }, 7);
     /*
@@ -1057,7 +1062,11 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
     check(s.w === 28 && s.h === 18, `邪龙：关卡地图真的生效（实际 ${s.w}×${s.h}）`, '又静默退回随机图了');
     check(s.cities.every((c) => c.owner !== 'C'), '邪龙：C 一座城都没有');
     check(s.units.some((u) => u.owner === 'C'), '邪龙：开局必须有兵', 'C 是 cityless，0 兵第一帧就判出局');
-    for (const t of ['dragon-king', 'demon', 'bone-dragon', 'dragoon-rider']) {
+    check(
+      s.units.filter((u) => u.type === 'af_balloon').length >= 4,
+      `邪龙：开局两家各两只侦察气球（实际 ${s.units.filter((u) => u.type === 'af_balloon').length} 只）`,
+    );
+    for (const t of ['evil-dragon-king', 'demon', 'bone-dragon', 'dragoon-rider', 'af_balloon']) {
       check(!!s.unitTypes[t], `邪龙：兵种表里有「${t}」`, '没有的话事件刷兵只会留一句系统日志');
     }
 
@@ -1073,7 +1082,7 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
       /* 炸了下面那条会红 */
     }
     check(
-      wave.units.some((u) => u.type === 'dragon-king'),
+      wave.units.some((u) => u.type === 'evil-dragon-king'),
       `邪龙：第 26 次行动后邪龙王下场（当前 turn=${wave.turn}）`,
       `场上只有 ${wave.units.filter((u) => u.owner === 'C').map((u) => u.type).join(',') || '空'}`,
     );
