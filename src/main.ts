@@ -972,6 +972,9 @@ let dirty = false;
 let roomTimer = 0;
 /** 诊断用：进房以来成功提交过几次（?debug=1 里看） */
 let pushOkCount = 0;
+/** 诊断用：最近一次拉到云端快照的时刻与它的 updated_at */
+let lastSnapAt = 0;
+let lastSnapUpdated = '';
 /**
  * 观战人数的心跳与轮询。
  *
@@ -1624,6 +1627,8 @@ function renderDebugHud(): void {
     `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
     `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
     `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
+    `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
+      ` 上次拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'}`,
   ].join('\n');
 }
 
@@ -3497,7 +3502,24 @@ function dispatch(action: Action): boolean {
        * 看着就是"AI 动了一下又不动了"。
        * 所以挂在 `.then()` 上：提交成功 → 再驱动电脑。
        */
-      void pushTurn(room, prevTurn).then(() => {
+      /*
+       * 房间里**有电脑**的时候用强制提交（2026-11-16）。
+       *
+       * 带乐观锁的写法在这里会静默失败：`prevTurn` 是"我以为云端停在几"，
+       * 而这局里云端还会被电脑那一轮推着前进，一旦对不上 `.eq('turn', …)`
+       * 就一行也更新不到——房主本地照样打，观战端永远停在上一帧。
+       * 带 AI 的房间里只有本机会写，不存在合法的并发冲突，所以直接覆盖。
+       */
+      const done = anyAiSide(state)
+        ? submitTurnForce(room.code, state).then((ok) => {
+            if (ok) {
+              dirty = false;
+              pushOkCount += 1;
+              render();
+            }
+          })
+        : pushTurn(room, prevTurn);
+      void done.then(() => {
         if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
       });
       return true;
@@ -7482,6 +7504,8 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+    lastSnapAt = Date.now();
+    lastSnapUpdated = snapshot.updatedAt;
 
     // "别人入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
     if (!seat.spectator) {
