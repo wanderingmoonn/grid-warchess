@@ -322,6 +322,28 @@ export async function submitTurn(
 }
 
 /**
+ * 强制提交：不带乐观锁。
+ *
+ * 只给**自动推进的回合**用（房间里电脑的那一手）。理由：那一方只有本机会写，
+ * 云端不可能同时被别人改，所以"锁对不上"在这里不是冲突，而是**我们自己的
+ * 上一次提交没算清进度号**——用带锁的写法会静默失败，观战端于是永远停在
+ * "轮到电脑"那一帧。
+ */
+export async function submitTurnForce(code: string, state: GameState): Promise<boolean> {
+  const { data, error } = await (await table()).q
+    .update({
+      state,
+      turn: state.turn,
+      current: state.current,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('code', code)
+    .select();
+  if (error) throw new Error(readableError(error));
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
  * 提交一步 BP（禁用/选人/超时）。
  *
  * `expectedSeq` 是本机提交前看到的 `draft.seq`，也就是房间里 `turn` 列当前的值。

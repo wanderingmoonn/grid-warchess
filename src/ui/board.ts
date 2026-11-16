@@ -473,7 +473,14 @@ function hpClass(ratio: number): string {
 
 /** 时代用罗马数字表示，比阿拉伯数字更像"时代" */
 function romanEra(era: number): string {
-  return ['I', 'II', 'III', 'IV', 'V'][era - 1] ?? String(era);
+  /*
+   * 八档都在表里（2026-11-16 补 VI~VIII）。
+   *
+   * 之前只写到 V，第六时代之后会掉回阿拉伯数字——棋盘上于是出现
+   * "I / V / 6 / 7 / 8" 混排：同一枚角标两种写法，看着像出了 bug。
+   * 兜底保留 String(era)：以后再加时代没来得及补表，也只是数字而不是空。
+   */
+  return ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'][era - 1] ?? String(era);
 }
 
 /**
@@ -722,6 +729,24 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
            */
           node.dataset.cityEra = CITY_ERA_SLUG[Math.min(CITY_ERA_SLUG.length, Math.max(1, city.era)) - 1]!;
           /*
+           * 城市块的边长与"这一格在块内的偏移"（2026-11-16）。
+           *
+           * 为什么需要：512 的城区贴图**不是无缝图**，平铺时每隔几格就会露一条
+           * 接缝——倍数调小（镜头拉近）时这条缝会正好穿过城里，看着就是"断层"。
+           * 渐变混合消不掉它，镜像拼接又会变成万花筒。
+           *
+           * 所以改成**一座城铺一整张图**：`background-size` 按块边长算，
+           * 位置按块内偏移算。这样接缝只会出现在城的边界上——那里本来就画着城墙，
+           * 看不出来。代价是同代的城市图案相同，靠 `--city-jitter` 做一点色差区分。
+           */
+          node.dataset.citySize = String(city.size);
+          node.dataset.cx = String(x - city.x);
+          node.dataset.cy = String(y - city.y);
+          // 每座城一个稳定的轻微明暗/色相偏移（由 id 哈希得来，存档重开也不变）
+          let hash = 0;
+          for (let k = 0; k < city.id.length; k++) hash = (hash * 31 + city.id.charCodeAt(k)) | 0;
+          node.dataset.cityJitter = String((Math.abs(hash) % 7) - 3);
+          /*
            * 城市块的四条边（`data-ct/cr/cb/cl`）：邻居**不是同一座城**就是块的边界。
            *
            * 城市是 2×2 或 3×3 的一整块，块内四格必须连成一片；只在块的边缘画墙。
@@ -924,7 +949,14 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         delete node.dataset.wb;
         delete node.dataset.wl;
       }
-if (layer.cls[i] !== cls) {
+// 城市块取景参数（整张图铺满一座城，见 style.css 里 t-city 的说明）
+      if (node.dataset.citySize) {
+        node.style.setProperty('--cs', node.dataset.citySize);
+        node.style.setProperty('--cx', node.dataset.cx ?? '0');
+        node.style.setProperty('--cy', node.dataset.cy ?? '0');
+        node.style.setProperty('--cj', node.dataset.cityJitter ?? '0');
+      }
+      if (layer.cls[i] !== cls) {
         // className 整体赋值比 classList 逐项增删快，而且不会有残留：
         // 上一帧的 reach、这一帧没有，整体赋值一次就干净了
         node.className = cls;

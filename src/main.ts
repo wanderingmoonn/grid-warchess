@@ -149,6 +149,7 @@ import {
   saveSeat,
   submitDraft,
   submitTurn,
+  submitTurnForce,
   type RoomSeat,
   type RoomSnapshot,
 } from './net/room.ts';
@@ -970,6 +971,13 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+/** 诊断用：进房以来成功提交过几次（?debug=1 里看） */
+let pushOkCount = 0;
+/** 诊断用：最近一次拉到云端快照的时刻与它的 updated_at */
+let lastSnapAt = 0;
+let lastSnapUpdated = '';
+/** 诊断用：最近一次拉到的云端那一局是什么样 */
+let lastSnapHead = '';
 /**
  * 观战人数的心跳与轮询。
  *
@@ -1594,8 +1602,42 @@ function ensureArtIndex(): void {
   void loadUnitArtIndex().then(() => render());
 }
 
+/**
+ * 诊断浮层：`?debug=1` 才出现（2026-11-16）。
+ *
+ * "房间里 AI 不动"这种问题，光看棋盘分不清是**该电脑却没点起来**、
+ * 还是**点起来了但提交被挡**。把这几项直接打在屏幕上，一眼就能定位：
+ * 轮到的席位、AI 席位表、暂停标记、令牌、以及房间里的进度号。
+ */
+function renderDebugHud(): void {
+  if (!new URLSearchParams(location.search).has('debug')) return;
+  const el =
+    document.getElementById('debug-hud') ??
+    (() => {
+      const d = document.createElement('div');
+      d.id = 'debug-hud';
+      d.style.cssText =
+        'position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.5 monospace;' +
+        'background:rgba(20,20,20,.88);color:#9fe;padding:8px 10px;border-radius:6px;' +
+        'white-space:pre;pointer-events:none;max-width:52ch';
+      document.body.appendChild(d);
+      return d;
+    })();
+  el.textContent = [
+    `turn=${state.turn} current=${state.current} winner=${state.winner ?? '-'}`,
+    `aiSeats=${JSON.stringify(state.config.aiSeats)} aiOpp=${state.config.aiOpponent} aiAlly=${state.config.aiAlly}`,
+    `aiControl=${JSON.stringify(state.aiControl)} isAiSide(${state.current})=${isAiSide(state, state.current)}`,
+    `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
+    `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
+    `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
+    `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
+      ` 拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'} 远端=${lastSnapHead || '-'}`,
+  ].join('\n');
+}
+
 function render(): void {
   ensureArtIndex();
+  renderDebugHud();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -2926,7 +2968,7 @@ function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
   dropHeatFlash();
   state = snapshot.state;
-  state.aiControl = { A: false, B: false };
+  state.aiControl = undefined;
   state.fog = fog;
   clearSelection();
   saveMatch(state);
@@ -3455,8 +3497,48 @@ function dispatch(action: Action): boolean {
     clearSelection();
     render();
     if (room) {
-      // 联机里"结束回合"就等于提交：把整局推上去，然后等对面
-      void pushTurn(room, prevTurn);
+      /*
+       * 联机里"结束回合"就等于提交：把整局推上去，然后等对面。
+       *
+       * **等这一步真正落地之后再叫 AI**（2026-11-16）。
+       *
+       * 这一支在房间里 submit 完就 return 了，下面那串"轮到谁"的分支根本走不到；
+       * 而关卡/单人局的房间里对面正是 AI——不点它，棋盘停在"轮到蓝方"不动。
+       * 但又不能点得太早：AI 那一轮跑完也要 `pushTurn`，两次写云端都带乐观锁
+       * （`turn = 提交前那个值`），并发的话先落地的那次把锁推进了，AI 那次被挡掉，
+       * 云端的还是"轮到蓝方"的旧局面，15 秒轮询一拉就把棋盘退回去——
+       * 看着就是"AI 动了一下又不动了"。
+       * 所以挂在 `.then()` 上：提交成功 → 再驱动电脑。
+       */
+      /*
+       * 房间里**有电脑**的时候用强制提交（2026-11-16）。
+       *
+       * 带乐观锁的写法在这里会静默失败：`prevTurn` 是"我以为云端停在几"，
+       * 而这局里云端还会被电脑那一轮推着前进，一旦对不上 `.eq('turn', …)`
+       * 就一行也更新不到——房主本地照样打，观战端永远停在上一帧。
+       * 带 AI 的房间里只有本机会写，不存在合法的并发冲突，所以直接覆盖。
+       */
+      const done = anyAiSide(state)
+        ? submitTurnForce(room.code, state).then((ok) => {
+            if (ok) {
+              dirty = false;
+              pushOkCount += 1;
+              render();
+            }
+          })
+        : pushTurn(room, prevTurn);
+      /*
+       * **不管提交成没成功，都要把电脑点起来**（2026-11-16）。
+       *
+       * 原来只写 `done.then(...)`：`submitTurnForce` 一旦 reject（网络、RLS、超时），
+       * 或者上面那个 `render()` 抛错，这个 then 根本不会执行——于是房主本地这一局
+       * 就停在"轮到蓝方"，云端也跟着停在原地，观战端看过去就是"卡在 AI 回合"。
+       * 提交失败是"云端没跟上"，不该连累"这一局还打不打"。
+       */
+      const kickIfAi = (): void => {
+        if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
+      };
+      void done.then(kickIfAi, kickIfAi);
       return true;
     }
     if (!state.winner) {
@@ -5315,8 +5397,47 @@ async function runAiLoop(): Promise<void> {
   const token = ++aiToken;
   clearSelection();
 
+  /*
+   * 观战位**不在本地跑 AI**（2026-11-16）。
+   *
+   * 房间里 AI 只该由坐席那一端驱动：观战方要是也自己算一遍，它算出来的进展
+   * 云端没有，15 秒轮询一拉就把画面退回旧局面——用户看到的就是"AI 走一轮、
+   * 然后时间倒流"。观战方只要跟着快照看。
+   */
+  if (watching()) return;
+
+  /*
+   * 房间里的 AI 走完之后必须**把整局推上去**，否则云端还停在行动前那一版，
+   * 轮询按 `adoptDecision` 判"回合不同 → 采纳云端"，棋盘会当场倒退。
+   */
+  const pushing = room !== null;
+  // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
+  if (pushing) dirty = true;
+
   while (token === aiToken && !state.winner && !aiPaused && isAiSide(state, state.current)) {
     await runAiTurn(token);
+  }
+
+  /*
+   * 电脑这一轮走完，**强制**推上去（不带乐观锁）。
+   *
+   * 这里不敢再用"提交前那个进度号"做锁：AI 一回合里会做好几个动作，
+   * `state.turn` 一路在涨，等循环结束时那个号早就不是云端手里的号了，
+   * 带锁的写法会被静默挡掉——观战端于是永远停在"轮到电脑"那一帧
+   * （用户看到的"观战方卡在 AI 行动回合"）。
+   * 电脑这一方只有本机会写，不存在合法的并发冲突，所以可以放心覆盖。
+   */
+  if (pushing && room) {
+    try {
+      const ok = await submitTurnForce(room.code, state);
+      if (ok) {
+        dirty = false;
+        pushOkCount += 1;
+        render();
+      }
+    } catch {
+      /* 网络不通就下次再说：轮到人时还会再提一次 */
+    }
   }
 
   if (token !== aiToken) return; // 被新的调用接管了，交给它渲染
@@ -5666,6 +5787,8 @@ function exitTutorial(): void {
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
 function kickAiIfNeeded(): void {
   aiPaused = false;
+  // 观战位只跟着快照看，本地不驱 AI（见 runAiLoop 顶部那段）
+  if (watching()) return;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
 }
 
@@ -7220,8 +7343,18 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   normalizePlayerNames(state);
   // 房间里的这一局记不记，看它自己的配置；换了局就得重开一个记录器
   resetRecorder();
-  // 房间里两边各走各的：AI 托管在这里没有意义，顺手关掉免得它替人下棋
-  state.aiControl = { A: false, B: false };
+  /*
+   * 进房间只清**手动托管**，不动"这一局本来就有的电脑席位"（2026-11-16）。
+   *
+   * 原来这里写的是 `aiControl = { A: false, B: false }`，理由"房间里两边各走各的"。
+   * 但关卡模式（`config.level`）的对手本来就是 AI：想开个房让人来观战，
+   * 一进房 AI 就被这一行关掉了，对面从此不动——看起来就是"联机房间让 AI 失效"。
+   *
+   * 现在清成 undefined，AI 席位回到 `config.aiSeats` / `aiOpponent` 的声明：
+   *   · 普通联机房：开局面板里 AI 就是关的，清完仍然是关；
+   *   · 关卡 / 单人局开房观战：AI 保留，观战的人看到的是真在打的局面。
+   */
+  state.aiControl = undefined;
   aiToken += 1;
   aiPaused = false;
   dirty = false;
@@ -7236,6 +7369,15 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   saveMatch(state);
   render();
   startRoomPolling();
+  /*
+   * 进房后**主动点一次 AI**（2026-11-16）。
+   *
+   * 上面只是把 `aiControl` 清干净、把 `aiToken` 换掉，AI 循环本身不会自己醒过来，
+   * 要等玩家下一次结束回合才被 `kickAiIfNeeded` 叫起。关卡/单人局开房观战时，
+   * 局面常常正好轮到电脑——不主动点，观战的人会看到一局"对面纹丝不动"的棋，
+   * 和"AI 失效"一模一样。
+   */
+  kickAiIfNeeded();
 }
 
 function leaveRoom(): void {
@@ -7275,6 +7417,7 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
       return;
     }
     dirty = false;
+    pushOkCount += 1;
     toast(okText ?? '这一回合已提交，等对方行动');
     render();
   } catch (err) {
@@ -7284,7 +7427,15 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
 
 function startRoomPolling(): void {
   window.clearInterval(roomTimer);
-  roomTimer = window.setInterval(() => void pollRoom(), 15000);
+  /*
+   * 观战端拉得勤一些（2026-11-16）。
+   *
+   * 15 秒是给"两个人在下"定的：对面走完会提交，我这边等一拍无所谓。
+   * 但观战是**看别人的棋**——房主那边电脑刚走完一回合，观战端最多要等 15 秒
+   * 才看见，感觉上就是"永远慢一步"。观战只读、不写云端，拉勤一点没有副作用。
+   */
+  const beat = watching() ? 4000 : 15000;
+  roomTimer = window.setInterval(() => void pollRoom(), beat);
   startPresence();
 }
 
@@ -7370,6 +7521,9 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+    lastSnapAt = Date.now();
+    lastSnapUpdated = snapshot.updatedAt;
+    lastSnapHead = `code=${snapshot.code} turn=${snapshot.turn} current=${snapshot.current}`;
 
     // "别人入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
     if (!seat.spectator) {
@@ -7439,8 +7593,10 @@ async function pollRoom(): Promise<void> {
     // 联机没有"本地动作"可挂钩：对面这一回合打到哪，只能靠新旧两份状态的记账差
     const beforeSync = state;
     state = snapshot.state;
-    state.aiControl = { A: false, B: false };
+    state.aiControl = undefined; // 同上：只清手动托管，保留关卡/单人局自带的 AI 席位
     state.fog = fog; // 迷雾是本地偏好，别被对面关掉
+    // 同步到"该电脑走"的那一帧时也要把它点起来，否则观战方看到的是静止画面
+    window.setTimeout(() => kickAiIfNeeded(), 0);
     if (decision.why !== 'finished') noteStrikeFlash(beforeSync, state);
     if (decision.why === 'finished') {
       dirty = false;
@@ -7513,6 +7669,15 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       ? [mine.seat, ...tableSeats.filter((x) => x !== mine.seat)]
       : tableSeats;
     for (const seat of order) {
+      /*
+       * **别去抢电脑的座位**（2026-11-16）。
+       *
+       * 关卡模式里 B 是 AI（`level.seats.ai`），可分享链接被朋友点开时，
+       * 这行会老老实实把两个空位都试一遍，于是人坐进了 B——同一方既有真人
+       * 又有 AI，两边各推一手，表现就是"AI 莫名其妙一直在循环"。
+       * 这一方归电脑，观战者就该去观战位。
+       */
+      if (isAiSide(snapshot.state, seat)) continue;
       const result = await claimSeat(code, seat, token);
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);

@@ -539,9 +539,6 @@ export const LEVELS: LevelDef[] = [
       h: 14,
       rows: rowsOf(14, 14, SOLO_PAINT),
       citiesA: [{ x: 1, y: 6 }],
-      // 两座城：产能翻倍，而且必须打两座才算赢。
-      // x 从 10 挪到 11 是为了给河岸留出两列缓冲——守方弓箭手（射程 3）
-      // 站在自己河岸就该够不到这里，而不是站在岸上就能点掉城边的农民。
       citiesB: [
         { x: 11, y: 3 },
         { x: 11, y: 10 },
@@ -550,34 +547,14 @@ export const LEVELS: LevelDef[] = [
     },
     seats: { count: 2, ai: ['B'] },
     setup: { startEra: 1, firstSide: 'A' },
-    /*
-     * 这一关的 AI 比默认更敢冲（`riskAversion: 0.6`）。
-     *
-     * 默认 AI 走一格要算"这个落点会挨多少打"，抵掉推进的收益；只要守方摆出几个兵，
-     * 它就宁可待在桥头。这张图要的是"压过来"，所以让它愿意用伤亡换推进。
-     * 配合三支过河突击队，压力才是持续的——单靠参数不够（实测过：只调参数时
-     * 它最多多过去一两个兵，城一滴血不掉）。
-     */
     ai: { riskAversion: 0.2, cohesion: 0, appetite: 3 },
     deploy: {
       A: [
-        { type: 'lumberjack', x: 4, y: 5 },
+        { type: 'lumberjack', x: 4, y: 4 },
         { type: 'militia', x: 4, y: 7 },
         { type: 'archer', x: 3, y: 7 },
         { type: 'militia', x: 4, y: 8 },
       ],
-      /*
-       * 攻方起手：4 近战 + 4 远程 + 2 高机动 + 2 箭塔 + 2 农民。
-       *
-       * 四类各有分工，不能互相替代：
-       *   · 民兵占桥头、扛线；
-       *   · 弓手（射程 3）越过两格宽的河压制西岸——守方站岸边就要挨打；
-       *   · 箭塔钉在桥头两侧，守方想清掉对岸的目标就得先拆塔，而拆塔要拿命换；
-       *   · 农民摆在城后，把两座城的产能真的用起来。
-       *
-       * 塔刻意放在 (9,6)/(9,9) 而不是桥头 (9,7)/(9,8)：建筑占格且不可通行，
-       * 摆在桥头会把自家过河的门口堵死。
-       */
       B: [
         { type: 'militia', x: 9, y: 7 },
         { type: 'militia', x: 9, y: 8 },
@@ -592,22 +569,10 @@ export const LEVELS: LevelDef[] = [
       ],
     },
     goals: [{ kind: 'survive', seat: 'A', untilTurn: 30 }],
-    /*
-     * 禁掉「先后手补偿」：这一关是 1 城对 2 城的不对称布防，后手再补一笔金币，
-     * 等于把设计好的强弱差抹掉一截。（和「断后」同一条理由。）
-     */
-    /*
-     * 闪电战、高机动性不禁，只提醒。
-     *
-     * 这一关守方只有三个兵，攻方的机动优势被放大得很厉害：开了之后难度会从"要小心"
-     * 变成"基本守不住"。但那是玩家自己选的挑战，禁掉不如说清楚——
-     * 所以从 forbid 挪到 warn（`2026-11-15` 实机反馈：「开高机动性直接没法打」）。
-     */
-    expansions: { require:['era-arms'] , forbid: ['turn-order-comp'], warn: ['blitz', 'high-mobility'] },
+    expansions: { require:['era-arms', 'blackout', 'bloodbath'] , forbid: ['turn-order-comp'], warn: ['blitz', 'high-mobility'] },
     /*
      * 三段压力：
-     *   1~5 次行动：桥还在。这是玩家**唯一能主动出门换兵**的窗口，也是这关的全部乐趣；
-     *   第 6 次行动：桥被炸成深水，只能守桥头；
+     *   1~5 次行动：
      *   第 11 次行动：整条河退成浅流——防线从 1 格变成 14 格，逼他把人收拢到城下硬撑。
      *
      * 第二段刻意**不写 `only`**：整条河一起变，包括桥墩那一格。
@@ -616,7 +581,7 @@ export const LEVELS: LevelDef[] = [
     events: [
       {
         id: 'flank-1',
-        when: { kind: 'turn', at: 6 },
+        when: { kind: 'turn', at: 5 },
         do: [
           { kind: 'say', text: '北边冒出斥候，小心之后更多的援兵。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'scout', x: 2, y: 0 }] },
@@ -624,7 +589,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-1',
-        when: { kind: 'turn', at: 6 },
+        when: { kind: 'turn', at: 5 },
         do: [
           { kind: 'say', text: '对岸有人在动。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }] },
@@ -651,7 +616,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 15 },
         do: [
           { kind: 'say', text: '北边骑兵绕行来了，南边也有先遣部队。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'scout', x: 2, y: 13 }, { type: 'scout', x: 3, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'scout', x: 3, y: 13 }] },
         ],
       },
       {
@@ -664,7 +629,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'ebb',
-        when: { kind: 'turn', at: 15 },
+        when: { kind: 'turn', at: 18 },
         do: [
           { kind: 'say', text: '水位退了。整条河都能淌过去。' },
           { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
@@ -672,7 +637,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-4',
-        when: { kind: 'turn', at: 17 },
+        when: { kind: 'turn', at: 18 },
         do: [
           { kind: 'say', text: '又上来一队长弓手。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
@@ -680,7 +645,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'end',
-        when: { kind: 'turn', at: 20 },
+        when: { kind: 'turn', at: 22 },
         do: [
           { kind: 'say', text: '河断流了。' },
           { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'plain' },
@@ -688,7 +653,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-5',
-        when: { kind: 'turn', at: 20 },
+        when: { kind: 'turn', at: 24 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'knight', x: 13, y: 7 }, { type: 'knight', x: 13, y: 8 }] },
