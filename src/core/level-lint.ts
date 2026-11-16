@@ -11,6 +11,7 @@
  */
 
 import { CONFIG, UNIT_TYPES, navigable, passable } from './config.ts';
+import { EXPANSIONS } from './expansions.ts';
 import { loadCustomUnits } from './customUnits.ts';
 import { terrainFromChar } from './mapgen.ts';
 import { LEVEL_TERRAINS, type DeployUnit, type LevelDef, type LevelDo } from './level.ts';
@@ -167,6 +168,37 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
   for (const [key, units] of Object.entries(level.deploy ?? {})) {
     const owner = key as PlayerId;
     checkUnits(units, `第 ${owner} 家的部署`, known, out);
+
+  /*
+   * ---- 禁用兵种 ----
+   *
+   * 只做两条**能确定**的提醒：
+   *   · id 在内置、扩展、关卡兵种里都查不到（多半拼错了）；
+   *   · 禁了某个席位开局就摆着的兵（开局有一个、但这一关造不出第二个）。
+   * 不查"禁了本局根本没开的扩展兵种"——lint 这一层不知道玩家勾了哪些包。
+   */
+  const banned = level.banUnits ?? [];
+  if (banned.length > 0) {
+    const inPacks = new Set<string>();
+    for (const e of EXPANSIONS) for (const u of e.units ?? []) inPacks.add(u.id);
+    for (const id of banned) {
+      if (known[id] || inPacks.has(id)) continue;
+      out.push({
+        severity: 'warn',
+        text: `禁用名单里的「${id}」认不出来：内置、扩展和这一关的兵种表里都没有它，多半是拼错了。`,
+      });
+    }
+    for (const [key, list] of Object.entries(level.deploy ?? {})) {
+      const hit = (list ?? []).filter((u) => banned.includes(u.type));
+      if (hit.length === 0) continue;
+      out.push({
+        severity: 'warn',
+        text: `第 ${key} 家的开局兵力里有 ${hit.length} 个被禁用的兵种（${hit
+          .map((u) => known[u.type]?.name ?? u.type)
+          .join('、')}）：开局就有一个，但这一关造不出第二个。`,
+      });
+    }
+  }
     checkSpots(units, `第 ${owner} 家的部署`, owner, level, known, cities, out);
   }
 

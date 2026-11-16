@@ -1070,7 +1070,28 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
       check(!!s.unitTypes[t], `邪龙：兵种表里有「${t}」`, '没有的话事件刷兵只会留一句系统日志');
     }
 
-    // 完全体要在第 17 次行动之后下场
+    /*
+     * 禁用兵种：玩家造不了黑暗势力那几样。
+     *
+     * 这条和下面"boss 照样刷得出来"是一对——禁的是**产线**，不是兵种表。
+     * 只做前者的话，玩家会发现自己造不出邪龙王；把后者也测上，才能确认
+     * "敌人那边不受影响"这个语义没被误伤。
+     */
+    const myCity = s.cities.find((c) => c.owner === 'A');
+    if (myCity) {
+      for (const id of ['evil-dragon-king', 'demon', 'bone-dragon']) {
+        const r = applyAction(s, { type: 'RECRUIT', cityId: myCity.id, unitType: id });
+        check(
+          !r.ok && (r as { reason: string }).reason.includes('禁用'),
+          `邪龙：玩家造不了「${s.unitTypes[id]?.name ?? id}」`,
+          r.ok ? '竟然造出来了' : '',
+        );
+      }
+      const fine = applyAction(s, { type: 'RECRUIT', cityId: myCity.id, unitType: 'tank' });
+      check(fine.ok, '邪龙：没禁的兵种照常能造', fine.ok ? '' : (fine as { reason: string }).reason);
+    }
+
+    // 完全体要在第 26 次行动之后下场
     let wave = s;
     try {
       for (let i = 0; i < 160 && !wave.winner && wave.turn < 27; i += 1) {

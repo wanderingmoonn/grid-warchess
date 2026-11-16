@@ -404,6 +404,20 @@ export interface LevelDef {
    * 的语义正好是"不进产线、AI 不采购"，引擎里已经跑通（AI 三处都跳过它）。
    */
   units?: Record<string, UnitTypeDef>;
+  /**
+   * **这一关禁用的兵种**（id 列表）：两边都不能招募、不能被建造单位盖出来。
+   *
+   * 和上面的 `units` 是两件相反的事：那个是"只在这一关存在的兵"，
+   * 这个是"本来存在、但这一关不许造"的兵。
+   *
+   * 用处是**别让玩家用敌人的招牌兵反打敌人**——比如「邪龙」关，玩家自己
+   * 各造一条邪龙王就能把对面碾了，剧情上也不成立（那是黑暗势力那边的东西）。
+   *
+   * 事件里的 `spawn` **不受影响**：禁的是"产线"，不是"兵种表"。
+   * 这一关要禁玩家造邪龙王，但敌人那边照样得靠事件把它刷出来。
+   * 已经在场上的兵也不会被删（读档、或者禁用是后来才加的）。
+   */
+  banUnits?: string[];
   /** 这一关专属的 AI 参数（见 `LevelAiTuning`）。不写＝用默认 AI */
   ai?: LevelAiTuning;
   /**
@@ -1143,6 +1157,25 @@ export const LEVELS: LevelDef[] = [
      */
     expansions: { require: ['fantasy', 'air', 'pack-contemporary'] },
     /*
+     * 禁用兵种：**黑暗势力那一套玩家不该有**。
+     *
+     * 不禁的话，两个玩家各造一条邪龙王就能把对面碾了（190 血、range 4），
+     * 而且从情境上说不通——那是对面军团的招牌。
+     *
+     * 禁的是**产线**：事件里的 `spawn` 不受影响，敌人照样按波次把这几样放出来。
+     * 5 代以上的奇想英雄（至尊法师、天使、圣剑勇者）一起禁，理由同上：
+     * 这一关的神话战力只该出现在邪龙那一边。
+     */
+    banUnits: [
+      'evil-dragon-king',
+      'demon',
+      'bone-dragon',
+      'dragoon-rider',
+      'archmage',
+      'angel',
+      'sword-saint',
+    ],
+    /*
      * 开局兵力：每城一辆坦克、两个步兵班、两个重机枪组、一个建筑队，
      * 外加两只侦察气球。
      *
@@ -1734,6 +1767,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   const goals = normalizeGoals(obj.goals, map, seats, errors);
   const setup = normalizeSetup(obj.setup, seats, errors);
   const units = normalizeLevelUnits(obj.units, errors);
+  const banUnits = normalizeBanUnits(obj.banUnits, errors);
   const aiTuning = normalizeAiTuning(obj.ai, errors);
   if (errors.length > 0) return { ok: false, errors };
 
@@ -1754,6 +1788,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       ...(goals ? { goals: structuredClone(goals) } : {}),
       ...(setup ? { setup: structuredClone(setup) } : {}),
       ...(units ? { units: structuredClone(units) } : {}),
+      ...(banUnits ? { banUnits: [...banUnits] } : {}),
       ...(aiTuning ? { ai: aiTuning } : {}),
     },
   };
@@ -2026,6 +2061,33 @@ function normalizeAiTuning(raw: unknown, errors: string[]): LevelAiTuning | unde
  * 校验拦不住也不该拦。`id` 一律以 map 的 key 为准，免得出现
  * "key 叫 warden、def.id 叫 hero"这种对不上的情况。
  */
+/**
+ * 校验"这一关禁用哪些兵种"。
+ *
+ * 只查**结构**（数组、每项是字符串、不重复），不查"这个兵种存不存在"——
+ * 那要等 `createMatch` 拿到本局扩展池才知道（同一个 id 在没开对应扩展的局里
+ * 根本不存在）。写错 id 不会造出坏局面：`canUseType` 只做字符串比较，
+ * 不存在的 id 永远匹配不上，等于没写。lint 那边另有一条"认不出来"的提醒。
+ */
+function normalizeBanUnits(raw: unknown, errors: string[]): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    errors.push('"banUnits" 要写成兵种 id 的数组，比如 ["evil-dragon-king"]');
+    return undefined;
+  }
+  const out: string[] = [];
+  for (const x of raw) {
+    const id = typeof x === 'string' ? x.trim() : '';
+    if (!id) {
+      errors.push('"banUnits" 里有空项：每一项都要是兵种 id');
+      continue;
+    }
+    if (!out.includes(id)) out.push(id);
+  }
+  if (out.length > 300) errors.push(`"banUnits" 写了 ${out.length} 个兵种，最多 300 个`);
+  return out.length > 0 ? out : undefined;
+}
+
 function normalizeLevelUnits(
   raw: unknown,
   errors: string[],

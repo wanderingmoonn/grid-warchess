@@ -10197,6 +10197,32 @@ check('新建一个兵种：id 自动生成，名字空会被拦', () => {
   assert.ok(issues.includes('名字不能为空'), `空名字要被拦，实际：${issues.slice(0, 120)}`);
 });
 
+check('禁用兵种：搜一个名字勾上，清空搜索后仍然列着', () => {
+  // 先从"新建兵种"表单回列表（上一条没存成，还停在表单里）
+  topMask()!.querySelector<HTMLElement>('[data-act="back"]')?.click();
+  const layer = topMask()!;
+
+  assert.ok(layer.querySelector('[data-ban-query]'), '兵种面板要有禁用区的搜索框');
+  assert.ok(layer.querySelector('[data-act="ban-clear"]'), '要能一键全部恢复');
+
+  const input = layer.querySelector<HTMLInputElement>('[data-ban-query]')!;
+  input.value = '民兵';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+  const box = layer.querySelector<HTMLInputElement>('[data-ban="militia"]');
+  assert.ok(!!box, '搜「民兵」应该找得到它');
+  box!.checked = true;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // 清空搜索：已禁用的要留在列表里，否则作者看不出自己禁了什么
+  input.value = '';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.ok(
+    topMask()!.querySelector('[data-ban="militia"]'),
+    '清空搜索后，已经禁用的兵种还该列着',
+  );
+});
+
 check('应用之后 units 写进 JSON，且默认只能由部署/事件出现', () => {
   // 退出编辑表单（刚才那条没存成），回列表再应用
   topMask()!.querySelector<HTMLElement>('[data-act="back"]')?.click();
@@ -10205,7 +10231,9 @@ check('应用之后 units 写进 JSON，且默认只能由部署/事件出现', 
   const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
   const data = JSON.parse(ta.value) as {
     units?: Record<string, { name?: string; summonedOnly?: boolean }>;
+    banUnits?: string[];
   };
+  assert.deepEqual(data.banUnits, ['militia'], `禁用名单要写进 JSON，实际 ${JSON.stringify(data.banUnits)}`);
   const list = Object.values(data.units ?? {});
   assert.equal(list.length, 1, `应该只有一个关卡兵种，实际 ${list.length}`);
   assert.equal(list[0]?.name, '守将', '名字应当是刚改的');

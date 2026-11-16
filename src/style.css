@@ -5536,6 +5536,42 @@ a.btn {
   font-size: 12px;
 }
 
+/*
+ * 兵种面板底部的「禁用兵种」区。
+ *
+ * 它和上面的"关卡独有兵种"是两个相反的清单（一个是只在这一关存在的兵，
+ * 一个是这一关不许造的兵），所以用一条上边线隔开，别让人以为是同一张表。
+ */
+.level-ban {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.level-ban-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.level-ban-item {
+  margin-bottom: 0;
+  padding: 2px 0;
+}
+
+.level-ban-item small {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
 .level-unit-nums {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 8px 0;
