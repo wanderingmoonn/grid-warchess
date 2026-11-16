@@ -3521,9 +3521,18 @@ function dispatch(action: Action): boolean {
             }
           })
         : pushTurn(room, prevTurn);
-      void done.then(() => {
+      /*
+       * **不管提交成没成功，都要把电脑点起来**（2026-11-16）。
+       *
+       * 原来只写 `done.then(...)`：`submitTurnForce` 一旦 reject（网络、RLS、超时），
+       * 或者上面那个 `render()` 抛错，这个 then 根本不会执行——于是房主本地这一局
+       * 就停在"轮到蓝方"，云端也跟着停在原地，观战端看过去就是"卡在 AI 回合"。
+       * 提交失败是"云端没跟上"，不该连累"这一局还打不打"。
+       */
+      const kickIfAi = (): void => {
         if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
-      });
+      };
+      void done.then(kickIfAi, kickIfAi);
       return true;
     }
     if (!state.winner) {
