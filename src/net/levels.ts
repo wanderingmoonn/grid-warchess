@@ -63,13 +63,23 @@ export interface LevelUploadResult {
 function failure(err: DbFailure | undefined, what: string): { reason: string; retryable: boolean } {
   const code = (err?.code ?? '').replace(/^DATABASE_/, '');
   const msg = (err?.message ?? '').toLowerCase();
+  /*
+   * 提示里**带上原始码和原文**（2026-11-16）。
+   *
+   * 42501 这个码背后至少有两种完全不同的原因：权限没给、或者 RLS 的
+   * WITH CHECK 没过（Postgres 对"违反行级安全策略"也报 42501）。
+   * 之前这里统一翻成"凭据或域名对不上"，于是真实原因被这句话盖掉了——
+   * 用户看到的是一句猜，我们这边也拿不到线索。码和原文一并留着，
+   * 既方便用户转述，也方便直接对着日志定位。
+   */
+  const detail = `${code ? `[${code}] ` : ''}${err?.message ?? '网络不通'}`;
   if (code === '42P01' || /relation .*does not exist|undefined table|schema cache/.test(msg)) {
     return { reason: '关卡库还没开通（云数据库里没有 warchess_levels 这张表）', retryable: false };
   }
   if (code === '42501' || /permission denied|not authorized|invalid_client|origin/.test(msg)) {
-    return { reason: '服务端不接受这次读写（凭据或域名对不上）', retryable: false };
+    return { reason: `服务端拒绝了这次写入：${detail}`, retryable: false };
   }
-  return { reason: `${what}失败：${err?.message ?? '网络不通'}`, retryable: true };
+  return { reason: `${what}失败：${detail}`, retryable: true };
 }
 
 /** 云端一行的 id 统一加前缀，和本机的 `user:` 分开——两种来源不能混成一个命名空间 */
@@ -201,6 +211,8 @@ export async function uploadSharedLevel(level: LevelDef, author?: string): Promi
       })
       .select();
     if (res?.error) {
+      // 原文也留一份在控制台：提示条会被截断，这里不会
+      console.warn('[levels] 上传被拒', res.error);
       const f = failure(res.error, '上传');
       return { ok: false, reason: f.reason, howTo: f.retryable ? '稍后再试一次' : '需要先开通关卡库' };
     }
