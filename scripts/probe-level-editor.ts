@@ -582,6 +582,63 @@ line('14. 点亮区域');
   }
 }
 
+/* ── 15. 同盟校验（teams） ────────────────────────────────────── */
+line('15. 同盟');
+
+{
+  const rows = Array.from({ length: 8 }, () => '............');
+  const base = {
+    id: 'user:probe-teams',
+    version: 1,
+    name: '同盟探针',
+    map: {
+      id: 'levelmap:probe-teams',
+      name: '同盟探针',
+      w: 12,
+      h: 8,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 9, y: 1 }],
+      source: 'user',
+    },
+    seats: {
+      count: 3,
+      ai: ['C'],
+      cities: { C: [{ x: 9, y: 5 }] },
+      teams: [
+        ['A', 'B'],
+        ['C'],
+      ],
+    },
+    deploy: {
+      A: [{ type: 'militia', x: 2, y: 2 }],
+      B: [{ type: 'militia', x: 8, y: 2 }],
+      C: [{ type: 'militia', x: 8, y: 4 }],
+    },
+  };
+  const v = validateLevel(base);
+  check(v.ok, '正常的同盟能过校验', v.ok ? '' : v.errors.join('；'));
+  if (v.ok) {
+    check(
+      JSON.stringify(v.level.seats?.teams) === JSON.stringify([['A', 'B'], ['C']]),
+      'teams 原样保留',
+      JSON.stringify(v.level.seats?.teams),
+    );
+  }
+
+  // 漏席位：C 坐了人却没进任何队
+  const missing = validateLevel({ ...base, seats: { ...base.seats, teams: [['A', 'B']] } });
+  check(!missing.ok, '漏掉某个席位要报错', missing.ok ? '竟然过了' : missing.errors[0]);
+
+  // 同一家出现在两个队
+  const dup = validateLevel({ ...base, seats: { ...base.seats, teams: [['A', 'B'], ['B', 'C']] } });
+  check(!dup.ok, '一家出现在两个队要报错', dup.ok ? '竟然过了' : dup.errors[0]);
+
+  // 只有一个队 = 没有敌人
+  const solo = validateLevel({ ...base, seats: { ...base.seats, teams: [['A', 'B', 'C']] } });
+  check(!solo.ok, '只有一个队要报错（那样没有敌人）', solo.ok ? '竟然过了' : solo.errors[0]);
+}
+
 /* ── 汇总 ──────────────────────────────────────────────────────── */
 console.log('');
 if (failed === 0) {

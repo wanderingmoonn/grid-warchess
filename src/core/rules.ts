@@ -2577,6 +2577,23 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
  * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
  * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
+/**
+ * 这两家算不算**一伙的**（同一个队，或者就是自己）。
+ *
+ * 没写 `seats.teams` 的对局恒等于 `a === b` —— 既有对局一个字都不变。
+ *
+ * 用到它的地方全是"原来写 `owner === owner`"的判定：
+ *   · 打兵 / 打城 / 溅射：同队不能打；
+ *   · 寻路占位：同队可以**穿过**（但终点仍然不能停在别人身上）；
+ *   · 城市与建筑：同队的城能进、建筑能站。
+ */
+export function sameTeam(s: GameState, a: PlayerId, b: PlayerId): boolean {
+  if (a === b) return true;
+  const teams = s.config.level?.seats?.teams;
+  if (!teams || teams.length === 0) return false;
+  return teams.some((group) => group.includes(a) && group.includes(b));
+}
+
 export function blockedFor(
   s: GameState,
   x: number,
@@ -2631,7 +2648,8 @@ export function blockedFor(
   if (tile.cityId) {
     const city = cityById(s, tile.cityId);
     // 废墟可以进：进城那一下就是"接管"这个动作本身
-    if (city && city.owner !== unit.owner && !city.ruined) return true;
+    // 友军的城也不挡：合作关里两人可以走对方的城（但入驻仍然按各家的城算）
+    if (city && !sameTeam(s, city.owner, unit.owner) && !city.ruined) return true;
   }
   return false;
 }
@@ -2794,7 +2812,8 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
     for (const c of cellsAt(ax, ay)) {
       const hit = s.units.some((u) => {
         if (!coversTile(s, u, c.x, c.y)) return false;
-        if (u.owner === unit.owner) return false;
+        // 同队不挡路：能穿过去，但停不下来（见 blockedAnchor）
+        if (sameTeam(s, u.owner, unit.owner)) return false;
         if (isAirborne(s, u) !== air) return false;
         if (utype(s, u.type).bridges) return false;
         return true;
@@ -2893,7 +2912,7 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
         if (d.category !== 'building') return true;
         if (d.bridges) return false; // 桥是双向的，谁都能站
         if (d.obstacle) return true; // 墙：自己人也过不去
-        return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
+        return !sameTeam(s, u.owner, unit.owner); // 自家/友军设施能站，敌方的先打掉
       });
       return blockers.length > 0;
     });
@@ -3489,7 +3508,7 @@ function splashVictims(
    */
   const board = boardIdOf(attacker);
   for (const v of s.units) {
-    if (v.owner === attacker.owner) continue;
+    if (sameTeam(s, v.owner, attacker.owner)) continue;
     if (boardIdOf(v) !== board) continue;
     if (skip.has(v.id)) continue;
     // 占到任意一格就算被覆盖：多格单位只挨一份（名单按单位去重）
@@ -3831,6 +3850,26 @@ function checkWinner(s: GameState): PlayerId | null {
     );
   });
   if (alive.length === playing.length) return null;
+
+  /*
+   * 同盟局按**队**判胜负。
+   *
+   * 这一条不是"顺便支持一下"，是**必须**：友军之间不能互相攻击（见 `sameTeam`
+   * 那几处判定），如果还按"只剩一家"收场，打光敌人之后 A、B 谁也打不了谁，
+   * 对局会永远停在那里。所以"只剩一队"就是结束条件。
+   *
+   * 赢家仍然返回一个 `PlayerId`（队内第一个还活着的席位）——`winner` 的类型
+   * 不扩成"队伍"，界面层再把它翻译成"盟友胜利"。少改一处类型，就少一处
+   * 需要兼容的存档/回放分支。
+   */
+  const teams = s.config.level?.seats?.teams;
+  if (teams && teams.length > 0) {
+    const aliveTeams = teams.filter((g) => g.some((p) => alive.includes(p)));
+    if (aliveTeams.length > 1) return null;
+    if (aliveTeams.length === 1) return aliveTeams[0]!.find((p) => alive.includes(p)) ?? null;
+    return null; // 全灭：同归于尽
+  }
+
   if (alive.length === 1) return alive[0]!;
   // 一家都没了（同归于尽）：判给第一个还站着的……没有，那就平局
   if (alive.length === 0) return null;
@@ -4790,7 +4829,12 @@ function revealZone(
    * 判定在 `fog.ts` 里是 `until >= turn`，所以 turns=1 实际覆盖两个行动序号，
    * 两家局正好是一个完整的轮次。
    */
-  const until = s.turn + Math.max(1, Math.round(turns));
+  /*
+   * 负数 = 一直亮。用一个大数而不是 `Infinity`：`Infinity` 存进 JSON 会变成 null，
+   * 存档再读出来就成了"亮到 0"，反而全灭。999999 比任何一局的行动数都大。
+   */
+  const FOREVER = 999999;
+  const until = turns < 0 ? FOREVER : s.turn + Math.max(1, Math.round(turns));
   // 同格取更晚的那个过期点；顺手把已经过期的清掉，别让状态无限长
   const keep = new Map<number, number>();
   for (const r of s.revealed ?? []) {
@@ -5352,7 +5396,7 @@ function doAttack(
   if (boardIdOf(attacker) !== boardIdOf(defender)) {
     return { ok: false, reason: '不在同一张图上，打不到' };
   }
-  if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
+  if (sameTeam(s, defender.owner, attacker.owner)) return { ok: false, reason: '不能攻击友军' };
   if (underConstruction(attacker)) {
     return { ok: false, reason: `${utype(s, attacker.type).name} 还在施工，没装好武器` };
   }
@@ -5710,7 +5754,7 @@ function doSiege(
   if (!city) return { ok: false, reason: '城市不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (boardIdOf(attacker) !== boardIdOf(city)) return { ok: false, reason: '不在同一张图上，够不着这座城' };
-  if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
+  if (sameTeam(s, city.owner, attacker.owner)) return { ok: false, reason: '不能攻击友军的城市' };
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
   // 和野战同理：没武器的单位不能攻城。否则桥会对着邻格的城市"攻城"，
