@@ -5309,8 +5309,31 @@ async function runAiLoop(): Promise<void> {
   const token = ++aiToken;
   clearSelection();
 
+  /*
+   * 观战位**不在本地跑 AI**（2026-11-16）。
+   *
+   * 房间里 AI 只该由坐席那一端驱动：观战方要是也自己算一遍，它算出来的进展
+   * 云端没有，15 秒轮询一拉就把画面退回旧局面——用户看到的就是"AI 走一轮、
+   * 然后时间倒流"。观战方只要跟着快照看。
+   */
+  if (watching()) return;
+
+  /*
+   * 房间里的 AI 走完之后必须**把整局推上去**，否则云端还停在行动前那一版，
+   * 轮询按 `adoptDecision` 判"回合不同 → 采纳云端"，棋盘会当场倒退。
+   * `startTurn` 就是提交时用来做乐观锁的那个进度号（云端此刻的值）。
+   */
+  const startTurn = state.turn;
+  const pushing = room !== null;
+  // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
+  if (pushing) dirty = true;
+
   while (token === aiToken && !state.winner && !aiPaused && isAiSide(state, state.current)) {
     await runAiTurn(token);
+  }
+
+  if (pushing && token === aiToken && room && state.turn !== startTurn) {
+    await pushTurn(room, startTurn, '电脑这一回合已提交');
   }
 
   if (token !== aiToken) return; // 被新的调用接管了，交给它渲染
@@ -5660,6 +5683,8 @@ function exitTutorial(): void {
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
 function kickAiIfNeeded(): void {
   aiPaused = false;
+  // 观战位只跟着快照看，本地不驱 AI（见 runAiLoop 顶部那段）
+  if (watching()) return;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
 }
 
