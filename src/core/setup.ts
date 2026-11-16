@@ -21,7 +21,7 @@ import { validateFixedMap } from './fixed-maps.ts';
 import { validateLevel, goalText } from './level.ts';
 import { canStandAt, refreshMemory, grantOpeningIncome, runLevelEvents } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
-import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, MatchConfig, PlayerId, Terrain, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
 import { registerResource } from './resources.ts';
 import { nextRandom } from './rng.ts';
@@ -799,6 +799,20 @@ export function createMatch(
       const out: number[] = [];
       for (let i = 0; i < tiles.length; i += 1) {
         if (tiles[i]?.terrain === 'bridge') out.push(i);
+      }
+      return out;
+    })(),
+    /*
+     * 地图桥的"河床"：一律按水域记。
+     *
+     * 地图字符只有一个 `=`，它不表达桥下是水还是沼泽，而现有三张内置关的桥
+     * 都是跨水的。记下来是为了让"事件把这一片水位改浅之后，拆桥能还原成浅水"
+     * 这条路对地图桥也成立（以前只有工兵桥才有原地形记录）。
+     */
+    bridgeDeck: (() => {
+      const out: Record<string, Terrain> = {};
+      for (let i = 0; i < tiles.length; i += 1) {
+        if (tiles[i]?.terrain === 'bridge') out[String(i)] = 'water';
       }
       return out;
     })(),

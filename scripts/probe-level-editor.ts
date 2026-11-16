@@ -476,7 +476,14 @@ if (duelChecked.ok) {
   for (let i = 0; i < 900 && !st.winner; i += 1) {
     const act = aiNextAction(st) ?? { type: 'END_TURN' as const };
     const r = applyAction(st, act);
-    st = r.ok ? r.state : applyAction(st, { type: 'END_TURN' }).state ?? st;
+    if (r.ok) {
+      st = r.state;
+    } else {
+      // AI 偶尔会给出非法动作（比如目标格已被占）：换成结束回合，别让探针中断
+      const fallback = applyAction(st, { type: 'END_TURN' });
+      if (!fallback.ok) break;
+      st = fallback.state;
+    }
     const now = snap();
     if (now !== last) {
       moves += 1;

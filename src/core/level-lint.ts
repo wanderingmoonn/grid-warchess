@@ -311,4 +311,24 @@ function checkTerrainAction(
       text: `事件「${eventId}」想把地形改成「${terrainName(act.to as Terrain)}」，这一项不能由事件改（桥面、城、虚空都不行）。`,
     });
   }
+
+  /*
+   * 改成深水会**把这一片里的桥冲垮**（桥面撑得住浅水/干河床，撑不住深水）。
+   * 这是目前"用事件拆桥"的唯一办法，所以不是错误；但桥上要是有兵会被挤走，
+   * 值得先提醒一句——作者多半是想要这个效果，只是没想到连人一起波及。
+   */
+  if (act.to === 'deep') {
+    let bridges = 0;
+    for (let y = top; y <= bottom; y += 1) {
+      for (let x = left; x <= right; x += 1) {
+        if (terrainAt(level, x, y) === 'bridge') bridges += 1;
+      }
+    }
+    if (bridges > 0) {
+      out.push({
+        severity: 'warn',
+        text: `事件「${eventId}」把 ${bridges} 格桥面改成了深水：桥会被冲垮，站在上面的兵会被挤走。这是"用事件拆桥"的正常做法，确认一下是不是想要的。`,
+      });
+    }
+  }
 }

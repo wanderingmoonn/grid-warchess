@@ -285,7 +285,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         <select class="level-mini-select" data-terr-to="${i}:${j}">${LEVEL_TERRAINS.map(
           (t) => `<option value="${t}" ${act.to === t ? 'selected' : ''}>${esc(CONFIG.terrainName[t] ?? t)}</option>`,
         ).join('')}</select>
-        <span class="field-hint">（桥和城改不了：桥由桥单位维持，城有自己的一套机制）</span>
+        <span class="field-hint">（城格不动；桥面也不动——水位变浅只改桥下的河床，改成<b>深水</b>才会把桥冲垮）</span>
       </span>`;
   }
 
@@ -311,9 +311,19 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         for (let y = y0; y <= y1; y += 1) {
           for (let x = x0; x <= x1; x += 1) {
             if (x < 0 || y < 0 || x >= w || y >= h) continue;
+            const t = terrainAt(grid, x, y);
+            /*
+             * 桥面：只有"改成深水"才会把它冲垮，那才算一格变化。
+             * 其余情况下桥面不动（变的是桥下河床），不该报进"改几格"。
+             */
+            if (t === 'bridge') {
+              if (act.to === 'deep' && (!act.only || act.only.length === 0 || act.only.includes('water'))) {
+                cells += 1;
+              }
+              continue;
+            }
             if (act.only && act.only.length > 0) {
-              const t = terrainAt(grid, x, y);
-              // 事件能改的地形是 LEVEL_TERRAINS 的子集，这里的 t 可能更宽（桥/城/虚空），
+              // 事件能改的地形是 LEVEL_TERRAINS 的子集，这里的 t 可能更宽（城/虚空），
               // 用 includes 前先确认它在这个子集里
               if (!LEVEL_TERRAINS.includes(t as LevelTerrain) || !act.only.includes(t as LevelTerrain)) continue;
             }
