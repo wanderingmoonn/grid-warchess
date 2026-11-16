@@ -407,7 +407,7 @@
         <li><b>反应射击</b>：敌人踏进射程的那一刻就打，不是等回合末补一炮。打出去的发数从这座建筑
           本回合的攻击次数里扣，和你自己点开火<b>共用同一份</b>——一回合总共还是那么几发，
           变的只是时机：从"挨完打才还手"变成"进门就打"。先打刚进来的那个，它倒了还有余弹就转火。</li>
-        <li><b>你的回合开始</b>，结算收入：基础 20 + 每座城按自己的时代贡献 + 每个经济单位按所在地形产出。</li>
+        <li><b>你的回合开始</b>，结算收入：每座城按自己的时代贡献 + 每个经济单位按所在地形产出。没有城就没有收入。</li>
         <li>你的单位恢复行动力（移动一次、攻击一次）。</li>
         <li>你行动：移动、攻击、攻城、建造、在城市生产、升级城市。</li>
         <li>点「结束行动」，把回合交给对方。</li>
@@ -713,8 +713,7 @@
     <section id="economy">
       <h2><span class="sec-num">08</span>经济</h2>
       <div class="formula">
-        每回合收入 = 20（基础）<br />
-        &nbsp;&nbsp;+ Σ 每座城市按自己的时代贡献<br />
+        每回合收入 = Σ 每座城市按自己的时代贡献<br />
         &nbsp;&nbsp;+ Σ 每个经济单位 / 经济建筑按所在地形产出<br />
         &nbsp;&nbsp;+ 相邻水域的额外 3 金<br />
         <span class="c">再过一个扩展钩子，最后取整</span>
@@ -736,7 +735,7 @@
         <li>所以第一道闸是<b>开局差一点买不起</b>：开局先结一次第一回合收入，手上有两百出头，
           离 220 金刚好差一点——逼你先走一两个回合的积累，而不是第一回合就把科技点上去。</li>
         <li>第二道闸是<b>升级会掏空你的兵</b>：升级那一回合你几乎造不出任何东西，等于把一整个回合押在"以后"。</li>
-        <li>第三道闸是<b>收益不再指数增长</b>：城市收入从 30 → 56，涨得比造价慢得多。所以越到后面，升级越像"解锁更强的兵"，而不是"印钞"。</li>
+        <li>第三道闸是<b>收益不再指数增长</b>：城市收入从 30 → 76，涨得比造价慢得多。所以越到后面，升级越像"解锁更强的兵"，而不是"印钞"。</li>
       </ul>
       <div class="callout">
         想调整节奏就看两个数：<code>ERAS[].upgradeCost</code>（越贵越慢）和 <code>ERAS[].cityIncome</code>（越低越穷）。
@@ -801,7 +800,7 @@
           <tr><th>时代</th><th>升级费</th><th>城市耐久</th><th>城市护甲</th><th>城市收入</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">青铜时代</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">30</td></tr><tr><td class="name">铁器时代</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">35</td></tr><tr><td class="name">火器时代</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">41</td></tr><tr><td class="name">蒸汽时代</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">48</td></tr><tr><td class="name">机械化时代</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">56</td></tr>
+          <tr><td class="name">青铜时代</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">50</td></tr><tr><td class="name">铁器时代</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">55</td></tr><tr><td class="name">火器时代</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">61</td></tr><tr><td class="name">蒸汽时代</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">68</td></tr><tr><td class="name">机械化时代</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">76</td></tr>
         </tbody>
       </table>
       <p>升级会同时提升耐久、护甲、收入，并解锁新兵种。升级用<b>增量</b>而非覆盖，所以扩展规则（比如「要塞」）给城市加的属性不会被升级抹掉。</p>
@@ -920,7 +919,7 @@
         <p class="era-meta">
           短兵相接 ·
           升级费 — ·
-          城市耐久 30 · 护甲 4 · 收入 30
+          城市耐久 30 · 护甲 4 · 收入 50
         </p>
         
     <h4>战斗单位</h4>
@@ -1105,7 +1104,7 @@
         <p class="era-meta">
           甲胄与长弓 ·
           升级费 220 金 ·
-          城市耐久 42 · 护甲 6 · 收入 35
+          城市耐久 42 · 护甲 6 · 收入 55
         </p>
         
     <h4>战斗单位</h4>
@@ -1254,7 +1253,7 @@
         <p class="era-meta">
           排队枪毙 ·
           升级费 360 金 ·
-          城市耐久 54 · 护甲 8 · 收入 41
+          城市耐久 54 · 护甲 8 · 收入 61
         </p>
         
     <h4>战斗单位</h4>
@@ -1415,7 +1414,7 @@
         <p class="era-meta">
           钢铁与堑壕 ·
           升级费 540 金 ·
-          城市耐久 66 · 护甲 10 · 收入 48
+          城市耐久 66 · 护甲 10 · 收入 68
         </p>
         
     <h4>战斗单位</h4>
@@ -1552,7 +1551,7 @@
         <p class="era-meta">
           内燃机与总动员 ·
           升级费 780 金 ·
-          城市耐久 80 · 护甲 12 · 收入 56
+          城市耐久 80 · 护甲 12 · 收入 76
         </p>
         
     <h4>战斗单位</h4>
