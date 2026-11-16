@@ -1,0 +1,289 @@
+/**
+ * 关卡编辑器（E0 + E1）的探针。
+ *
+ * E0 回答一个问题：**玩家做的关能不能像内置关一样走完一局的一生**。
+ * E1 回答另一个：**改错的地方能不能被指出来，而且指得对**。
+ *
+ * 这里刻意跑在 node 里（没有 localStorage）：`userLevels.ts` 在拿不到 localStorage 时
+ * 退化成"只在内存里"，所以注册表、校验、建局、删除这几条照样能测。
+ * 唯一测不到的是"真的写到磁盘上"——那条只能在浏览器里手动验，写在 PLAN 的固定动作第 3 条。
+ *
+ * 用法：npm run probe:level-editor
+ */
+
+import { aiNextAction } from '../src/core/ai.ts';
+import { LEVELS, allLevels, levelById, playableLevels } from '../src/core/level.ts';
+import { lintLevel } from '../src/core/level-lint.ts';
+import { applyAction } from '../src/core/rules.ts';
+import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
+import {
+  cloneAsUserLevel,
+  deleteUserLevel,
+  exportLevelText,
+  isUserLevelId,
+  loadUserLevels,
+  parseLevelText,
+  saveUserLevel,
+  userLevelList,
+} from '../src/core/userLevels.ts';
+import type { LevelDef } from '../src/core/level.ts';
+import type { GameState } from '../src/core/types.ts';
+
+let failed = 0;
+const ok = (what: string, extra = ''): void => {
+  console.log(`  ✓ ${what}${extra ? `  ${extra}` : ''}`);
+};
+const bad = (what: string, why: string): void => {
+  failed += 1;
+  console.log(`  ✗ ${what}\n      ${why}`);
+};
+const check = (cond: boolean, what: string, why = ''): boolean => {
+  if (cond) ok(what);
+  else bad(what, why);
+  return cond;
+};
+const line = (t: string): void => {
+  console.log(`\n${t}`);
+};
+
+/** 一张"能开局"的最小关卡：改这个来造各种坏样本 */
+function sample(over: Partial<LevelDef> = {}): LevelDef {
+  return {
+    id: 'user:probe-base',
+    version: 1,
+    name: '探针关',
+    brief: '探针用，不给人玩',
+    map: {
+      id: 'levelmap:probe-base',
+      name: '探针关',
+      w: 10,
+      h: 8,
+      rows: [
+        '..........',
+        '..........',
+        '....^^....',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+      ],
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 7, y: 5 }],
+      source: 'user',
+    },
+    seats: { count: 2, ai: ['B'] },
+    setup: { startEra: 1 },
+    deploy: {
+      A: [{ type: 'militia', x: 3, y: 3 }],
+      B: [{ type: 'militia', x: 7, y: 3 }],
+    },
+    ...over,
+  };
+}
+
+/* ── 1. 注册表：装得进去，且不污染内置 ─────────────────────────── */
+line('1. 用户关卡注册表');
+const builtinCount = LEVELS.length;
+check(allLevels().length === builtinCount, '一开始没有用户关卡（不污染内置表）', `现在 ${allLevels().length} 张`);
+
+const saved = saveUserLevel(sample());
+if (!check(saved.ok, '一张合规的关卡能存进去', saved.ok ? '' : saved.errors.join('；'))) {
+  console.log('\n存不进去，后面没法测');
+  process.exit(1);
+}
+if (!saved.ok) process.exit(1);
+
+check(LEVELS.length === builtinCount, '存了之后内置表长度不变', `内置 ${LEVELS.length} vs ${builtinCount}`);
+check(allLevels().length === builtinCount + 1, 'allLevels() 能看见它');
+check(
+  playableLevels().some((l) => l.id === saved.level.id),
+  'playableLevels() 里也有（否则选关页看不到）',
+);
+check(levelById(saved.level.id)?.name === '探针关', 'levelById 能按 id 找到它');
+check(isUserLevelId(saved.level.id), `id 带 user: 前缀`, saved.level.id);
+
+/* ── 2. 内置与用户的 id 冲突 ────────────────────────────────────── */
+line('2. id 冲突时内置优先');
+const builtinOne = LEVELS.find((l) => l.dev !== true) ?? LEVELS[0]!;
+const collide = saveUserLevel(sample({ id: builtinOne.id, name: '假冒的内置关' }));
+check(!collide.ok, '不允许用内置关的 id 存一张自己的关', collide.ok ? '竟然存进去了' : '被拦住了');
+check(
+  levelById(builtinOne.id)?.name === builtinOne.name,
+  'levelById 仍然返回内置那一份',
+  levelById(builtinOne.id)?.name ?? 'null',
+);
+
+/* ── 3. 版本号 ──────────────────────────────────────────────────── */
+line('3. 每存一次版本号 +1');
+const v1 = saveUserLevel(sample());
+const v2 = saveUserLevel(sample());
+check(v1.ok && v2.ok, '同一张关能存两次');
+if (v1.ok && v2.ok) {
+  check(v2.level.version === v1.level.version + 1, '版本号自增', `${v1.level.version} → ${v2.level.version}`);
+  check(userLevelList().filter((it) => it.level.id === v2.level.id).length === 1, '同 id 只留一份（不是追加）');
+}
+
+/* ── 4. 用户关卡能开局、能推进 ───────────────────────────────────── */
+line('4. 用户关卡能开局');
+const mine = levelById(saved.level.id);
+let state: GameState | null = null;
+if (!mine) {
+  bad('取到关卡', 'levelById 没返回这张关');
+} else {
+  ok('取到关卡');
+  const s0 = createMatch({ ...DEFAULT_CONFIG, level: mine }, 11);
+  check(s0.config.level?.id === mine.id, '局面里带的是这一份关卡快照');
+  check(s0.w === 10 && s0.h === 8, '尺寸用的是关卡地图', `${s0.w}×${s0.h}`);
+  let cur: GameState = s0;
+  for (let i = 0; i < 6 && !cur.winner; i += 1) {
+    const r = applyAction(cur, aiNextAction(cur) ?? { type: 'END_TURN' });
+    if (r.ok) cur = r.state;
+  }
+  check(cur.turn > 0, '能往前推几步', `第 ${cur.turn} 次行动`);
+  state = cur;
+}
+
+/* ── 5. 删除 ────────────────────────────────────────────────────── */
+line('5. 删掉之后');
+check(deleteUserLevel(saved.level.id), '删除成功');
+check(levelById(saved.level.id) === null, 'levelById 找不到它了');
+check(allLevels().length === builtinCount, '注册表回到只剩内置');
+if (state) {
+  // 删掉关卡不该影响正在打的那一局：它跑的是快照
+  const r = applyAction(state, { type: 'END_TURN' });
+  check(r.ok, '已经开局的那一局照样能继续走', r.ok ? '' : r.reason);
+}
+
+/* ── 6. 导入导出的文本 ──────────────────────────────────────────── */
+line('6. 文本导入导出');
+const text = exportLevelText(sample({ id: 'user:probe-text' }));
+const back = parseLevelText(text);
+check(back.ok, '导出再导入能过', back.ok ? '' : back.errors.join('；'));
+check(/^\s*\{/.test(text) && text.includes('\n  '), '导出的是带缩进、人能读的 JSON');
+
+const brokenJson = parseLevelText('{ "id": "user:x", ');
+check(!brokenJson.ok, '坏 JSON 被拦住');
+if (!brokenJson.ok) {
+  check(brokenJson.errors[0]!.includes('JSON 语法错'), '说的是"JSON 语法错"，不是含糊的失败', brokenJson.errors[0]);
+}
+const missing = parseLevelText(JSON.stringify({ id: 'user:y', version: 1, name: '' }));
+check(!missing.ok, '缺字段被拦住（交给 validateLevel 逐条说）');
+
+/* ── 7. 另存为副本 ──────────────────────────────────────────────── */
+line('7. 复制成我的关卡');
+const copy = cloneAsUserLevel(sample({ id: 'user:probe-src', name: '原始关' }));
+check(copy.id !== 'user:probe-src', 'id 换了', copy.id);
+check(copy.map.id !== 'levelmap:probe-src', 'map.id 也换了（复盘和地图缓存按它认图）', copy.map.id);
+check(copy.name === '原始关 副本', '名字带"副本"', copy.name);
+check(copy.map.name === copy.name, '地图名跟着改（不然缩略图上名字对不上）');
+check(copy.map.source === 'user', '地图来源标成 user');
+const srcRes = parseLevelText(JSON.stringify(sample({ id: 'user:probe-src', name: '原始关' })));
+check(srcRes.ok, '原版没被改坏');
+
+/* ── 8. lint：能指到格子 ────────────────────────────────────────── */
+line('8. 第二层校验（lintLevel）');
+
+const issuesOf = (lv: LevelDef): ReturnType<typeof lintLevel> => lintLevel(lv);
+
+// 8.1 兵种 id 不存在 → 警告（不是错：可能来自没启用的扩展，这里算不出来）
+const unknown = issuesOf(sample({ deploy: { A: [{ type: 'no-such-unit', x: 2, y: 2 }] } }));
+check(
+  unknown.some((i) => i.severity === 'warn' && i.text.includes('找不到')),
+  '不存在的兵种给警告',
+  unknown.map((i) => `${i.severity}:${i.text}`).join(' | ') || '一条都没有',
+);
+
+// 8.2 时代更高的兵 → **只警告**。这条锁住 2026-11-16 的实测结论：
+//     默认配置下 unitTypes 就是全部兵种，青铜局刷骑士是能成功的。
+const eraWarn = issuesOf(sample({ deploy: { A: [{ type: 'knight', x: 2, y: 2 }] } }));
+check(
+  eraWarn.some((i) => i.severity === 'warn' && i.text.includes('时代')),
+  '跨时代的兵给警告',
+  eraWarn.map((i) => i.text).join(' | '),
+);
+check(
+  !eraWarn.some((i) => i.severity === 'error'),
+  '跨时代的兵不报错（实测能刷出来，报错就是虚报）',
+  eraWarn.filter((i) => i.severity === 'error').map((i) => i.text).join(' | '),
+);
+
+// 8.3 站在山上 → 错，且带坐标
+const onMountain = issuesOf(sample({ deploy: { A: [{ type: 'militia', x: 4, y: 2 }] } }));
+const mt = onMountain.find((i) => i.severity === 'error');
+check(!!mt, '摆在山上的兵报错');
+check(mt?.at?.x === 4 && mt?.at?.y === 2, '错误带上了坐标（编辑器能跳过去）', JSON.stringify(mt?.at));
+
+// 8.4 摆到别人城里 → 错
+const inEnemyCity = issuesOf(sample({ deploy: { A: [{ type: 'militia', x: 7, y: 5 }] } }));
+check(
+  inEnemyCity.some((i) => i.severity === 'error' && i.text.includes('第 B 家的城里')),
+  '摆到别人城里报错',
+  inEnemyCity.map((i) => i.text).join(' | '),
+);
+
+// 8.5 hidden 席位没有 deploy 事件 → 错
+const hiddenNoDeploy = issuesOf(
+  sample({ seats: { count: 3, ai: ['B', 'C'], cities: { C: [{ x: 1, y: 6 }] }, hidden: ['C'] } }),
+);
+check(
+  hiddenNoDeploy.some((i) => i.severity === 'error' && i.text.includes('永远不出现')),
+  '未登场的席位没人叫它上场 → 报错',
+  hiddenNoDeploy.map((i) => i.text).join(' | '),
+);
+
+// 8.6 assassinate 的目标能被造出来 → 错（对面会一直补）
+const badGoal = issuesOf(
+  sample({ goals: [{ kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'militia' }] }),
+);
+check(
+  badGoal.some((i) => i.severity === 'error' && i.text.includes('一直补人')),
+  '斩首目标不该是能造出来的兵种',
+  badGoal.map((i) => i.text).join(' | '),
+);
+
+// 8.7 改地形没配播报 → 警告
+const noSay = issuesOf(
+  sample({
+    events: [
+      {
+        id: 'blow',
+        when: { kind: 'turn', at: 4 },
+        do: [{ kind: 'terrain', zone: { x0: 4, y0: 2, x1: 4, y1: 2 }, to: 'deep' }],
+      },
+    ],
+  }),
+);
+check(
+  noSay.some((i) => i.severity === 'warn' && i.text.includes('播报')),
+  '改地形没播报 → 警告',
+  noSay.map((i) => i.text).join(' | '),
+);
+
+// 8.8 合规的关：一条错都不该有
+const clean = issuesOf(sample());
+check(
+  !clean.some((i) => i.severity === 'error'),
+  '一张合规的关没有错误',
+  clean.filter((i) => i.severity === 'error').map((i) => i.text).join(' | '),
+);
+
+/* ── 9. 重新读盘不会丢 ──────────────────────────────────────────── */
+line('9. 重新读盘');
+saveUserLevel(sample({ id: 'user:probe-reload', name: '读盘关' }));
+const reloaded = loadUserLevels();
+check(reloaded.length >= 1, 'loadUserLevels() 之后内存里还有东西', `${reloaded.length} 张`);
+check(
+  levelById('user:probe-reload')?.name === '读盘关',
+  '重新读之后 levelById 照样能查到',
+  levelById('user:probe-reload')?.name ?? 'null',
+);
+
+/* ── 汇总 ──────────────────────────────────────────────────────── */
+console.log('');
+if (failed === 0) {
+  console.log('全部通过（用户关卡注册表 + 第二层校验）');
+} else {
+  console.log(`有 ${failed} 项没过`);
+  process.exitCode = 1;
+}

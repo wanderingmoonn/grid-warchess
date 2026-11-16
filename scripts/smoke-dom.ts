@@ -9378,6 +9378,95 @@ check('普通对局不显示目标那一块', () => {
   assert.ok(goal?.hidden !== false, `自由对局里目标那一块应该 hidden，实际 hidden=${goal?.hidden}`);
 });
 
+/* ------------------------------------------------------------------ */
+/* 关卡编辑器（E0 + E1）                                              */
+/* ------------------------------------------------------------------ */
+
+console.log('\n关卡编辑器');
+
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+
+check('选关页有「我的关卡」分组和一个新建入口', () => {
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('我的关卡'), `要有这个分组，实际：${body.slice(0, 200)}`);
+  assert.ok(!!doc.querySelector('[data-level-new]'), '要有「新建关卡」的入口');
+  /*
+   * 玩家关卡必须和预制关卡分成两组。
+   * 混在一起的话，玩家会分不清"这是官方内容"还是"我昨天改坏的"。
+   */
+  const groups = [...doc.querySelectorAll('.field-label')].map((el) => el.textContent ?? '');
+  assert.ok(
+    groups.some((t) => t.includes('选一关')) && groups.some((t) => t.includes('我的关卡')),
+    `两个分组都要在，实际：${groups.join(' | ')}`,
+  );
+});
+
+check('点「新建关卡」：给出一个能直接开局的模板', () => {
+  click('[data-level-new]');
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const ta = mask?.querySelector<HTMLTextAreaElement>('textarea.level-json');
+  assert.ok(!!ta, '编辑器里应该有一个 JSON 文本框');
+  assert.ok(
+    (ta!.value ?? '').includes('"id": "user:'),
+    `模板的 id 就该是 user: 开头，实际：${(ta!.value ?? '').slice(0, 100)}`,
+  );
+  const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('没问题'), `模板必须是一张能直接开局的关，实际：${issues}`);
+});
+
+// 故意改坏 JSON：问题列表要当场说是语法错，而不是等按了保存才说
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const ta = mask?.querySelector<HTMLTextAreaElement>('textarea.level-json');
+  if (ta) {
+    ta.value = '{ "id": ';
+    ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+}
+// 输入是防抖的（300ms），等它跑完再看
+await wait(420);
+
+check('改成坏 JSON：当场报「JSON 语法错」，并指出大约第几行', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('JSON 语法错'), `要说清是语法错，实际：${issues.slice(0, 160)}`);
+  assert.ok(
+    /第 \d+ 行|没写完|position/.test(issues),
+    `要能说清错在哪（第几行 / 没写完），实际：${issues.slice(0, 160)}`,
+  );
+});
+
+// 恢复成模板。jsdom 没实现 confirm，得在这个 window 上自己盖一个
+{
+  (window as unknown as { confirm: () => boolean }).confirm = () => true;
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="reset"]')?.click();
+}
+await wait(80);
+
+check('点「恢复成初始模板」能回到一张合规的关', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('没问题'), `恢复之后应该是干净的，实际：${issues.slice(0, 160)}`);
+  mask?.querySelector<HTMLElement>('[data-act="save"]')?.click();
+  const foot = mask?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('已保存'), `存成功要有回执，实际：${foot}`);
+});
+
+check('存完之后关掉编辑器：选关页的「我的关卡」里出现了这张关', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+  const mine = doc.querySelector<HTMLElement>('[data-level^="user:"]');
+  assert.ok(!!mine, '新建的关卡应该出现在「我的关卡」分组里');
+  // 它不该同时出现在预制那组里：重复出现会让玩家以为有两张
+  const cards = [...doc.querySelectorAll<HTMLElement>('[data-level]')].filter((el) =>
+    (el.dataset.level ?? '').startsWith('user:'),
+  );
+  assert.equal(cards.length, 1, `同一张关只该出现一次，实际 ${cards.length} 次`);
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。

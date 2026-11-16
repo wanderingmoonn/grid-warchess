@@ -4981,6 +4981,112 @@ a.btn {
   accent-color: var(--a);
 }
 
+/* ── 关卡编辑器（2026-11-16，E1）───────────────────────────────────────
+ * 左边数据、右边问题列表。两栏都给 minmax(0, …)，否则 JSON 那栏会把
+ * 整行撑破（pre 内容的 min-width 是内容宽度，不是 0）。
+ */
+.level-editor-head {
+  margin-bottom: 10px;
+}
+
+.level-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 12px;
+  margin: 10px 0 8px;
+  align-items: start;
+}
+
+.level-json {
+  width: 100%;
+  min-height: 360px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+  resize: vertical;
+}
+
+.level-json:focus {
+  outline: 2px solid rgba(47, 110, 168, 0.35);
+  outline-offset: 1px;
+}
+
+.level-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.level-summary {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  line-height: 1.6;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.level-summary-line b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.level-summary-id {
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.level-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.level-issue {
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-2);
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.level-issue b {
+  display: block;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.level-issue.is-error {
+  border-left-color: var(--danger-strong);
+}
+
+.level-issue.is-warn {
+  border-left-color: var(--warn-deep);
+}
+
+.level-issue.is-ok {
+  border-left-color: var(--ok);
+}
+
+.level-issue-meta {
+  color: var(--text-3);
+}
+
 .editor-checks {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

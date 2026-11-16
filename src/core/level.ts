@@ -1138,23 +1138,57 @@ export const LEVELS: LevelDef[] = [
 ];
 
 /**
- * 全部关卡（含测试夹具）。探针、自检、内部跳转用它。
+ * 内置关卡之外的来源（玩家在本机做的那些）。
+ *
+ * 用"注册回调"而不是直接 import `userLevels.ts`，是为了**避免循环依赖**：
+ * 那个文件要 import `validateLevel`，这里再反过来 import 它，启动时就会炸。
+ * 回调是惰性的，`allLevels()` 每次现取——玩家刚存的一张关，下一次问就在了。
+ *
+ * 一个来源抛错不该让整个注册表消失（表现会是"所有关卡都不见了"），所以逐个 try。
+ */
+const extraSources: Array<() => LevelDef[]> = [];
+
+export function registerLevelSource(fn: () => LevelDef[]): void {
+  if (!extraSources.includes(fn)) extraSources.push(fn);
+}
+
+function extraLevels(): LevelDef[] {
+  if (extraSources.length === 0) return [];
+  const out: LevelDef[] = [];
+  for (const fn of extraSources) {
+    try {
+      out.push(...fn());
+    } catch {
+      // 一个来源坏了就当它没贡献，别连累内置关卡
+    }
+  }
+  return out;
+}
+
+/**
+ * 全部关卡（含测试夹具、含玩家做的）。探针、自检、内部跳转用它。
  *
  * **玩家菜单不该用它**——那种地方要用 `playableLevels()`，否则"1 个兵打 5 个"
  * 这种专门用来验机制的图会出现在选关列表里，玩家点进去只会觉得是半成品。
  */
 export function allLevels(): LevelDef[] {
-  return LEVELS;
+  const extra = extraLevels();
+  // 没有外部来源时返回同一个数组引用：老代码（和探针）里 `=== LEVELS` 用得着
+  return extra.length > 0 ? [...LEVELS, ...extra] : LEVELS;
 }
 
 /** 玩家能选到的关卡（去掉 `dev` 那些测试夹具） */
 export function playableLevels(): LevelDef[] {
-  return LEVELS.filter((l) => l.dev !== true);
+  return allLevels().filter((l) => l.dev !== true);
 }
 
+/**
+ * 按 id 找关卡。**先内置、后玩家**：同 id 时内置优先，
+ * 这样玩家不可能用一个自制关卡顶掉"孤城"（表现会非常难查）。
+ */
 export function levelById(id: string | null | undefined): LevelDef | null {
   if (!id) return null;
-  return LEVELS.find((l) => l.id === id) ?? null;
+  return LEVELS.find((l) => l.id === id) ?? extraLevels().find((l) => l.id === id) ?? null;
 }
 
 /**

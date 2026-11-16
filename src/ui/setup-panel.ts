@@ -42,7 +42,16 @@ import {
   type FixedMap,
 } from '../core/fixed-maps.ts';
 import { cachedMaps, listSharedMaps, uploadSharedMap } from '../net/maps.ts';
-import { allLevels, applyLevelToConfig, goalText, playableLevels, type LevelDef } from '../core/level.ts';
+import {
+  allLevels,
+  applyLevelToConfig,
+  goalText,
+  levelById,
+  playableLevels,
+  type LevelDef,
+} from '../core/level.ts';
+import { cloneAsUserLevel, deleteUserLevel, isUserLevelId, userLevelList } from '../core/userLevels.ts';
+import { openLevelEditor } from './level-editor.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
@@ -1016,6 +1025,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
            <i>${n} 家 · ${who}</i>
          </button>`;
       };
+      /*
+       * 玩家自己做的关卡。**必须从 `playableLevels()` 里摘出去**：
+       * 那个函数现在会把用户关卡一起返回（注册表已经打通了），
+       * 不摘的话同一张关会在"预制"和"我的"两个分组里各出现一次。
+       */
+      const myLevels = userLevelList();
+      const presetLevels = playableLevels().filter((l) => !isUserLevelId(l.id));
+      const editingMine = !!config.level && isUserLevelId(config.level.id);
       const levelsView = `
             <section class="field">
               <div class="field-label">
@@ -1027,9 +1044,38 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   <b>自由对局</b>
                   <i>自己选地图和对手</i>
                 </button>
-                ${playableLevels().map(levelCard).join('')}
+                ${presetLevels.map(levelCard).join('')}
               </div>
-              <div class="field-hint">关卡由我们预制，暂时不能自己改。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。</div>
+              <div class="field-hint">预制关卡是只读的（那是平衡基准）。想改就选中它，点「复制成我的关卡」。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。</div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                我的关卡 <span class="field-hint">自己做，只存在这台设备上</span>
+              </div>
+              <div class="map-gallery">
+                ${myLevels.map((it) => levelCard(it.level)).join('')}
+                <button type="button" class="map-card" data-level-new="1" title="从一张能直接开打的模板开始">
+                  <span class="map-card-thumb is-random">＋</span>
+                  <b>新建关卡</b>
+                  <i>改数据，不做图</i>
+                </button>
+              </div>
+              ${
+                config.level
+                  ? `<div class="seed-row">
+                       <button class="btn btn-sm" data-level-edit="1">${
+                         editingMine ? '编辑这张关' : '复制成我的关卡'
+                       }</button>
+                       ${editingMine ? '<button class="btn btn-sm" data-level-del="1">删除</button>' : ''}
+                     </div>`
+                  : ''
+              }
+              <div class="field-hint">${
+                myLevels.length === 0
+                  ? '还没有自己的关卡。点「新建关卡」会给你一张能直接开打的模板，改几个数字就能看出差别。'
+                  : '选一张之后可以编辑或删除。删除不影响已经存下来的对局——那一局跑的是开局时的快照。'
+              }</div>
             </section>
 
             ${
@@ -1472,6 +1518,51 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       ) {
         expDrawerOpen = false;
         paint();
+        return;
+      }
+
+      /*
+       * 关卡编辑器的入口只有这一处（选关页）。三个动作分开写，因为它们的副作用不同：
+       *   · 新建 → 不预先建关卡，存了才有（关掉不留下垃圾）；
+       *   · 编辑/复制 → 内置关卡先拷一份再进编辑器，不让人手滑改掉孤城；
+       *   · 删除 → 只删本机这一份，已存的对局跑的是快照，不受影响。
+       *
+       * 三个动作都是"关闭编辑器时才刷新面板"：编辑器存完不关窗，
+       * 中途就让面板重排的话，`config.level` 会跟着半成品闪来闪去。
+       */
+      const afterEditor = (r: { saved: boolean; level?: LevelDef }): void => {
+        if (r.saved && r.level) {
+          // 从注册表重新取一份：编辑器保存的是"新版本"，直接用它也行，
+          // 但注册表里那份才是后续 `levelById` 能查到的，别让两处不一致
+          const picked = levelById(r.level.id) ?? r.level;
+          Object.assign(config, applyLevelToConfig(config, picked));
+        }
+        paint();
+      };
+
+      if (target.closest('[data-level-new]')) {
+        // 不传 level = 编辑器自己给一张能开打的模板（关掉不留垃圾）
+        openLevelEditor({ onClose: afterEditor });
+        return;
+      }
+
+      if (target.closest('[data-level-edit]') && config.level) {
+        const src = config.level;
+        // 内置关卡：先复制成自己的再进编辑器（不复制就没得存，只读）
+        openLevelEditor({
+          level: isUserLevelId(src.id) ? levelById(src.id) ?? src : cloneAsUserLevel(src),
+          onClose: afterEditor,
+        });
+        return;
+      }
+
+      if (target.closest('[data-level-del]') && config.level) {
+        const id = config.level.id;
+        if (window.confirm(`删掉「${config.level.name}」？这只删本机这一份，已经存下来的对局不受影响。`)) {
+          deleteUserLevel(id);
+          Object.assign(config, applyLevelToConfig(config, null));
+          paint();
+        }
         return;
       }
 
