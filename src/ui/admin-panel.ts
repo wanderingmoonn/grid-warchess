@@ -16,6 +16,7 @@
 
 import { cloudDatabase } from '../net/room.ts';
 import { mapThumbSvg } from './map-thumb.ts';
+import { validateLevel, type LevelDef } from '../core/level.ts';
 
 interface AdminRow {
   id: number;
@@ -70,7 +71,7 @@ function ago(iso?: string): string {
   return `${Math.round(h / 24)} 天前`;
 }
 
-export function openAdminPanel(): void {
+export function openAdminPanel(opts: { onPlay?: (level: LevelDef) => void } = {}): void {
   const mask = document.createElement('div');
   mask.className = 'admin-mask';
   document.body.appendChild(mask);
@@ -135,8 +136,15 @@ export function openAdminPanel(): void {
       if (row.build) facts.push(String(row.build));
     }
     const raw = JSON.stringify(row, null, 2);
+    const playable = kind === 'level' && opts.onPlay ? lv : null;
     return `
       ${thumb}
+      ${
+        playable
+          ? `<div class="admin-play"><button class="btn btn-sm" data-act="play" data-id="${row.id}">试玩这张关</button>
+             <span class="admin-note">会在游戏里直接开一局（不影响已有存档，点「新对局」可退出）</span></div>`
+          : ''
+      }
       <div class="admin-facts">${facts.map((t) => `<span class="admin-chip">${esc(t)}</span>`).join('')}</div>
       <details class="admin-raw">
         <summary>原始 JSON（${Math.round(raw.length / 1024)}KB）</summary>
@@ -332,6 +340,15 @@ export function openAdminPanel(): void {
       data = null;
       msg = '';
       paint();
+    } else if (a === 'play' && detailRow && opts.onPlay) {
+      const checked = validateLevel(detailRow.row.data as object);
+      if (!checked.ok) {
+        detailErr = `这张关的数据过不了校验，打不开：${checked.errors[0] ?? ''}`;
+        paint();
+        return;
+      }
+      mask.remove();
+      opts.onPlay(checked.level);
     } else if (a === 'view') {
       const kind = el.dataset.kind ?? 'level';
       void (async () => {
