@@ -338,6 +338,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
      */
     let tab: 'battle' | 'maps' | 'levels' = 'battle';
+    /**
+     * 这套面板是不是已经自动拉过一次云端关卡（2026-11-16）。
+     *
+     * 打开就拉，但**每次打开只拉一次**：paint() 会被点任意一个开关触发，
+     * 没有这个标记就会变成"点一下发一次请求"。
+     */
+    let cloudAutoTried = false;
     /** 换页的时候把滚动条拨回顶部：留在上一页的位置会让人以为页面没换 */
     let resetScroll = false;
 
@@ -410,7 +417,31 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
          <i>${size}${extra}</i>
        </button>`;
 
+    /**
+     * 后台拉一次云端关卡。
+     *
+     * 为什么不等玩家点「刷新」：那个按钮藏在一行小字里，没看见就等于"别人的关卡
+     * 永远是空的"。拉的是只读列表，失败也只是保持缓存，不会有副作用。
+     * 拉到之后**只在数量变了才重画**——多数时候内容和缓存一致，白重画一次会打断
+     * 正在输入的名字（重画=整块 innerHTML 换掉）。
+     */
+    const autoFetchCloudLevels = (): void => {
+      if (cloudAutoTried) return;
+      cloudAutoTried = true;
+      const before = cachedCloudLevels().map((l) => l.id).join(',');
+      void listSharedLevels()
+        .then((r) => {
+          if (!r.ok) return;
+          const after = r.levels.map((l) => l.id).join(',');
+          if (after !== before) paint();
+        })
+        .catch(() => {
+          /* 断网 / 关卡库没开通：保持缓存，别打扰玩家 */
+        });
+    };
+
     const paint = () => {
+      autoFetchCloudLevels();
       /*
        * 关卡局没有「地图」页。如果玩家正停在那页时点了关卡（或上车时记着 maps），
        * 就把他挪到简报页——否则会画出一页没有对应标签的内容，
@@ -1648,7 +1679,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const levelBtn = target.closest<HTMLElement>('[data-level]');
       if (levelBtn) {
         const id = levelBtn.dataset.level ?? '';
-        const picked = id ? allLevels().find((l) => l.id === id) ?? null : null;
+        /*
+         * 云端关卡**不在 `allLevels()` 里**（那个注册表只放内置关卡和"我的关卡"）。
+         * 原来这里只查它，于是点云端卡片永远查到 null → 被当成"自由对局"，
+         * 玩家点了半天等于没选（2026-11-16 用户报的就是这个）。
+         * 云端关卡去缓存里补一次；`cloud:` 前缀保证不会和本机关卡撞 id。
+         */
+        const picked = id
+          ? (allLevels().find((l) => l.id === id) ?? cachedCloudLevels().find((l) => l.id === id) ?? null)
+          : null;
         Object.assign(config, applyLevelToConfig(config, picked));
         // 换了关，抽屉里「这一关锁定哪些包」已经变了，收起来重新看
         expDrawerOpen = false;

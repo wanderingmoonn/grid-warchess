@@ -23,6 +23,7 @@ import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText } from './core/level.ts';
+import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
@@ -5714,6 +5715,39 @@ function newGameFlow(): void {
 }
 
 /**
+ * 从审核台**直接开一局**这张关卡（2026-11-16）。
+ *
+ * 审核最需要的是"能不能玩"，而不是"JSON 长什么样"。这里复用"新对局"那条路：
+ * 用同一份 `DEFAULT_CONFIG` 加一个 `level` 快照开局，其余设置（AI 速度、动效…）
+ * 都沿用当前这局——试玩完再点"新对局"就回到正常流程。
+ *
+ * 不写进"我的关卡"：那是玩家自己做的东西，审核别人的关卡不该在他的列表里留垃圾。
+ * 想留着改，用选关页的"复制成我的关卡"。
+ */
+function playtestLevel(level: LevelDef): void {
+  try {
+    state = createMatch({ ...DEFAULT_CONFIG, level }, randomSeed(), loadCustomUnits());
+    dropHeatFlash();
+    detachRoom();
+    resetZoom();
+    clearSelection();
+    resetRecorder();
+    saveMatch(state);
+    hasRealSave = true;
+    /*
+     * 首页是挂在 `body` 上的独立一层（见 showTitle 的注释），换局不会自动收掉它。
+     * 不摘掉这一层，试玩就变成"棋盘在下面、首页在上面"——看起来像没开。
+     */
+    document.querySelector('.title-screen')?.remove();
+    render();
+    toast(`试玩：${level.name}（不想要了就点「新对局」）`);
+    kickAiIfNeeded();
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '这张关卡打不开');
+  }
+}
+
+/**
  * 新手教程：开一局钉死的局面，把教练层挂上。
  *
  * 存档在教程期间**挂起**（`suspendSaves`）。这不是防作弊，是防覆盖：教程每走一步
@@ -8895,7 +8929,7 @@ if (forceHome || invited.length < 4) showTitle();
  * 不做独立入口/独立包：这东西只有审核时用，而且要读的云端凭据和游戏是同一套，
  * 拆出去反而多一类"域名和 publishableKey 对不上"的坑。
  */
-if (new URLSearchParams(location.search).has('admin')) openAdminPanel();
+if (new URLSearchParams(location.search).has('admin')) openAdminPanel({ onPlay: playtestLevel });
 
 /* ── 设置弹窗 ────────────────────────────────────────────────────────────
  *
