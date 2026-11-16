@@ -21,6 +21,7 @@ import { LEVEL_TERRAINS, type LevelDef } from '../core/level.ts';
 import { terrainFromChar } from '../core/mapgen.ts';
 import type { MapPoint } from '../core/fixed-maps.ts';
 import type { PlayerId } from '../core/types.ts';
+import { cellFromEvent as cellAtEvent, cellTone, cityLookup, gridFromRows, renderLevelGrid } from './level-grid.ts';
 import { toast } from './toast.ts';
 
 const MIN_SIZE = 8;
@@ -55,10 +56,6 @@ export interface LevelCanvasOptions {
 const esc = (t: string) =>
   t.replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
 
-function toGrid(rows: string[], w: number, h: number): string[][] {
-  return Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => rows[y]?.[x] ?? '.'));
-}
-
 function cloneCities(src: Record<string, MapPoint[]>): Record<string, MapPoint[]> {
   const out: Record<string, MapPoint[]> = {};
   for (const [k, v] of Object.entries(src)) out[k] = v.map((p) => ({ x: p.x, y: p.y }));
@@ -72,7 +69,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
 
   let w = level.map.w;
   let h = level.map.h;
-  let grid = toGrid(level.map.rows, w, h);
+  let grid = gridFromRows(level.map.rows, w, h);
   let cities: Record<string, MapPoint[]> = {
     A: level.map.citiesA.map((p) => ({ ...p })),
     B: level.map.citiesB.map((p) => ({ ...p })),
@@ -159,22 +156,22 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
   const restore = (snap: Snapshot): void => {
     grid = snap.grid.map((r) => [...r]);
     cities = cloneCities(snap.cities);
+    reindexCities();
     h = grid.length;
     w = grid[0]?.length ?? w;
   };
 
   /* ---------- 查询 ---------- */
 
-  /** 这一格被哪座城占着（含城的占地范围） */
-  const cityAt = (x: number, y: number): { seat: PlayerId; origin: MapPoint } | null => {
-    for (const seat of seats) {
-      for (const c of cities[seat] ?? []) {
-        if (x >= c.x && x < c.x + CITY_SIZE && y >= c.y && y < c.y + CITY_SIZE) {
-          return { seat, origin: c };
-        }
-      }
-    }
-    return null;
+  /*
+   * 城市占格：交给共用底座算（画布 / 摆兵 / 事件选区用的是同一份规则）。
+   * 索引是**快照**，所以 cities 一变就要重建——`reindexCities()` 到处都是，
+   * 少了哪一处就会出现"城挪了、旧的占格还在"。
+   */
+  let cityIdx = cityLookup(cities, CITY_SIZE);
+  const cityAt = (x: number, y: number) => cityIdx(x, y);
+  const reindexCities = (): void => {
+    cityIdx = cityLookup(cities, CITY_SIZE);
   };
 
   const canPlaceCity = (seat: PlayerId, x: number, y: number): string | null => {
@@ -215,6 +212,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
     const hit = cityAt(x, y);
     if (hit) {
       cities[hit.seat] = (cities[hit.seat] ?? []).filter((c) => c !== hit.origin);
+      reindexCities();
       strokeDirty = true;
       renderGrid();
       return;
@@ -225,6 +223,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
       return;
     }
     cities[brush.seat] = [...(cities[brush.seat] ?? []), { x, y }];
+    reindexCities();
     strokeDirty = true;
     renderGrid();
   };
@@ -258,9 +257,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
   /* ---------- 渲染 ---------- */
 
   function cellClass(x: number, y: number): string {
-    const hit = cityAt(x, y);
-    const terrain = hit ? 'city' : terrainFromChar(grid[y]?.[x] ?? '.');
-    return `tile t-${terrain}`;
+    return `tile t-${cellTone(grid, cityAt, x, y)}`;
   }
 
   function paintCellDom(x: number, y: number): void {
@@ -273,22 +270,14 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
   }
 
   function renderGrid(): void {
-    canvasEl.style.aspectRatio = `${w} / ${h}`;
-    canvasEl.style.gridTemplateColumns = `repeat(${w}, 1fr)`;
-    canvasEl.style.gridTemplateRows = `repeat(${h}, 1fr)`;
-    const parts: string[] = [];
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        const hit = cityAt(x, y);
-        const label = hit && hit.origin.x === x && hit.origin.y === y ? hit.seat : '';
-        parts.push(
-          `<div class="${cellClass(x, y)}" data-x="${x}" data-y="${y}" title="${x}, ${y}">${label}</div>`,
-        );
-      }
-    }
-    canvasEl.innerHTML = parts.join('');
-    // 格子太小的话城标会糊成一团，这里只控制字号不控制显隐
-    canvasEl.style.setProperty('font-size', `${Math.max(9, Math.min(16, Math.round(360 / Math.max(w, h))))}px`);
+    renderLevelGrid(canvasEl, {
+      w,
+      h,
+      grid,
+      cityAt,
+      cityLabel: (hit) => hit.seat,
+      overlay: () => '',
+    });
     wInput.value = String(w);
     hInput.value = String(h);
     const counts: Record<string, number> = {};
@@ -323,11 +312,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
 
   /* ---------- 交互 ---------- */
 
-  const cellFromEvent = (ev: PointerEvent): { x: number; y: number } | null => {
-    const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-x]');
-    if (!el) return null;
-    return { x: Number(el.dataset.x), y: Number(el.dataset.y) };
-  };
+  const cellFromEvent = (ev: Event): { x: number; y: number } | null => cellAtEvent(ev, canvasEl);
 
   canvasEl.addEventListener('pointerdown', (ev) => {
     const cell = cellFromEvent(ev);
@@ -413,6 +398,7 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
       dropped += (cities[seat] ?? []).length - keep.length;
       cities[seat] = keep;
     }
+    reindexCities();
     renderGrid();
     const notes: string[] = [];
     if (cut > 0) notes.push(`边缘裁掉了 ${cut} 格地形`);

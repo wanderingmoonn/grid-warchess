@@ -23,6 +23,7 @@ import { terrainFromChar } from '../core/mapgen.ts';
 import type { DeployUnit } from '../core/level.ts';
 import type { LevelDef } from '../core/level.ts';
 import type { PlayerId, UnitTypeDef } from '../core/types.ts';
+import { cityLookup, gridFromRows, renderLevelGrid } from './level-grid.ts';
 import { toast } from './toast.ts';
 
 const SEATS: PlayerId[] = ['A', 'B', 'C', 'D'];
@@ -59,19 +60,15 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
     ...(level.units ?? {}),
   };
 
-  const cities: Array<{ seat: PlayerId; x: number; y: number }> = [];
-  const pushCities = (list: Array<{ x: number; y: number }> | undefined, seat: PlayerId): void => {
-    for (const c of list ?? []) {
-      for (let dy = 0; dy < CITY_SIZE; dy += 1) {
-        for (let dx = 0; dx < CITY_SIZE; dx += 1) cities.push({ seat, x: c.x + dx, y: c.y + dy });
-      }
-    }
+  /** 城位按"每家几座城"给，占格交给共用底座算（和画布同一份规则） */
+  const cityPoints: Partial<Record<PlayerId, Array<{ x: number; y: number }>>> = {
+    A: level.map.citiesA,
+    B: level.map.citiesB,
+    ...(level.seats?.cities?.C ? { C: level.seats.cities.C } : {}),
+    ...(level.seats?.cities?.D ? { D: level.seats.cities.D } : {}),
   };
-  pushCities(level.map.citiesA, 'A');
-  pushCities(level.map.citiesB, 'B');
-  pushCities(level.seats?.cities?.C, 'C');
-  pushCities(level.seats?.cities?.D, 'D');
-  const cityAt = (x: number, y: number) => cities.find((c) => c.x === x && c.y === y) ?? null;
+  const cityAt = cityLookup(cityPoints, CITY_SIZE);
+  const grid = gridFromRows(rows, w, h);
 
   /** 从关卡数据恢复出来的兵（含所有席位，摆的时候要看见对面） */
   let placed: Placed[] = [];
@@ -206,24 +203,24 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
   };
 
   const renderGrid = (): void => {
-    canvasEl.style.aspectRatio = `${w} / ${h}`;
-    canvasEl.style.gridTemplateColumns = `repeat(${w}, 1fr)`;
-    canvasEl.style.gridTemplateRows = `repeat(${h}, 1fr)`;
-    canvasEl.style.setProperty('font-size', `${Math.max(9, Math.min(15, Math.round(360 / Math.max(w, h))))}px`);
-    const parts: string[] = [];
-    for (let y = 0; y < h; y += 1) {
-      for (let x = 0; x < w; x += 1) {
-        const city = cityAt(x, y);
-        const terrain = city ? 'city' : terrainFromChar(rows[y]?.[x] ?? '.');
+    renderLevelGrid(canvasEl, {
+      w,
+      h,
+      grid,
+      cityAt,
+      cityLabel: (hit) => hit.seat,
+      overlay: (x, y) => {
         const unit = unitOnCell(x, y);
-        const seatClass = unit ? `lv-${unit.owner}` : city ? `lv-${city.seat}` : '';
-        const chip = unit ? `<span class="lv-unit ${seatClass}">${esc(catalog[unit.type]?.short ?? '?')}</span>` : '';
-        parts.push(
-          `<div class="tile t-${terrain} ${seatClass}" data-x="${x}" data-y="${y}" title="${x}, ${y}">${chip}</div>`,
-        );
-      }
-    }
-    canvasEl.innerHTML = parts.join('');
+        if (!unit) return '';
+        return `<span class="lv-unit lv-${unit.owner}">${esc(catalog[unit.type]?.short ?? '?')}</span>`;
+      },
+      extraClass: (x, y) => {
+        const unit = unitOnCell(x, y);
+        if (unit) return `lv-${unit.owner}`;
+        const city = cityAt(x, y);
+        return city ? `lv-${city.seat}` : '';
+      },
+    });
     countsEl.textContent = seats
       .map((s) => `${SEAT_NAME[s] ?? s} ${placed.filter((u) => u.owner === s).length}`)
       .join(' · ');

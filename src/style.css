@@ -5194,6 +5194,199 @@ a.btn {
  * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
  * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
  */
+/* ── 事件表单（E4a）─────────────────────────────────────────────────
+ * 左卡片、右地图。卡片按"当…就…"排，不追求一屏看十条——事件本来就不多，
+ * 而每条都要能就地看清区域和落点。
+ */
+.level-events-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 8px 0;
+}
+
+.level-events-col,
+.level-events-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-events-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.level-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.level-event-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 8px 10px;
+}
+
+.level-event-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.level-event-no,
+.level-do-no {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: var(--text-3);
+  color: var(--panel);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.level-event-when,
+.level-when-arg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-event-del {
+  margin-left: auto;
+}
+
+.level-event-repeat {
+  margin: 6px 0 0 26px;
+}
+
+.level-event-dos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 6px 0;
+}
+
+.level-do-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.level-event-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  border-top: 1px dashed var(--line);
+  padding-top: 6px;
+}
+
+.level-mini-select,
+.level-mini-num {
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 3px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.level-mini-num {
+  width: 56px;
+}
+
+.level-say-input {
+  flex: 1 1 200px;
+  min-width: 120px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.level-spawn-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.level-spawn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--panel);
+}
+
+.level-spawn-chip button {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+}
+
+.level-spawn-empty {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.level-pick-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+/* 选区高亮：用内阴影而不是外框，免得把格子撑大 */
+.level-canvas .tile.is-selected {
+  box-shadow: inset 0 0 0 2px var(--a);
+}
+
+.lv-spawn-dot {
+  display: grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 500;
+}
+
+@media (max-width: 860px) {
+  .level-events-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* ── 席位面板 ───────────────────────────────────────────────────── */
 .level-seat-start {
   max-width: 420px;

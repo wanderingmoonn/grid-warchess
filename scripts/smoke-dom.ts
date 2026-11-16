@@ -9800,6 +9800,123 @@ check('加到 3 家：自动给第三家塞一座城（否则数据立刻过不�
   mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
 }
 
+/* ------------------------------------------------------------------ */
+/* 事件表单（E4a）                                                     */
+/* ------------------------------------------------------------------ */
+
+console.log('\n事件表单');
+
+click('[data-level-new]');
+
+check('事件面板：卡片式，有模板入口和一块地图', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+  assert.ok(doc.querySelector('[data-template]'), '要有模板下拉');
+  assert.ok(doc.querySelector('[data-act="add-event"]'), '要能加一条空事件');
+  assert.ok(doc.querySelector('.level-canvas'), '要有一块地图用来选区域/点落点');
+});
+
+check('从模板加一条「炸桥」：卡片里是播报 + 改地形两个动作', () => {
+  const sel = doc.querySelector<HTMLSelectElement>('[data-template]')!;
+  sel.value = 'bridge';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const cards = doc.querySelectorAll('.level-event-card');
+  assert.equal(cards.length, 1, `应该有一条事件，实际 ${cards.length}`);
+  const rows = doc.querySelectorAll('.level-do-row');
+  assert.equal(rows.length, 2, `炸桥模板是两个动作，实际 ${rows.length}`);
+  const summary = doc.querySelector('[data-summary]')?.textContent ?? '';
+  assert.ok(summary.includes('共 1 条'), `摘要要写清有几条，实际：${summary}`);
+});
+
+check('播报清空 → 点应用被拦，并指到第几条', () => {
+  const say = doc.querySelector<HTMLInputElement>('[data-say]')!;
+  say.value = '   ';
+  say.dispatchEvent(new window.Event('input', { bubbles: true }));
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const issues = doc.querySelector('[data-issues]')?.textContent ?? '';
+  assert.ok(issues.includes('播报是空的'), `要说清哪里不对，实际：${issues.slice(0, 160)}`);
+  assert.ok(issues.includes('第 1 条'), `要指到第几条，实际：${issues.slice(0, 160)}`);
+  assert.ok(doc.querySelector('.level-event-card'), '被拦下时面板不该关');
+});
+
+check('补回播报再应用：事件的 JSON 结构正确', () => {
+  const say = doc.querySelector<HTMLInputElement>('[data-say]')!;
+  say.value = '桥被炸断了。';
+  say.dispatchEvent(new window.Event('input', { bubbles: true }));
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    events?: Array<{ id?: string; when?: { kind?: string; at?: number }; do?: Array<{ kind?: string }> }>;
+  };
+  assert.equal(data.events?.length, 1, '应该有 1 条事件');
+  assert.equal(data.events?.[0]?.when?.kind, 'turn', '触发类型是 turn');
+  assert.equal(data.events?.[0]?.when?.at, 10, '炸桥模板默认第 10 次行动');
+  assert.equal(data.events?.[0]?.do?.length, 2, '两个动作');
+  assert.deepEqual(
+    data.events?.[0]?.do?.map((a) => a.kind),
+    ['say', 'terrain'],
+    '动作顺序应当保持 播报 → 改地形',
+  );
+  // id 自动生成，不能是空串（否则触发记录会分不清是哪一条）
+  assert.ok((data.events?.[0]?.id ?? '').length > 0, 'id 必须自动生成');
+});
+
+/** 在地图上拖一个矩形（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
+const dragOnMap = (x0: number, y0: number, x1: number, y1: number): void => {
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  canvas
+    .querySelector<HTMLElement>(`[data-x="${x0}"][data-y="${y0}"]`)
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+  // 按下之后网格会重绘，所以第二个格子必须重新取
+  canvas
+    .querySelector<HTMLElement>(`[data-x="${x1}"][data-y="${y1}"]`)
+    ?.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true }));
+  canvas.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+};
+
+check('框选区域：拖一个矩形就把 zone 改掉（不用填四个数）', () => {
+  // 重新打开事件面板，改刚才那条的地形区域
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+  const btn = doc.querySelector<HTMLElement>('[data-pick-do-zone]');
+  assert.ok(!!btn, '改地形那一行要有「选区域」按钮');
+  btn!.click();
+  dragOnMap(2, 2, 3, 3);
+
+  const after = doc.querySelector<HTMLElement>('[data-pick-do-zone]')?.textContent ?? '';
+  assert.ok(after.includes('2,2') && after.includes('3,3'), `区域文本要跟着变，实际：${after}`);
+  assert.ok(after.includes('4 格'), `要写出框了几格，实际：${after}`);
+});
+
+check('刷兵：点地图加落点，落点列表里能看见、能删', () => {
+  const sel = doc.querySelector<HTMLSelectElement>('[data-template]')!;
+  sel.value = 'reinforce';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // 模板自带一个落点（0,0）；再加一个
+  const before = doc.querySelectorAll('.level-spawn-chip').length;
+  const pickBtn = [...doc.querySelectorAll<HTMLElement>('[data-pick-spawn]')].pop();
+  pickBtn?.click();
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  canvas
+    .querySelector<HTMLElement>('[data-x="1"][data-y="0"]')
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+
+  const after = doc.querySelectorAll('.level-spawn-chip').length;
+  assert.ok(after > before, `点地图之后落点应该多一个，实际 ${before} → ${after}`);
+
+  // 删掉一个
+  [...doc.querySelectorAll<HTMLElement>('[data-spawn-del]')].pop()?.click();
+  assert.equal(doc.querySelectorAll('.level-spawn-chip').length, after - 1, '点 × 应该删掉那个落点');
+});
+
+// 收尾：关掉事件面板与编辑器
+{
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。
