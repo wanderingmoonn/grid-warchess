@@ -8065,6 +8065,45 @@ check('三人局城被打光：顶栏说"你的城全丢了"，席位栏把这�
 });
 
 
+check('同盟局结算：顶栏写队名、"盟友"标在队友头上', () => {
+  /*
+   * 合作关里 `winner` 只是队里第一个还活着的席位。界面直接写
+   * `players[winner].name` 会让"两个人一起打赢了"显示成"只有红方赢了"——
+   * 蓝方看着像输了。席位栏同理：不标"盟友"，玩家得靠记位数才知道谁是自己人。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, playerCount: 3 }, 5152);
+  // 只借 seats.teams：`sameTeam` 读的就是这里（关卡其余字段用随机图自带的）
+  (st.config as unknown as { level?: unknown }).level = {
+    ...(st.config.level ?? {}),
+    seats: { count: 3, teams: [['A', 'B'], ['C']] },
+  };
+  st.winner = 'A';
+
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+
+  const badge = host.querySelector('.turn-badge')?.textContent ?? '';
+  assert.ok(badge.includes('胜利'), `终局那一格要写谁赢了，实际：${badge}`);
+  assert.ok(
+    badge.includes(st.players.B.name),
+    `同盟局要把队友一起写进胜方，实际：${badge}（蓝方叫 ${st.players.B.name}）`,
+  );
+
+  const rowText = (p: 'A' | 'B' | 'C') =>
+    [...host.querySelectorAll('.seat-row')].find((r) => (r.textContent ?? '').includes(st.players[p].name))
+      ?.textContent ?? '';
+  assert.ok(rowText('A').includes('（你）'), `自己那行还是标"你"，实际：${rowText('A')}`);
+  assert.ok(rowText('B').includes('（盟友）'), `同队那行要标"盟友"，实际：${rowText('B')}`);
+  assert.ok(!rowText('C').includes('盟友'), `敌人那行不能标盟友，实际：${rowText('C')}`);
+});
+
 check('掉血动画：一笔扣血只演一次，DOM 重排（有人倒下）也不重播', () => {
   /*
    * 病根不在我们自己的调用次数，而在浏览器：`paintUnits` 为了对齐顺序会
@@ -9217,11 +9256,12 @@ check('关卡页只列玩家关，测试夹具不出现', () => {
   const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
   assert.equal(ids[0], '', '第一张应该是「自由对局」');
   const named = ids.filter(Boolean);
-  assert.equal(named.length, 4, `菜单里应该只有四关，实际 ${named.length}：${named.join(',')}`);
+  assert.equal(named.length, 5, `菜单里应该只有五关，实际 ${named.length}：${named.join(',')}`);
   assert.ok(named.includes('level:lone-city'), '缺「孤城」');
   assert.ok(named.includes('level:behead'), '缺「斩首」');
   assert.ok(named.includes('level:latecomer'), '缺「黄雀」');
   assert.ok(named.includes('level:escort'), '缺「护送」');
+  assert.ok(named.includes('level:evil-dragon'), '缺「邪龙」');
   // 夹具关（断后 / 断桥 / 死守 / 三岔口 / 平地探针）不该出现在玩家的选关列表里
   for (const dev of ['level:rear-guard', 'level:cut-bridge', 'level:hold-out', 'level:tri-corner', 'level:probe-flat']) {
     assert.ok(!named.includes(dev), `测试夹具「${dev}」不该出现在菜单里`);
@@ -9832,6 +9872,72 @@ check('加到 3 家：自动给第三家塞一座城（否则数据立刻过不�
   assert.ok(!issues.includes('会出问题'), `加完第三家之后不该有错误，实际：${issues.slice(0, 200)}`);
 });
 
+check('同盟开关：勾上之后每家行尾出现「第 N 队」，默认前两家一队', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+
+  const box = doc.querySelector<HTMLInputElement>('[data-allies]')!;
+  assert.ok(box, '席位面板要有「同盟」开关');
+  assert.equal(box.checked, false, '默认应该是各自为战');
+  assert.equal(doc.querySelector('[data-team-for="A"]'), null, '没勾同盟时不该出现队伍下拉');
+
+  box.checked = true;
+  box.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const teams = ['A', 'B', 'C'].map((p) => doc.querySelector<HTMLSelectElement>(`[data-team-for="${p}"]`));
+  assert.ok(
+    teams.every(Boolean),
+    '勾上之后每家都要有队伍下拉',
+  );
+  assert.equal(teams[0]!.value, '1', '默认把红方放进第 1 队');
+  assert.equal(teams[1]!.value, '1', '默认把蓝方也放进第 1 队（合作关最常见的形状）');
+  assert.equal(teams[2]!.value, '2', '第三家单独一队');
+
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const data = JSON.parse(doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!.value) as {
+    seats?: { teams?: string[][] };
+  };
+  assert.deepEqual(data.seats?.teams, [['A', 'B'], ['C']], `teams 要写进关卡，实际 ${JSON.stringify(data.seats?.teams)}`);
+});
+
+check('同盟：把所有人都塞进第 1 队会被拦住（那样没有敌人）', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+
+  const c = doc.querySelector<HTMLSelectElement>('[data-team-for="C"]')!;
+  assert.equal(c.value, '2', '上一轮存下来的队号要回显（C 是第 2 队）');
+  c.value = '1';
+  c.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const stillOpen = doc.querySelector('[data-team-for="C"]');
+  assert.ok(stillOpen, '全塞进一队时不该关窗——数据是坏的');
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('没有敌人'), `要说清为什么不给存，实际：${foot}`);
+
+  // 改回第 2 队再存，别把坏状态留给后面的用例
+  const back = doc.querySelector<HTMLSelectElement>('[data-team-for="C"]')!;
+  back.value = '2';
+  back.dispatchEvent(new window.Event('change', { bubbles: true }));
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+});
+
+check('同盟：取消勾选会把 teams 从关卡里清掉', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+
+  const box = doc.querySelector<HTMLInputElement>('[data-allies]')!;
+  assert.equal(box.checked, true, '上一轮存下来的同盟要回显成勾着');
+  box.checked = false;
+  box.dispatchEvent(new window.Event('change', { bubbles: true }));
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const data = JSON.parse(doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!.value) as {
+    seats?: { teams?: unknown };
+  };
+  assert.equal(data.seats?.teams, undefined, '取消同盟后不该留着 teams');
+});
+
 // 收尾：关掉编辑器
 {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
@@ -9947,6 +10053,43 @@ check('刷兵：点地图加落点，落点列表里能看见、能删', () => {
   // 删掉一个
   [...doc.querySelectorAll<HTMLElement>('[data-spawn-del]')].pop()?.click();
   assert.equal(doc.querySelectorAll('.level-spawn-chip').length, after - 1, '点 × 应该删掉那个落点');
+});
+
+/*
+ * 点亮：给"迷雾里不知道该往哪走"的地方用（护送关的终点、伏兵位置）。
+ * 它是独立的动作，加不加就是开关——隐秘事件不加就仍然藏着。
+ */
+check('点亮：能加一条「点亮一片区域」，拖框之后写进 events', () => {
+  const layer = [...doc.querySelectorAll('.modal-mask')].pop()!;
+  const last = layer.querySelectorAll<HTMLSelectElement>('[data-do-add-kind]');
+  const sel = last[last.length - 1]!;
+  const evIdx = sel.dataset.doAddKind!;
+  sel.value = 'reveal';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  // 按钮必须取**同一条事件**的那个：面板里每条事件都有自己的"再做一个动作"
+  layer.querySelector<HTMLElement>(`[data-do-add="${evIdx}"]`)?.click();
+
+  const top = [...doc.querySelectorAll('.modal-mask')].pop()!;
+  const card = top.querySelector<HTMLElement>(`[data-ev="${evIdx}"]`);
+  const pickBtns = card?.querySelectorAll<HTMLElement>('[data-pick-do-zone]') ?? [];
+  assert.ok(pickBtns.length > 0, '点亮那一行要有「选区域」按钮');
+  pickBtns[pickBtns.length - 1]!.click();
+  dragOnMap(4, 4, 5, 5);
+
+  const afterCard = [...doc.querySelectorAll('.modal-mask')]
+    .pop()!
+    .querySelector<HTMLElement>(`[data-ev="${evIdx}"]`);
+  const afterBtns = afterCard?.querySelectorAll<HTMLElement>('[data-pick-do-zone]') ?? [];
+  const text = afterBtns[afterBtns.length - 1]?.textContent ?? '';
+  assert.ok(text.includes('4,4') && text.includes('5,5'), `区域文本要跟着变，实际：${text}`);
+
+  // 应用后 JSON 里要有 reveal，zone 是刚拖的那一块
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { events?: Array<{ do?: Array<{ kind?: string; zone?: { x0: number; y0: number; x1: number; y1: number } }> }> };
+  const reveals = (data.events ?? []).flatMap((e) => (e.do ?? []).filter((a) => a.kind === 'reveal'));
+  assert.equal(reveals.length, 1, `应该有一条点亮动作，实际 ${reveals.length}`);
+  assert.deepEqual(reveals[0]?.zone, { x0: 4, y0: 4, x1: 5, y1: 5 }, `点亮的区域不对：${JSON.stringify(reveals[0]?.zone)}`);
 });
 
 // 收尾：关掉事件面板与编辑器

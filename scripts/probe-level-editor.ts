@@ -17,6 +17,7 @@ import { validateFixedMap } from '../src/core/fixed-maps.ts';
 import { citiesOf } from '../src/core/rules.ts';
 import { lintLevel } from '../src/core/level-lint.ts';
 import { applyAction, isCitylessSeat, isEliminated } from '../src/core/rules.ts';
+import { playerView } from '../src/core/fog.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { downloadLevelFile, downloadLevelsFile, parseLevelFileText } from '../src/core/level-io.ts';
 import { levelUploadBlocker } from '../src/net/levels.ts';
@@ -501,6 +502,141 @@ if (duelChecked.ok) {
     '这一局能推进到有结果（或者在时间上限前一直在打）',
     `winner=${st.winner ?? '-'} turn=${st.turn}`,
   );
+}
+
+/* ── 14. 点亮（reveal）─────────────────────────────────────────── */
+line('14. 点亮区域');
+
+/*
+ * 护送关的核心场景：开着雾，玩家得知道"终点在哪"。
+ * 点亮 = 把这片格子永久并进可见集，不随视野收回去。
+ */
+{
+  const rows = Array.from({ length: 8 }, () => '..........');
+  const v = validateLevel({
+    id: 'user:probe-reveal',
+    version: 1,
+    name: '点亮探针',
+    map: {
+      id: 'levelmap:probe-reveal',
+      name: '点亮探针',
+      w: 10,
+      h: 8,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 7, y: 5 }],
+      source: 'user',
+    },
+    seats: { count: 2, ai: ['B'] },
+    deploy: {
+      A: [{ type: 'militia', x: 2, y: 2 }],
+      B: [{ type: 'militia', x: 7, y: 4 }],
+    },
+    events: [
+      {
+        id: 'reveal-far',
+        // 用 turn 2：turn 1 的事件在建局时就会跑（`createMatch` 末尾调 runLevelEvents），
+        // 写 1 的话'开局看不见'这条根本测不到
+        when: { kind: 'turn', at: 2 },
+        do: [
+          { kind: 'reveal', zone: { x0: 8, y0: 0, x1: 9, y1: 1 } },
+          // repeat 里重复点亮同一片：必须幂等，不该报错也不该重复堆
+          { kind: 'reveal', zone: { x0: 8, y0: 0, x1: 9, y1: 1 } },
+        ],
+      },
+    ],
+  });
+  check(v.ok, '带点亮动作的关卡能过校验', v.ok ? '' : v.errors.join('；'));
+  if (v.ok) {
+    // 默认开雾（DEFAULT_CONFIG.fog 是 true），才谈得上"点亮"
+    const s = createMatch({ ...DEFAULT_CONFIG, level: v.level }, 3);
+    check(s.fog === true, '这一关默认开着雾（不然"点亮"没有意义）');
+    const far = 0 * 10 + 8; // (8,0)：离 A 的兵很远，没点亮时看不见
+    const before = playerView(s, 'A');
+    check(!before.visible.includes(far), '开局看不到远处那一片（雾是开着的）');
+
+    // 推一步让 turn 2 的事件触发
+    const r = applyAction(s, { type: 'END_TURN' });
+    check(r.ok, '能推进一步触发事件', r.ok ? '' : (r as { reason: string }).reason);
+    if (r.ok) {
+      const after = playerView(r.state, 'A');
+      check(after.visible.includes(far), '点亮之后，那片区域在玩家视野里');
+      check((r.state.revealed ?? []).length === 4, '记下了 4 格（重复点亮是幂等的）', `实际 ${(r.state.revealed ?? []).length}`);
+      // 别把整张图都点亮：同一条事件没点的地方仍然不可见
+      const other = 0 * 10 + 0; // (0,0)
+      check(!after.visible.includes(other), '没点亮的格子不会被顺带点亮');
+
+      // 到期：默认亮 1 次，够当下 + 下一手；再往后就该重新没入迷雾
+      let cur = r.state;
+      for (let k = 0; k < 4 && !cur.winner; k += 1) {
+        const rr = applyAction(cur, { type: 'END_TURN' });
+        if (!rr.ok) break;
+        cur = rr.state;
+      }
+      check(
+        !playerView(cur, 'A').visible.includes(far),
+        '点亮到期之后重新被迷雾遮住（不是永久可见）',
+        `turn=${cur.turn}，仍在 ${(cur.revealed ?? []).filter((x) => x.i === far).length} 条记录里`,
+      );
+    }
+  }
+}
+
+/* ── 15. 同盟校验（teams） ────────────────────────────────────── */
+line('15. 同盟');
+
+{
+  const rows = Array.from({ length: 8 }, () => '............');
+  const base = {
+    id: 'user:probe-teams',
+    version: 1,
+    name: '同盟探针',
+    map: {
+      id: 'levelmap:probe-teams',
+      name: '同盟探针',
+      w: 12,
+      h: 8,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 9, y: 1 }],
+      source: 'user',
+    },
+    seats: {
+      count: 3,
+      ai: ['C'],
+      cities: { C: [{ x: 9, y: 5 }] },
+      teams: [
+        ['A', 'B'],
+        ['C'],
+      ],
+    },
+    deploy: {
+      A: [{ type: 'militia', x: 2, y: 2 }],
+      B: [{ type: 'militia', x: 8, y: 2 }],
+      C: [{ type: 'militia', x: 8, y: 4 }],
+    },
+  };
+  const v = validateLevel(base);
+  check(v.ok, '正常的同盟能过校验', v.ok ? '' : v.errors.join('；'));
+  if (v.ok) {
+    check(
+      JSON.stringify(v.level.seats?.teams) === JSON.stringify([['A', 'B'], ['C']]),
+      'teams 原样保留',
+      JSON.stringify(v.level.seats?.teams),
+    );
+  }
+
+  // 漏席位：C 坐了人却没进任何队
+  const missing = validateLevel({ ...base, seats: { ...base.seats, teams: [['A', 'B']] } });
+  check(!missing.ok, '漏掉某个席位要报错', missing.ok ? '竟然过了' : missing.errors[0]);
+
+  // 同一家出现在两个队
+  const dup = validateLevel({ ...base, seats: { ...base.seats, teams: [['A', 'B'], ['B', 'C']] } });
+  check(!dup.ok, '一家出现在两个队要报错', dup.ok ? '竟然过了' : dup.errors[0]);
+
+  // 只有一个队 = 没有敌人
+  const solo = validateLevel({ ...base, seats: { ...base.seats, teams: [['A', 'B', 'C']] } });
+  check(!solo.ok, '只有一个队要报错（那样没有敌人）', solo.ok ? '竟然过了' : solo.errors[0]);
 }
 
 /* ── 汇总 ──────────────────────────────────────────────────────── */

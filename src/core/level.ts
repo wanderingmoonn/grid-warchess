@@ -99,7 +99,22 @@ export type LevelDo =
    * **不自动拦截"把地图切成两块"**——"断了桥才能守住"本身就是一种设计，
    * 引擎去拦反而是拦创意。这一关能不能打完，是批量自检该管的事。
    */
-  | { kind: 'terrain'; zone: LevelZone; to: LevelTerrain; only?: LevelTerrain[] };
+  | { kind: 'terrain'; zone: LevelZone; to: LevelTerrain; only?: LevelTerrain[] }
+  /**
+   * 点亮一片区域：这些格子此后**一直可见**（地形和上面的单位都不再被迷雾遮住）。
+   *
+   * 用在不希望玩家瞎猜的地方：护送关的终点（不然开着雾根本不知道往哪走）、
+   * 伏兵刷出来的位置（让"那儿有人"这件事立刻成立）。
+   *
+   * **这就是开关**：想点亮就加这条动作，不想让玩家看见的隐秘事件就别加。
+   * 它是"信息"不是"效果"——不改地形、不刷兵、不造成任何规则变化，
+   * 只是把这片从迷雾里揭出来。没开迷雾的对局里它无害（本来就全可见）。
+   *
+   * `turns`：亮几次行动（默认 1）。1 已经覆盖"当下 + 下一手"两个行动序号
+   * （事件常在对方回合触发，只亮当下一手等于玩家没看见）。
+   * **写负数 = 一直亮**（比如 `turns: -1`），给"地图上永久该知道的位置"用。
+   */
+  | { kind: 'reveal'; zone: LevelZone; turns?: number };
 
 /**
  * 一件事：什么时候、做什么。
@@ -313,6 +328,22 @@ export interface LevelSeats {
    */
   cityless?: PlayerId[];
   /**
+   * **同盟**（2026-11-16）：同一组里的席位互为友军。
+   *
+   * 不写＝每家各自为战（既有对局一个字都不变）。写了之后：
+   *   · **不能互相攻击**（打兵、打城都拦）；
+   *   · **可以穿过友军的单位**，但不能停在上面；
+   *   · 胜负按**队**算：只剩一队活着才算结束（否则"打光敌人之后队友之间打不了，
+   *     对局永远收不了场"）；
+   *   · AI 不会把队友当目标。
+   *
+   * **视野不共享**：两人还是各看各的雾。共享了"两个人配合"就退化成"一个人操作两条线"，
+   * 那不如直接让一个人玩两家。
+   *
+   * 每个坐人的席位必须**恰好**出现在一个队里；不写就是各家独立。
+   */
+  teams?: PlayerId[][];
+  /**
    * 开局**不在场上**的席位。
    *
    * 和"出局"是两件事：出局是打没了，未登场是还没来。所以它不占回合、不算出局、
@@ -489,8 +520,8 @@ const CUT_PAINT: Array<[number, number, string]> = (() => {
  * 内建关卡。
  *
  * 分两层，别混：
- *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀 / 护送。四张各教一件事——
- *     用地形换时间、集中兵力打一点、第三方与时机、无城护送穿越。
+ *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀 / 护送 / 邪龙。五张各教一件事——
+ *     用地形换时间、集中兵力打一点、第三方与时机、无城护送穿越、两人合作守大图。
  *   · **测试夹具**（`dev: true`）：平地探针、断后、断桥、三岔口、死守。
  *     各验一条机制，不进玩家菜单，探针二十多段靠它们跑。
  */
@@ -543,6 +574,51 @@ const ESCORT_PAINT: Array<[number, number, string]> = (() => {
   // 中段伏击点：一片林子 + 一块高地
   out.push([7, 3, 'f'], [8, 3, 'f'], [7, 4, 'f']);
   out.push([11, 4, 'h'], [11, 5, 'h']);
+  return out;
+})();
+
+/**
+ * 「邪龙」的地形：28×18 的大图，北面一道山脊，中央开一道裂隙。
+ *
+ * 为什么这么大：这关要的是"发育时间"。两座城摆在南边两角，敌人的空军从北面
+ * 裂隙进来，光飞过来就要三四个回合——这段时间正是玩家造兵、升时代、把火枪
+ * 架到高地上的窗口。小图会把这段窗口压没。
+ *
+ * 地形只做三件事：
+ *   1. **山脊 + 裂隙**：视觉上告诉你"威胁从哪儿来"，也顺带给地面部队一点遮挡；
+ *   2. **焦土**：裂隙正下方那片沙丘，是邪龙落过的地方（`full` 事件还会把它扩大）；
+ *   3. **城前丘陵**：给火枪手一点射程优势——这是全图唯一"该站人"的地方。
+ *
+ * 注意：敌人全是**飞行单位**，山、河、林都拦不住它们。地形在这里是给玩家用的，
+ * 不是给敌人用的。别指望靠地形把它们挡住。
+ */
+const DRAGON_PAINT: Array<[number, number, string]> = (() => {
+  const W = 28;
+  const out: Array<[number, number, string]> = [];
+  // 北面山脊：y=0 整行，中央 x=12..15 是裂隙（邪龙进来的口子）
+  for (let x = 0; x < W; x += 1) if (x < 12 || x > 15) out.push([x, 0, '^']);
+  // 山脊向两侧延伸两行，把北面压成"只有中间能过"的样子
+  for (let y = 1; y <= 2; y += 1) {
+    for (let x = 0; x < 7; x += 1) out.push([x, y, '^']);
+    for (let x = 21; x < W; x += 1) out.push([x, y, '^']);
+  }
+  // 裂隙下方的焦土（沙丘）
+  for (let y = 1; y <= 6; y += 1) {
+    for (let x = 11; x <= 16; x += 1) {
+      if (y <= 2 && (x < 12 || x > 15)) continue; // 别盖住山脊
+      out.push([x, y, 'd']);
+    }
+  }
+  // 中段掩体：两片林子
+  out.push([6, 7, 'f'], [7, 7, 'f'], [6, 8, 'f'], [7, 8, 'f'], [8, 8, 'f']);
+  out.push([20, 7, 'f'], [21, 7, 'f'], [20, 8, 'f'], [21, 8, 'f'], [19, 8, 'f']);
+  // 正中的一块高地：谁占了谁视野好，但离两座城都不近
+  out.push([13, 10, 'h'], [14, 10, 'h'], [13, 11, 'h'], [14, 11, 'h']);
+  // 两座城前的阵地（丘陵：火枪站上去多一格射程）
+  out.push([9, 12, 'h'], [11, 12, 'h'], [10, 13, 'h']);
+  out.push([15, 12, 'h'], [17, 12, 'h'], [16, 13, 'h']);
+  // 两城之间的连接线上放两棵树，别让中间一片空
+  out.push([13, 14, 'f'], [14, 14, 'f']);
   return out;
 })();
 
@@ -958,7 +1034,17 @@ export const LEVELS: LevelDef[] = [
       {
         id: 'first-gate',
         when: { kind: 'turn', at: 1 },
-        do: [{ kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' }],
+        do: [
+          { kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' },
+          /*
+           * 开局把**终点那一片**点亮，亮 10 次行动（约 5 轮）。
+           *
+           * 这张关默认开雾：不点亮的话，玩家只知道"往东"，看不到终点在哪一格、
+           * 也不知道城前那排箭塔压着什么位置。但它**不是永久信息**——
+           * 亮够看清路线就熄，后面仍然得靠自己的视野。
+           */
+          { kind: 'reveal', zone: { x0: 14, y0: 1, x1: 17, y1: 6 }, turns: 10 },
+        ],
       },
       /*
        * 经过中段伏击点（x=7 那片林子）时，追兵从北边冒出来。
@@ -972,6 +1058,8 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '北边的林子后头窜出一队追兵！' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 8, y: 2 }, { type: 'archer', x: 9, y: 2 }] },
+          // 伏兵的位置亮一下就走（默认 1 次）：玩家看清"那儿有人"，下一手重新没入迷雾
+          { kind: 'reveal', zone: { x0: 7, y0: 1, x1: 10, y1: 3 } },
         ],
       },
       /*
@@ -987,6 +1075,7 @@ export const LEVELS: LevelDef[] = [
            * 但它们是**从身后堵退路**的，逼玩家往前、不能回头磨。
            */
           { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 6, y: 4 }, { type: 'militia', x: 6, y: 5 }] },
+          { kind: 'reveal', zone: { x0: 5, y0: 3, x1: 7, y1: 6 } },
         ],
       },
       /*
@@ -1006,6 +1095,222 @@ export const LEVELS: LevelDef[] = [
      * 失败不用另写：cityless 的"兵打光即输"自动兜住。
      */
     goals: [{ kind: 'escort', seat: 'A', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, unitType: 'messenger' }],
+  },
+
+  /* ── 玩家关 5：邪龙（两人合作）────────────────────────────── */
+  {
+    id: 'level:evil-dragon',
+    version: LEVEL_VERSION,
+    name: '邪龙',
+    brief: '28×18，两人各守一座城。北面裂隙里会不断飞出龙——先攒兵，再谈反击。',
+    map: {
+      id: 'levelmap:evil-dragon',
+      name: '邪龙',
+      w: 28,
+      h: 18,
+      rows: rowsOf(28, 18, DRAGON_PAINT),
+      citiesA: [{ x: 9, y: 14 }],
+      citiesB: [{ x: 16, y: 14 }],
+      source: 'builtin',
+    },
+    seats: {
+      count: 3,
+      /*
+       * A、B 是两个真人（热座或联机），C 是电脑控制的邪龙军团。
+       * `teams` 一写，A/B 就不能互打、可以穿过对方的兵，胜负也按队算——
+       * 打光邪龙那一队就一起赢。
+       */
+      ai: ['C'],
+      cityless: ['C'],
+      teams: [['A', 'B'], ['C']],
+    },
+    /*
+     * 开局时代定在 6（信息化）：玩家一上来就有打得动重甲、够得着空中的兵，
+     * 收入也够连着造——这就是"发育准备"的起点。
+     *
+     * 不是白送：敌人是第五、六代的飞行单位（恶魔 78 血 42 攻、骷髅飞龙 92 血、
+     * 邪龙王 190 血）。从青铜/铁器起手的话，第一批龙飞到时玩家还在攒弓箭手。
+     */
+    setup: { startEra: 6, firstSide: 'A' },
+    /*
+     * 固定三个包：
+     *   · **fantasy**：邪龙王、恶魔、骷髅飞龙、龙骑兵全在奇想里，这是这一关的主角；
+     *   · **air**：玩家的"眼睛"。开局送的两只侦察气球（9 格视野）负责看见北面
+     *     裂隙里什么时候出来东西——没有它，开雾的图上玩家只能干等；
+     *   · **pack-contemporary**：玩家开局第六代（信息化）要靠它，邪龙王自己也是
+     *     兵种级 requiresPack（不写这个包，`s.unitTypes['evil-dragon-king']` 不存在，
+     *     事件刷兵只会留一句系统日志）。
+     */
+    expansions: { require: ['fantasy', 'air', 'pack-contemporary'] },
+    /*
+     * 开局兵力：每城一辆坦克、两个步兵班、两个重机枪组、一个建筑队，
+     * 外加两只侦察气球。
+     *
+     * **一个近战都不给**：敌人全是飞行单位，射程 1 的兵（戟兵、骠骑兵）
+     * 按 canStrike 的"地面打空中要够得着"根本打不到，给了只会让玩家以为
+     * "我有一队兵"然后看着它们站着不动。
+     * 坦克（88 血 10 甲）顶在前面，步兵班/重机枪是输出，建筑队拉经济。
+     */
+    deploy: {
+      A: [
+        { type: 'tank', x: 10, y: 12 },
+        { type: 'squad', x: 9, y: 13 },
+        { type: 'squad', x: 9, y: 11 },
+        { type: 'hmg', x: 11, y: 13 },
+        { type: 'hmg', x: 10, y: 11 },
+        { type: 'crew', x: 8, y: 14 },
+        /*
+         * 两只侦察气球：不能打、一碰就掉，但视野 9——全游戏最便宜的"看见"。
+         *
+         * 这一关开雾，敌人的空军从北面十几格外飞过来。没有气球的话，玩家只能
+         * 盯着雾等第一波砸到脸上；有了它，至少能提前两三个回合知道"来了几条、
+         * 从哪个方向绕"。气球迷失不影响胜负，掉了再造（空军包已经强制开）。
+         */
+        { type: 'af_balloon', x: 10, y: 10 },
+        { type: 'af_balloon', x: 12, y: 13 },
+      ],
+      B: [
+        { type: 'tank', x: 16, y: 12 },
+        { type: 'squad', x: 17, y: 13 },
+        { type: 'squad', x: 17, y: 11 },
+        { type: 'hmg', x: 15, y: 13 },
+        { type: 'hmg', x: 16, y: 11 },
+        { type: 'crew', x: 18, y: 14 },
+        { type: 'af_balloon', x: 16, y: 10 },
+        { type: 'af_balloon', x: 14, y: 13 },
+      ],
+      /*
+       * 邪龙开局就有一个先遣：一条龙骑兵在北面裂隙外。
+       *
+       * 它不是为了立刻打人——它离两座城 13 格，飞过来要三个回合。
+       * 它是**这一席的存在证明**：cityless 席位的出局条件是"兵打光"，
+       * 开局一个兵都没有的话，第一帧就判 C 出局、玩家什么都没干就赢了。
+       */
+      C: [{ type: 'dragoon-rider', x: 13, y: 1 }],
+    },
+    events: [
+      /*
+       * 开场：告诉玩家"威胁从北面来"，并把裂隙点亮一段（12 次行动≈6 轮）。
+       *
+       * 开雾的局里，玩家看不见北面那一片，也就不知道敌人在哪、还有多远。
+       * 点亮不是永久信息，看够就熄——后面的侦察仍然要自己做。
+       */
+      {
+        id: 'omen',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'say', text: '北面的山裂开了一道缝。有东西要下来了——趁现在把兵攒起来。' },
+          { kind: 'reveal', zone: { x0: 11, y0: 0, x1: 16, y1: 6 }, turns: 12 },
+        ],
+      },
+
+      /*
+       * 第一波：再补一条龙骑兵。
+       *
+       * 从第 5 次行动开始——玩家已经有两次自己的回合可以造兵/挪人。
+       * 之后每 4 次行动一波，一波比一波重，直到邪龙王本体下场。
+       * 节奏是"给你喘气的时间，但不给太多"。
+       */
+      {
+        id: 'wave-1',
+        when: { kind: 'turn', at: 7 },
+        do: [
+          { kind: 'say', text: '又一条龙骑兵从裂隙里钻出来，贴着山脊往南飞。' },
+          {
+            kind: 'spawn',
+            owner: 'C',
+            units: [
+              { type: 'dragoon-rider', x: 14, y: 1 },
+              { type: 'dragoon-rider', x: 12, y: 2 },
+            ],
+          },
+          { kind: 'reveal', zone: { x0: 11, y0: 0, x1: 16, y1: 6 }, turns: 3 },
+        ],
+      },
+      {
+        id: 'wave-2',
+        when: { kind: 'turn', at: 12 },
+        do: [
+          { kind: 'say', text: '一头恶魔跟着下来了。它飞得不快，但能隔空烧人。' },
+          {
+            kind: 'spawn',
+            owner: 'C',
+            units: [{ type: 'demon', x: 12, y: 1 }],
+          },
+          // 让 AI 从这一波开始主动扑：前两波它会先打最近的兵，这一波之后盯着城
+          { kind: 'doctrine', seat: 'C', strategy: 'rush' },
+          { kind: 'reveal', zone: { x0: 11, y0: 0, x1: 16, y1: 7 }, turns: 3 },
+        ],
+      },
+
+      /*
+       * 第三波：骷髅飞龙。它带 `siege-master`，是专门拆城的那个——
+       * 播报要点明，否则玩家看着城血掉得莫名其妙。
+       */
+      {
+        id: 'wave-3',
+        when: { kind: 'turn', at: 17 },
+        do: [
+          { kind: 'say', text: '骷髅飞龙从云里钻出来了——它专门拆城，别让它靠近。' },
+          { kind: 'spawn', owner: 'C', units: [{ type: 'bone-dragon', x: 13, y: 1 }] },
+          { kind: 'reveal', zone: { x0: 10, y0: 0, x1: 17, y1: 8 }, turns: 3 },
+        ],
+      },
+
+      /*
+       * 完全体：邪龙王 + 一整队随从。
+       *
+       * 这一刻是这一关的"下半场"。之前所有波次都是在逼玩家别停下来发育；
+       * 这一波之后就没得发育了，只能硬接。
+       * 顺带把中央那片烧成焦土——纯气氛，但对玩家是个信号："它真的来了"。
+       */
+      {
+        id: 'full',
+        when: { kind: 'turn', at: 26 },
+        do: [
+          { kind: 'say', text: '天黑了。邪龙王亲自下来了——它身后还跟着一整队。' },
+          {
+            kind: 'spawn',
+            owner: 'C',
+            units: [
+              { type: 'evil-dragon-king', x: 13, y: 1 },
+              { type: 'bone-dragon', x: 11, y: 1 },
+              { type: 'demon', x: 15, y: 1 },
+              { type: 'dragoon-rider', x: 12, y: 2 },
+            ],
+          },
+          { kind: 'terrain', zone: { x0: 10, y0: 7, x1: 17, y1: 12 }, to: 'dune' },
+          { kind: 'doctrine', seat: 'C', strategy: 'rush' },
+          { kind: 'reveal', zone: { x0: 8, y0: 0, x1: 19, y1: 10 }, turns: 4 },
+        ],
+      },
+
+      /*
+       * 邪龙王倒下：这一关的"心理终点"。
+       *
+       * 它一死，剩下那些飞龙虽然还在，但玩家已经知道赢定了。
+       * 不刷兵、不改规则——只给一句话，别让胜利在沉默里发生。
+       */
+      {
+        id: 'dragon-down',
+        when: { kind: 'unitDied', type: 'evil-dragon-king' },
+        do: [{ kind: 'say', text: '邪龙王栽下去了。剩下的不过是一群没了主人的野兽——清干净。' }],
+      },
+    ],
+    /*
+     * 两条正面的胜利条件：**守住就算赢**。
+     *
+     * 不写的话，这一关只有"把邪龙军团清光"这一种赢法——问题是恶魔会召唤小恶魔、
+     * 残兵会散到地图角落，玩家把主力和 boss 都打死了，还得满地图追最后几只，
+     * 实测会卡到两百多次行动都结束不了。
+     *
+     * 两条 survive 各写一边：任一玩家撑到第 45 次行动就赢（另一个人先倒下不影响，
+     * 这正是"合作"该有的宽容）。两座城都丢光时 survive 不成立，走默认的失败。
+     */
+    goals: [
+      { kind: 'survive', seat: 'A', untilTurn: 45 },
+      { kind: 'survive', seat: 'B', untilTurn: 45 },
+    ],
   },
 
   {
@@ -1977,7 +2282,26 @@ function normalizeDo(
     return { kind: 'terrain', zone, to: to as LevelTerrain, ...(only && only.length > 0 ? { only } : {}) };
   }
 
-  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain）`);
+  if (kind === 'reveal') {
+    const zone = normZone(a.zone, `事件「${id}」点亮区域的范围`, map, errors);
+    if (!zone) return undefined;
+    let turns: number | undefined;
+    if (a.turns !== undefined && a.turns !== '') {
+      const n = Math.round(Number(a.turns));
+      // 负数统一成 -1（一直亮）；正数 1~99
+      if (!Number.isFinite(n) || n === 0 || n < -1 || n > 99) {
+        errors.push(`事件「${id}」点亮要持续「${String(a.turns)}」次行动：1~99，或者写负数表示一直亮`);
+      } else {
+        turns = n < 0 ? -1 : n;
+      }
+    }
+    // 1 是默认值，不写进 JSON
+    return { kind: 'reveal', zone, ...(turns !== undefined && turns !== 1 ? { turns } : {}) };
+  }
+
+  errors.push(
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal）`,
+  );
   return undefined;
 }
 
@@ -2035,6 +2359,47 @@ function normalizeSeats(
     }
   }
 
+  /*
+   * 同盟。三条都是"写错就会造出坏局面"的：
+   *   · 某个坐人的席位**没进任何队**：它默认和所有人敌对，作者以为它在队里；
+   *   · 同一席位出现在两个队：敌我关系直接自相矛盾；
+   *   · 只有一个队：那就没有敌人了，第一帧就"全队胜利"。
+   */
+  let teams: PlayerId[][] | undefined;
+  if (Array.isArray(obj.teams) && obj.teams.length > 0) {
+    const out: PlayerId[][] = [];
+    const seen = new Map<PlayerId, number>();
+    for (const [gi, raw] of obj.teams.entries()) {
+      const group: PlayerId[] = [];
+      for (const p of Array.isArray(raw) ? raw : []) {
+        const seat = String(p).toUpperCase() as PlayerId;
+        if (!SEAT_ORDER.includes(seat as 'A' | 'B' | 'C' | 'D')) {
+          errors.push(`同盟第 ${gi + 1} 队里有「${String(p)}」，不是有效席位（只能是 A/B/C/D）`);
+          continue;
+        }
+        if (!seated.includes(seat)) {
+          errors.push(`同盟第 ${gi + 1} 队里有「${seat}」，但这一局没坐这一家`);
+          continue;
+        }
+        if (seen.has(seat)) {
+          errors.push(`第 ${seat} 家同时出现在同盟第 ${seen.get(seat)! + 1} 队和第 ${gi + 1} 队：一家只能在一个队里`);
+          continue;
+        }
+        seen.set(seat, gi);
+        if (!group.includes(seat)) group.push(seat);
+      }
+      if (group.length > 0) out.push(group);
+    }
+    const missing = seated.filter((p) => !seen.has(p));
+    if (missing.length > 0) {
+      errors.push(`同盟里漏了 ${missing.join(' / ')}：写了 teams 就要把每个坐人的席位都放进某一队`);
+    }
+    if (out.length < 2) {
+      errors.push('同盟至少要两个队（只有一个队就没有敌人了）');
+    }
+    if (out.length >= 2) teams = out;
+  }
+
   const aiRaw = Array.isArray(obj.ai) ? obj.ai : [];
   const ai: PlayerId[] = [];
   for (const p of aiRaw) {
@@ -2066,6 +2431,17 @@ function normalizeSeats(
           .map((c) => ({ x: Math.round(Number((c as MapPoint)?.x)), y: Math.round(Number((c as MapPoint)?.y)) }))
           .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
       : [];
+    /*
+     * 「没有城」的席位（合作关里靠事件刷兵的邪龙军团）**故意**没有城。
+     * 以前这里一刀切要求第三/第四家必须有城，于是 cityless 只能用在两家局
+     * （护送关的 A 走的是 citiesA 为空那条路）——三家局的"无城敌人"根本写不出来。
+     */
+    if (cityless.includes(p)) {
+      if (pts.length > 0) {
+        errors.push(`第 ${p} 家既标了「没有城」，又在 seats.cities.${p} 里写了城位：二选一`);
+      }
+      continue;
+    }
     if (pts.length === 0) {
       errors.push(`第 ${p} 家没有城：这一关是 ${count} 家局，必须在 seats.cities.${p} 里给它一座城`);
       continue;
@@ -2130,6 +2506,7 @@ function normalizeSeats(
     count: count as 2 | 3 | 4,
     ...(Object.keys(cities).length > 0 ? { cities } : {}),
     ...(cityless.length > 0 ? { cityless } : {}),
+    ...(teams ? { teams } : {}),
     ai,
     ...(hidden.length > 0 ? { hidden } : {}),
     ...(Object.keys(cityEra).length > 0 ? { cityEra } : {}),

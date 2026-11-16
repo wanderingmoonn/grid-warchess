@@ -4656,21 +4656,29 @@ a.btn {
   aspect-ratio: 1 / 1;
   border-radius: 6px;
   overflow: hidden;
-  background: var(--plain);
-  border: 1px solid var(--line);
-}
-
-/* 随机地形没有缩略图，给一块"问号"质感的占位 */
-.map-card-thumb.is-random {
-  display: grid;
-  place-items: center;
-  font-size: var(--fs-sm);
-  color: var(--text-3);
+  /*
+   * 底色用**斜条纹**，不用平原色。
+   *
+   * 缩略图里认不出/没配色的格子是透明的（`mapThumbSvg` 跳过它们）。
+   * 以前底色写的是 `--plain`（和平原一模一样），于是"空/无"和"平原"
+   * 在预览里完全分不出来——玩家会以为那片是草地。条纹是"这里没有内容"
+   * 的通用表示，和「自由对局」的占位框同一套语言。
+   */
+  background-color: var(--panel-2);
   background-image: repeating-linear-gradient(
     45deg,
     var(--panel-2) 0 6px,
     var(--panel) 6px 12px
   );
+  border: 1px solid var(--line);
+}
+
+/* 随机地形没有缩略图，给一块"问号"质感的占位（底色条纹沿基础类，这里只管文字居中） */
+.map-card-thumb.is-random {
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
 }
 
 .map-thumb {
@@ -5829,6 +5837,27 @@ a.btn {
   display: flex;
   gap: 6px;
   margin: 10px 0 8px;
+}
+
+/*
+ * 同盟开关那一行。
+ *
+ * 它和上面的"几家"是两个层级：几家是**这一局有几个人**，同盟是**谁跟谁一伙**。
+ * 靠一条上边线隔开，别让人误以为它是第四个"几家"按钮。
+ */
+.level-seat-allies {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.level-seat-allies .editor-check {
+  margin-bottom: 0;
+  white-space: nowrap;
 }
 
 .level-seat-list {
