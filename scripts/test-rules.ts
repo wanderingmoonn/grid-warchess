@@ -1759,8 +1759,8 @@ test('不能用没启用的兵种产兵', () => {
 
 test('回合结束切换玩家并结算收入', () => {
   const s = fresh();
+  // 2026-11-16：底薪删掉，收入全部来自城与经济单位（各时代城收入已 +20 补回）
   const bIncome =
-    CONFIG.baseIncome +
     2 * eraDef(1).cityIncome +
     s.units.filter((u) => u.owner === 'B').reduce((sum, u) => sum + unitIncome(s, u), 0);
   const r = applyAction(s, { type: 'END_TURN' });

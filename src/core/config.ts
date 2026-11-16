@@ -33,8 +33,6 @@ export const CONFIG = {
 
   /** 每方起始金币 */
   startGold: 120,
-  /** 每回合基础收入（与城市无关） */
-  baseIncome: 20,
   /**
    * AI 单方产兵上限，**规则层不限制玩家**。
    *
@@ -294,7 +292,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 0,
     cityMaxHp: 30,
     cityArmor: 4,
-    cityIncome: 30,
+    cityIncome: 50,
   },
   {
     level: 2,
@@ -304,7 +302,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 220,
     cityMaxHp: 42,
     cityArmor: 6,
-    cityIncome: 35,
+    cityIncome: 55,
   },
   {
     level: 3,
@@ -314,7 +312,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 360,
     cityMaxHp: 54,
     cityArmor: 8,
-    cityIncome: 41,
+    cityIncome: 61,
   },
   {
     level: 4,
@@ -324,7 +322,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 540,
     cityMaxHp: 66,
     cityArmor: 10,
-    cityIncome: 48,
+    cityIncome: 68,
   },
   {
     level: 5,
@@ -334,7 +332,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 780,
     cityMaxHp: 80,
     cityArmor: 12,
-    cityIncome: 56,
+    cityIncome: 76,
   },
   {
     level: 6,
@@ -344,7 +342,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 1080,
     cityMaxHp: 96,
     cityArmor: 14,
-    cityIncome: 62,
+    cityIncome: 82,
   },
   {
     level: 7,
@@ -354,7 +352,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 1440,
     cityMaxHp: 112,
     cityArmor: 16,
-    cityIncome: 68,
+    cityIncome: 88,
   },
   {
     level: 8,
@@ -364,7 +362,7 @@ export const ERAS: EraDef[] = [
     upgradeCost: 1980,
     cityMaxHp: 132,
     cityArmor: 19,
-    cityIncome: 78,
+    cityIncome: 98,
   },
 ];
 

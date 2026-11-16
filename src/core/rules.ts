@@ -3905,12 +3905,21 @@ export function unitYieldAt(s: GameState, u: Unit, x: number, y: number): Resour
 /**
  * 这一方现在每回合能收多少（**全部资源**）。纯函数，不写状态。
  *
+ * **没有"底薪"**（2026-11-16 删掉）。以前每方每回合先拿 20 金、与城无关，
+ * 于是"没有城"也能攒钱——那让"无城对战"这种玩法在数据上说不通
+ * （攒着钱却造不出兵，界面上一栏数字还在涨）。现在收入全部来自：
+ * 城（按各自时代）、经济单位（按脚下地形）、扩展钩子。
+ * 于是"没有城市 = 没有产出"成了一句话就能讲清的规则。
+ *
+ * 各时代 `cityIncome` 已经各自 +20 补回原来的底薪，**单城局的总收入没有变**；
+ * 双城局每回合多 20（见 `DESIGN-CITYLESS-2026-11-16.md` 2.5）。
+ *
  * 金币那一段仍然过一遍 modifyIncome 钩子（战争经济之类的老扩展读它），
  * 其它资源暂时没有钩子——它们本来就只在多资源扩展里出现，
  * 而那个扩展自己就是唯一的生产者。
  */
 export function incomeResOf(s: GameState, p: PlayerId): ResourceCost {
-  const out: ResourceCost = { gold: CONFIG.baseIncome };
+  const out: ResourceCost = {};
   const add = (id: ResourceId, n: number | undefined): void => {
     if (!n) return;
     out[id] = (out[id] ?? 0) + n;
