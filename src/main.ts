@@ -1593,8 +1593,40 @@ function ensureArtIndex(): void {
   void loadUnitArtIndex().then(() => render());
 }
 
+/**
+ * 诊断浮层：`?debug=1` 才出现（2026-11-16）。
+ *
+ * "房间里 AI 不动"这种问题，光看棋盘分不清是**该电脑却没点起来**、
+ * 还是**点起来了但提交被挡**。把这几项直接打在屏幕上，一眼就能定位：
+ * 轮到的席位、AI 席位表、暂停标记、令牌、以及房间里的进度号。
+ */
+function renderDebugHud(): void {
+  if (!new URLSearchParams(location.search).has('debug')) return;
+  const el =
+    document.getElementById('debug-hud') ??
+    (() => {
+      const d = document.createElement('div');
+      d.id = 'debug-hud';
+      d.style.cssText =
+        'position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.5 monospace;' +
+        'background:rgba(20,20,20,.88);color:#9fe;padding:8px 10px;border-radius:6px;' +
+        'white-space:pre;pointer-events:none;max-width:52ch';
+      document.body.appendChild(d);
+      return d;
+    })();
+  el.textContent = [
+    `turn=${state.turn} current=${state.current} winner=${state.winner ?? '-'}`,
+    `aiSeats=${JSON.stringify(state.config.aiSeats)} aiOpp=${state.config.aiOpponent} aiAlly=${state.config.aiAlly}`,
+    `aiControl=${JSON.stringify(state.aiControl)} isAiSide(${state.current})=${isAiSide(state, state.current)}`,
+    `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
+    `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
+    `level=${state.config.level?.id ?? '-'} dirty=${dirty}`,
+  ].join('\n');
+}
+
 function render(): void {
   ensureArtIndex();
+  renderDebugHud();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -3449,16 +3481,22 @@ function dispatch(action: Action): boolean {
     clearSelection();
     render();
     if (room) {
-      // 联机里"结束回合"就等于提交：把整局推上去，然后等对面
-      void pushTurn(room, prevTurn);
       /*
-       * **交棒之后如果是电脑，把它点起来**（2026-11-16）。
+       * 联机里"结束回合"就等于提交：把整局推上去，然后等对面。
        *
-       * 这一支在房间里 submit 完就 return 了，下面那串"轮到谁"的分支根本走不到。
-       * 普通联机没问题（对面是人，等轮询把他的棋拉下来就行），但关卡/单人局的
-       * 房间里对面是 AI：没人点它，棋盘就停在"轮到蓝方"一动不动。
+       * **等这一步真正落地之后再叫 AI**（2026-11-16）。
+       *
+       * 这一支在房间里 submit 完就 return 了，下面那串"轮到谁"的分支根本走不到；
+       * 而关卡/单人局的房间里对面正是 AI——不点它，棋盘停在"轮到蓝方"不动。
+       * 但又不能点得太早：AI 那一轮跑完也要 `pushTurn`，两次写云端都带乐观锁
+       * （`turn = 提交前那个值`），并发的话先落地的那次把锁推进了，AI 那次被挡掉，
+       * 云端的还是"轮到蓝方"的旧局面，15 秒轮询一拉就把棋盘退回去——
+       * 看着就是"AI 动了一下又不动了"。
+       * 所以挂在 `.then()` 上：提交成功 → 再驱动电脑。
        */
-      if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
+      void pushTurn(room, prevTurn).then(() => {
+        if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
+      });
       return true;
     }
     if (!state.winner) {
