@@ -4555,6 +4555,12 @@ a.btn {
   background: var(--panel-2);
 }
 
+/* 编辑器底栏：辅助动作（另存为副本 / 重置 / 试玩 / 跑局）居左，保存和关闭居右。
+   中间的空格把两组推开，让「保存」永远贴着「关闭」。 */
+.modal-foot-gap {
+  flex: 1 1 auto;
+}
+
 .field-label {
   display: flex;
   align-items: baseline;

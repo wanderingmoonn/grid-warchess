@@ -91,10 +91,7 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
     return `
       <div class="modal-head">
         <h2>关卡独有兵种</h2>
-        <p>
-          这些兵只属于这一关：别的对局看不到、规则书里没有、电脑也不会采购。
-          做「斩杀某个目标」时必须用它们——普通兵种对面会一直补，条件永远不成立。
-        </p>
+        <p>这些兵只属于这一关，别的对局看不到。「斩首」目标要用它们。</p>
       </div>
       <div class="modal-body">
         <div class="editor-toolbar">
@@ -128,10 +125,10 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
                   .join('')
           }
         </div>
-        <div class="field-hint">id 撞上内置兵种时不算错（这一关会覆盖它），但容易让人误会，建议换个名字。</div>
+        <div class="field-hint">id 撞内置兵种时建议换个名字。</div>
       </div>
       <div class="modal-foot">
-        <button class="btn btn-primary btn-sm" data-act="apply">用这张兵种表</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>`;
   };
@@ -141,7 +138,7 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
     return `
       <div class="modal-head">
         <h2>${editingId ? '编辑兵种' : '新建兵种'}</h2>
-        <p>数值按这关的手感调。存下来之后，「摆兵」和「事件」里都能选到它。</p>
+        <p>存下来后，「摆兵」和「事件」里都能选到它。</p>
       </div>
       <div class="modal-body">
         <div class="editor-grid">
@@ -163,11 +160,9 @@ export function openLevelUnits(opts: LevelUnitsOptions): void {
         </div>
         <label class="editor-check">
           <input type="checkbox" data-f="summonedOnly" ${d.summonedOnly ? 'checked' : ''}>
-          只能由部署/事件出现（不进产线、电脑不采购）
+          只能由部署/事件出现
         </label>
-        <div class="field-hint">
-          做「斩首」的目标时**必须**勾上：不勾的话对面会一边死一边补，条件永远不会成立。
-        </div>
+        <div class="field-hint">做「斩首」目标时必须勾上，否则对面会一直补。</div>
         <div class="level-issues" data-issues></div>
       </div>
       <div class="modal-foot">

@@ -106,10 +106,7 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>摆兵</h2>
-        <p>
-          先选一家、再选兵种，然后点格子。点自己已经摆好的兵是<b>撤掉</b>。
-          写了开局兵力的那一方<b>不再自动撒兵</b>（连农民也没有），所以要摆就摆全。
-        </p>
+        <p>选一家、选兵种，点格子摆放。点自己的兵是撤掉。写了兵力的那一方不再自动撒兵。</p>
       </div>
       <div class="modal-body">
         <div class="level-army-seats" data-seats></div>
@@ -126,11 +123,11 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
             </div>
           </div>
         </div>
-        <div class="field-hint" data-foot>点「用这份兵力」，编辑器里的数据会跟着变（还要再点一次「保存」）。</div>
+        <div class="field-hint" data-foot>改完点「保存」。</div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-sm" data-act="clear">清空这一家</button>
-        <button class="btn btn-primary btn-sm" data-act="apply">用这份兵力</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;
