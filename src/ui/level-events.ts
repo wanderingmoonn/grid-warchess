@@ -279,10 +279,16 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         </span>`;
     }
     if (act.kind === 'reveal') {
+      const forever = (act.turns ?? 1) < 0;
       return `${kindSel}<span class="level-when-arg">
           点亮 <button class="btn btn-sm" data-pick-do-zone="${i}:${j}">${esc(zoneText(act.zone))}</button>
-          持续 <input type="number" min="1" max="99" class="level-mini-num" data-reveal-turns="${i}:${j}" value="${act.turns ?? 1}">
+          持续 <input type="number" min="1" max="99" class="level-mini-num" data-reveal-turns="${i}:${j}" value="${
+            forever ? 1 : act.turns ?? 1
+          }" ${forever ? 'disabled' : ''}>
           次行动
+          <label class="editor-check"><input type="checkbox" data-reveal-forever="${i}:${j}" ${
+            forever ? 'checked' : ''
+          }> 一直亮</label>
           <span class="field-hint">（到期重新没入迷雾；1 次 ≈ 亮到下一手）</span>
         </span>`;
     }
@@ -309,7 +315,8 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       } else if (act.kind === 'reveal') {
         const z = act.zone;
         const n = (Math.abs(z.x1 - z.x0) + 1) * (Math.abs(z.y1 - z.y0) + 1);
-        chips.push(`点亮 ${n} 格${act.turns ? ` · ${act.turns} 次` : ''}`);
+        const span = (act.turns ?? 1) < 0 ? '一直亮' : act.turns && act.turns > 1 ? `${act.turns} 次` : '1 次';
+        chips.push(`点亮 ${n} 格 · ${span}`);
       } else if (act.kind === 'doctrine') chips.push('换打法');
       else if (act.kind === 'deploy') chips.push(`第 ${act.seat} 家登场`);
       else if (act.kind === 'terrain') {
@@ -731,6 +738,17 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       const [i, j] = terrTo.split(':').map(Number);
       const act = events[i!]?.do[j!];
       if (act && act.kind === 'terrain') act.to = val as LevelTerrain;
+      return;
+    }
+    const forever = el.getAttribute('data-reveal-forever');
+    if (forever) {
+      const [i, j] = forever.split(':').map(Number);
+      const act = events[i!]?.do[j!];
+      if (act && act.kind === 'reveal') {
+        if ((el as HTMLInputElement).checked) act.turns = -1;
+        else delete act.turns;
+      }
+      renderList();
       return;
     }
     const repeat = el.getAttribute('data-repeat');

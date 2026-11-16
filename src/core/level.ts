@@ -111,8 +111,8 @@ export type LevelDo =
    * 只是把这片从迷雾里揭出来。没开迷雾的对局里它无害（本来就全可见）。
    *
    * `turns`：亮几次行动（默认 1）。1 已经覆盖"当下 + 下一手"两个行动序号
-   * （事件常在对方回合触发，只亮当下一手等于玩家没看见）。要一直看到终点
-   * 这类长期信息就写大一点（比如 30）。
+   * （事件常在对方回合触发，只亮当下一手等于玩家没看见）。
+   * **写负数 = 一直亮**（比如 `turns: -1`），给"地图上永久该知道的位置"用。
    */
   | { kind: 'reveal'; zone: LevelZone; turns?: number };
 
@@ -327,6 +327,22 @@ export interface LevelSeats {
    *   · **兵打光就输，引擎不看你后面还有没有援军**。带波次的关卡要自己保证前期不被打光。
    */
   cityless?: PlayerId[];
+  /**
+   * **同盟**（2026-11-16）：同一组里的席位互为友军。
+   *
+   * 不写＝每家各自为战（既有对局一个字都不变）。写了之后：
+   *   · **不能互相攻击**（打兵、打城都拦）；
+   *   · **可以穿过友军的单位**，但不能停在上面；
+   *   · 胜负按**队**算：只剩一队活着才算结束（否则"打光敌人之后队友之间打不了，
+   *     对局永远收不了场"）；
+   *   · AI 不会把队友当目标。
+   *
+   * **视野不共享**：两人还是各看各的雾。共享了"两个人配合"就退化成"一个人操作两条线"，
+   * 那不如直接让一个人玩两家。
+   *
+   * 每个坐人的席位必须**恰好**出现在一个队里；不写就是各家独立。
+   */
+  teams?: PlayerId[][];
   /**
    * 开局**不在场上**的席位。
    *
@@ -2011,13 +2027,15 @@ function normalizeDo(
     let turns: number | undefined;
     if (a.turns !== undefined && a.turns !== '') {
       const n = Math.round(Number(a.turns));
-      if (!Number.isFinite(n) || n < 1 || n > 99) {
-        errors.push(`事件「${id}」点亮要持续「${String(a.turns)}」次行动，只能写 1~99`);
+      // 负数统一成 -1（一直亮）；正数 1~99
+      if (!Number.isFinite(n) || n === 0 || n < -1 || n > 99) {
+        errors.push(`事件「${id}」点亮要持续「${String(a.turns)}」次行动：1~99，或者写负数表示一直亮`);
       } else {
-        turns = n;
+        turns = n < 0 ? -1 : n;
       }
     }
-    return { kind: 'reveal', zone, ...(turns ? { turns } : {}) };
+    // 1 是默认值，不写进 JSON
+    return { kind: 'reveal', zone, ...(turns !== undefined && turns !== 1 ? { turns } : {}) };
   }
 
   errors.push(
@@ -2078,6 +2096,47 @@ function normalizeSeats(
         `第 ${seat} 家同时被标成「没有城」又有 ${own.length} 座城位：这两件事只能选一个（想让它没城就把城位删掉）`,
       );
     }
+  }
+
+  /*
+   * 同盟。三条都是"写错就会造出坏局面"的：
+   *   · 某个坐人的席位**没进任何队**：它默认和所有人敌对，作者以为它在队里；
+   *   · 同一席位出现在两个队：敌我关系直接自相矛盾；
+   *   · 只有一个队：那就没有敌人了，第一帧就"全队胜利"。
+   */
+  let teams: PlayerId[][] | undefined;
+  if (Array.isArray(obj.teams) && obj.teams.length > 0) {
+    const out: PlayerId[][] = [];
+    const seen = new Map<PlayerId, number>();
+    for (const [gi, raw] of obj.teams.entries()) {
+      const group: PlayerId[] = [];
+      for (const p of Array.isArray(raw) ? raw : []) {
+        const seat = String(p).toUpperCase() as PlayerId;
+        if (!SEAT_ORDER.includes(seat as 'A' | 'B' | 'C' | 'D')) {
+          errors.push(`同盟第 ${gi + 1} 队里有「${String(p)}」，不是有效席位（只能是 A/B/C/D）`);
+          continue;
+        }
+        if (!seated.includes(seat)) {
+          errors.push(`同盟第 ${gi + 1} 队里有「${seat}」，但这一局没坐这一家`);
+          continue;
+        }
+        if (seen.has(seat)) {
+          errors.push(`第 ${seat} 家同时出现在同盟第 ${seen.get(seat)! + 1} 队和第 ${gi + 1} 队：一家只能在一个队里`);
+          continue;
+        }
+        seen.set(seat, gi);
+        if (!group.includes(seat)) group.push(seat);
+      }
+      if (group.length > 0) out.push(group);
+    }
+    const missing = seated.filter((p) => !seen.has(p));
+    if (missing.length > 0) {
+      errors.push(`同盟里漏了 ${missing.join(' / ')}：写了 teams 就要把每个坐人的席位都放进某一队`);
+    }
+    if (out.length < 2) {
+      errors.push('同盟至少要两个队（只有一个队就没有敌人了）');
+    }
+    if (out.length >= 2) teams = out;
   }
 
   const aiRaw = Array.isArray(obj.ai) ? obj.ai : [];
@@ -2175,6 +2234,7 @@ function normalizeSeats(
     count: count as 2 | 3 | 4,
     ...(Object.keys(cities).length > 0 ? { cities } : {}),
     ...(cityless.length > 0 ? { cityless } : {}),
+    ...(teams ? { teams } : {}),
     ai,
     ...(hidden.length > 0 ? { hidden } : {}),
     ...(Object.keys(cityEra).length > 0 ? { cityEra } : {}),
