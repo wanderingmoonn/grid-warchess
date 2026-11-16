@@ -490,6 +490,47 @@ function incomeBadgeOf(cost: ResourceCost): string {
   return first ? `+${first[1]}${resourceShort(first[0])}` : '';
 }
 
+/* `.board` 的内边距：左右各 6px、上下各 6px。格局要减掉它才是内容区 */
+export const BOARD_PAD = 12;
+
+export interface BoardBox {
+  /** 棋盘外框（含 padding） */
+  w: number;
+  h: number;
+  /** 一格多宽 —— 长宽同值，这就是"格子是正方形"的保证 */
+  cell: number;
+}
+
+/**
+ * 算棋盘该占多大。
+ *
+ * **不能拿 `min(容器宽, 可用高)` 当棋盘边长**——那只对正方形地图成立。
+ * 地图允许 8~40 的长宽各自取值（`12×10` 这种），一旦外框是方的、格子又按
+ * `repeat(w,1fr)` 均分，格子就会被拉成长方形：短的那边被抻长。
+ * 玩家在 2026-11-16 的实机上就是这么发现的。
+ *
+ * 正确做法是**先算一格多大，再反推外框**：宽、高各除一次取小的，
+ * 这样两轴的格宽必然相同，格子恒为正方形，多出来的屏幕空间留白。
+ *
+ * 地板沿用原来的语义（整块不小于 160px）：图太大时宁可让格子小于 16px，
+ * 也不要让棋盘撑破容器。
+ */
+export function fitBoardBox(cols: number, rows: number, availW: number, availH: number): BoardBox {
+  const c = Number.isFinite(cols) && cols > 0 ? Math.round(cols) : 1;
+  const r = Number.isFinite(rows) && rows > 0 ? Math.round(rows) : 1;
+  const innerW = Math.max(0, availW - BOARD_PAD);
+  const innerH = Math.max(0, availH - BOARD_PAD);
+  const fit = Math.min(innerW / c, innerH / r);
+  // 地板：整块不小于 160（和旧行为一致），换算成"一格"就是 160 / 长边
+  const floor = 160 / Math.max(c, r);
+  const cell = Math.max(fit, floor);
+  return {
+    w: Math.round(cell * c + BOARD_PAD),
+    h: Math.round(cell * r + BOARD_PAD),
+    cell,
+  };
+}
+
 /*
  * 只刷新格宽（`--cell`），不重画棋盘。
  *

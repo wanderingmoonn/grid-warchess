@@ -26,6 +26,7 @@ import {
   saveUserLevel,
 } from '../core/userLevels.ts';
 import { lintLevel, type LevelIssue } from '../core/level-lint.ts';
+import { toast } from './toast.ts';
 import type { LevelDef } from '../core/level.ts';
 
 export interface LevelEditorResult {
@@ -221,6 +222,19 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
   };
 
   /**
+   * 直接关掉，不弹确认。
+   *
+   * 保存成功走这里：**存完就关**是玩家一眼能看懂的"这事儿结束了"。
+   * 之前留着不关、只把提示写在窗口底部，结果就是玩家看不见、反复点保存——
+   * 每一次都真的存了一遍（版本号一路涨），而他以为界面卡住了。
+   */
+  const closeNow = (level: LevelDef | null = lastSaved): void => {
+    if (timer !== null) clearTimeout(timer);
+    mask.remove();
+    opts.onClose?.({ saved: !!level, level: level ?? undefined });
+  };
+
+  /**
    * 把名称/简介写回 JSON。
    *
    * 在 **change（失焦）** 时写，不是每敲一个字就写：一是免得和用户正在编辑的
@@ -264,14 +278,12 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
     const act = btn.dataset.act;
 
     if (act === 'close') {
-      if (timer !== null) clearTimeout(timer);
       // 没存就关：一定要问一句。草稿还在，但要让人知道"下次会接着上次"
       if (ta.value !== savedText && ta.value.trim() !== '') {
         if (!window.confirm('还没保存。放掉的内容会留在草稿里，下次打开这张关会自动接着改。关闭吗？')) return;
         saveDraft(key, ta.value);
       }
-      mask.remove();
-      opts.onClose?.({ saved: !!lastSaved, level: lastSaved ?? undefined });
+      closeNow();
       return;
     }
 
@@ -317,6 +329,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       footEl.textContent = saved.persisted
         ? '已复制成你自己的关卡，接着改就行。'
         : '已经复制了，但这台设备存不住（隐私模式），关掉浏览器就没了。';
+      toast(`已复制成「${saved.level.name}」，接着改就行`);
       return;
     }
 
@@ -342,18 +355,21 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
         return;
       }
       clearDraft(key);
-      // 存的是"这份数据"，不是"用户敲的那串字"：重新序列化一次，让下次打开看到规范格式
-      text = exportLevelText(saved.level);
-      savedText = text;
-      ta.value = text;
-      key = saved.level.id;
-      refresh();
-      footEl.textContent = saved.persisted
-        ? `已保存「${saved.level.name}」。回选关页就能看见它。`
-        : `已放进这一会儿的列表里，但这台设备存不住（隐私模式），关掉浏览器就没了。`;
-      // 存完**不关窗**：作者多半还要接着改（加一波援军、调一句播报）。
-      // 面板等关闭时再刷新，免得它在这中间反复重排。
       lastSaved = saved.level;
+      /*
+       * 存完**立刻关窗**，并给一句提示。
+       *
+       * 反过来的做法（留在原地、只在底部写一行"已保存"）实机被玩家骂了：
+       * 那行字在窗口最底部、很容易没看见，玩家的判断是"没反应"，
+       * 于是一路点下去——每点一次都真的存一遍，版本号涨到十几。
+       * 关窗是最强的反馈，提示只是补一句"存到哪儿了"。
+       */
+      closeNow(saved.level);
+      toast(
+        saved.persisted
+          ? `已保存「${saved.level.name}」，在选关页的「我的关卡」里`
+          : `「${saved.level.name}」只在这次打开期间有效（这台设备存不住）`,
+      );
       return;
     }
   });

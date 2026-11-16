@@ -59,7 +59,7 @@ import { createTutorialMatch } from '../src/core/tutorial.ts';
 import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
-import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
+import { BOARD_PAD, coordsFromEvent, fitBoardBox, renderBoard } from '../src/ui/board.ts';
 import { __setArtIndexForTest, setUiArt, uiArtOn } from '../src/ui/unit-art.ts';
 import { scopeBoardUi } from '../src/ui/board-scope.ts';
 import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
@@ -9379,6 +9379,52 @@ check('普通对局不显示目标那一块', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* 棋盘尺寸（非正方形地图）                                            */
+/* ------------------------------------------------------------------ */
+
+console.log('\n棋盘尺寸');
+
+/*
+ * 玩家实机上发现的问题：12×10 的地图，格子被压成长方形（短边被抻长）。
+ *
+ * 原因是 fitBoard 把棋盘外框写成了正方形（`min(容器宽, 可用高)` 一个数），
+ * 而格子是按 `repeat(cols,1fr) × repeat(rows,1fr)` 均分的 —— 长宽不一致时
+ * 每一格必然不等边。判据只有一条：**两轴的格宽必须相等**。
+ */
+const cellW = (b: { w: number }) => (b.w - BOARD_PAD) / 12;
+const cellH = (b: { h: number }) => (b.h - BOARD_PAD) / 10;
+
+check('12×10 的图：两轴格宽相同（格子是正方形，不是长方形）', () => {
+  const b = fitBoardBox(12, 10, 800, 700);
+  assert.ok(Math.abs(cellW(b) - cellH(b)) <= 1, `横向格宽 ${cellW(b).toFixed(1)}、纵向 ${cellH(b).toFixed(1)} 不一致`);
+  assert.ok(b.w <= 800 && b.h <= 700, `不能超出可用区域，实际 ${b.w}×${b.h}`);
+
+  // 换一个"高度是瓶颈"的容器：外框该比可用宽度窄，两边留白，而不是把格子抻开
+  const b2 = fitBoardBox(12, 10, 800, 600);
+  assert.ok(b2.w < 800, `高度受限时宽度要留白，实际 ${b2.w}`);
+  assert.ok(
+    Math.abs((b2.w - BOARD_PAD) / 12 - (b2.h - BOARD_PAD) / 10) <= 1,
+    `高度受限时格宽也要相等，实际 ${((b2.w - BOARD_PAD) / 12).toFixed(1)} vs ${((b2.h - BOARD_PAD) / 10).toFixed(1)}`,
+  );
+});
+
+check('正方形地图的行为不变（12×12 仍铺满短边）', () => {
+  const b = fitBoardBox(12, 12, 800, 700);
+  assert.ok(b.w === b.h, `还是正方形，实际 ${b.w}×${b.h}`);
+  assert.equal(b.h, 700, `应当正好用满可用高度，实际 ${b.h}`);
+});
+
+check('40×40 与 8×40 这类极端长宽也不变形', () => {
+  const big = fitBoardBox(40, 40, 800, 700);
+  assert.ok(big.w === big.h && big.h <= 700, `40×40 应当正方且放得下，实际 ${big.w}×${big.h}`);
+  const tall = fitBoardBox(8, 40, 800, 700);
+  const cw = (tall.w - BOARD_PAD) / 8;
+  const ch = (tall.h - BOARD_PAD) / 40;
+  assert.ok(Math.abs(cw - ch) <= 1, `8×40 的格宽 ${cw.toFixed(1)} vs ${ch.toFixed(1)}`);
+  assert.ok(tall.h <= 700, `不能超高，实际 ${tall.h}`);
+});
+
+/* ------------------------------------------------------------------ */
 /* 关卡编辑器（E0 + E1）                                              */
 /* ------------------------------------------------------------------ */
 
@@ -9450,16 +9496,32 @@ check('点「恢复成初始模板」能回到一张合规的关', () => {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
   const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
   assert.ok(issues.includes('没问题'), `恢复之后应该是干净的，实际：${issues.slice(0, 160)}`);
-  mask?.querySelector<HTMLElement>('[data-act="save"]')?.click();
-  const foot = mask?.querySelector('[data-foot]')?.textContent ?? '';
-  assert.ok(foot.includes('已保存'), `存成功要有回执，实际：${foot}`);
 });
 
-check('存完之后关掉编辑器：选关页的「我的关卡」里出现了这张关', () => {
+/*
+ * 保存 = 关窗 + 一句提示。
+ *
+ * 实机上这里踩过：存完把窗口留着、只在窗口最底部写一行"已保存"，玩家没看见，
+ * 一路点了七八次保存（每次都真的存了一遍）。**关窗才是那个"结束了"的信号**，
+ * 所以这一条钉的是"窗口没了"，不是"底部文案对不对"。
+ */
+check('点保存：窗口自己关掉、选关页里出现这张关，并且给一句提示', () => {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
-  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+  mask?.querySelector<HTMLElement>('[data-act="save"]')?.click();
+
+  const stillOpen = [...doc.querySelectorAll('.modal-mask')].some((m) => m.querySelector('textarea.level-json'));
+  assert.ok(!stillOpen, '保存之后不该还留着一个编辑器窗口');
+
+  // 可能有更早的提示还没消失，所以看"所有还在的提示里有没有这一句"
+  const toasts = [...doc.querySelectorAll('.toast')].map((el) => el.textContent ?? '');
+  assert.ok(toasts.length > 0, '保存之后要有一句提示（存到哪儿了）');
+  assert.ok(
+    toasts.some((t) => t.includes('已保存')),
+    `提示要写明存成功了，实际：${toasts.join(' | ')}`,
+  );
+
   const mine = doc.querySelector<HTMLElement>('[data-level^="user:"]');
-  assert.ok(!!mine, '新建的关卡应该出现在「我的关卡」分组里');
+  assert.ok(!!mine, '保存的关卡应该出现在「我的关卡」分组里');
   // 它不该同时出现在预制那组里：重复出现会让玩家以为有两张
   const cards = [...doc.querySelectorAll<HTMLElement>('[data-level]')].filter((el) =>
     (el.dataset.level ?? '').startsWith('user:'),
