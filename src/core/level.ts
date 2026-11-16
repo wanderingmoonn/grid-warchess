@@ -569,7 +569,7 @@ export const LEVELS: LevelDef[] = [
       ],
     },
     goals: [{ kind: 'survive', seat: 'A', untilTurn: 30 }],
-    expansions: { require:['era-arms', 'blackout', 'bloodbath'] , forbid: ['turn-order-comp'], warn: ['blitz', 'high-mobility'] },
+    expansions: { require:['era-arms'] , forbid: ['turn-order-comp', 'blackout', 'bloodbath'], warn: ['blitz', 'high-mobility'] },
     /*
      * 三段压力：
      *   1~5 次行动：
