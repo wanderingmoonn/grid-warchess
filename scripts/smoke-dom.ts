@@ -9540,16 +9540,21 @@ click('[data-level-new]');
 
 check('编辑器里有「画地图」入口，打开就是一整张格子', () => {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  /*
+   * 尺寸从数据里读，不写死 12×10：模板哪天改大改小，这条用例不该跟着红。
+   * （这也是本项目对探针的一贯要求——钉死数值等于给未来的自己埋雷。）
+   */
+  const ta = mask?.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const { w, h } = (JSON.parse(ta.value) as { map: { w: number; h: number } }).map;
   mask?.querySelector<HTMLElement>('[data-act="canvas"]')?.click();
   const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop();
   assert.ok(!!canvas, '应该弹出画布');
   const cells = canvas!.querySelectorAll('[data-x]');
-  // 模板是 12×10：格子数必须等于 w×h，少一格就说明行列写错了
-  assert.equal(cells.length, 120, `格子数应该是 12×10=120，实际 ${cells.length}`);
+  assert.equal(cells.length, w * h, `格子数应该等于 ${w}×${h}，实际 ${cells.length}`);
   // 正方形格子的保证在这条：容器的宽高比跟着地图走，格子按 1fr 均分
   assert.ok(
-    (canvas!.style.aspectRatio ?? '').replace(/\s/g, '') === '12/10',
-    `容器的宽高比应该是 12/10，实际 ${canvas!.style.aspectRatio}`,
+    (canvas!.style.aspectRatio ?? '').replace(/\s/g, '') === `${w}/${h}`,
+    `容器的宽高比应该是 ${w}/${h}，实际 ${canvas!.style.aspectRatio}`,
   );
 });
 
