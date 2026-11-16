@@ -27,6 +27,7 @@ import {
 } from '../core/userLevels.ts';
 import { lintLevel, type LevelIssue } from '../core/level-lint.ts';
 import { toast } from './toast.ts';
+import { openLevelCanvas } from './level-canvas.ts';
 import type { LevelDef } from '../core/level.ts';
 
 export interface LevelEditorResult {
@@ -128,6 +129,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
         <div class="editor-toolbar">
           <button class="btn btn-primary btn-sm" data-act="save">保存到我的关卡</button>
           <button class="btn btn-sm" data-act="clone">${readOnly ? '复制成我的关卡' : '另存为副本'}</button>
+          <button class="btn btn-sm" data-act="canvas">画地图</button>
           <button class="btn btn-sm" data-act="copy">复制 JSON</button>
           <button class="btn btn-sm" data-act="reset">恢复成${readOnly ? '原版' : '初始模板'}</button>
         </div>
@@ -295,6 +297,35 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       ta.value = text;
       clearDraft(key);
       refresh();
+      return;
+    }
+
+    if (act === 'canvas') {
+      /*
+       * 内置关卡不给画：画完也存不下来（保存按钮是禁用的），只会白忙一场。
+       * 说清楚"先复制"比灰掉按钮好——灰掉的话玩家会以为是坏了。
+       */
+      if (readOnly) {
+        footEl.textContent = '内置关卡只读。先点「复制成我的关卡」，再画。';
+        return;
+      }
+      const parsed = parseLevelText(ta.value);
+      if (!parsed.ok) {
+        renderIssues(parsed.errors, []);
+        footEl.textContent = '先把 JSON 修好再画地图。';
+        return;
+      }
+      openLevelCanvas({
+        level: parsed.level,
+        onApply: (next) => {
+          // 画布只负责产出"一份新的关卡数据"，写回文本这条路由编辑器统一管
+          ta.value = exportLevelText(next);
+          refresh();
+          // 代码改的值不会触发 input 事件，草稿得手动补一次，否则关窗就丢
+          saveDraft(key, ta.value);
+          footEl.textContent = '地图换了。点「保存到我的关卡」才会真的存下来。';
+        },
+      });
       return;
     }
 

@@ -10,7 +10,7 @@
  * **能确定才报错**——虚报一个错，作者会去改一个本来就对的地方，比不报更糟。
  */
 
-import { UNIT_TYPES, navigable, passable } from './config.ts';
+import { CONFIG, UNIT_TYPES, navigable, passable } from './config.ts';
 import { loadCustomUnits } from './customUnits.ts';
 import { terrainFromChar } from './mapgen.ts';
 import { LEVEL_TERRAINS, type DeployUnit, type LevelDef, type LevelDo } from './level.ts';
@@ -70,29 +70,10 @@ function standReport(def: UnitTypeDef | undefined, t: Terrain): 'ok' | 'warn' | 
 }
 
 function terrainName(t: Terrain): string {
-  const map: Partial<Record<Terrain, string>> = {
-    plain: '平原',
-    forest: '森林',
-    hill: '丘陵',
-    water: '水域',
-    deep: '深水',
-    shallow: '浅流',
-    mountain: '山',
-    plateau: '台地',
-    valley: '谷地',
-    marsh: '沼泽',
-    dune: '沙丘',
-    city: '城市',
-    bridge: '桥面',
-    void: '虚空',
-    deck: '甲板',
-    wreck: '破口',
-    regolith: '月壤',
-    crater: '环形山',
-    shadow: '阴影乱流',
-  };
-  return map[t] ?? t;
+  // 用全局那一份，别在这儿再抄一张表——抄出来的表迟早和渲染/导出对不上
+  return CONFIG.terrainName[t] ?? t;
 }
+
 
 /**
  * 一层兵种检查：id 认不认识、时代对不对。

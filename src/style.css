@@ -5091,6 +5091,125 @@ a.btn {
   color: var(--text-3);
 }
 
+/* ── 地图画布（E2）───────────────────────────────────────────────────
+ * 格子本身不在这儿上色：直接套 `.tile.t-<地形>`，和棋盘用同一份样式。
+ * 自己配一套颜色的话，迟早出现"画布上是沼泽、进局变沙丘"。
+ * 正方形的保证来自容器的 `aspect-ratio: w / h`（JS 按地图尺寸写），
+ * 格子按 1fr 均分——和对局棋盘是同一条道理。
+ */
+.level-canvas-wrap {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 8px 0;
+}
+
+.level-palette {
+  flex: 0 0 142px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.level-brushes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.level-brush {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.level-brush.active {
+  border-color: var(--a);
+  color: var(--text);
+}
+
+.level-swatch {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.level-brush-char {
+  color: var(--text-3);
+  font-style: normal;
+  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.level-canvas-box {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.level-canvas {
+  display: grid;
+  width: 100%;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #cfc9bc;
+  touch-action: none;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.level-canvas .tile {
+  display: grid;
+  place-items: center;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.level-canvas-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.level-canvas-size {
+  max-width: 340px;
+  margin-bottom: 6px;
+}
+
+@media (max-width: 720px) {
+  .level-canvas-wrap {
+    flex-direction: column;
+  }
+
+  .level-palette {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .level-brushes {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
 .editor-checks {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

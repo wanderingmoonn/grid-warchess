@@ -9529,6 +9529,93 @@ check('点保存：窗口自己关掉、选关页里出现这张关，并且给�
   assert.equal(cards.length, 1, `同一张关只该出现一次，实际 ${cards.length} 次`);
 });
 
+/* ------------------------------------------------------------------ */
+/* 地图画布（E2）                                                      */
+/* ------------------------------------------------------------------ */
+
+console.log('\n地图画布');
+
+// 从一张新模板开始，免得受上一条用例存下来的关影响
+click('[data-level-new]');
+
+check('编辑器里有「画地图」入口，打开就是一整张格子', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="canvas"]')?.click();
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop();
+  assert.ok(!!canvas, '应该弹出画布');
+  const cells = canvas!.querySelectorAll('[data-x]');
+  // 模板是 12×10：格子数必须等于 w×h，少一格就说明行列写错了
+  assert.equal(cells.length, 120, `格子数应该是 12×10=120，实际 ${cells.length}`);
+  // 正方形格子的保证在这条：容器的宽高比跟着地图走，格子按 1fr 均分
+  assert.ok(
+    (canvas!.style.aspectRatio ?? '').replace(/\s/g, '') === '12/10',
+    `容器的宽高比应该是 12/10，实际 ${canvas!.style.aspectRatio}`,
+  );
+});
+
+/** 在画布上点一格（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
+const paintAt = (x: number, y: number): void => {
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const cell = canvas.querySelector<HTMLElement>(`[data-x="${x}"][data-y="${y}"]`);
+  cell?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+  canvas.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+};
+
+check('选水笔刷点一格：那一格变水，撤销能退回去', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-ch="~"]')?.click();
+  paintAt(5, 5);
+
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const cell = canvas.querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(cell?.className.includes('t-water'), `(5,5) 应该变成水域，实际 ${cell?.className}`);
+
+  mask?.querySelector<HTMLElement>('[data-act="undo"]')?.click();
+  const back = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(back?.className.includes('t-plain'), `撤销之后应该回到平原，实际 ${back?.className}`);
+});
+
+check('城是整块占位：点一下摆一座，再点同一座撤掉', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-seat="A"]')?.click();
+  paintAt(6, 6);
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const origin = canvas.querySelector<HTMLElement>('[data-x="6"][data-y="6"]');
+  const corner = canvas.querySelector<HTMLElement>('[data-x="7"][data-y="7"]');
+  assert.ok(origin?.className.includes('t-city'), '左上角应该是城');
+  assert.ok(corner?.className.includes('t-city'), '2×2 的右下角也该是城');
+  assert.equal(origin?.textContent, 'A', '城的左上角要标出这是哪一家');
+
+  paintAt(6, 6);
+  const after = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="6"][data-y="6"]');
+  assert.ok(!(after?.className ?? '').includes('t-city'), '再点一次同一座城应该撤掉');
+});
+
+check('点「用这张图」：编辑器里的数据跟着变（但还要自己点保存）', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-ch="~"]')?.click();
+  paintAt(3, 3);
+  mask?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  assert.ok(!doc.querySelector('.level-canvas'), '应用之后画布应该关掉');
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { map: { rows: string[] } };
+  assert.equal(data.map.rows[3]?.[3], '~', `编辑器里的地形应该跟着变，实际第 3 行：${data.map.rows[3]}`);
+  // 数据变了但还没存：底部要提醒一句，玩家才不会以为已经存上了
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('保存'), `要提醒还没保存，实际：${foot}`);
+});
+
+// 收尾：关掉编辑器（confirm 被 stub 成 true），别把窗口留给后面的用例
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。
