@@ -1561,16 +1561,7 @@ html[data-terrain='on'] .tile.t-city[data-city-era='steam'] { --city-tex: url('/
 html[data-terrain='on'] .tile.t-city[data-city-era='mechanized'] { --city-tex: url('/art/terrain/city-mechanized.webp'); }
 html[data-terrain='on'] .tile.t-city[data-city-era='info'] { --city-tex: url('/art/terrain/city-info.webp'); }
 html[data-terrain='on'] .tile.t-city[data-city-era='armor'] { --city-tex: url('/art/terrain/city-armor.webp'); }
-/*
- * 信息化单独用 4 格：这张图的主体是"一大片玻璃屋顶 + 周边场地"，
- * 5 格时 2×2 的城正好卡在一栋楼上（看着像单栋楼的鸟瞰），
- * 4 格能多圈进半条街，但仍然不至于撞到接缝。
- */
-html[data-terrain='on'] .tile.t-city[data-city-era='info'] {
-  background-size:
-    100% 100%,
-    calc(var(--cell, 44px) * 4) calc(var(--cell, 44px) * 4);
-}
+
 html[data-terrain='on'] .tile.t-city[data-city-era='fusion'] { --city-tex: url('/art/terrain/city-fusion.webp'); }
 /* 归属色：A 冷蓝、B 暖红。0.20 透明——0.30 会把八档材质压成一片灰粉（2026-11-15 实测） */
 html[data-terrain='on'] .tile.t-city.own-A { --city-tint: rgba(86, 126, 172, 0.20); }
