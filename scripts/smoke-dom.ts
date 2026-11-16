@@ -10265,6 +10265,69 @@ check('云端拉不到时，给的是原因而不是空白', () => {
 // 收尾
 topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
 
+/* ------------------------------------------------------------------ */
+/* 无城席位（F1 第二步）                                                */
+/* ------------------------------------------------------------------ */
+
+console.log('\n无城席位');
+
+for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level-new]');
+
+check('席位面板有「没有城」，勾上之后不再要求城的时代', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+  const layer = topMask()!;
+  const box = layer.querySelector<HTMLInputElement>('[data-cityless-for="A"]');
+  assert.ok(!!box, '每家要有一个「没有城」的勾');
+  box!.checked = true;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const after = topMask()!;
+  assert.ok(
+    !after.querySelector('[data-era-for="A"]'),
+    '标了没有城，就不该再问"城的时代"',
+  );
+  assert.ok(
+    (after.textContent ?? '').includes('靠开局兵力打'),
+    '要写清这一方靠什么打',
+  );
+});
+
+check('应用之后：seats.cityless 写进去，A 的城位清空', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    seats?: { cityless?: string[] };
+    map?: { citiesA?: unknown[] };
+  };
+  assert.deepEqual(data.seats?.cityless, ['A'], `cityless 应该是 ["A"]，实际 ${JSON.stringify(data.seats?.cityless)}`);
+  assert.equal((data.map?.citiesA ?? []).length, 0, 'A 的城位要一起清掉（不然数据自相矛盾）');
+});
+
+check('画布不再给"没有城"的那一方摆城', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="canvas"]')?.click();
+  const layer = topMask()!;
+  layer.querySelector<HTMLElement>('[data-seat="A"]')?.click();
+  const canvas = layer.querySelector<HTMLElement>('.level-canvas')!;
+  canvas
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]')
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+
+  const cell = canvas.querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(!(cell?.className ?? '').includes('t-city'), '不该给无城席位放下城');
+  assert.ok(
+    (layer.querySelector('[data-foot]')?.textContent ?? '').includes('没有城'),
+    `要说明原因，实际：${layer.querySelector('[data-foot]')?.textContent}`,
+  );
+});
+
+// 收尾
+topMask()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
+topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。

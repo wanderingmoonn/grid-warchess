@@ -284,8 +284,8 @@ export interface LevelSeats {
   /**
    * 第三、第四席的城（左上角）。A/B 用地图自带的那两组，这里只写多出来的。
    *
-   * `count` 是 3 就必须给 C；是 4 就必须给 C 和 D。**没城的席位第一回合就被判出局**
-   * （出局的定义就是"城全丢光"），所以这不是可选项——校验会拦。
+   * `count` 是 3 就必须给 C；是 4 就必须给 C 和 D。
+   * **例外**：在 `cityless` 里点名的席位不需要城，见下面那个字段。
    */
   cities?: Partial<Record<'C' | 'D', MapPoint[]>>;
   /** 哪些席位由电脑操作。不写＝全是真人；写了 B 就是 B 交给电脑 */
@@ -301,6 +301,18 @@ export interface LevelSeats {
    * 要落在"入场那一刻的兵力和兵种"上，别指望科技差一直压着。
    */
   cityEra?: Partial<Record<PlayerId, number>>;  /**
+   * **没有城的席位**（2026-11-16 新增）。
+   *
+   * 语义：这一席开局就没有城、没有产线、没有收入，靠 `deploy` 摆的兵打一场。
+   * 出局条件跟着变：**兵打光即出局**（不是"城全丢光"——它从来没有城）。
+   *
+   * 用来表达"孤军""决斗图"这类玩法。三件事要注意：
+   *   · 必须写 `deploy`，否则开局零兵＝第一帧就出局（校验会拦）；
+   *   · 不能同时有城（`map.citiesA/B` 或 `seats.cities` 里给它城是自相矛盾的）；
+   *   · **兵打光就输，引擎不看你后面还有没有援军**。带波次的关卡要自己保证前期不被打光。
+   */
+  cityless?: PlayerId[];
+  /**
    * 开局**不在场上**的席位。
    *
    * 和"出局"是两件事：出局是打没了，未登场是还没来。所以它不占回合、不算出局、
@@ -1254,7 +1266,17 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   if (!name) errors.push('缺少关卡名');
   if (name.length > 24) errors.push('关卡名太长（最多 24 个字）');
 
-  const checkedMap = validateFixedMap(obj.map);
+  /*
+   * 先看 `seats.cityless`，再校验地图。
+   *
+   * 顺序不能反：地图校验会拦"某一方没有城"，而"没有城"正是无城席位该有的样子。
+   * 这里只做**最宽松的预读**（能认出席位就行），真正的合法性由 `normalizeSeats` 判。
+   */
+  const rawSeats = (obj.seats ?? {}) as Partial<LevelSeats> & Record<string, unknown>;
+  const rawCityless = (Array.isArray(rawSeats.cityless) ? rawSeats.cityless : [])
+    .map((p) => String(p).toUpperCase())
+    .filter((p) => SEAT_ORDER.includes(p as 'A' | 'B' | 'C' | 'D'));
+  const checkedMap = validateFixedMap(obj.map, { allowEmpty: rawCityless });
   if (!checkedMap.ok) {
     // 地图的错因原样带出来：作者在关卡里写错一格，和在地图文件里写错一格，
     // 要看到的是同一句话。
@@ -1845,6 +1867,37 @@ function normalizeSeats(
   }
   const seated = SEAT_ORDER.slice(0, count) as readonly PlayerId[];
 
+  /*
+   * 无城席位（`cityless`）。
+   *
+   * 两道判断：① 只能是这一局坐人的席位；② 不能和城位同时存在——
+   * 两边都写是自相矛盾的配置，静默取一个会让作者查半天。
+   */
+  const cityless: PlayerId[] = [];
+  for (const p of Array.isArray(obj.cityless) ? obj.cityless : []) {
+    const seat = String(p).toUpperCase() as PlayerId;
+    if (!SEAT_ORDER.includes(seat as 'A' | 'B' | 'C' | 'D')) {
+      errors.push(`「没有城」的席位「${String(p)}」不是有效席位（只能是 A/B/C/D）`);
+      continue;
+    }
+    if (!seated.includes(seat)) {
+      errors.push(`「没有城」的席位「${seat}」这一局没坐人（这一关只有 ${seated.join(' / ')} 家）`);
+      continue;
+    }
+    if (!cityless.includes(seat)) cityless.push(seat);
+  }
+  for (const seat of cityless) {
+    const own = [
+      ...(seat === 'A' ? map.citiesA : seat === 'B' ? map.citiesB : []),
+      ...(((obj.cities ?? {}) as Partial<Record<'C' | 'D', MapPoint[]>>)[seat as 'C' | 'D'] ?? []),
+    ];
+    if (own.length > 0) {
+      errors.push(
+        `第 ${seat} 家同时被标成「没有城」又有 ${own.length} 座城位：这两件事只能选一个（想让它没城就把城位删掉）`,
+      );
+    }
+  }
+
   const aiRaw = Array.isArray(obj.ai) ? obj.ai : [];
   const ai: PlayerId[] = [];
   for (const p of aiRaw) {
@@ -1939,6 +1992,7 @@ function normalizeSeats(
   return {
     count: count as 2 | 3 | 4,
     ...(Object.keys(cities).length > 0 ? { cities } : {}),
+    ...(cityless.length > 0 ? { cityless } : {}),
     ai,
     ...(hidden.length > 0 ? { hidden } : {}),
     ...(Object.keys(cityEra).length > 0 ? { cityEra } : {}),

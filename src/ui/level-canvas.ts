@@ -66,6 +66,8 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
   const level = opts.level;
   const seatCount = level.seats?.count ?? 2;
   const seats = SEATS.slice(0, seatCount);
+  /** 标了"没有城"的席位：画布不给它摆城（去「席位」面板改） */
+  const citylessSeats = new Set(level.seats?.cityless ?? []);
 
   let w = level.map.w;
   let h = level.map.h;
@@ -175,6 +177,9 @@ export function openLevelCanvas(opts: LevelCanvasOptions): void {
   };
 
   const canPlaceCity = (seat: PlayerId, x: number, y: number): string | null => {
+    if (citylessSeats.has(seat)) {
+      return `${SEAT_NAME[seat] ?? seat}标了「没有城」。想给它城，先去「席位」里把这个勾去掉。`;
+    }
     if (x < 0 || y < 0 || x + CITY_SIZE > w || y + CITY_SIZE > h) return '放不下：城的 2×2 会伸出边界';
     for (let dy = 0; dy < CITY_SIZE; dy += 1) {
       for (let dx = 0; dx < CITY_SIZE; dx += 1) {

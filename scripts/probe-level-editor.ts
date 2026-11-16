@@ -12,7 +12,9 @@
  */
 
 import { aiNextAction } from '../src/core/ai.ts';
-import { LEVELS, allLevels, levelById, playableLevels } from '../src/core/level.ts';
+import { LEVELS, allLevels, levelById, playableLevels, validateLevel } from '../src/core/level.ts';
+import { validateFixedMap } from '../src/core/fixed-maps.ts';
+import { citiesOf } from '../src/core/rules.ts';
 import { lintLevel } from '../src/core/level-lint.ts';
 import { applyAction } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
@@ -330,6 +332,68 @@ check(levelUploadBlocker(one) === null, '合规关卡可以上传');
 check(
   levelUploadBlocker(sample({ name: '' })) !== null,
   '不合规关卡在上传前就被拦下（不占用一次审核名额）',
+);
+
+/* ── 11. 无城席位（F1 第二步：数据与校验） ─────────────────────── */
+line('11. 无城席位');
+
+/** 一张"甲方没城"的关卡：地图里 citiesA 是空的，靠 seats.cityless 放行 */
+const citylessLevel = sample({
+  id: 'user:probe-cityless',
+  name: '无城探针',
+  map: {
+    id: 'levelmap:probe-cityless',
+    name: '无城探针',
+    w: 10,
+    h: 8,
+    rows: Array.from({ length: 8 }, () => '..........'),
+    citiesA: [],
+    citiesB: [{ x: 7, y: 5 }],
+    source: 'user',
+  },
+  seats: { count: 2, ai: ['B'], cityless: ['A'] },
+  deploy: { A: [{ type: 'militia', x: 3, y: 3 }, { type: 'archer', x: 4, y: 3 }] },
+});
+
+const checked = validateLevel(citylessLevel);
+check(checked.ok, '标了无城的关卡能过校验', checked.ok ? '' : checked.errors.join('；'));
+
+// 关键：**没有 cityless 这张免票，地图校验仍然要求两方都有城**。
+// 放宽只发生在关卡那条路上，地图上传那条路必须保持原样。
+const strictMap = validateFixedMap(citylessLevel.map);
+check(!strictMap.ok, '地图单独校验（上传那条路）仍然要求双方有城');
+check(
+  validateFixedMap(citylessLevel.map, { allowEmpty: ['A'] }).ok,
+  '带上 allowEmpty 才放行',
+);
+
+// 自相矛盾：既说没城，又给了城位
+const contradictory = validateLevel({
+  ...citylessLevel,
+  map: { ...citylessLevel.map, citiesA: [{ x: 1, y: 1 }] },
+});
+check(!contradictory.ok, '「没城 + 有城位」被拦下', contradictory.ok ? '竟然过了' : contradictory.errors[0]);
+
+// 建局：A 一座城都没有，B 照旧
+if (checked.ok) {
+  const s = createMatch({ ...DEFAULT_CONFIG, level: checked.level }, 31);
+  check(citiesOf(s, 'A').length === 0, '无城席位建局后确实没有城', `实际 ${citiesOf(s, 'A').length}`);
+  check(citiesOf(s, 'B').length > 0, '有城的那一方照旧有城', `实际 ${citiesOf(s, 'B').length}`);
+  check(s.units.filter((u) => u.owner === 'A').length === 2, '无城方靠 deploy 拿到兵', `实际 ${s.units.filter((u) => u.owner === 'A').length}`);
+}
+
+// lint：无城席位必须写 deploy
+const noDeploy = lintLevel({ ...citylessLevel, deploy: { B: [{ type: 'militia', x: 8, y: 4 }] } });
+check(
+  noDeploy.some((i) => i.severity === 'error' && i.text.includes('第一帧就出局')),
+  '无城席位没写兵力 → 报错（不让它静默变成"开局即输"）',
+  noDeploy.map((i) => i.text).join(' | '),
+);
+const okLint = lintLevel(citylessLevel);
+check(
+  !okLint.some((i) => i.severity === 'error'),
+  '写了兵力的无城关卡没有错误',
+  okLint.filter((i) => i.severity === 'error').map((i) => i.text).join(' | '),
 );
 
 /* ── 汇总 ──────────────────────────────────────────────────────── */

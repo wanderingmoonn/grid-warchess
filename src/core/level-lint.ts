@@ -202,6 +202,29 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
     }
   }
 
+  /*
+   * 无城席位必须写 `deploy`。
+   *
+   * 不写就是"开局零兵"，而零兵的无城席位第一帧就出局——这不是玩家能理解的失败，
+   * 是作者漏了一个字段。所以要在编辑器里当场拦，而不是等他自己发现。
+   */
+  for (const seat of level.seats?.cityless ?? []) {
+    if (level.seats?.hidden?.includes(seat)) {
+      out.push({
+        severity: 'error',
+        text: `第 ${seat} 家同时被标成「没有城」和「中途登场」：未登场的席位要靠 deploy 事件放城，两件事冲突。`,
+      });
+      continue;
+    }
+    const list = level.deploy?.[seat] ?? [];
+    if (list.length === 0) {
+      out.push({
+        severity: 'error',
+        text: `第 ${seat} 家标成了「没有城」，但没写开局兵力。它会以零兵开局、第一帧就出局——去「摆兵」里给它摆几个兵。`,
+      });
+    }
+  }
+
   /* ---- 胜负 ---- */
   for (const goal of level.goals ?? []) {
     if (goal.kind !== 'assassinate') continue;

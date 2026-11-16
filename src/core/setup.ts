@@ -605,10 +605,19 @@ export function createMatch(
    * 是配置决定的事实。它靠事件里的 `deploy` 上场。
    */
   const hiddenSeatList = (level?.seats?.hidden ?? []).filter((p) => seatList.includes(p));
+  /**
+   * **没有城的席位**（关卡 `seats.cityless`）。
+   *
+   * 和"未登场"不同：它在场、占回合、要打仗，只是没有城。所以这里只是不摆城，
+   * 出兵照旧走 `deploy`。出局条件在 rules.ts 里单独判（兵打光即出局）。
+   */
+  const citylessList = (level?.seats?.cityless ?? []).filter((p) => seatList.includes(p));
 
   for (const p of seats) {
     // 未登场的席位：地图上不给它城（要靠事件里的 deploy 放）
     if (hiddenSeatList.includes(p)) continue;
+    // 无城席位：本来就不该有城，直接跳过
+    if (citylessList.includes(p)) continue;
     for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
   }
 

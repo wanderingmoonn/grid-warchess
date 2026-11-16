@@ -39,6 +39,8 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
   let count: 2 | 3 | 4 = (level.seats?.count ?? 2) as 2 | 3 | 4;
   const ai = new Set<PlayerId>(level.seats?.ai ?? []);
   const hidden = new Set<PlayerId>(level.seats?.hidden ?? []);
+  /** 没有城的席位（靠开局兵力打）。和"中途登场"互斥，apply 时会拦 */
+  const cityless = new Set<PlayerId>(level.seats?.cityless ?? []);
   /** 只记"和开局时代不一样"的那些 */
   const cityEra: Partial<Record<PlayerId, number>> = { ...(level.seats?.cityEra ?? {}) };
   /** C / D 的城位（A / B 在地图里） */
@@ -182,10 +184,15 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
             <label class="editor-check"><input type="checkbox" data-hidden-for="${seat}" ${
               hidden.has(seat) ? 'checked' : ''
             }> 中途才登场</label>
-            <label class="level-seat-era">城的时代 ${eraSel}</label>
-            <span class="level-seat-city ${hasCity ? '' : 'is-missing'}">${
-              hasCity ? '有城' : '没有城'
-            }</span>
+            <label class="editor-check"><input type="checkbox" data-cityless-for="${seat}" ${
+              cityless.has(seat) ? 'checked' : ''
+            }> 没有城</label>
+            ${
+              cityless.has(seat)
+                ? '<span class="level-seat-city">靠开局兵力打（没有产线、没有收入）</span>'
+                : `<label class="level-seat-era">城的时代 ${eraSel}</label>
+                   <span class="level-seat-city ${hasCity ? '' : 'is-missing'}">${hasCity ? '有城' : '没有城'}</span>`
+            }
           </div>`;
       })
       .join('');
@@ -197,6 +204,7 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
     startHintEl.textContent = startLabel;
 
     const noCity = seated().filter((seat) => {
+      if (cityless.has(seat)) return false; // 标了"没有城"的席位本来就不该有城
       const list = seat === 'A' ? level.map.citiesA : seat === 'B' ? level.map.citiesB : extraCities[seat as 'C' | 'D'] ?? [];
       return list.length === 0;
     });
@@ -226,6 +234,20 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
       render();
       return;
     }
+    const citylessSeat = el.getAttribute('data-cityless-for') as PlayerId | null;
+    if (citylessSeat) {
+      if ((el as HTMLInputElement).checked) {
+        cityless.add(citylessSeat);
+        // 没城就不该有"城的时代"，也不该留着城位（两边都写会被校验拒）
+        delete cityEra[citylessSeat];
+        if (citylessSeat === 'C' || citylessSeat === 'D') delete extraCities[citylessSeat];
+      } else {
+        cityless.delete(citylessSeat);
+      }
+      render();
+      return;
+    }
+
     const eraSeat = el.getAttribute('data-era-for') as PlayerId | null;
     if (eraSeat) {
       const v = (el as HTMLSelectElement).value;
@@ -248,9 +270,24 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
       return;
     }
     if (act === 'apply') {
+      const clash = [...cityless].filter((seat) => hidden.has(seat));
+      if (clash.length > 0) {
+        footEl.textContent = `${clash.map((s) => SEAT_NAME[s] ?? s).join('、')}同时被标成「没有城」和「中途才登场」：未登场要靠 deploy 事件放城，这两件事冲突。`;
+        return;
+      }
       const next: LevelDef = { ...level };
+      // A/B 的城位在地图里，标了"没有城"就要一起清掉（不然校验会拒）
+      if (cityless.has('A') || cityless.has('B')) {
+        next.map = {
+          ...level.map,
+          ...(cityless.has('A') ? { citiesA: [] } : {}),
+          ...(cityless.has('B') ? { citiesB: [] } : {}),
+        };
+      }
+
       const seats: LevelSeats = {
         count,
+        ...(cityless.size > 0 ? { cityless: [...cityless] } : {}),
         // 显式写出来（含空数组）：这是"这一关的硬设定"，不留给面板去猜
         ai: [...ai],
         ...(hidden.size > 0 ? { hidden: [...hidden] } : {}),
