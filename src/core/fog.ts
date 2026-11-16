@@ -218,16 +218,21 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
       if (set.has(i)) continue;
       const tile = boardOf(cloned, id).tiles[i];
       /*
-       * 看不见的桥要还原成**原来的地形**，不是一律还原成水。
+       * 看不见的桥要还原成**桥下那块地**，不是一律还原成水。
        *
-       * 桥现在也能架在沼泽上（`buildOn: ['water', 'marsh']`），
-       * 一律还原成水的话，沼泽上那座桥在迷雾里会凭空变成一条河——
+       * 桥现在也能架在沼泽上（`buildOn: ['water', 'marsh']`），而水位还可能被
+       * 事件改浅。一律还原成水的话，沼泽上那座桥在迷雾里会凭空变成一条河——
        * 河过不去、沼泽能过（移动力 2），玩家按错的地形做判断。
-       * 原地形建桥那一刻记在 `custom.deckFrom` 里；老存档没有这个字段，退回水面。
+       *
+       * 优先读局面的 `bridgeDeck`（事件改水位时会同步更新），再退回单位上
+       * 建桥那一刻记的 `custom.deckFrom`；老存档两样都没有，退回水面。
        */
       if (tile && tile.terrain === 'bridge') {
-        const from = u.custom?.deckFrom;
-        tile.terrain = from === 'marsh' ? 'marsh' : 'water';
+        const recorded = u.custom?.deckFrom;
+        const bed =
+          cloned.bridgeDeck?.[String(i)] ??
+          (typeof recorded === 'string' ? (recorded as typeof tile.terrain) : undefined);
+        tile.terrain = bed ?? 'water';
       }
     }
   }
