@@ -520,8 +520,8 @@ const CUT_PAINT: Array<[number, number, string]> = (() => {
  * 内建关卡。
  *
  * 分两层，别混：
- *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀 / 护送。四张各教一件事——
- *     用地形换时间、集中兵力打一点、第三方与时机、无城护送穿越。
+ *   · **玩家关**（没有 `dev` 标记）：孤城 / 斩首 / 黄雀 / 护送 / 邪龙。五张各教一件事——
+ *     用地形换时间、集中兵力打一点、第三方与时机、无城护送穿越、两人合作守大图。
  *   · **测试夹具**（`dev: true`）：平地探针、断后、断桥、三岔口、死守。
  *     各验一条机制，不进玩家菜单，探针二十多段靠它们跑。
  */
@@ -574,6 +574,51 @@ const ESCORT_PAINT: Array<[number, number, string]> = (() => {
   // 中段伏击点：一片林子 + 一块高地
   out.push([7, 3, 'f'], [8, 3, 'f'], [7, 4, 'f']);
   out.push([11, 4, 'h'], [11, 5, 'h']);
+  return out;
+})();
+
+/**
+ * 「邪龙」的地形：28×18 的大图，北面一道山脊，中央开一道裂隙。
+ *
+ * 为什么这么大：这关要的是"发育时间"。两座城摆在南边两角，敌人的空军从北面
+ * 裂隙进来，光飞过来就要三四个回合——这段时间正是玩家造兵、升时代、把火枪
+ * 架到高地上的窗口。小图会把这段窗口压没。
+ *
+ * 地形只做三件事：
+ *   1. **山脊 + 裂隙**：视觉上告诉你"威胁从哪儿来"，也顺带给地面部队一点遮挡；
+ *   2. **焦土**：裂隙正下方那片沙丘，是邪龙落过的地方（`full` 事件还会把它扩大）；
+ *   3. **城前丘陵**：给火枪手一点射程优势——这是全图唯一"该站人"的地方。
+ *
+ * 注意：敌人全是**飞行单位**，山、河、林都拦不住它们。地形在这里是给玩家用的，
+ * 不是给敌人用的。别指望靠地形把它们挡住。
+ */
+const DRAGON_PAINT: Array<[number, number, string]> = (() => {
+  const W = 28;
+  const out: Array<[number, number, string]> = [];
+  // 北面山脊：y=0 整行，中央 x=12..15 是裂隙（邪龙进来的口子）
+  for (let x = 0; x < W; x += 1) if (x < 12 || x > 15) out.push([x, 0, '^']);
+  // 山脊向两侧延伸两行，把北面压成"只有中间能过"的样子
+  for (let y = 1; y <= 2; y += 1) {
+    for (let x = 0; x < 7; x += 1) out.push([x, y, '^']);
+    for (let x = 21; x < W; x += 1) out.push([x, y, '^']);
+  }
+  // 裂隙下方的焦土（沙丘）
+  for (let y = 1; y <= 6; y += 1) {
+    for (let x = 11; x <= 16; x += 1) {
+      if (y <= 2 && (x < 12 || x > 15)) continue; // 别盖住山脊
+      out.push([x, y, 'd']);
+    }
+  }
+  // 中段掩体：两片林子
+  out.push([6, 7, 'f'], [7, 7, 'f'], [6, 8, 'f'], [7, 8, 'f'], [8, 8, 'f']);
+  out.push([20, 7, 'f'], [21, 7, 'f'], [20, 8, 'f'], [21, 8, 'f'], [19, 8, 'f']);
+  // 正中的一块高地：谁占了谁视野好，但离两座城都不近
+  out.push([13, 10, 'h'], [14, 10, 'h'], [13, 11, 'h'], [14, 11, 'h']);
+  // 两座城前的阵地（丘陵：火枪站上去多一格射程）
+  out.push([9, 12, 'h'], [11, 12, 'h'], [10, 13, 'h']);
+  out.push([15, 12, 'h'], [17, 12, 'h'], [16, 13, 'h']);
+  // 两城之间的连接线上放两棵树，别让中间一片空
+  out.push([13, 14, 'f'], [14, 14, 'f']);
   return out;
 })();
 
@@ -1050,6 +1095,243 @@ export const LEVELS: LevelDef[] = [
      * 失败不用另写：cityless 的"兵打光即输"自动兜住。
      */
     goals: [{ kind: 'escort', seat: 'A', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, unitType: 'messenger' }],
+  },
+
+  /* ── 玩家关 5：邪龙（两人合作）────────────────────────────── */
+  {
+    id: 'level:evil-dragon',
+    version: LEVEL_VERSION,
+    name: '邪龙',
+    brief: '28×18，两人各守一座城。北面裂隙里会不断飞出龙——先攒兵，再谈反击。',
+    map: {
+      id: 'levelmap:evil-dragon',
+      name: '邪龙',
+      w: 28,
+      h: 18,
+      rows: rowsOf(28, 18, DRAGON_PAINT),
+      citiesA: [{ x: 9, y: 14 }],
+      citiesB: [{ x: 16, y: 14 }],
+      source: 'builtin',
+    },
+    seats: {
+      count: 3,
+      /*
+       * A、B 是两个真人（热座或联机），C 是电脑控制的邪龙军团。
+       * `teams` 一写，A/B 就不能互打、可以穿过对方的兵，胜负也按队算——
+       * 打光邪龙那一队就一起赢。
+       */
+      ai: ['C'],
+      cityless: ['C'],
+      teams: [['A', 'B'], ['C']],
+    },
+    /*
+     * 开局时代定在 3（火器）：玩家一上来就有火枪兵（射程 4，能打空军）可用。
+     *
+     * 这是这一关"发育准备"的起点——不是白送，是让玩家从第一回合就有
+     * **能对空的手段**。要是从青铜起手，敌人第一批龙飞到时玩家还在攒弓箭手。
+     */
+    setup: { startEra: 6, firstSide: 'A' },
+    /*
+     * 固定开奇想。
+     *
+     * 邪龙王**不用原版**：它是 700 金的第六代英雄（190 血、陨卵每三回合下一条魔龙），
+     * 用它当这一关的 boss，玩家会被滚雪球压死——实测 18 个机械化兵也翻不回来。
+     * 所以这里用关卡独有兵种 `dragon-king` 复刻一个"只会喷火的邪龙王"：
+     * 150 血、去掉陨卵技能。名字和定位不变，压力从"打不完"变成"打得动"。
+     *
+     * `pack-contemporary` 是给**玩家**的：开局第六代（信息化）才有 atk 66 一级的
+     * 兵和够用的收入；靠第五代的机械化兵打这条龙，实测是把钱花光也只造得起弓手。
+     */
+    expansions: { require: ['fantasy', 'pack-contemporary'] },
+    /*
+     * 开局兵力：每城两个火枪兵 + 一个劳工。
+     *
+     * 为什么只给火枪：敌人**全是飞行单位**，近战（戟兵、骠骑兵）射程 1，
+     * 按 canStrike 的"地面打空中要够得着"根本打不到。给了也是白给，
+     * 玩家会以为"我有一队兵"然后看着它们站着不动。
+     * 劳工负责把经济拉起来——这关的钱要花在造兵上，不是造农民。
+     */
+    deploy: {
+      A: [
+        { type: 'tank', x: 10, y: 12 },
+        { type: 'squad', x: 9, y: 13 },
+        { type: 'squad', x: 9, y: 11 },
+        { type: 'hmg', x: 11, y: 13 },
+        { type: 'hmg', x: 10, y: 11 },
+        { type: 'crew', x: 8, y: 14 },
+      ],
+      B: [
+        { type: 'tank', x: 16, y: 12 },
+        { type: 'squad', x: 17, y: 13 },
+        { type: 'squad', x: 17, y: 11 },
+        { type: 'hmg', x: 15, y: 13 },
+        { type: 'hmg', x: 16, y: 11 },
+        { type: 'crew', x: 18, y: 14 },
+      ],
+      /*
+       * 邪龙开局就有一个先遣：一条龙骑兵在北面裂隙外。
+       *
+       * 它不是为了立刻打人——它离两座城 13 格，飞过来要三个回合。
+       * 它是**这一席的存在证明**：cityless 席位的出局条件是"兵打光"，
+       * 开局一个兵都没有的话，第一帧就判 C 出局、玩家什么都没干就赢了。
+       */
+      C: [{ type: 'dragoon-rider', x: 13, y: 1 }],
+    },
+    /*
+     * 这一关的邪龙王：**原版裁掉陨卵**。
+     *
+     * 原版是第六代英雄（190 血 / 8 甲 / range 4 / 魔抗 12），每三回合下一颗
+     * 140 血的卵、两回合后孵成 150 血的魔龙。AI 用它的时候是"越打越多"，
+     * 实测让 18 个机械化兵也翻不回来。这里保留它的面板和压迫感，只去掉
+     * "无限下蛋"那条——boss 仍然是全场最硬的那一个，但玩家能靠集火打死。
+     */
+    units: {
+      'dragon-king': {
+        id: 'dragon-king',
+        name: '邪龙王',
+        short: '邪',
+        era: 6,
+        category: 'combat',
+        cost: 1,
+        move: 2,
+        atk: 32,
+        armor: 8,
+        maxHp: 150,
+        range: 4,
+        vision: 10,
+        magicAtk: 20,
+        magicRes: 12,
+        element: 'dark',
+        flight: true,
+        layer: 'air',
+        weak: { light: 2 },
+        resist: { fire: 0.5, water: 0.5, earth: 0.5, wind: 0.5 },
+        summonedOnly: true,
+      },
+    },
+    events: [
+      /*
+       * 开场：告诉玩家"威胁从北面来"，并把裂隙点亮一段（12 次行动≈6 轮）。
+       *
+       * 开雾的局里，玩家看不见北面那一片，也就不知道敌人在哪、还有多远。
+       * 点亮不是永久信息，看够就熄——后面的侦察仍然要自己做。
+       */
+      {
+        id: 'omen',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'say', text: '北面的山裂开了一道缝。有东西要下来了——趁现在把兵攒起来。' },
+          { kind: 'reveal', zone: { x0: 11, y0: 0, x1: 16, y1: 6 }, turns: 12 },
+        ],
+      },
+
+      /*
+       * 第一波：再补一条龙骑兵。
+       *
+       * 从第 5 次行动开始——玩家已经有两次自己的回合可以造兵/挪人。
+       * 之后每 4 次行动一波，一波比一波重，直到邪龙王本体下场。
+       * 节奏是"给你喘气的时间，但不给太多"。
+       */
+      {
+        id: 'wave-1',
+        when: { kind: 'turn', at: 7 },
+        do: [
+          { kind: 'say', text: '又一条龙骑兵从裂隙里钻出来，贴着山脊往南飞。' },
+          {
+            kind: 'spawn',
+            owner: 'C',
+            units: [
+              { type: 'dragoon-rider', x: 14, y: 1 },
+              { type: 'dragoon-rider', x: 12, y: 2 },
+            ],
+          },
+          { kind: 'reveal', zone: { x0: 11, y0: 0, x1: 16, y1: 6 }, turns: 3 },
+        ],
+      },
+      {
+        id: 'wave-2',
+        when: { kind: 'turn', at: 12 },
+        do: [
+          { kind: 'say', text: '一头恶魔跟着下来了。它飞得不快，但能隔空烧人。' },
+          {
+            kind: 'spawn',
+            owner: 'C',
+            units: [{ type: 'demon', x: 12, y: 1 }],
+          },
+          // 让 AI 从这一波开始主动扑：前两波它会先打最近的兵，这一波之后盯着城
+          { kind: 'doctrine', seat: 'C', strategy: 'rush' },
+          { kind: 'reveal', zone: { x0: 11, y0: 0, x1: 16, y1: 7 }, turns: 3 },
+        ],
+      },
+
+      /*
+       * 第三波：骷髅飞龙。它带 `siege-master`，是专门拆城的那个——
+       * 播报要点明，否则玩家看着城血掉得莫名其妙。
+       */
+      {
+        id: 'wave-3',
+        when: { kind: 'turn', at: 17 },
+        do: [
+          { kind: 'say', text: '骷髅飞龙从云里钻出来了——它专门拆城，别让它靠近。' },
+          { kind: 'spawn', owner: 'C', units: [{ type: 'bone-dragon', x: 13, y: 1 }] },
+          { kind: 'reveal', zone: { x0: 10, y0: 0, x1: 17, y1: 8 }, turns: 3 },
+        ],
+      },
+
+      /*
+       * 完全体：邪龙王 + 一整队随从。
+       *
+       * 这一刻是这一关的"下半场"。之前所有波次都是在逼玩家别停下来发育；
+       * 这一波之后就没得发育了，只能硬接。
+       * 顺带把中央那片烧成焦土——纯气氛，但对玩家是个信号："它真的来了"。
+       */
+      {
+        id: 'full',
+        when: { kind: 'turn', at: 26 },
+        do: [
+          { kind: 'say', text: '天黑了。邪龙王亲自下来了——它身后还跟着一整队。' },
+          {
+            kind: 'spawn',
+            owner: 'C',
+            units: [
+              { type: 'dragon-king', x: 13, y: 1 },
+              { type: 'bone-dragon', x: 11, y: 1 },
+              { type: 'demon', x: 15, y: 1 },
+              { type: 'dragoon-rider', x: 12, y: 2 },
+            ],
+          },
+          { kind: 'terrain', zone: { x0: 10, y0: 7, x1: 17, y1: 12 }, to: 'dune' },
+          { kind: 'doctrine', seat: 'C', strategy: 'rush' },
+          { kind: 'reveal', zone: { x0: 8, y0: 0, x1: 19, y1: 10 }, turns: 4 },
+        ],
+      },
+
+      /*
+       * 邪龙王倒下：这一关的"心理终点"。
+       *
+       * 它一死，剩下那些飞龙虽然还在，但玩家已经知道赢定了。
+       * 不刷兵、不改规则——只给一句话，别让胜利在沉默里发生。
+       */
+      {
+        id: 'dragon-down',
+        when: { kind: 'unitDied', type: 'dragon-king' },
+        do: [{ kind: 'say', text: '邪龙王栽下去了。剩下的不过是一群没了主人的野兽——清干净。' }],
+      },
+    ],
+    /*
+     * 两条正面的胜利条件：**守住就算赢**。
+     *
+     * 不写的话，这一关只有"把邪龙军团清光"这一种赢法——问题是恶魔会召唤小恶魔、
+     * 残兵会散到地图角落，玩家把主力和 boss 都打死了，还得满地图追最后几只，
+     * 实测会卡到两百多次行动都结束不了。
+     *
+     * 两条 survive 各写一边：任一玩家撑到第 45 次行动就赢（另一个人先倒下不影响，
+     * 这正是"合作"该有的宽容）。两座城都丢光时 survive 不成立，走默认的失败。
+     */
+    goals: [
+      { kind: 'survive', seat: 'A', untilTurn: 45 },
+      { kind: 'survive', seat: 'B', untilTurn: 45 },
+    ],
   },
 
   {
@@ -2170,6 +2452,17 @@ function normalizeSeats(
           .map((c) => ({ x: Math.round(Number((c as MapPoint)?.x)), y: Math.round(Number((c as MapPoint)?.y)) }))
           .filter((c) => Number.isFinite(c.x) && Number.isFinite(c.y))
       : [];
+    /*
+     * 「没有城」的席位（合作关里靠事件刷兵的邪龙军团）**故意**没有城。
+     * 以前这里一刀切要求第三/第四家必须有城，于是 cityless 只能用在两家局
+     * （护送关的 A 走的是 citiesA 为空那条路）——三家局的"无城敌人"根本写不出来。
+     */
+    if (cityless.includes(p)) {
+      if (pts.length > 0) {
+        errors.push(`第 ${p} 家既标了「没有城」，又在 seats.cities.${p} 里写了城位：二选一`);
+      }
+      continue;
+    }
     if (pts.length === 0) {
       errors.push(`第 ${p} 家没有城：这一关是 ${count} 家局，必须在 seats.cities.${p} 里给它一座城`);
       continue;

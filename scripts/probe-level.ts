@@ -988,10 +988,10 @@ line('23. 地图上的桥不该自己塌');
 }
 
 /* ── 24. 玩家关冒烟：三关都能建、都能跑 ─────────────────────── */
-line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送');
+line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
 {
   const menu = playableLevels();
-  check(menu.length === 4, `菜单里正好四关（${menu.map((l) => l.name).join(' / ')}）`);
+  check(menu.length === 5, `菜单里正好五关（${menu.map((l) => l.name).join(' / ')}）`);
   check(
     allLevels().length > menu.length,
     `夹具关还在注册表里（全 ${allLevels().length} 张，玩家可见 ${menu.length} 张）`,
@@ -1022,6 +1022,60 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送');
       `      · ${lv.name}：${built.units} 兵起手 → 第 ${s.turn} 次行动，${
         s.winner ? `胜方 ${s.winner}` : '未分胜负'
       }`,
+    );
+  }
+}
+
+/* ── 24b. 邪龙：三人合作关的结构 ─────────────────────────────── */
+{
+  const lv = levelById('level:evil-dragon')!;
+  const v = validateLevel(lv);
+  check(v.ok, '邪龙：校验通过', v.ok ? '' : v.errors.slice(0, 3).join('；'));
+  if (v.ok) {
+    check(
+      v.level.map.w === 28 && v.level.map.h === 18,
+      `邪龙：地图 28×18（实际 ${v.level.map.w}×${v.level.map.h}）`,
+    );
+    check(
+      JSON.stringify(v.level.seats?.teams) === '[["A","B"],["C"]]',
+      '邪龙：A / B 同队、C 单独一队',
+      JSON.stringify(v.level.seats?.teams),
+    );
+    check((v.level.seats?.cityless ?? []).includes('C'), '邪龙：C 是「没有城」的席位');
+    check(
+      (v.level.expansions?.require ?? []).includes('fantasy'),
+      '邪龙：要求开奇想',
+      JSON.stringify(v.level.expansions?.require),
+    );
+
+    const s = createMatch({ ...DEFAULT_CONFIG, level: v.level }, 7);
+    /*
+     * 这条断言是这次最容易再踩的坑：三家局里只要有一家 cityless，
+     * `setup` 的 multiOk 就不成立 → 关卡地图被丢掉、**静默**退回 12×12 随机图。
+     * 玩家看到的是"我做的 28×18 变成了 12×12"，日志里一个字都没有。
+     */
+    check(s.w === 28 && s.h === 18, `邪龙：关卡地图真的生效（实际 ${s.w}×${s.h}）`, '又静默退回随机图了');
+    check(s.cities.every((c) => c.owner !== 'C'), '邪龙：C 一座城都没有');
+    check(s.units.some((u) => u.owner === 'C'), '邪龙：开局必须有兵', 'C 是 cityless，0 兵第一帧就判出局');
+    for (const t of ['dragon-king', 'demon', 'bone-dragon', 'dragoon-rider']) {
+      check(!!s.unitTypes[t], `邪龙：兵种表里有「${t}」`, '没有的话事件刷兵只会留一句系统日志');
+    }
+
+    // 完全体要在第 17 次行动之后下场
+    let wave = s;
+    try {
+      for (let i = 0; i < 160 && !wave.winner && wave.turn < 27; i += 1) {
+        const a = aiNextAction(wave) ?? ({ type: 'END_TURN' } as Action);
+        const r = applyAction(wave, a);
+        wave = r.ok ? r.state : (applyAction(wave, { type: 'END_TURN' } as Action) as { state: GameState }).state;
+      }
+    } catch {
+      /* 炸了下面那条会红 */
+    }
+    check(
+      wave.units.some((u) => u.type === 'dragon-king'),
+      `邪龙：第 26 次行动后邪龙王下场（当前 turn=${wave.turn}）`,
+      `场上只有 ${wave.units.filter((u) => u.owner === 'C').map((u) => u.type).join(',') || '空'}`,
     );
   }
 }
