@@ -220,9 +220,16 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
         text: `「斩首」的目标兵种「${type}」不存在，这个条件永远不会成立（不是白送胜利，是永远打不完）。`,
       });
     } else if (def.summonedOnly !== true) {
+      /*
+       * 只警告，不拦。
+       *
+       * 严格说这个条件"很难成立"而不是"不可能"：把对面的城全打掉、或者一口气清空同型兵，
+       * 它也能成立。所以这是设计选择（虽然多半是没想到），不是配置错误——
+       * 2026-11-16 定的口径是"框架内的东西越自由越好，编辑器不替作者判断"。
+       */
       out.push({
-        severity: 'error',
-        text: `「斩首」的目标「${def.name}」是能被造出来的兵种，对面会一直补人，条件永远不成立。请在 units 里给它加 summonedOnly: true。`,
+        severity: 'warn',
+        text: `「斩首」的目标「${def.name}」玩家造得出来，对面会一直补人，条件很难成立。想让它可靠，在 units 里给它加 summonedOnly: true。`,
       });
     }
   }

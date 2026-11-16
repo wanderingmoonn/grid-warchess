@@ -27,7 +27,7 @@ import {
   type LevelZone,
 } from '../core/level.ts';
 import type { PlayerId } from '../core/types.ts';
-import { cellFromEvent, cityLookup, gridFromRows, renderLevelGrid, terrainAt } from './level-grid.ts';
+import { bindZoneDrag, cellFromEvent, cityLookup, gridFromRows, renderLevelGrid, terrainAt } from './level-grid.ts';
 import { toast } from './toast.ts';
 
 const SEAT_ORDER: PlayerId[] = ['A', 'B', 'C', 'D'];
@@ -89,9 +89,13 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   const firstCombat = unitOptions.find((d) => d.category === 'combat')?.id ?? unitOptions[0]?.id ?? 'militia';
 
   let events: LevelEvent[] = structuredClone(level.events ?? []);
+  /** 卡片 / 时间轴。时间轴是"看节奏"的视图，改数据仍然在卡片里 */
+  let view: 'cards' | 'timeline' = 'cards';
+  /** 从时间轴点进来时要高亮哪一张卡 */
+  let focusIdx: number | null = null;
   let pick: PickTarget | null = null;
-  let dragAnchor: { x: number; y: number } | null = null;
-  let dragNow: { x: number; y: number } | null = null;
+  /** 拖拽中的预览区域（松手就写进事件里） */
+  let previewZone: LevelZone | null = null;
 
   const mask = document.createElement('div');
   mask.className = 'modal-mask';
@@ -108,6 +112,8 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         <div class="level-events-wrap">
           <div class="level-events-col">
             <div class="level-events-toolbar">
+              <button class="chip" data-view="cards">卡片</button>
+              <button class="chip" data-view="timeline">时间轴</button>
               <select data-template class="level-mini-select"></select>
               <button class="btn btn-sm" data-act="add-event">加一条事件</button>
               <span class="field-hint" data-summary></span>
@@ -283,7 +289,96 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       </span>`;
   }
 
+  /** 把一件事压成一行摘要，供时间轴用 */
+  function summarize(ev: LevelEvent): { chips: string[]; detail: string } {
+    const chips: string[] = [];
+    const details: string[] = [];
+    for (const act of ev.do) {
+      if (act.kind === 'say') chips.push('播报');
+      else if (act.kind === 'spawn') {
+        chips.push(`刷兵 ${act.units.length}`);
+        const where = act.units.slice(0, 3).map((u) => `(${u.x},${u.y})`).join(' ');
+        details.push(`落点 ${where}${act.units.length > 3 ? ' …' : ''}`);
+      } else if (act.kind === 'doctrine') chips.push('换打法');
+      else if (act.kind === 'deploy') chips.push(`第 ${act.seat} 家登场`);
+      else if (act.kind === 'terrain') {
+        // 真数一遍会被改到的格子：只按 `only` 过滤，不猜引擎的兜底（城格/占位）
+        let cells = 0;
+        const x0 = Math.min(act.zone.x0, act.zone.x1);
+        const x1 = Math.max(act.zone.x0, act.zone.x1);
+        const y0 = Math.min(act.zone.y0, act.zone.y1);
+        const y1 = Math.max(act.zone.y0, act.zone.y1);
+        for (let y = y0; y <= y1; y += 1) {
+          for (let x = x0; x <= x1; x += 1) {
+            if (x < 0 || y < 0 || x >= w || y >= h) continue;
+            if (act.only && act.only.length > 0) {
+              const t = terrainAt(grid, x, y);
+              // 事件能改的地形是 LEVEL_TERRAINS 的子集，这里的 t 可能更宽（桥/城/虚空），
+              // 用 includes 前先确认它在这个子集里
+              if (!LEVEL_TERRAINS.includes(t as LevelTerrain) || !act.only.includes(t as LevelTerrain)) continue;
+            }
+            cells += 1;
+          }
+        }
+        chips.push(`改地形 ${cells} 格`);
+        details.push(`改成${CONFIG.terrainName[act.to] ?? act.to}`);
+      }
+    }
+    return { chips, detail: details.join(' · ') };
+  }
+
+  function renderTimeline(): void {
+    if (events.length === 0) {
+      listEl.innerHTML = '<div class="editor-empty">还没有事件，时间轴是空的。</div>';
+      return;
+    }
+    const withAt = events
+      .map((ev, i) => ({ ev, i }))
+      .filter((x): x is { ev: LevelEvent & { when: { kind: 'turn'; at: number } }; i: number } => x.ev.when.kind === 'turn')
+      .sort((a, b) => a.ev.when.at - b.ev.when.at);
+    const others = events.map((ev, i) => ({ ev, i })).filter((x) => x.ev.when.kind !== 'turn');
+
+    const row = (x: { ev: LevelEvent; i: number }, at: string, sub: string): string => {
+      const sum = summarize(x.ev);
+      return `<button type="button" class="level-timeline-row" data-jump="${x.i}">
+          <span class="level-timeline-at">${at}<i>${sub}</i></span>
+          <span class="level-timeline-body">
+            <span class="level-timeline-chips">${sum.chips
+              .map((c) => `<span class="level-tl-chip">${esc(c)}</span>`)
+              .join('')}</span>
+            ${sum.detail ? `<span class="level-timeline-detail">${esc(sum.detail)}</span>` : ''}
+          </span>
+        </button>`;
+    };
+
+    listEl.innerHTML = `
+      <div class="level-timeline">
+        ${
+          withAt.length > 0
+            ? withAt
+                .map((x) =>
+                  row(x, `第 ${x.ev.when.kind === 'turn' ? x.ev.when.at : 0} 次`, `约第 ${Math.ceil((x.ev as { when: { at: number } }).when.at / Math.max(1, seatCount))} 轮`),
+                )
+                .join('')
+            : '<div class="editor-empty">还没有按时机触发的事件。</div>'
+        }
+        ${
+          others.length > 0
+            ? `<div class="level-timeline-group">看情况触发</div>${others
+                .map((x) =>
+                  row(x, x.ev.when.kind === 'unitDied' ? '兵死了' : '走进区域', x.ev.when.kind === 'unitDied' ? '有人阵亡时' : '踩到点上时'),
+                )
+                .join('')}`
+            : ''
+        }
+      </div>`;
+  }
+
   function renderList(): void {
+    if (view === 'timeline') {
+      renderTimeline();
+      return;
+    }
     if (events.length === 0) {
       listEl.innerHTML =
         '<div class="editor-empty">还没有事件。上面选一个模板开始，或者加一条空的自己填。</div>';
@@ -292,7 +387,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     listEl.innerHTML = events
       .map(
         (ev, i) => `
-      <div class="level-event-card" data-ev="${i}">
+      <div class="level-event-card ${focusIdx === i ? 'is-focus' : ''}" data-ev="${i}">
         <div class="level-event-head">
           <span class="level-event-no">${i + 1}</span>
           <span class="level-event-when">当 ${whenControls(ev, i)}</span>
@@ -340,20 +435,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
 
   /* ---------- 渲染：地图（选区 / 落点） ---------- */
 
-  const dragZone = (): LevelZone | null => {
-    if (!dragAnchor || !dragNow) return null;
-    return {
-      x0: Math.min(dragAnchor.x, dragNow.x),
-      y0: Math.min(dragAnchor.y, dragNow.y),
-      x1: Math.max(dragAnchor.x, dragNow.x),
-      y1: Math.max(dragAnchor.y, dragNow.y),
-    };
-  };
-
   /** 当前该高亮哪一片：拖拽中优先，其次是这次选点要改的那一块 */
   const activeZone = (): LevelZone | null => {
-    const drag = dragZone();
-    if (drag) return drag;
+    if (previewZone) return previewZone;
     if (!pick) return null;
     if (pick.kind === 'zone') {
       const ev = events[pick.ev];
@@ -394,10 +478,18 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     pickStateEl.textContent = pick ? (pick.kind === 'zone' ? '正在框选区域…' : '正在点落点…') : '';
   }
 
+  /** 两个视图按钮谁高亮——统一在这儿刷，别在模板字符串里算（那里 view 的类型会被收窄） */
+  const syncViewChips = (): void => {
+    mask.querySelectorAll<HTMLElement>('[data-view]').forEach((el) => {
+      el.classList.toggle('active', el.dataset.view === view);
+    });
+  };
+
   function renderAll(): void {
     renderList();
     renderSummary();
     renderMap();
+    syncViewChips();
   }
 
   /* ---------- 校验（表单这一层） ---------- */
@@ -466,54 +558,51 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
 
   /* ---------- 交互：地图 ---------- */
 
+  /*
+   * 刷兵选点：点一格加一个兵。
+   * 框选区域交给共用的 `bindZoneDrag`——它和胜负条件里的护送区是同一件事，
+   * 各写一份迟早会出现"事件里能拖、胜负里拖不动"这种鬼问题。
+   */
   canvasEl.addEventListener('pointerdown', (ev) => {
+    if (pick?.kind !== 'spawn') return;
     const cell = cellFromEvent(ev, canvasEl);
     if (!cell) return;
     ev.preventDefault();
-    if (pick?.kind === 'spawn') {
-      const ev0 = events[pick.ev];
-      const act = ev0?.do[pick.act];
-      if (!act || act.kind !== 'spawn') return;
-      const def = catalog[(act as { lastType?: string }).lastType ?? firstCombat];
-      if (!def) return;
-      act.units = [...act.units, { type: def.id, x: cell.x, y: cell.y }];
-      renderAll();
-      footEl.textContent = `落点 (${cell.x}, ${cell.y}) 已加。继续点，或者再点一次「在地图上点位置」结束。`;
-      return;
-    }
-    if (pick?.kind === 'zone') {
-      dragAnchor = cell;
-      dragNow = cell;
-      renderMap();
-    }
+    const ev0 = events[pick.ev];
+    const act = ev0?.do[pick.act];
+    if (!act || act.kind !== 'spawn') return;
+    const def = catalog[(act as { lastType?: string }).lastType ?? firstCombat];
+    if (!def) return;
+    act.units = [...act.units, { type: def.id, x: cell.x, y: cell.y }];
+    renderAll();
+    footEl.textContent = `落点 (${cell.x}, ${cell.y}) 已加。继续点，或者再点一次「在地图上点位置」结束。`;
   });
 
   canvasEl.addEventListener('pointermove', (ev) => {
     const cell = cellFromEvent(ev, canvasEl);
-    if (!cell) return;
-    coordEl.textContent = `第 ${cell.x}, ${cell.y} 格`;
-    if (!dragAnchor || pick?.kind !== 'zone') return;
-    dragNow = cell;
-    renderMap();
+    if (cell) coordEl.textContent = `第 ${cell.x}, ${cell.y} 格`;
   });
 
-  const endDrag = (): void => {
-    if (pick?.kind !== 'zone' || !dragAnchor) return;
-    const zone = dragZone() ?? { x0: dragAnchor.x, y0: dragAnchor.y, x1: dragAnchor.x, y1: dragAnchor.y };
-    const ev = events[pick.ev];
-    if (ev) {
-      if (pick.slot === 'when' && ev.when.kind === 'enter') ev.when = { ...ev.when, zone };
-      const act = ev.do[pick.act];
-      if (pick.slot === 'do' && act && act.kind === 'terrain') act.zone = zone;
-    }
-    dragAnchor = null;
-    dragNow = null;
-    pick = null;
-    renderAll();
-    footEl.textContent = '区域改好了。';
-  };
-  canvasEl.addEventListener('pointerup', endDrag);
-  canvasEl.addEventListener('pointercancel', endDrag);
+  bindZoneDrag(canvasEl, {
+    enabled: () => pick?.kind === 'zone',
+    onUpdate: (z) => {
+      previewZone = z;
+      renderMap();
+    },
+    onCommit: (zone) => {
+      if (!pick || pick.kind !== 'zone') return;
+      const ev0 = events[pick.ev];
+      if (ev0) {
+        if (pick.slot === 'when' && ev0.when.kind === 'enter') ev0.when = { ...ev0.when, zone };
+        const act = ev0.do[pick.act];
+        if (pick.slot === 'do' && act && act.kind === 'terrain') act.zone = zone;
+      }
+      previewZone = null;
+      pick = null;
+      renderAll();
+      footEl.textContent = '区域改好了。';
+    },
+  });
 
   /* ---------- 交互：按钮与表单 ---------- */
 
@@ -674,6 +763,26 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       const ev0 = events[i];
       if (ev0 && sel) ev0.do = [...ev0.do, defaultDo(sel.value as LevelDo['kind'])];
       renderAll();
+      return;
+    }
+
+    const viewBtn = t.closest<HTMLElement>('[data-view]');
+    if (viewBtn) {
+      view = viewBtn.dataset.view === 'timeline' ? 'timeline' : 'cards';
+      focusIdx = null;
+      renderList();
+      syncViewChips();
+      return;
+    }
+    const jump = t.closest<HTMLElement>('[data-jump]');
+    if (jump) {
+      focusIdx = Number(jump.dataset.jump);
+      view = 'cards';
+      renderList();
+      syncViewChips();
+      // 滚到那一张卡：列表是内滚动的，不滚的话点完像没反应
+      const card = listEl.querySelector<HTMLElement>(`[data-ev="${focusIdx}"]`);
+      card?.scrollIntoView?.({ block: 'nearest' });
       return;
     }
 

@@ -9917,6 +9917,180 @@ check('刷兵：点地图加落点，落点列表里能看见、能删', () => {
   [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
 }
 
+/* ------------------------------------------------------------------ */
+/* 胜负条件 / 关卡独有兵种                                              */
+/* ------------------------------------------------------------------ */
+
+console.log('\n胜负条件');
+
+click('[data-level-new]');
+
+check('胜负面板：能加一条"守住一段时间"，并写出人话预览', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="goals"]')?.click();
+  doc.querySelector<HTMLElement>('[data-act="add"]')?.click();
+
+  const card = doc.querySelector('.level-goal-card');
+  assert.ok(!!card, '应该出现一张条件卡');
+  const text = card?.textContent ?? '';
+  assert.ok(text.includes('守住 20 次行动'), `要有"守住几次行动"，实际：${text.slice(0, 120)}`);
+  assert.ok(text.includes('红方赢'), `要写清是谁赢，实际：${text.slice(0, 120)}`);
+});
+
+check('改成"把兵送到某处"：拖框定区域', () => {
+  const sel = doc.querySelector<HTMLSelectElement>('[data-kind]')!;
+  sel.value = 'escort';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  doc.querySelector<HTMLElement>('[data-pick]')?.click();
+  dragOnMap(3, 3, 4, 4);
+
+  const btn = doc.querySelector<HTMLElement>('[data-pick]')?.textContent ?? '';
+  assert.ok(btn.includes('3,3') && btn.includes('4,4'), `区域文本要跟着变，实际：${btn}`);
+  assert.ok(btn.includes('4 格'), `要写出几格，实际：${btn}`);
+});
+
+check('顺序能调：先判的排前面', () => {
+  doc.querySelector<HTMLElement>('[data-act="add"]')?.click();
+  assert.equal(doc.querySelectorAll('.level-goal-card').length, 2, '应该有两条');
+
+  // 第二条（刚加的 survive）往前挪
+  [...doc.querySelectorAll<HTMLElement>('[data-down]')].length; // 确认按钮在
+  doc.querySelector<HTMLElement>('[data-up="1"]')?.click();
+  const kinds = [...doc.querySelectorAll<HTMLSelectElement>('[data-kind]')].map((el) => el.value);
+  assert.deepEqual(kinds, ['survive', 'escort'], `换序后应该是 守→送，实际 ${kinds.join(',')}`);
+});
+
+check('应用之后 goals 按顺序写进 JSON', () => {
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { goals?: Array<{ kind?: string; untilTurn?: number; zone?: unknown }> };
+  assert.equal(data.goals?.[0]?.kind, 'survive', '第一条是守');
+  assert.equal(data.goals?.[1]?.kind, 'escort', '第二条是送');
+  assert.ok(!!data.goals?.[1]?.zone, '护送条件必须有区域');
+});
+
+console.log('\n关卡独有兵种');
+
+/*
+ * 注意：多个面板的按钮属性会重名（编辑器工具栏自己也有 `data-act="copy"` 和
+ * `data-act="new"`），所以这一段一律**限定在最上层那个弹窗里**查。
+ * 用 `doc.querySelector` 会拿到编辑器那一层的按钮，点下去什么都不会发生——
+ * 这个坑在事件面板那轮已经踩过一次了。
+ */
+const topMask = (): HTMLElement | undefined => [...doc.querySelectorAll<HTMLElement>('.modal-mask')].pop();
+
+check('从现有兵种复制一个：进表单，改个名能存', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="units"]')?.click();
+
+  const layer = topMask()!;
+  const src = layer.querySelector<HTMLSelectElement>('[data-copy-src]')!;
+  src.value = 'militia';
+  src.dispatchEvent(new window.Event('change', { bubbles: true }));
+  layer.querySelector<HTMLElement>('[data-act="copy"]')?.click();
+
+  const nameEl = topMask()!.querySelector<HTMLInputElement>('[data-f="name"]');
+  assert.ok(!!nameEl, '复制之后应该进编辑表单');
+  assert.ok((nameEl!.value ?? '').includes('民兵'), `名字应该沿用原兵种，实际 ${nameEl!.value}`);
+
+  nameEl!.value = '守将';
+  nameEl!.dispatchEvent(new window.Event('input', { bubbles: true }));
+  topMask()!.querySelector<HTMLElement>('[data-act="save-unit"]')?.click();
+
+  const row = topMask()!.querySelector('.level-unit-row');
+  assert.ok(!!row, '存下之后列表里应该有它');
+  assert.ok((row?.textContent ?? '').includes('守将'), `列表里要显示名字，实际：${row?.textContent}`);
+});
+
+check('新建一个兵种：id 自动生成，名字空会被拦', () => {
+  topMask()!.querySelector<HTMLElement>('[data-act="new"]')?.click();
+  const layer = topMask()!;
+  const idEl = layer.querySelector<HTMLInputElement>('[data-f="id"]')!;
+  assert.ok(/^lv\d+$/.test(idEl.value), `id 应该自动生成 lvN，实际 ${idEl.value}`);
+
+  const nameEl = layer.querySelector<HTMLInputElement>('[data-f="name"]')!;
+  nameEl.value = '';
+  nameEl.dispatchEvent(new window.Event('input', { bubbles: true }));
+  layer.querySelector<HTMLElement>('[data-act="save-unit"]')?.click();
+  const issues = topMask()!.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('名字不能为空'), `空名字要被拦，实际：${issues.slice(0, 120)}`);
+});
+
+check('应用之后 units 写进 JSON，且默认只能由部署/事件出现', () => {
+  // 退出编辑表单（刚才那条没存成），回列表再应用
+  topMask()!.querySelector<HTMLElement>('[data-act="back"]')?.click();
+  topMask()!.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    units?: Record<string, { name?: string; summonedOnly?: boolean }>;
+  };
+  const list = Object.values(data.units ?? {});
+  assert.equal(list.length, 1, `应该只有一个关卡兵种，实际 ${list.length}`);
+  assert.equal(list[0]?.name, '守将', '名字应当是刚改的');
+  assert.equal(list[0]?.summonedOnly, true, '复制出来的默认"只能由部署/事件出现"');
+});
+
+// 收尾：关掉编辑器
+{
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 事件时间轴（E4b）                                                   */
+/* ------------------------------------------------------------------ */
+
+console.log('\n事件时间轴');
+
+click('[data-level-new]');
+{
+  // 打开事件面板，加两条模板：援军（第 8 次）+ 炸桥（第 10 次）
+  topMask()?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+  const layer = topMask()!;
+  for (const tpl of ['reinforce', 'bridge']) {
+    const sel = layer.querySelector<HTMLSelectElement>('[data-template]')!;
+    sel.value = tpl;
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+}
+
+check('时间轴：按行动序号排序，标出"约第几轮"和会发生什么', () => {
+  topMask()?.querySelector<HTMLElement>('[data-view="timeline"]')?.click();
+  const rows = [...topMask()!.querySelectorAll<HTMLElement>('.level-timeline-row')];
+  assert.equal(rows.length, 2, `两条事件应该有两行，实际 ${rows.length}`);
+
+  const at0 = rows[0]?.querySelector('.level-timeline-at')?.textContent ?? '';
+  const at1 = rows[1]?.querySelector('.level-timeline-at')?.textContent ?? '';
+  assert.ok(at0.includes('第 8 次'), `先出现的是第 8 次，实际：${at0}`);
+  assert.ok(at1.includes('第 10 次'), `后出现的是第 10 次，实际：${at1}`);
+  // 两家局：8 次 ≈ 第 4 轮，10 次 ≈ 第 5 轮（这块最容易算错，所以钉住）
+  assert.ok(at0.includes('第 4 轮'), `8 次 ≈ 4 轮，实际：${at0}`);
+  assert.ok(at1.includes('第 5 轮'), `10 次 ≈ 5 轮，实际：${at1}`);
+
+  const body0 = rows[0]?.textContent ?? '';
+  const body1 = rows[1]?.textContent ?? '';
+  assert.ok(body0.includes('刷兵'), `第 8 次是援军，实际：${body0}`);
+  assert.ok(body1.includes('改地形'), `第 10 次是炸桥，实际：${body1}`);
+  assert.ok(/改地形 \d+ 格/.test(body1), `要数出改几格，实际：${body1}`);
+});
+
+check('点时间轴的一行：回到卡片并高亮那一条', () => {
+  const rows = [...topMask()!.querySelectorAll<HTMLElement>('.level-timeline-row')];
+  rows[1]?.click(); // 第 10 次那条
+  const focused = topMask()!.querySelector('.level-event-card.is-focus');
+  assert.ok(!!focused, '回到卡片视图后应当高亮被点的那一条');
+  assert.ok(
+    (topMask()!.querySelector('[data-view="cards"]')?.className ?? '').includes('active'),
+    '视图按钮要切回「卡片」',
+  );
+});
+
+// 收尾：关掉事件面板与编辑器
+{
+  topMask()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
+  topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。

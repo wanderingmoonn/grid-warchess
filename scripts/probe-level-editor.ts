@@ -232,14 +232,20 @@ check(
   hiddenNoDeploy.map((i) => i.text).join(' | '),
 );
 
-// 8.6 assassinate 的目标能被造出来 → 错（对面会一直补）
-const badGoal = issuesOf(
+// 8.6 assassinate 的目标能被造出来 → **只警告**（难成立，但不是不可能；
+//     编辑器不替作者做这个决定，2026-11-16 定的口径）
+const buildableGoal = issuesOf(
   sample({ goals: [{ kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'militia' }] }),
 );
 check(
-  badGoal.some((i) => i.severity === 'error' && i.text.includes('一直补人')),
-  '斩首目标不该是能造出来的兵种',
-  badGoal.map((i) => i.text).join(' | '),
+  buildableGoal.some((i) => i.severity === 'warn' && i.text.includes('一直补人')),
+  '斩首目标选了能造出来的兵种 → 警告',
+  buildableGoal.map((i) => `${i.severity}:${i.text}`).join(' | '),
+);
+check(
+  !buildableGoal.some((i) => i.severity === 'error'),
+  '但不拦（打光对面的城也是一条路，那是设计自由）',
+  buildableGoal.filter((i) => i.severity === 'error').map((i) => i.text).join(' | '),
 );
 
 // 8.7 改地形没配播报 → 警告

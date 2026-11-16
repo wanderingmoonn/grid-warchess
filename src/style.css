@@ -4856,6 +4856,7 @@ a.btn {
 .editor-toolbar {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   margin-bottom: 4px;
 }
 
@@ -5049,6 +5050,23 @@ a.btn {
   font-size: 11px;
 }
 
+.level-draft-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0 4px;
+  padding: 6px 9px;
+  border: 1px dashed var(--warn-deep);
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-draft-bar[hidden] {
+  display: none;
+}
+
 .level-issues {
   display: flex;
   flex-direction: column;
@@ -5194,6 +5212,76 @@ a.btn {
  * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
  * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
  */
+/* ── 胜负条件 / 关卡独有兵种 ────────────────────────────────────────
+ * 两块都沿用事件表单的骨架（左列 + 右地图 / 左列表 + 右表单），
+ * 免得每个面板长一个样。
+ */
+.level-goals-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 8px 0;
+}
+
+.level-goals-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.level-goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 430px;
+  overflow: auto;
+}
+
+.level-goal-card .level-event-head {
+  align-items: center;
+}
+
+.level-goal-order {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.level-goal-row {
+  margin: 6px 0 4px 26px;
+}
+
+.level-unit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 10px;
+}
+
+.level-unit-row .level-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.level-unit-nums {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 8px 0;
+}
+
+@media (max-width: 860px) {
+  .level-goals-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .level-unit-nums {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ── 事件表单（E4a）─────────────────────────────────────────────────
  * 左卡片、右地图。卡片按"当…就…"排，不追求一屏看十条——事件本来就不多，
  * 而每条都要能就地看清区域和落点。
@@ -5356,6 +5444,89 @@ a.btn {
 .level-spawn-empty {
   font-size: var(--fs-sm);
   color: var(--text-3);
+}
+
+/* ── 事件时间轴（E4b）─────────────────────────────────────────────
+ * 一条竖线上的节点：左边"第几次行动 / 约第几轮"，右边"会发生什么"。
+ * 它的价值是**一眼看出节奏**——这个信息以前只能靠读代码。
+ */
+.level-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.level-timeline-group {
+  margin: 10px 0 2px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.level-timeline-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  text-align: left;
+  color: var(--text-2);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--a);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.level-timeline-row:hover {
+  border-color: var(--line-strong);
+}
+
+.level-timeline-at {
+  flex: 0 0 92px;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.level-timeline-at i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.level-timeline-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.level-timeline-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.level-tl-chip {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.level-timeline-detail {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.level-event-card.is-focus {
+  border-color: var(--a);
+  box-shadow: 0 0 0 1px var(--a);
 }
 
 .level-pick-hint {

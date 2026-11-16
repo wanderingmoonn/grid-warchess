@@ -31,6 +31,8 @@ import { openLevelCanvas } from './level-canvas.ts';
 import { openLevelArmy } from './level-army.ts';
 import { openLevelSeats } from './level-seats.ts';
 import { openLevelEvents } from './level-events.ts';
+import { openLevelGoals } from './level-goals.ts';
+import { openLevelUnits } from './level-units.ts';
 import type { LevelDef } from '../core/level.ts';
 
 export interface LevelEditorResult {
@@ -106,10 +108,17 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
   let key = editing?.id ?? 'new';
   let text = editing ? exportLevelText(editing) : exportLevelText(starterLevel());
 
-  // 上次写了一半的，优先拿回来。**只在内容确实不一样时**覆盖，免得把刚打开的模板冲掉
+  /*
+   * 草稿只在**编辑已有的关**时自动恢复。
+   *
+   * 「新建」不自动恢复：否则第二次点「新建关卡」拿到的是上次那张半成品，
+   * 而不是一张干净模板——玩家会以为"新建"坏了（这个坑是测试先撞上的）。
+   * 新建时如果确实有草稿，底栏给一行「恢复 / 丢弃」，让人自己选。
+   */
   const draft = draftOf(key);
-  const restored = !!draft && draft.trim().length > 0;
+  const restored = key !== 'new' && !!draft && draft.trim().length > 0;
   if (restored) text = draft!;
+  const pendingDraft = key === 'new' && !!draft && draft.trim().length > 0 ? draft : null;
 
   /** 上次成功存下去的文本：用来判断"关掉会不会丢东西" */
   let savedText = editing ? exportLevelText(editing) : '';
@@ -136,6 +145,8 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           <button class="btn btn-sm" data-act="army">摆兵</button>
           <button class="btn btn-sm" data-act="seats">席位</button>
           <button class="btn btn-sm" data-act="events">事件</button>
+          <button class="btn btn-sm" data-act="goals">胜负</button>
+          <button class="btn btn-sm" data-act="units">兵种</button>
           <button class="btn btn-sm" data-act="copy">复制 JSON</button>
           <button class="btn btn-sm" data-act="reset">恢复成${readOnly ? '原版' : '初始模板'}</button>
         </div>
@@ -149,6 +160,11 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
             <div class="level-summary"></div>
             <div class="level-issues"></div>
           </div>
+        </div>
+        <div class="level-draft-bar" data-draft-bar hidden>
+          <span>这儿有一份上次没写完的草稿。</span>
+          <button class="btn btn-sm" data-act="draft-restore">接着改那份</button>
+          <button class="btn btn-sm" data-act="draft-discard">丢掉</button>
         </div>
         <div class="field-hint" data-foot></div>
       </div>
@@ -165,6 +181,8 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
   const summaryEl = q<HTMLDivElement>('.level-summary');
   const footEl = q<HTMLDivElement>('[data-foot]');
   const saveBtn = q<HTMLButtonElement>('[data-act="save"]');
+  const draftBar = q<HTMLDivElement>('[data-draft-bar]');
+  if (pendingDraft) draftBar.hidden = false;
 
   ta.value = text;
 
@@ -295,6 +313,23 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       return;
     }
 
+    if (act === 'draft-restore') {
+      if (pendingDraft) {
+        ta.value = pendingDraft;
+        draftBar.hidden = true;
+        refresh();
+        footEl.textContent = '已经把草稿载进来了。';
+      }
+      return;
+    }
+
+    if (act === 'draft-discard') {
+      clearDraft(key);
+      draftBar.hidden = true;
+      footEl.textContent = '草稿丢掉了，现在是一张干净的模板。';
+      return;
+    }
+
     if (act === 'reset') {
       if (!window.confirm('把编辑器里的内容换成初始版本？现在的改动会丢掉。')) return;
       // 有"原来的那一份"就回到它，没有（新建）才回到模板。别用 starterLevel：
@@ -339,6 +374,22 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       openPanel(
         (level) => openLevelCanvas({ level, onApply: (next) => applyFromPanel(next, '地图') }),
         '画地图',
+      );
+      return;
+    }
+
+    if (act === 'goals') {
+      openPanel(
+        (level) => openLevelGoals({ level, onApply: (next) => applyFromPanel(next, '胜负条件') }),
+        '改胜负',
+      );
+      return;
+    }
+
+    if (act === 'units') {
+      openPanel(
+        (level) => openLevelUnits({ level, onApply: (next) => applyFromPanel(next, '兵种') }),
+        '改兵种',
       );
       return;
     }

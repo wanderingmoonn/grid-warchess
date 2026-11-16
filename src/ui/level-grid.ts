@@ -106,6 +106,64 @@ export function renderLevelGrid(el: HTMLElement, o: RenderOptions): void {
   el.innerHTML = parts.join('');
 }
 
+/** 拖拽框选一块矩形区域。事件选区和胜负条件（护送点）都要用它 */
+export interface ZoneDragOptions {
+  /** 什么时候允许拖（比如"只有点了选区域之后"）。省略 = 一直允许 */
+  enabled?: () => boolean;
+  /** 拖拽过程中的预览，松手前会一直回调 */
+  onUpdate?: (zone: import('../core/level.ts').LevelZone | null) => void;
+  onCommit: (zone: import('../core/level.ts').LevelZone) => void;
+}
+
+/**
+ * 给一块网格绑上"拖一个矩形"的手势。
+ *
+ * 抽出来的原因：事件表单的选区和胜负条件的护送区是同一件事。
+ * 各写一份的话，早晚出现"事件里拖出来是 3×2，胜负里拖出来是 2×3"这种鬼问题。
+ */
+export function bindZoneDrag(el: HTMLElement, o: ZoneDragOptions): void {
+  let anchor: { x: number; y: number } | null = null;
+  let now: { x: number; y: number } | null = null;
+
+  const zoneOf = (): import('../core/level.ts').LevelZone | null => {
+    if (!anchor || !now) return null;
+    return {
+      x0: Math.min(anchor.x, now.x),
+      y0: Math.min(anchor.y, now.y),
+      x1: Math.max(anchor.x, now.x),
+      y1: Math.max(anchor.y, now.y),
+    };
+  };
+
+  el.addEventListener('pointerdown', (ev) => {
+    if (o.enabled && !o.enabled()) return;
+    const cell = cellFromEvent(ev, el);
+    if (!cell) return;
+    ev.preventDefault();
+    anchor = cell;
+    now = cell;
+    o.onUpdate?.(zoneOf());
+  });
+
+  el.addEventListener('pointermove', (ev) => {
+    if (!anchor) return;
+    const cell = cellFromEvent(ev, el);
+    if (!cell) return;
+    now = cell;
+    o.onUpdate?.(zoneOf());
+  });
+
+  const finish = (): void => {
+    if (!anchor) return;
+    const zone = zoneOf() ?? { x0: anchor.x, y0: anchor.y, x1: anchor.x, y1: anchor.y };
+    anchor = null;
+    now = null;
+    o.onCommit(zone);
+  };
+  el.addEventListener('pointerup', finish);
+  el.addEventListener('pointercancel', finish);
+}
+
 /** 从鼠标/指针事件里取出格子坐标（点在格子外面返回 null） */
 export function cellFromEvent(ev: Event, root: HTMLElement): { x: number; y: number } | null {
   const target = ev.target as HTMLElement | null;
