@@ -20,10 +20,10 @@ import { toast } from './toast.ts';
 type Tier = 'none' | 'require' | 'forbid' | 'warn';
 
 const TIER_NAME: Record<Tier, string> = {
-  none: '无所谓',
-  require: '必须开',
+  none: '无',
+  require: '必选',
   forbid: '禁用',
-  warn: '会变难',
+  warn: '警告',
 };
 
 /** 三个旋钮：名字 / 区间 / 默认 / 一句话解释 */
@@ -36,24 +36,24 @@ const KNOBS: Array<{
 }> = [
   {
     key: 'riskAversion',
-    name: '风险厌恶（进攻性主旋钮）',
+    name: '风险厌恶',
     min: 0.2,
     max: 2,
-    hint: '调小 = 愿意用伤亡换推进（攻坚图）；调大 = 极度惜命（护主、护送）。默认 1。',
+    hint: '小 = 敢用伤亡换推进；大 = 惜命。默认 1。',
   },
   {
     key: 'cohesion',
     name: '战线收拢',
     min: 0,
     max: 2,
-    hint: '0 = 谁快谁先上（过河攻坚要这个）；2 = 跑太快的停下来等队友。默认 1。',
+    hint: '0 = 谁快谁先上；2 = 停下来等队友。默认 1。',
   },
   {
     key: 'appetite',
     name: '战意',
     min: 0.2,
     max: 3,
-    hint: '放大或缩小"朝目标推进"的分数。默认 1。',
+    hint: '放大或缩小「朝目标推进」的分。默认 1。',
   },
 ];
 
@@ -87,29 +87,21 @@ export function openLevelRules(opts: LevelRulesOptions): void {
     <div class="modal wide">
       <div class="modal-head">
         <h2>规则：扩展包与 AI</h2>
-        <p>
-          扩展三档是<b>这一关对规则的要求</b>：必须开 / 禁用是硬要求，玩家改不动；
-          「会变难」只是提醒，玩家想挑战就让他试。没提到的归玩家自己选。
-        </p>
       </div>
       <div class="modal-body">
         <div class="field-label">扩展包 <span class="field-hint" data-exp-count></span></div>
         <div class="level-rules-filter">
-          <input class="level-say-input" data-filter placeholder="按名字筛一下（27 个包翻起来累）">
-          <button class="btn btn-sm" data-act="clear-exp">全部恢复「无所谓」</button>
+          <input class="level-say-input" data-filter placeholder="按名字筛选">
+          <button class="btn btn-sm" data-act="clear-exp">全部重置</button>
         </div>
         <div class="level-rules-list" data-exp></div>
         <div class="field-label level-rules-ai-title">这一关的 AI</div>
         <div class="level-rules-ai" data-ai></div>
-        <div class="field-hint">
-          这几个旋钮只改"评分里的几笔账"，改不动 AI 的<b>投送能力</b>：过河的兵还是会堵在桥头。
-          要真压力，用事件把兵送到对面那侧（从地图边缘进场）。
-        </div>
-        <div class="field-hint" data-foot>改完点「用这套规则」，编辑器里的数据会跟着变（还要再点一次「保存」）。</div>
+        <div class="field-hint" data-foot>改完点「保存」。</div>
       </div>
       <div class="modal-foot">
         <button class="btn btn-sm" data-act="reset-ai">AI 恢复默认</button>
-        <button class="btn btn-primary btn-sm" data-act="apply">用这套规则</button>
+        <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
       </div>
     </div>`;
@@ -145,8 +137,8 @@ export function openLevelRules(opts: LevelRulesOptions): void {
     const warn = Object.values(tiers).filter((t) => t === 'warn').length;
     countEl.textContent =
       req + forb + warn === 0
-        ? '没有要求，扩展全归玩家选'
-        : `必须开 ${req} · 禁用 ${forb} · 会变难 ${warn}`;
+        ? '无要求，扩展归玩家选'
+        : `必选 ${req} · 禁用 ${forb} · 警告 ${warn}`;
   };
 
   const renderAi = (): void => {
@@ -190,7 +182,7 @@ export function openLevelRules(opts: LevelRulesOptions): void {
     if (act === 'clear-exp') {
       for (const k of Object.keys(tiers)) delete tiers[k];
       renderExpansions();
-      footEl.textContent = '扩展要求清空了，全部归玩家选。';
+      footEl.textContent = '扩展要求已清空。';
       return;
     }
     if (act === 'reset-ai') {

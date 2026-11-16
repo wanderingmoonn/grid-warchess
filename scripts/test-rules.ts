@@ -354,7 +354,11 @@ import {
   isEliminated,
   hasQuit,
   produceAt,
+  sameTeam,
+  teamOf,
+  teamNameOf,
 } from '../src/core/rules.ts';
+import { buildBattleCard } from '../src/core/battle-card.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
@@ -20456,6 +20460,124 @@ test('手搓一张第二张图（不挂任何扩展）：走子、开火、威�
     [...threat].every((i) => i >= 0 && i < W * W),
     '威胁圈的格号必须属于第二张图（否则会画到地球的格子上）',
   );
+});
+
+test('同盟：同队不能互打、能穿行，打光敌人就收场', () => {
+  /*
+   * 3 家：A、B 一队（两个真人合作），C 一队（强敌）。
+   *
+   * 检查四件事，正好是"加队伍"最容易漏的四条：
+   *   ① 同队不能攻击（打兵、打城都拦）；
+   *   ② 同队可以**穿过**，但不能停在别人身上；
+   *   ③ 打光敌人之后按队收场（不然 A、B 打不了对方，对局永远结束不了）；
+   *   ④ AI 不把队友当目标。
+   */
+  const W = 12;
+  const H = 8;
+  const rows = Array.from({ length: H }, () => '.'.repeat(W));
+  const level = {
+    id: 'dev:coop',
+    version: 1,
+    name: '合作探针',
+    map: {
+      id: 'levelmap:coop',
+      name: '合作探针',
+      w: W,
+      h: H,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 9, y: 1 }],
+      source: 'user',
+    },
+    seats: {
+      count: 3,
+      ai: ['C'],
+      cities: { C: [{ x: 9, y: 5 }] },
+      teams: [
+        ['A', 'B'],
+        ['C'],
+      ],
+    },
+    setup: { startEra: 1 },
+    deploy: {
+      A: [{ type: 'knight', x: 3, y: 3 }],
+      B: [{ type: 'militia', x: 4, y: 3 }],
+      C: [{ type: 'militia', x: 8, y: 3 }],
+    },
+  } as never;
+
+  const s = createMatch({ ...BASE, level }, 7);
+  assert.equal(s.w, W, '关卡地图要真的生效（别静默回落成随机图）');
+  assert.deepEqual(s.config.level?.seats?.teams, [['A', 'B'], ['C']], 'teams 要原样存进快照');
+
+  // 判据本身：A/B 同队、A/C 不同队；没有 teams 的对局退化成"只有自己"
+  assert.equal(sameTeam(s, 'A', 'B'), true, 'A/B 应该同队');
+  assert.equal(sameTeam(s, 'A', 'C'), false, 'A/C 不该同队');
+  const plain = fresh();
+  assert.equal(sameTeam(plain, 'A', 'B'), false, '没写 teams 时两家仍然敌对');
+
+  const a = s.units.find((u) => u.owner === 'A')!;
+  const b = s.units.find((u) => u.owner === 'B')!;
+  s.current = 'A';
+
+  // ① 打兵：拦
+  const atk = applyAction(s, { type: 'ATTACK', unitId: a.id, targetId: b.id });
+  assert.equal(atk.ok, false, '同队不能互相攻击');
+  assert.ok(atk.reason.includes('友军'), `理由该说友军，实际：${atk.reason}`);
+
+  // ① 打城：拦
+  const bCity = s.cities.find((c) => c.owner === 'B')!;
+  const siege = applyAction(s, {
+    type: 'ATTACK',
+    unitId: a.id,
+    targetId: `city:${bCity.id}`,
+  });
+  assert.equal(siege.ok, false, '同队的城也不能打');
+
+  // ② 穿行：B 的兵挡在 (4,3)，A 的骑士在 (3,3)，(5,3) 在它背后
+  const reach = reachableTiles(s, a);
+  assert.ok(reach.has(3 * W + 5), '同队单位可以穿过去（不该挡路）');
+  assert.equal(
+    reach.has(3 * W + 4),
+    false,
+    '穿过可以，但**不能停在**队友身上——那一格仍然是它的',
+  );
+
+  // ③ 打光 C：按队收场，赢家是 A 或 B（不是"没人赢"）
+  const killed = structuredClone(s);
+  killed.units = killed.units.filter((u) => u.owner !== 'C');
+  killed.cities = killed.cities.filter((c) => c.owner !== 'C');
+  killed.current = 'A';
+  const end = applyAction(killed, { type: 'END_TURN' });
+  assert.ok(end.ok, '能结束回合');
+  if (end.ok) {
+    assert.ok(
+      end.state.winner === 'A' || end.state.winner === 'B',
+      `只剩一个队时应当收场并判给队里的人，实际 winner=${end.state.winner ?? 'null'}`,
+    );
+
+    // 队伍信息：A/B 一队、C 自己一队；队名要把两个名字都写出来
+    assert.deepEqual(teamOf(end.state, 'A'), ['A', 'B'], 'teamOf 要给出整队');
+    assert.deepEqual(teamOf(end.state, 'C'), ['C'], '单人队就是自己');
+    assert.ok(
+      teamNameOf(end.state, 'A').includes(' + '),
+      `同盟队名要用 + 连起来，实际：${teamNameOf(end.state, 'A')}`,
+    );
+    assert.equal(teamNameOf(plain, 'A'), plain.players.A.name, '没写 teams 时队名就是人名');
+
+    /*
+     * 战报卡：winner 是 A，但看卡的是 B（同队）。
+     * 以前 `iWon: winner === me` 会让 B 看到"失败"——合作关里最刺眼的那句假话。
+     */
+    const card = buildBattleCard({ ...end.state, winner: 'A' }, 'B', 'test');
+    assert.equal(card.iWon, true, '队友赢了也是你赢了');
+    assert.equal(card.sides.length, 2, '敌方按队算：C 一队，队友不该被列成敌人');
+    assert.ok(
+      card.sides[0]!.name.includes(' + '),
+      `我方那一边要写队名，实际：${card.sides[0]!.name}`,
+    );
+    assert.equal(card.sides[1]!.side, 'C', '对面只有 C');
+  }
 });
 
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑

@@ -74,6 +74,7 @@ import {
   xyOf,
   isAirborne,
   strikeDistance,
+  sameTeam,
 } from './rules.ts';
 import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
@@ -379,7 +380,8 @@ function doomedCity(
  * 双人局下这几个函数和 `other` 完全等价，所以既有对局的行为一点没变。
  */
 function enemySeats(s: GameState, p: PlayerId): PlayerId[] {
-  return seatsOf(s).filter((x) => x !== p);
+  // 同盟局里队友不是敌人（不然 AI 会一直"想打又打不了"，把回合耗在队友身上）
+  return seatsOf(s).filter((x) => !sameTeam(s, x, p));
 }
 
 function enemyUnitsOf(s: GameState, p: PlayerId): Unit[] {
