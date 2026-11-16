@@ -79,18 +79,17 @@ function terrainName(t: Terrain): string {
 
 
 /**
- * 一层兵种检查：id 认不认识、时代对不对。
+ * 兵种检查：**只查 id 认不认识**。
  *
- * **时代只报警告**。2026-11-16 实测：默认配置下 `unitTypes` 就是全部兵种，
- * 青铜局里刷一个 `knight`（铁器）是**能成功**的。所以"写高时代兵"不等于写错——
- * 它常常是故意的（"这一关会空投一个重装"），只是玩家造不出来而已。
- * 以前文档里那句"青铜关写骑士会被静默跳过"是错的，别照着它写死规则。
+ * 时代差不查。2026-11-16 实测：默认配置下 `unitTypes` 就是全部兵种，青铜局里
+ * 刷一个 `knight`（铁器）**能成功**。而且"青铜关空投一辆坦克"是正经的关卡设计，
+ * 不是配置错误——编辑器替作者做这个判断就越界了。
+ * （早先版本这里有一条"跨时代"警告，同一天被用户要求去掉："框架内的东西越自由越好"。）
  */
 function checkUnits(
   units: DeployUnit[] | undefined,
   label: string,
   known: Record<string, UnitTypeDef>,
-  startEra: number,
   out: LevelIssue[],
 ): void {
   for (const u of units ?? []) {
@@ -102,13 +101,6 @@ function checkUnits(
         at: { x: u.x, y: u.y },
       });
       continue;
-    }
-    if (def.era > startEra) {
-      out.push({
-        severity: 'warn',
-        text: `${label}里的「${def.name}」是第 ${def.era} 时代的兵，本关开局是第 ${startEra} 时代。刷是刷得出来的，但玩家自己造不出来——如果这是故意的就没问题。`,
-        at: { x: u.x, y: u.y },
-      });
     }
   }
 }
@@ -167,7 +159,6 @@ function checkSpots(
 export function lintLevel(level: LevelDef): LevelIssue[] {
   const out: LevelIssue[] = [];
   const known = knownUnits(level);
-  const startEra = level.setup?.startEra ?? 1;
   const cities = cityCells(level);
   const seats = level.seats?.count ?? 2;
   const seatList: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(0, seats);
@@ -175,7 +166,7 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
   /* ---- 开局部署 ---- */
   for (const [key, units] of Object.entries(level.deploy ?? {})) {
     const owner = key as PlayerId;
-    checkUnits(units, `第 ${owner} 家的部署`, known, startEra, out);
+    checkUnits(units, `第 ${owner} 家的部署`, known, out);
     checkSpots(units, `第 ${owner} 家的部署`, owner, level, known, cities, out);
   }
 
@@ -202,7 +193,7 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
     for (const act of ev.do) {
       if (act.kind === 'spawn') {
         const label = `事件「${ev.id}」刷兵`;
-        checkUnits(act.units, label, known, startEra, out);
+        checkUnits(act.units, label, known, out);
         checkSpots(act.units, label, act.owner, level, known, cities, out);
       }
       if (act.kind === 'terrain') {

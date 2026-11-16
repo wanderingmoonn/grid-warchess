@@ -5194,6 +5194,73 @@ a.btn {
  * 席位颜色只在编辑器和画布里用，不参与对局渲染（那边有自己的阵营色）。
  * 写成 `--lv-seat` 变量，一处定义、swatch / 兵棋 / 页签三处共用。
  */
+/* ── 席位面板 ───────────────────────────────────────────────────── */
+.level-seat-start {
+  max-width: 420px;
+  margin-bottom: 4px;
+}
+
+.level-seat-count {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 8px;
+}
+
+.level-seat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.level-seat-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--lv-seat, var(--line));
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.level-seat-row .editor-check {
+  margin-bottom: 0;
+}
+
+.level-seat-name {
+  min-width: 42px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.level-seat-era {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.level-seat-era select {
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 3px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.level-seat-city {
+  margin-left: auto;
+  color: var(--text-3);
+}
+
+.level-seat-city.is-missing {
+  color: var(--danger-strong);
+}
+
 .lv-A {
   --lv-seat: #c0392b;
 }

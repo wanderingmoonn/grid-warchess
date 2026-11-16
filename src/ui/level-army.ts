@@ -15,7 +15,8 @@
  * 但会先被 lint 警告一句（那是故意的设计，不是错误）。
  */
 
-import { CONFIG, UNIT_TYPES, isPseudoUnit } from '../core/config.ts';
+import { CONFIG, ERAS, UNIT_TYPES, isPseudoUnit } from '../core/config.ts';
+import { unitStatLine } from '../core/info.ts';
 import { loadCustomUnits } from '../core/customUnits.ts';
 import { standState } from '../core/level-lint.ts';
 import { terrainFromChar } from '../core/mapgen.ts';
@@ -146,27 +147,29 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
   const coordEl = q<HTMLSpanElement>('[data-coord]');
   const countsEl = q<HTMLSpanElement>('[data-counts]');
 
-  /** 货架：本时代能造的 + 关卡自带。按"战斗 / 经济 / 建造 / 建筑"分组 */
+  /**
+   * 货架：**全部兵种**，按时代分组，不做任何过滤。
+   *
+   * 这里原先只给"本时代能造的"，那是错的："青铜关空投一辆坦克"是正经的关卡设计，
+   * 不是配置错误。框架允许（`unitTypes` 里本来就有全时代的兵），编辑器没有资格替作者
+   * 做这个决定。时代分组只是让人找得到，不是一堵墙。
+   */
   const shelf = (): Array<{ group: string; units: UnitTypeDef[] }> => {
-    const own = Object.values(level.units ?? {});
-    const mine = Object.values(catalog).filter(
-      (d) =>
-        !isPseudoUnit(d.id) &&
-        !(level.units && d.id in level.units) &&
-        d.era <= startEra,
-    );
-    const byCat = (list: UnitTypeDef[], cat: string) => list.filter((d) => d.category === cat);
+    const own = new Set(Object.keys(level.units ?? {}));
     const groups: Array<{ group: string; units: UnitTypeDef[] }> = [];
-    for (const [cat, name] of [
-      ['combat', '战斗单位'],
-      ['economy', '经济单位'],
-      ['builder', '建造单位'],
-      ['building', '建筑'],
-    ] as Array<[string, string]>) {
-      const list = byCat(mine, cat);
-      if (list.length > 0) groups.push({ group: name, units: list.sort((a, b) => a.era - b.era || a.cost - b.cost) });
+    for (const era of ERAS) {
+      const list = Object.values(catalog)
+        .filter((d) => !isPseudoUnit(d.id) && !own.has(d.id) && d.era === era.level)
+        .sort((a, b) => a.cost - b.cost);
+      if (list.length > 0) groups.push({ group: `${era.name}（第 ${era.level} 时代）`, units: list });
     }
-    if (own.length > 0) groups.push({ group: '这一关自带', units: own });
+    // 不在任何时代里的（数据异常 / 扩展临时兵种）别丢掉，单独一组兜住
+    const orphans = Object.values(catalog).filter(
+      (d) => !isPseudoUnit(d.id) && !own.has(d.id) && !ERAS.some((e) => e.level === d.era),
+    );
+    if (orphans.length > 0) groups.push({ group: '其它', units: orphans });
+    const ownUnits = Object.values(level.units ?? {});
+    if (ownUnits.length > 0) groups.push({ group: '这一关自带', units: ownUnits });
     return groups;
   };
 
@@ -184,7 +187,7 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
   const renderShelf = (): void => {
     const groups = shelf();
     const total = groups.reduce((n, g) => n + g.units.length, 0);
-    paletteTitleEl.textContent = `兵种（${total} 种，第 ${startEra} 时代能造的 + 这一关自带的）`;
+    paletteTitleEl.textContent = `兵种（${total} 种，全时代都能摆；这一关开局是第 ${startEra} 时代）`;
     unitsEl.innerHTML = groups
       .map(
         (g) => `<div class="level-army-group">${esc(g.group)}</div>${g.units
@@ -192,7 +195,7 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
             const on = picked === d.id;
             return `<button type="button" class="level-brush ${on ? 'active' : ''}" data-unit="${esc(d.id)}" title="${
               esc(d.name)
-            } · 血 ${d.maxHp} / 攻 ${d.atk} / 甲 ${d.armor} / 移 ${d.move} / 射程 ${d.range}${d.summonedOnly ? ' · 只能由事件刷出' : ''}">
+            } · ${esc(unitStatLine(d))}${d.summonedOnly ? ' · 只能由事件刷出' : ''}">
                 <span class="level-swatch lv-unit-swatch lv-${editing}">${esc(d.short)}</span>
                 <span>${esc(d.name)}<i class="level-brush-char">${d.maxHp}血 ${d.move}移 ${d.range}射</i></span>
               </button>`;

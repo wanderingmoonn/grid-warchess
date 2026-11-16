@@ -9659,17 +9659,17 @@ console.log('\n摆兵');
 
 click('[data-level-new]');
 
-check('编辑器里有「摆兵」入口：席位页签 + 按时代过滤的货架', () => {
+check('编辑器里有「摆兵」入口：席位页签 + 全时代货架', () => {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
   mask?.querySelector<HTMLElement>('[data-act="army"]')?.click();
 
   const tabs = [...doc.querySelectorAll<HTMLElement>('[data-own]')].map((el) => el.dataset.own);
   assert.deepEqual(tabs, ['A', 'B'], `两家局应该只有 A/B 两个页签，实际 ${tabs.join(',')}`);
 
-  // 货架里必须有青铜时代的基础兵；高时代的不该出现（模板锁了 startEra: 1）
+  // 货架必须给**全部**兵种：青铜关空投坦克是正经设计，编辑器不许替作者过滤
   assert.ok(doc.querySelector('[data-unit="militia"]'), '缺民兵');
   assert.ok(doc.querySelector('[data-unit="archer"]'), '缺弓手');
-  assert.ok(!doc.querySelector('[data-unit="knight"]'), '青铜关不该能直接摆铁器兵');
+  assert.ok(doc.querySelector('[data-unit="knight"]'), '高时代兵也必须能摆（别按开局时代过滤）');
 });
 
 /** 在摆兵面板里点一格（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
@@ -9736,6 +9736,65 @@ check('点「用这份兵力」：编辑器里的 deploy 跟着变', () => {
 });
 
 // 收尾：关掉编辑器，别把窗口留给后面的用例
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 席位面板（cityEra / 几家 / 托管 / 晚登场）                            */
+/* ------------------------------------------------------------------ */
+
+console.log('\n席位');
+
+click('[data-level-new]');
+
+check('席位面板：开局时代、几家、每家的托管/晚登场/城的时代都在', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+
+  assert.ok(doc.querySelector('[data-start-era]'), '要有开局时代的下拉');
+  const chips = [...doc.querySelectorAll<HTMLElement>('[data-count-btn]')].map((el) => el.dataset.countBtn);
+  assert.deepEqual(chips, ['2', '3', '4'], `几家只能 2/3/4，实际 ${chips.join(',')}`);
+  assert.ok(doc.querySelector('[data-ai-for="A"]'), '每家要有托管开关');
+  assert.ok(doc.querySelector('[data-hidden-for="A"]'), '每家要有晚登场开关');
+  assert.ok(doc.querySelector('[data-era-for="A"]'), '每家要有城的时代下拉');
+});
+
+check('把某一家城的时代改成第 2 时代：写进 cityEra', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const sel = doc.querySelector<HTMLSelectElement>('[data-era-for="A"]')!;
+  sel.value = '2';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  mask?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { seats?: { cityEra?: Record<string, number> } };
+  assert.equal(data.seats?.cityEra?.A, 2, `seats.cityEra.A 应该是 2，实际 ${JSON.stringify(data.seats?.cityEra)}`);
+});
+
+check('加到 3 家：自动给第三家塞一座城（否则数据立刻过不了校验）', () => {
+  // 上一个用例之后编辑器还开着（应用不关窗），直接在它身上继续，别再开一个
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+  doc.querySelector<HTMLElement>('[data-count-btn="3"]')?.click();
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    seats?: { count?: number; cities?: Record<string, Array<{ x: number; y: number }>> };
+  };
+  assert.equal(data.seats?.count, 3, '席位数应该是 3');
+  assert.ok((data.seats?.cities?.C ?? []).length > 0, '第三家必须自动得到一座城，否则整张关过不了校验');
+
+  // 关键：数据要仍然是"能开局"的，问题列表里不该冒出 error
+  const issues = [...doc.querySelectorAll('.modal-mask')]
+    .pop()
+    ?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(!issues.includes('会出问题'), `加完第三家之后不该有错误，实际：${issues.slice(0, 200)}`);
+});
+
+// 收尾：关掉编辑器
 {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
   mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();

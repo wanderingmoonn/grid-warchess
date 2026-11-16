@@ -29,6 +29,7 @@ import { lintLevel, type LevelIssue } from '../core/level-lint.ts';
 import { toast } from './toast.ts';
 import { openLevelCanvas } from './level-canvas.ts';
 import { openLevelArmy } from './level-army.ts';
+import { openLevelSeats } from './level-seats.ts';
 import type { LevelDef } from '../core/level.ts';
 
 export interface LevelEditorResult {
@@ -132,6 +133,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           <button class="btn btn-sm" data-act="clone">${readOnly ? '复制成我的关卡' : '另存为副本'}</button>
           <button class="btn btn-sm" data-act="canvas">画地图</button>
           <button class="btn btn-sm" data-act="army">摆兵</button>
+          <button class="btn btn-sm" data-act="seats">席位</button>
           <button class="btn btn-sm" data-act="copy">复制 JSON</button>
           <button class="btn btn-sm" data-act="reset">恢复成${readOnly ? '原版' : '初始模板'}</button>
         </div>
@@ -335,6 +337,14 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
       openPanel(
         (level) => openLevelCanvas({ level, onApply: (next) => applyFromPanel(next, '地图') }),
         '画地图',
+      );
+      return;
+    }
+
+    if (act === 'seats') {
+      openPanel(
+        (level) => openLevelSeats({ level, onApply: (next) => applyFromPanel(next, '席位') }),
+        '改席位',
       );
       return;
     }

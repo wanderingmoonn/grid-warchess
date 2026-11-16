@@ -194,18 +194,18 @@ check(
   unknown.map((i) => `${i.severity}:${i.text}`).join(' | ') || '一条都没有',
 );
 
-// 8.2 时代更高的兵 → **只警告**。这条锁住 2026-11-16 的实测结论：
-//     默认配置下 unitTypes 就是全部兵种，青铜局刷骑士是能成功的。
-const eraWarn = issuesOf(sample({ deploy: { A: [{ type: 'knight', x: 2, y: 2 }] } }));
+/*
+ * 8.2 跨时代的兵**一条提示都不给**。
+ *
+ * 两个理由叠在一起：实测上它确实能刷出来（默认 unitTypes 就是全部兵种），
+ * 设计上"青铜关空投一辆坦克"是正经手法。编辑器替作者判断这件事就越界了——
+ * 2026-11-16 用户明确要求"框架内的东西越自由越好"。
+ */
+const eraQuiet = issuesOf(sample({ deploy: { A: [{ type: 'knight', x: 3, y: 3 }] } }));
 check(
-  eraWarn.some((i) => i.severity === 'warn' && i.text.includes('时代')),
-  '跨时代的兵给警告',
-  eraWarn.map((i) => i.text).join(' | '),
-);
-check(
-  !eraWarn.some((i) => i.severity === 'error'),
-  '跨时代的兵不报错（实测能刷出来，报错就是虚报）',
-  eraWarn.filter((i) => i.severity === 'error').map((i) => i.text).join(' | '),
+  !eraQuiet.some((i) => i.text.includes('时代')),
+  '跨时代的兵不提示（那是设计自由，不是配置错误）',
+  eraQuiet.map((i) => `${i.severity}:${i.text}`).join(' | '),
 );
 
 // 8.3 站在山上 → 错，且带坐标
