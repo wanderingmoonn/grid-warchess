@@ -2912,7 +2912,7 @@ function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
   dropHeatFlash();
   state = snapshot.state;
-  state.aiControl = undefined;
+  state.aiControl = { A: false, B: false };
   state.fog = fog;
   clearSelection();
   saveMatch(state);
@@ -7214,18 +7214,8 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   normalizePlayerNames(state);
   // 房间里的这一局记不记，看它自己的配置；换了局就得重开一个记录器
   resetRecorder();
-  /*
-   * 进房间只清**手动托管**，不动"这一局本来就有的电脑席位"（2026-11-16）。
-   *
-   * 原来这里写的是 `aiControl = { A: false, B: false }`，理由"房间里两边各走各的"。
-   * 但关卡模式（`config.level`）的对手本来就是 AI：想开个房让人来观战，
-   * 一进房 AI 就被这一行关掉了，对面从此不动——看起来就是"联机房间让 AI 失效"。
-   *
-   * 现在清成 undefined，AI 席位回到 `config.aiSeats` / `aiOpponent` 的声明：
-   *   · 普通联机房：开局面板里 AI 就是关的，清完仍然是关；
-   *   · 关卡 / 单人局开房观战：AI 保留，观战的人看到的是真在打的局面。
-   */
-  state.aiControl = undefined;
+  // 房间里两边各走各的：AI 托管在这里没有意义，顺手关掉免得它替人下棋
+  state.aiControl = { A: false, B: false };
   aiToken += 1;
   aiPaused = false;
   dirty = false;
@@ -7240,15 +7230,6 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   saveMatch(state);
   render();
   startRoomPolling();
-  /*
-   * 进房后**主动点一次 AI**（2026-11-16）。
-   *
-   * 上面只是把 `aiControl` 清干净、把 `aiToken` 换掉，AI 循环本身不会自己醒过来，
-   * 要等玩家下一次结束回合才被 `kickAiIfNeeded` 叫起。关卡/单人局开房观战时，
-   * 局面常常正好轮到电脑——不主动点，观战的人会看到一局"对面纹丝不动"的棋，
-   * 和"AI 失效"一模一样。
-   */
-  kickAiIfNeeded();
 }
 
 function leaveRoom(): void {
@@ -7452,10 +7433,8 @@ async function pollRoom(): Promise<void> {
     // 联机没有"本地动作"可挂钩：对面这一回合打到哪，只能靠新旧两份状态的记账差
     const beforeSync = state;
     state = snapshot.state;
-    state.aiControl = undefined; // 同上：只清手动托管，保留关卡/单人局自带的 AI 席位
+    state.aiControl = { A: false, B: false };
     state.fog = fog; // 迷雾是本地偏好，别被对面关掉
-    // 同步到"该电脑走"的那一帧时也要把它点起来，否则观战方看到的是静止画面
-    window.setTimeout(() => kickAiIfNeeded(), 0);
     if (decision.why !== 'finished') noteStrikeFlash(beforeSync, state);
     if (decision.why === 'finished') {
       dirty = false;
