@@ -98,7 +98,18 @@ export const TERRAIN_LEGEND = `（可用字符：${TERRAIN_CHARS.split('').join(
  * 只返回第一处错误 + 全部错误列表：界面上要把能改的都告诉作者，
  * 而不是让他修一个再上传一次。
  */
-export function validateFixedMap(raw: unknown): { ok: true; map: FixedMap } | { ok: false; errors: string[] } {
+export function validateFixedMap(
+  raw: unknown,
+  /**
+   * 放宽项。目前只有一个：`allowEmpty` = 这些席位**允许没有城**。
+   *
+   * 只有关卡那条路会传（`validateLevel` 把 `seats.cityless` 带下来）：
+   * "无城对战"是正经玩法，而地图文件上传那条路不传——一份只有一方城位的 .txt
+   * 对普通对局仍然是坏数据。
+   */
+  opts: { allowEmpty?: string[] } = {},
+): { ok: true; map: FixedMap } | { ok: false; errors: string[] } {
+  const allowEmpty = new Set(opts.allowEmpty ?? []);
   const errors: string[] = [];
   const obj = (raw ?? {}) as Partial<FixedMap> & Record<string, unknown>;
 
@@ -137,8 +148,8 @@ export function validateFixedMap(raw: unknown): { ok: true; map: FixedMap } | { 
   };
   const citiesA = norm(obj.citiesA);
   const citiesB = norm(obj.citiesB);
-  if (citiesA.length === 0) errors.push('甲方一座城都没有（citiesA）');
-  if (citiesB.length === 0) errors.push('乙方一座城都没有（citiesB）');
+  if (citiesA.length === 0 && !allowEmpty.has('A')) errors.push('甲方一座城都没有（citiesA）');
+  if (citiesB.length === 0 && !allowEmpty.has('B')) errors.push('乙方一座城都没有（citiesB）');
   if (citiesA.length > 8 || citiesB.length > 8) errors.push('每方最多 8 座城');
 
   /*

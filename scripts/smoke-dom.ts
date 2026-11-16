@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
 import { addMark } from '../src/core/marks.ts';
-import { EXPANSIONS, unitSourceIdOf } from '../src/core/expansions.ts';
+import { EXPANSIONS, conflictsWith, unitSourceIdOf } from '../src/core/expansions.ts';
 import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
@@ -59,7 +59,7 @@ import { createTutorialMatch } from '../src/core/tutorial.ts';
 import { buildBattleCard, battleCardText } from '../src/core/battle-card.ts';
 import { drawBattleCard, openBattleCard } from '../src/ui/battle-card.ts';
 import { godBarHtml, godShelfHtml } from '../src/ui/god-panel.ts';
-import { coordsFromEvent, renderBoard } from '../src/ui/board.ts';
+import { BOARD_PAD, coordsFromEvent, fitBoardBox, renderBoard } from '../src/ui/board.ts';
 import { __setArtIndexForTest, setUiArt, uiArtOn } from '../src/ui/unit-art.ts';
 import { scopeBoardUi } from '../src/ui/board-scope.ts';
 import { hasStarRows, starRows } from '../src/ui/star-panel.ts';
@@ -9271,36 +9271,73 @@ check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () =
   const drawer = doc.querySelector<HTMLElement>('.exp-drawer');
   assert.ok(drawer, '点开应该有抽屉');
   const text = drawer!.textContent ?? '';
-  assert.ok(text.includes('先后手补偿'), '抽屉里要说明这一关禁用了什么，实际：' + text.slice(0, 160));
+  assert.ok(text.includes('固定了扩展规则'), '抽屉里要说明这一关固定了哪些扩展，实际：' + text.slice(0, 160));
 
   const items = drawer!.querySelectorAll('.expansion-item');
   assert.ok(items.length > 10, '抽屉里应该是完整的扩展列表，实际 ' + items.length + ' 条');
 
-  const forbidden = drawer!.querySelector<HTMLInputElement>('[data-exp="turn-order-comp"]');
-  assert.ok(forbidden, '列表里应该有「先后手补偿」');
-  assert.ok(!forbidden!.checked && forbidden!.disabled, '关卡禁用的包：空着且点不动');
+  /*
+   * 下面几条**不再钉死具体的扩展 id**。
+   *
+   * 原来写的是 `[data-exp="bloodbath"]` 和 `[data-exp="turn-order-comp"]`，
+   * 它们假设"血战是关卡没提到的包""先后手补偿一定被禁用"。2026-11-16
+   * 孤城关把血战提成了 `require`（必须开），于是"没提到的包还能勾"这条
+   * 当场变红——而功能其实完全正确：它现在就该是勾着且点不动的。
+   *
+   * 判据改成从**抽屉自己的标记**反推：
+   *   · 锁定的条目一定带 `.expansion-req` 且 disabled；
+   *   · "还能勾"的条目 = 没锁、没被关卡点名（没有任何 `.expansion-req`）、
+   *     而且当前没勾（这样点一下必然是"加"，入口上才会出现它的名字）。
+   */
+  const locked = [...drawer!.querySelectorAll<HTMLInputElement>('[data-exp]:disabled')];
+  assert.ok(locked.length > 0, '这一关锁定的包要在列表里点不动');
+  assert.ok(
+    locked.some((el) => (el.closest('.expansion-item')?.textContent ?? '').includes('必须开')),
+    `「必须开」的包要写出来，实际锁定 ${locked.length} 条`,
+  );
+  assert.ok(
+    locked.some((el) => (el.closest('.expansion-item')?.textContent ?? '').includes('禁用')),
+    '「禁用」的包也要写出来',
+  );
 
-  const free = drawer!.querySelector<HTMLInputElement>('[data-exp="bloodbath"]');
-  assert.ok(free && !free.disabled, '关卡没提到的包必须还能勾');
-
+  /*
+   * 还得"不跟已经开着的包打架"。
+   *
+   * 抽屉里有一批互斥包（战争经济 × 老兵不死 之类）：勾上去会被直接拒掉并提示冲突，
+   * 入口那一行当然不会变。这不是功能坏了，是选到了一个不能同开的候选。
+   */
+  const onIds = [...drawer!.querySelectorAll<HTMLInputElement>('[data-exp]')]
+    .filter((el) => el.checked)
+    .map((el) => el.dataset.exp!);
+  const freeInput = [...drawer!.querySelectorAll<HTMLInputElement>('[data-exp]')].find(
+    (el) =>
+      !el.disabled &&
+      !el.checked &&
+      !el.closest('.expansion-item')?.querySelector('.expansion-req') &&
+      conflictsWith(onIds, el.dataset.exp!).length === 0,
+  );
+  assert.ok(freeInput, '关卡没提到的包必须还能勾（抽屉里应该至少有一个）');
+  const freeId = freeInput!.dataset.exp!;
+  const freeName = freeInput!.closest('.expansion-item')?.querySelector('b')?.textContent ?? '';
+  assert.ok(freeName.length > 0, '条目上要有包名');
 
   // 勾一个包：抽屉要留着（不然每勾一个就得重新点开），入口那一行要跟着变
   click('[data-act="exp-drawer"]');
-  const free2 = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]');
-  assert.ok(free2, '抽屉里能找到「血战」');
+  const free2 = doc.querySelector<HTMLInputElement>(`.exp-drawer [data-exp="${freeId}"]`);
+  assert.ok(free2, `抽屉里能找到「${freeName}」`);
   free2!.click();
   assert.ok(doc.querySelector('.exp-drawer'), '勾完包抽屉不该自己关掉');
   const entryNow = doc.querySelector<HTMLElement>('[data-act="exp-drawer"]')?.textContent ?? '';
-  // 默认配置里本来就带着「老兵不死」，所以这里只验勾上的那个出现在入口上
-  assert.ok(entryNow.includes('血战'), '入口那一行要列出已经加了什么，实际：' + entryNow);
-
+  assert.ok(entryNow.includes(freeName), `入口那一行要列出已经加了什么，实际：${entryNow}`);
 
   // 警告档：能开、不锁，但要说清"会变难"
   click('[data-act="exp-drawer"]');
-  const warned = doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="high-mobility"]');
-  assert.ok(warned, '抽屉里应该有「高机动性」');
+  const warned = [...doc.querySelectorAll<HTMLInputElement>('.exp-drawer [data-exp]')].find(
+    (el) => !el.disabled && !!el.closest('.expansion-item')?.querySelector('.expansion-req.is-warn'),
+  );
+  assert.ok(warned, '警告档的包要在列表里（孤城配了「会变难」的包）');
   assert.ok(!warned!.disabled, '警告不是禁用：还得能勾');
-  const warnTag = warned!.closest('.expansion-item')?.querySelector('.is-warn');
+  const warnTag = warned!.closest('.expansion-item')?.querySelector('.expansion-req.is-warn');
   assert.ok(warnTag, '这一档要在条目上标出来');
   assert.ok((warnTag!.textContent ?? '').includes('变难'), '标签要写清楚是变难，不是禁用');
 
@@ -9311,7 +9348,7 @@ check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () =
 
   // 再点一次取消勾选，免得把状态带进后面开局的那一局
   click('[data-act="exp-drawer"]');
-  doc.querySelector<HTMLInputElement>('.exp-drawer [data-exp="bloodbath"]')!.click();
+  doc.querySelector<HTMLInputElement>(`.exp-drawer [data-exp="${freeId}"]`)!.click();
   click('[data-act="exp-close"]');
 });
 
@@ -9377,6 +9414,956 @@ check('普通对局不显示目标那一块', () => {
   const goal = doc.querySelector<HTMLElement>('[data-ref="goal"]');
   assert.ok(goal?.hidden !== false, `自由对局里目标那一块应该 hidden，实际 hidden=${goal?.hidden}`);
 });
+
+/* ------------------------------------------------------------------ */
+/* 棋盘尺寸（非正方形地图）                                            */
+/* ------------------------------------------------------------------ */
+
+console.log('\n棋盘尺寸');
+
+/*
+ * 玩家实机上发现的问题：12×10 的地图，格子被压成长方形（短边被抻长）。
+ *
+ * 原因是 fitBoard 把棋盘外框写成了正方形（`min(容器宽, 可用高)` 一个数），
+ * 而格子是按 `repeat(cols,1fr) × repeat(rows,1fr)` 均分的 —— 长宽不一致时
+ * 每一格必然不等边。判据只有一条：**两轴的格宽必须相等**。
+ */
+const cellW = (b: { w: number }) => (b.w - BOARD_PAD) / 12;
+const cellH = (b: { h: number }) => (b.h - BOARD_PAD) / 10;
+
+check('12×10 的图：两轴格宽相同（格子是正方形，不是长方形）', () => {
+  const b = fitBoardBox(12, 10, 800, 700);
+  assert.ok(Math.abs(cellW(b) - cellH(b)) <= 1, `横向格宽 ${cellW(b).toFixed(1)}、纵向 ${cellH(b).toFixed(1)} 不一致`);
+  assert.ok(b.w <= 800 && b.h <= 700, `不能超出可用区域，实际 ${b.w}×${b.h}`);
+
+  // 换一个"高度是瓶颈"的容器：外框该比可用宽度窄，两边留白，而不是把格子抻开
+  const b2 = fitBoardBox(12, 10, 800, 600);
+  assert.ok(b2.w < 800, `高度受限时宽度要留白，实际 ${b2.w}`);
+  assert.ok(
+    Math.abs((b2.w - BOARD_PAD) / 12 - (b2.h - BOARD_PAD) / 10) <= 1,
+    `高度受限时格宽也要相等，实际 ${((b2.w - BOARD_PAD) / 12).toFixed(1)} vs ${((b2.h - BOARD_PAD) / 10).toFixed(1)}`,
+  );
+});
+
+check('正方形地图的行为不变（12×12 仍铺满短边）', () => {
+  const b = fitBoardBox(12, 12, 800, 700);
+  assert.ok(b.w === b.h, `还是正方形，实际 ${b.w}×${b.h}`);
+  assert.equal(b.h, 700, `应当正好用满可用高度，实际 ${b.h}`);
+});
+
+check('40×40 与 8×40 这类极端长宽也不变形', () => {
+  const big = fitBoardBox(40, 40, 800, 700);
+  assert.ok(big.w === big.h && big.h <= 700, `40×40 应当正方且放得下，实际 ${big.w}×${big.h}`);
+  const tall = fitBoardBox(8, 40, 800, 700);
+  const cw = (tall.w - BOARD_PAD) / 8;
+  const ch = (tall.h - BOARD_PAD) / 40;
+  assert.ok(Math.abs(cw - ch) <= 1, `8×40 的格宽 ${cw.toFixed(1)} vs ${ch.toFixed(1)}`);
+  assert.ok(tall.h <= 700, `不能超高，实际 ${tall.h}`);
+});
+
+/* ------------------------------------------------------------------ */
+/* 关卡编辑器（E0 + E1）                                              */
+/* ------------------------------------------------------------------ */
+
+console.log('\n关卡编辑器');
+
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+
+check('选关页有「我的关卡」分组和一个新建入口', () => {
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('我的关卡'), `要有这个分组，实际：${body.slice(0, 200)}`);
+  assert.ok(!!doc.querySelector('[data-level-new]'), '要有「新建关卡」的入口');
+  /*
+   * 玩家关卡必须和预制关卡分成两组。
+   * 混在一起的话，玩家会分不清"这是官方内容"还是"我昨天改坏的"。
+   */
+  const groups = [...doc.querySelectorAll('.field-label')].map((el) => el.textContent ?? '');
+  assert.ok(
+    groups.some((t) => t.includes('选一关')) && groups.some((t) => t.includes('我的关卡')),
+    `两个分组都要在，实际：${groups.join(' | ')}`,
+  );
+});
+
+check('点「新建关卡」：给出一个能直接开局的模板', () => {
+  click('[data-level-new]');
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const ta = mask?.querySelector<HTMLTextAreaElement>('textarea.level-json');
+  assert.ok(!!ta, '编辑器里应该有一个 JSON 文本框');
+  assert.ok(
+    (ta!.value ?? '').includes('"id": "user:'),
+    `模板的 id 就该是 user: 开头，实际：${(ta!.value ?? '').slice(0, 100)}`,
+  );
+  const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('没问题'), `模板必须是一张能直接开局的关，实际：${issues}`);
+});
+
+// 故意改坏 JSON：问题列表要当场说是语法错，而不是等按了保存才说
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const ta = mask?.querySelector<HTMLTextAreaElement>('textarea.level-json');
+  if (ta) {
+    ta.value = '{ "id": ';
+    ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+}
+// 输入是防抖的（300ms），等它跑完再看
+await wait(420);
+
+check('改成坏 JSON：当场报「JSON 语法错」，并指出大约第几行', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('JSON 语法错'), `要说清是语法错，实际：${issues.slice(0, 160)}`);
+  assert.ok(
+    /第 \d+ 行|没写完|position/.test(issues),
+    `要能说清错在哪（第几行 / 没写完），实际：${issues.slice(0, 160)}`,
+  );
+});
+
+// 恢复成模板。jsdom 没实现 confirm，得在这个 window 上自己盖一个
+{
+  (window as unknown as { confirm: () => boolean }).confirm = () => true;
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="reset"]')?.click();
+}
+await wait(80);
+
+check('点「恢复成初始模板」能回到一张合规的关', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const issues = mask?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('没问题'), `恢复之后应该是干净的，实际：${issues.slice(0, 160)}`);
+});
+
+/*
+ * 保存 = 关窗 + 一句提示。
+ *
+ * 实机上这里踩过：存完把窗口留着、只在窗口最底部写一行"已保存"，玩家没看见，
+ * 一路点了七八次保存（每次都真的存了一遍）。**关窗才是那个"结束了"的信号**，
+ * 所以这一条钉的是"窗口没了"，不是"底部文案对不对"。
+ */
+check('点保存：窗口自己关掉、选关页里出现这张关，并且给一句提示', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="save"]')?.click();
+
+  const stillOpen = [...doc.querySelectorAll('.modal-mask')].some((m) => m.querySelector('textarea.level-json'));
+  assert.ok(!stillOpen, '保存之后不该还留着一个编辑器窗口');
+
+  // 可能有更早的提示还没消失，所以看"所有还在的提示里有没有这一句"
+  const toasts = [...doc.querySelectorAll('.toast')].map((el) => el.textContent ?? '');
+  assert.ok(toasts.length > 0, '保存之后要有一句提示（存到哪儿了）');
+  assert.ok(
+    toasts.some((t) => t.includes('已保存')),
+    `提示要写明存成功了，实际：${toasts.join(' | ')}`,
+  );
+
+  const mine = doc.querySelector<HTMLElement>('[data-level^="user:"]');
+  assert.ok(!!mine, '保存的关卡应该出现在「我的关卡」分组里');
+  // 它不该同时出现在预制那组里：重复出现会让玩家以为有两张
+  const cards = [...doc.querySelectorAll<HTMLElement>('[data-level]')].filter((el) =>
+    (el.dataset.level ?? '').startsWith('user:'),
+  );
+  assert.equal(cards.length, 1, `同一张关只该出现一次，实际 ${cards.length} 次`);
+});
+
+/* ------------------------------------------------------------------ */
+/* 地图画布（E2）                                                      */
+/* ------------------------------------------------------------------ */
+
+console.log('\n地图画布');
+
+// 从一张新模板开始，免得受上一条用例存下来的关影响
+click('[data-level-new]');
+
+check('编辑器里有「画地图」入口，打开就是一整张格子', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  /*
+   * 尺寸从数据里读，不写死 12×10：模板哪天改大改小，这条用例不该跟着红。
+   * （这也是本项目对探针的一贯要求——钉死数值等于给未来的自己埋雷。）
+   */
+  const ta = mask?.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const { w, h } = (JSON.parse(ta.value) as { map: { w: number; h: number } }).map;
+  mask?.querySelector<HTMLElement>('[data-act="canvas"]')?.click();
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop();
+  assert.ok(!!canvas, '应该弹出画布');
+  const cells = canvas!.querySelectorAll('[data-x]');
+  assert.equal(cells.length, w * h, `格子数应该等于 ${w}×${h}，实际 ${cells.length}`);
+  // 正方形格子的保证在这条：容器的宽高比跟着地图走，格子按 1fr 均分
+  assert.ok(
+    (canvas!.style.aspectRatio ?? '').replace(/\s/g, '') === `${w}/${h}`,
+    `容器的宽高比应该是 ${w}/${h}，实际 ${canvas!.style.aspectRatio}`,
+  );
+});
+
+/*
+ * 尺寸这事被实机投诉过一次：控件在画布**底下**，玩家根本没找到。
+ * 现在挪到画布上方、带一个明确的「改尺寸」按钮，这条用例钉的就是"它在那儿、且真的生效"。
+ */
+check('画布上方能改地图尺寸，按「改尺寸」立刻生效', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const wIn = mask?.querySelector<HTMLInputElement>('[data-w]');
+  const hIn = mask?.querySelector<HTMLInputElement>('[data-h]');
+  assert.ok(!!wIn && !!hIn, '画布上方要有宽/高两个输入框');
+
+  const before = canvas.querySelectorAll('[data-x]').length;
+  const w0 = Number(wIn!.value);
+  const h0 = Number(hIn!.value);
+  // 只改宽：格子数必须跟着变成 (w+2)×h，宽高比也要跟着变
+  wIn!.value = String(w0 + 2);
+  mask?.querySelector<HTMLElement>('[data-act="resize"]')?.click();
+
+  const after = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  assert.equal(
+    after.querySelectorAll('[data-x]').length,
+    (w0 + 2) * h0,
+    `改宽之后格子数应该是 ${w0 + 2}×${h0}，实际 ${after.querySelectorAll('[data-x]').length}（改之前 ${before}）`,
+  );
+  assert.ok(
+    (after.style.aspectRatio ?? '').replace(/\s/g, '') === `${w0 + 2}/${h0}`,
+    `宽高比要跟着变，实际 ${after.style.aspectRatio}`,
+  );
+});
+
+/** 在画布上点一格（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
+const paintAt = (x: number, y: number): void => {
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const cell = canvas.querySelector<HTMLElement>(`[data-x="${x}"][data-y="${y}"]`);
+  cell?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+  canvas.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+};
+
+check('选水笔刷点一格：那一格变水，撤销能退回去', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-ch="~"]')?.click();
+  paintAt(5, 5);
+
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const cell = canvas.querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(cell?.className.includes('t-water'), `(5,5) 应该变成水域，实际 ${cell?.className}`);
+
+  mask?.querySelector<HTMLElement>('[data-act="undo"]')?.click();
+  const back = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(back?.className.includes('t-plain'), `撤销之后应该回到平原，实际 ${back?.className}`);
+});
+
+check('城是整块占位：点一下摆一座，再点同一座撤掉', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-seat="A"]')?.click();
+  paintAt(6, 6);
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  const origin = canvas.querySelector<HTMLElement>('[data-x="6"][data-y="6"]');
+  const corner = canvas.querySelector<HTMLElement>('[data-x="7"][data-y="7"]');
+  assert.ok(origin?.className.includes('t-city'), '左上角应该是城');
+  assert.ok(corner?.className.includes('t-city'), '2×2 的右下角也该是城');
+  assert.equal(origin?.textContent, 'A', '城的左上角要标出这是哪一家');
+
+  paintAt(6, 6);
+  const after = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="6"][data-y="6"]');
+  assert.ok(!(after?.className ?? '').includes('t-city'), '再点一次同一座城应该撤掉');
+});
+
+check('点「用这张图」：编辑器里的数据跟着变（但还要自己点保存）', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-ch="~"]')?.click();
+  paintAt(3, 3);
+  mask?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  assert.ok(!doc.querySelector('.level-canvas'), '应用之后画布应该关掉');
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { map: { rows: string[] } };
+  assert.equal(data.map.rows[3]?.[3], '~', `编辑器里的地形应该跟着变，实际第 3 行：${data.map.rows[3]}`);
+  // 数据变了但还没存：底部要提醒一句，玩家才不会以为已经存上了
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('保存'), `要提醒还没保存，实际：${foot}`);
+});
+
+// 收尾：关掉编辑器（confirm 被 stub 成 true），别把窗口留给后面的用例
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 摆兵（E3）                                                          */
+/* ------------------------------------------------------------------ */
+
+console.log('\n摆兵');
+
+click('[data-level-new]');
+
+check('编辑器里有「摆兵」入口：席位页签 + 全时代货架', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="army"]')?.click();
+
+  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-own]')].map((el) => el.dataset.own);
+  assert.deepEqual(tabs, ['A', 'B'], `两家局应该只有 A/B 两个页签，实际 ${tabs.join(',')}`);
+
+  // 货架必须给**全部**兵种：青铜关空投坦克是正经设计，编辑器不许替作者过滤
+  assert.ok(doc.querySelector('[data-unit="militia"]'), '缺民兵');
+  assert.ok(doc.querySelector('[data-unit="archer"]'), '缺弓手');
+  assert.ok(doc.querySelector('[data-unit="knight"]'), '高时代兵也必须能摆（别按开局时代过滤）');
+});
+
+/** 在摆兵面板里点一格（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
+const armyClick = (x: number, y: number): void => {
+  const grid = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  grid
+    .querySelector<HTMLElement>(`[data-x="${x}"][data-y="${y}"]`)
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+};
+const armyCount = (seat: string): number =>
+  Number(doc.querySelector<HTMLElement>(`[data-own="${seat}"] i`)?.textContent ?? '0');
+
+let before = 0;
+check('选兵种点空格：棋子落下，这一家的计数 +1', () => {
+  doc.querySelector<HTMLElement>('[data-unit="militia"]')?.click();
+  before = armyCount('A');
+  armyClick(5, 5);
+  const cell = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(!!cell?.querySelector('.lv-unit'), '格子上应该出现一枚棋子');
+  assert.ok(cell!.className.includes('lv-A'), `棋子要按家上色，实际 ${cell!.className}`);
+  assert.equal(armyCount('A'), before + 1, '这一家的计数应该 +1');
+});
+
+check('点自己已经摆好的兵：撤掉', () => {
+  armyClick(5, 5);
+  const cell = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(!cell?.querySelector('.lv-unit'), '再点一次应该撤掉');
+  assert.equal(armyCount('A'), before, '计数应该回到原值');
+});
+
+check('往别人城里放：当场拒绝，并说清是谁的城', () => {
+  // 模板里蓝方的城在 (9,7)，占 2×2
+  armyClick(9, 7);
+  const cell = [...doc.querySelectorAll<HTMLElement>('.level-canvas')]
+    .pop()!
+    .querySelector<HTMLElement>('[data-x="9"][data-y="7"]');
+  assert.ok(!cell?.querySelector('.lv-unit'), '别人城里不该放下兵');
+  // 两个弹窗都有 [data-foot]，必须取最上面那一层（摆兵面板），否则读到的是编辑器那句
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('放不了') && foot.includes('蓝方'), `要说清为什么，实际：${foot}`);
+  assert.equal(armyCount('A'), before, '被拒绝的放置不该改计数');
+});
+
+check('点「用这份兵力」：编辑器里的 deploy 跟着变', () => {
+  doc.querySelector<HTMLElement>('[data-unit="militia"]')?.click();
+  armyClick(4, 4);
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  assert.ok(!doc.querySelector('[data-own]'), '应用之后面板应该关掉');
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { deploy?: Record<string, Array<{ type: string; x: number; y: number }>> };
+  const list = data.deploy?.A ?? [];
+  assert.ok(
+    list.some((u) => u.type === 'militia' && u.x === 4 && u.y === 4),
+    `deploy.A 里应该有 (4,4) 的民兵，实际 ${JSON.stringify(list)}`,
+  );
+  const foot = [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector('[data-foot]')?.textContent ?? '';
+  assert.ok(foot.includes('保存'), `要提醒还没保存，实际：${foot}`);
+});
+
+// 收尾：关掉编辑器，别把窗口留给后面的用例
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 席位面板（cityEra / 几家 / 托管 / 晚登场）                            */
+/* ------------------------------------------------------------------ */
+
+console.log('\n席位');
+
+click('[data-level-new]');
+
+check('席位面板：开局时代、几家、每家的托管/晚登场/城的时代都在', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+
+  assert.ok(doc.querySelector('[data-start-era]'), '要有开局时代的下拉');
+  const chips = [...doc.querySelectorAll<HTMLElement>('[data-count-btn]')].map((el) => el.dataset.countBtn);
+  assert.deepEqual(chips, ['2', '3', '4'], `几家只能 2/3/4，实际 ${chips.join(',')}`);
+  assert.ok(doc.querySelector('[data-ai-for="A"]'), '每家要有托管开关');
+  assert.ok(doc.querySelector('[data-hidden-for="A"]'), '每家要有晚登场开关');
+  assert.ok(doc.querySelector('[data-era-for="A"]'), '每家要有城的时代下拉');
+});
+
+check('把某一家城的时代改成第 2 时代：写进 cityEra', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  const sel = doc.querySelector<HTMLSelectElement>('[data-era-for="A"]')!;
+  sel.value = '2';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  mask?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { seats?: { cityEra?: Record<string, number> } };
+  assert.equal(data.seats?.cityEra?.A, 2, `seats.cityEra.A 应该是 2，实际 ${JSON.stringify(data.seats?.cityEra)}`);
+});
+
+check('加到 3 家：自动给第三家塞一座城（否则数据立刻过不了校验）', () => {
+  // 上一个用例之后编辑器还开着（应用不关窗），直接在它身上继续，别再开一个
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+  doc.querySelector<HTMLElement>('[data-count-btn="3"]')?.click();
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    seats?: { count?: number; cities?: Record<string, Array<{ x: number; y: number }>> };
+  };
+  assert.equal(data.seats?.count, 3, '席位数应该是 3');
+  assert.ok((data.seats?.cities?.C ?? []).length > 0, '第三家必须自动得到一座城，否则整张关过不了校验');
+
+  // 关键：数据要仍然是"能开局"的，问题列表里不该冒出 error
+  const issues = [...doc.querySelectorAll('.modal-mask')]
+    .pop()
+    ?.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(!issues.includes('会出问题'), `加完第三家之后不该有错误，实际：${issues.slice(0, 200)}`);
+});
+
+// 收尾：关掉编辑器
+{
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 事件表单（E4a）                                                     */
+/* ------------------------------------------------------------------ */
+
+console.log('\n事件表单');
+
+click('[data-level-new]');
+
+check('事件面板：卡片式，有模板入口和一块地图', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+  assert.ok(doc.querySelector('[data-template]'), '要有模板下拉');
+  assert.ok(doc.querySelector('[data-act="add-event"]'), '要能加一条空事件');
+  assert.ok(doc.querySelector('.level-canvas'), '要有一块地图用来选区域/点落点');
+});
+
+check('从模板加一条「炸桥」：卡片里是播报 + 改地形两个动作', () => {
+  const sel = doc.querySelector<HTMLSelectElement>('[data-template]')!;
+  sel.value = 'bridge';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const cards = doc.querySelectorAll('.level-event-card');
+  assert.equal(cards.length, 1, `应该有一条事件，实际 ${cards.length}`);
+  const rows = doc.querySelectorAll('.level-do-row');
+  assert.equal(rows.length, 2, `炸桥模板是两个动作，实际 ${rows.length}`);
+  const summary = doc.querySelector('[data-summary]')?.textContent ?? '';
+  assert.ok(summary.includes('共 1 条'), `摘要要写清有几条，实际：${summary}`);
+});
+
+check('播报清空 → 点应用被拦，并指到第几条', () => {
+  const say = doc.querySelector<HTMLInputElement>('[data-say]')!;
+  say.value = '   ';
+  say.dispatchEvent(new window.Event('input', { bubbles: true }));
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const issues = doc.querySelector('[data-issues]')?.textContent ?? '';
+  assert.ok(issues.includes('播报是空的'), `要说清哪里不对，实际：${issues.slice(0, 160)}`);
+  assert.ok(issues.includes('第 1 条'), `要指到第几条，实际：${issues.slice(0, 160)}`);
+  assert.ok(doc.querySelector('.level-event-card'), '被拦下时面板不该关');
+});
+
+check('补回播报再应用：事件的 JSON 结构正确', () => {
+  const say = doc.querySelector<HTMLInputElement>('[data-say]')!;
+  say.value = '桥被炸断了。';
+  say.dispatchEvent(new window.Event('input', { bubbles: true }));
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    events?: Array<{ id?: string; when?: { kind?: string; at?: number }; do?: Array<{ kind?: string }> }>;
+  };
+  assert.equal(data.events?.length, 1, '应该有 1 条事件');
+  assert.equal(data.events?.[0]?.when?.kind, 'turn', '触发类型是 turn');
+  assert.equal(data.events?.[0]?.when?.at, 10, '炸桥模板默认第 10 次行动');
+  assert.equal(data.events?.[0]?.do?.length, 2, '两个动作');
+  assert.deepEqual(
+    data.events?.[0]?.do?.map((a) => a.kind),
+    ['say', 'terrain'],
+    '动作顺序应当保持 播报 → 改地形',
+  );
+  // id 自动生成，不能是空串（否则触发记录会分不清是哪一条）
+  assert.ok((data.events?.[0]?.id ?? '').length > 0, 'id 必须自动生成');
+});
+
+/** 在地图上拖一个矩形（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
+const dragOnMap = (x0: number, y0: number, x1: number, y1: number): void => {
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  canvas
+    .querySelector<HTMLElement>(`[data-x="${x0}"][data-y="${y0}"]`)
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+  // 按下之后网格会重绘，所以第二个格子必须重新取
+  canvas
+    .querySelector<HTMLElement>(`[data-x="${x1}"][data-y="${y1}"]`)
+    ?.dispatchEvent(new window.MouseEvent('pointermove', { bubbles: true }));
+  canvas.dispatchEvent(new window.MouseEvent('pointerup', { bubbles: true }));
+};
+
+check('框选区域：拖一个矩形就把 zone 改掉（不用填四个数）', () => {
+  // 重新打开事件面板，改刚才那条的地形区域
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+  const btn = doc.querySelector<HTMLElement>('[data-pick-do-zone]');
+  assert.ok(!!btn, '改地形那一行要有「选区域」按钮');
+  btn!.click();
+  dragOnMap(2, 2, 3, 3);
+
+  const after = doc.querySelector<HTMLElement>('[data-pick-do-zone]')?.textContent ?? '';
+  assert.ok(after.includes('2,2') && after.includes('3,3'), `区域文本要跟着变，实际：${after}`);
+  assert.ok(after.includes('4 格'), `要写出框了几格，实际：${after}`);
+});
+
+check('刷兵：点地图加落点，落点列表里能看见、能删', () => {
+  const sel = doc.querySelector<HTMLSelectElement>('[data-template]')!;
+  sel.value = 'reinforce';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // 模板自带一个落点（0,0）；再加一个
+  const before = doc.querySelectorAll('.level-spawn-chip').length;
+  const pickBtn = [...doc.querySelectorAll<HTMLElement>('[data-pick-spawn]')].pop();
+  pickBtn?.click();
+  const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;
+  canvas
+    .querySelector<HTMLElement>('[data-x="1"][data-y="0"]')
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+
+  const after = doc.querySelectorAll('.level-spawn-chip').length;
+  assert.ok(after > before, `点地图之后落点应该多一个，实际 ${before} → ${after}`);
+
+  // 删掉一个
+  [...doc.querySelectorAll<HTMLElement>('[data-spawn-del]')].pop()?.click();
+  assert.equal(doc.querySelectorAll('.level-spawn-chip').length, after - 1, '点 × 应该删掉那个落点');
+});
+
+// 收尾：关掉事件面板与编辑器
+{
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 胜负条件 / 关卡独有兵种                                              */
+/* ------------------------------------------------------------------ */
+
+console.log('\n胜负条件');
+
+click('[data-level-new]');
+
+check('胜负面板：能加一条"守住一段时间"，并写出人话预览', () => {
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop();
+  mask?.querySelector<HTMLElement>('[data-act="goals"]')?.click();
+  doc.querySelector<HTMLElement>('[data-act="add"]')?.click();
+
+  const card = doc.querySelector('.level-goal-card');
+  assert.ok(!!card, '应该出现一张条件卡');
+  const text = card?.textContent ?? '';
+  assert.ok(text.includes('守住 20 次行动'), `要有"守住几次行动"，实际：${text.slice(0, 120)}`);
+  assert.ok(text.includes('红方赢'), `要写清是谁赢，实际：${text.slice(0, 120)}`);
+});
+
+check('改成"把兵送到某处"：拖框定区域', () => {
+  const sel = doc.querySelector<HTMLSelectElement>('[data-kind]')!;
+  sel.value = 'escort';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  doc.querySelector<HTMLElement>('[data-pick]')?.click();
+  dragOnMap(3, 3, 4, 4);
+
+  const btn = doc.querySelector<HTMLElement>('[data-pick]')?.textContent ?? '';
+  assert.ok(btn.includes('3,3') && btn.includes('4,4'), `区域文本要跟着变，实际：${btn}`);
+  assert.ok(btn.includes('4 格'), `要写出几格，实际：${btn}`);
+});
+
+check('顺序能调：先判的排前面', () => {
+  doc.querySelector<HTMLElement>('[data-act="add"]')?.click();
+  assert.equal(doc.querySelectorAll('.level-goal-card').length, 2, '应该有两条');
+
+  // 第二条（刚加的 survive）往前挪
+  [...doc.querySelectorAll<HTMLElement>('[data-down]')].length; // 确认按钮在
+  doc.querySelector<HTMLElement>('[data-up="1"]')?.click();
+  const kinds = [...doc.querySelectorAll<HTMLSelectElement>('[data-kind]')].map((el) => el.value);
+  assert.deepEqual(kinds, ['survive', 'escort'], `换序后应该是 守→送，实际 ${kinds.join(',')}`);
+});
+
+check('应用之后 goals 按顺序写进 JSON', () => {
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { goals?: Array<{ kind?: string; untilTurn?: number; zone?: unknown }> };
+  assert.equal(data.goals?.[0]?.kind, 'survive', '第一条是守');
+  assert.equal(data.goals?.[1]?.kind, 'escort', '第二条是送');
+  assert.ok(!!data.goals?.[1]?.zone, '护送条件必须有区域');
+});
+
+console.log('\n关卡独有兵种');
+
+/*
+ * 注意：多个面板的按钮属性会重名（编辑器工具栏自己也有 `data-act="copy"` 和
+ * `data-act="new"`），所以这一段一律**限定在最上层那个弹窗里**查。
+ * 用 `doc.querySelector` 会拿到编辑器那一层的按钮，点下去什么都不会发生——
+ * 这个坑在事件面板那轮已经踩过一次了。
+ */
+const topMask = (): HTMLElement | undefined => [...doc.querySelectorAll<HTMLElement>('.modal-mask')].pop();
+
+check('从现有兵种复制一个：进表单，改个名能存', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="units"]')?.click();
+
+  const layer = topMask()!;
+  const src = layer.querySelector<HTMLSelectElement>('[data-copy-src]')!;
+  src.value = 'militia';
+  src.dispatchEvent(new window.Event('change', { bubbles: true }));
+  layer.querySelector<HTMLElement>('[data-act="copy"]')?.click();
+
+  const nameEl = topMask()!.querySelector<HTMLInputElement>('[data-f="name"]');
+  assert.ok(!!nameEl, '复制之后应该进编辑表单');
+  assert.ok((nameEl!.value ?? '').includes('民兵'), `名字应该沿用原兵种，实际 ${nameEl!.value}`);
+
+  nameEl!.value = '守将';
+  nameEl!.dispatchEvent(new window.Event('input', { bubbles: true }));
+  topMask()!.querySelector<HTMLElement>('[data-act="save-unit"]')?.click();
+
+  const row = topMask()!.querySelector('.level-unit-row');
+  assert.ok(!!row, '存下之后列表里应该有它');
+  assert.ok((row?.textContent ?? '').includes('守将'), `列表里要显示名字，实际：${row?.textContent}`);
+});
+
+check('新建一个兵种：id 自动生成，名字空会被拦', () => {
+  topMask()!.querySelector<HTMLElement>('[data-act="new"]')?.click();
+  const layer = topMask()!;
+  const idEl = layer.querySelector<HTMLInputElement>('[data-f="id"]')!;
+  assert.ok(/^lv\d+$/.test(idEl.value), `id 应该自动生成 lvN，实际 ${idEl.value}`);
+
+  const nameEl = layer.querySelector<HTMLInputElement>('[data-f="name"]')!;
+  nameEl.value = '';
+  nameEl.dispatchEvent(new window.Event('input', { bubbles: true }));
+  layer.querySelector<HTMLElement>('[data-act="save-unit"]')?.click();
+  const issues = topMask()!.querySelector('.level-issues')?.textContent ?? '';
+  assert.ok(issues.includes('名字不能为空'), `空名字要被拦，实际：${issues.slice(0, 120)}`);
+});
+
+check('应用之后 units 写进 JSON，且默认只能由部署/事件出现', () => {
+  // 退出编辑表单（刚才那条没存成），回列表再应用
+  topMask()!.querySelector<HTMLElement>('[data-act="back"]')?.click();
+  topMask()!.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    units?: Record<string, { name?: string; summonedOnly?: boolean }>;
+  };
+  const list = Object.values(data.units ?? {});
+  assert.equal(list.length, 1, `应该只有一个关卡兵种，实际 ${list.length}`);
+  assert.equal(list[0]?.name, '守将', '名字应当是刚改的');
+  assert.equal(list[0]?.summonedOnly, true, '复制出来的默认"只能由部署/事件出现"');
+});
+
+// 收尾：关掉编辑器
+{
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 事件时间轴（E4b）                                                   */
+/* ------------------------------------------------------------------ */
+
+console.log('\n事件时间轴');
+
+click('[data-level-new]');
+{
+  // 打开事件面板，加两条模板：援军（第 8 次）+ 炸桥（第 10 次）
+  topMask()?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+  const layer = topMask()!;
+  for (const tpl of ['reinforce', 'bridge']) {
+    const sel = layer.querySelector<HTMLSelectElement>('[data-template]')!;
+    sel.value = tpl;
+    sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+}
+
+check('时间轴：按行动序号排序，标出"约第几轮"和会发生什么', () => {
+  topMask()?.querySelector<HTMLElement>('[data-view="timeline"]')?.click();
+  const rows = [...topMask()!.querySelectorAll<HTMLElement>('.level-timeline-row')];
+  assert.equal(rows.length, 2, `两条事件应该有两行，实际 ${rows.length}`);
+
+  const at0 = rows[0]?.querySelector('.level-timeline-at')?.textContent ?? '';
+  const at1 = rows[1]?.querySelector('.level-timeline-at')?.textContent ?? '';
+  assert.ok(at0.includes('第 8 次'), `先出现的是第 8 次，实际：${at0}`);
+  assert.ok(at1.includes('第 10 次'), `后出现的是第 10 次，实际：${at1}`);
+  // 两家局：8 次 ≈ 第 4 轮，10 次 ≈ 第 5 轮（这块最容易算错，所以钉住）
+  assert.ok(at0.includes('第 4 轮'), `8 次 ≈ 4 轮，实际：${at0}`);
+  assert.ok(at1.includes('第 5 轮'), `10 次 ≈ 5 轮，实际：${at1}`);
+
+  const body0 = rows[0]?.textContent ?? '';
+  const body1 = rows[1]?.textContent ?? '';
+  assert.ok(body0.includes('刷兵'), `第 8 次是援军，实际：${body0}`);
+  assert.ok(body1.includes('改地形'), `第 10 次是炸桥，实际：${body1}`);
+  assert.ok(/改地形 \d+ 格/.test(body1), `要数出改几格，实际：${body1}`);
+});
+
+check('点时间轴的一行：回到卡片并高亮那一条', () => {
+  const rows = [...topMask()!.querySelectorAll<HTMLElement>('.level-timeline-row')];
+  rows[1]?.click(); // 第 10 次那条
+  const focused = topMask()!.querySelector('.level-event-card.is-focus');
+  assert.ok(!!focused, '回到卡片视图后应当高亮被点的那一条');
+  assert.ok(
+    (topMask()!.querySelector('[data-view="cards"]')?.className ?? '').includes('active'),
+    '视图按钮要切回「卡片」',
+  );
+});
+
+// 收尾：关掉事件面板与编辑器
+{
+  topMask()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
+  topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+}
+
+/* ------------------------------------------------------------------ */
+/* 扩展三档 / AI 旋钮 / 试玩                                           */
+/* ------------------------------------------------------------------ */
+
+console.log('\n扩展与 AI');
+
+/*
+ * 这一段要验"试玩真的开了这一局"，所以必须保证只存在**一个**开局面板。
+ *
+ * 前面几段各自 openSetup() 过、也留过没关的窗口；`click()` 取的是文档里第一个
+ * 同名按钮，于是会点到旧面板上——旧面板的 promise 早就 settle 了，`resolve` 是空操作，
+ * 表现就是"编辑器关了、但没开新局"（棋盘还是上一局那张）。这不是功能问题，
+ * 是测试没清场。所以这里直接把残留窗口摘掉，再开一个新的。
+ */
+for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level-new]');
+
+check('规则面板：扩展能选四档，AI 三个旋钮都在', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="rules"]')?.click();
+  const layer = topMask()!;
+  const rows = layer.querySelectorAll('[data-exp-id]');
+  assert.ok(rows.length >= 6, `应该列出全部扩展，实际 ${rows.length}`);
+  const knob = layer.querySelectorAll('[data-knob]');
+  assert.equal(knob.length, 3, `三个旋钮，实际 ${knob.length}`);
+  // 每一档都要能选（不是所有包都只有"必须开/禁用"）
+  const opts = [...(rows[0] as HTMLSelectElement).options].map((o) => o.value);
+  assert.deepEqual(opts, ['none', 'require', 'forbid', 'warn'], `四档：${opts.join(',')}`);
+});
+
+check('选一个"必须开" + 把风险厌恶调到 0.5：写进 expansions / ai', () => {
+  const layer = topMask()!;
+  const first = layer.querySelector<HTMLSelectElement>('[data-exp-id]')!;
+  const expId = first.dataset.expId!;
+  first.value = 'require';
+  first.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const knob = layer.querySelector<HTMLInputElement>('[data-knob="riskAversion"]')!;
+  knob.value = '0.5';
+  knob.dispatchEvent(new window.Event('input', { bubbles: true }));
+
+  layer.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    expansions?: { require?: string[] };
+    ai?: { riskAversion?: number };
+  };
+  assert.ok(
+    (data.expansions?.require ?? []).includes(expId),
+    `必须开的扩展要写进 require，实际 ${JSON.stringify(data.expansions)}`,
+  );
+  assert.equal(data.ai?.riskAversion, 0.5, `风险厌恶应该是 0.5，实际 ${data.ai?.riskAversion}`);
+});
+
+check('AI 三个都回默认：不写 ai 字段（少一句要解释的话）', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="rules"]')?.click();
+  topMask()?.querySelector<HTMLElement>('[data-act="reset-ai"]')?.click();
+  topMask()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { ai?: unknown };
+  assert.equal(data.ai, undefined, `默认值不该写进 JSON，实际 ${JSON.stringify(data.ai)}`);
+});
+
+/*
+ * 试玩：点一下编辑器关掉、开局面板也关掉、直接进对局。
+ * 这条真的会开一局（面板 promise 被 resolve，主流程走 createMatch），所以放在最后。
+ */
+/*
+ * 试玩要真的开一局。注意 `resolve()` 的回调是**微任务**：点完之后必须等一下，
+ * 否则读到的是上一局留下的棋盘（这次就踩了：400 格＝20×20 的旧局）。
+ */
+let tryLayer: HTMLElement | null = null;
+{
+  tryLayer = topMask()!;
+  assert.ok(tryLayer.querySelector('[data-act="tryout"]'), '编辑器里要有「试玩」');
+  assert.ok(tryLayer.querySelector('[data-act="selfplay"]'), '还要有「自打 3 局」');
+  tryLayer.querySelector<HTMLElement>('[data-act="tryout"]')?.click();
+}
+await wait(120);
+
+check('点「试玩」：编辑器关掉、直接进对局，进的就是这张图', () => {
+  assert.ok(!tryLayer!.isConnected, '点「试玩」的那个编辑器窗口应该被移除');
+  assert.ok(!!doc.querySelector('.board'), '应该已经在棋盘上了');
+
+  const tiles = doc.querySelectorAll('.tiles .tile').length;
+  assert.equal(tiles, 120, `棋盘应该是模板的 12×10（120 格），实际 ${tiles}`);
+});
+
+/* ------------------------------------------------------------------ */
+/* 关卡管理（E6）                                                      */
+/* ------------------------------------------------------------------ */
+
+console.log('\n关卡管理');
+
+// 先清场再开一个干净的面板（理由和「扩展与 AI」那段一样：避免点到旧面板）
+for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+
+check('选关页有「管理 / 导入导出」入口', () => {
+  assert.ok(!!doc.querySelector('[data-level-manage]'), '「我的关卡」分组里要有管理入口');
+});
+
+check('管理面板：列出我的关卡，每人一行，带尺寸/几家/事件数', () => {
+  doc.querySelector<HTMLElement>('[data-level-manage]')?.click();
+  const layer = topMask()!;
+  const rows = layer.querySelectorAll('.level-mgr-row');
+  assert.ok(rows.length > 0, '前面用例存过关卡，这里应该列出来');
+  const meta = rows[0]?.querySelector('.level-mgr-name i')?.textContent ?? '';
+  assert.ok(/\d+×\d+/.test(meta), `元信息里要有尺寸，实际：${meta}`);
+  assert.ok(meta.includes('家'), `还要写几家，实际：${meta}`);
+  assert.ok(meta.includes('事件'), `还要写事件数，实际：${meta}`);
+});
+
+check('改名：只换名字，id 不变', () => {
+  const layer = topMask()!;
+  const firstRow = layer.querySelector<HTMLElement>('.level-mgr-row');
+  const oldMeta = firstRow?.querySelector('.level-mgr-name i')?.textContent ?? '';
+  firstRow?.querySelector<HTMLElement>('[data-rename]')?.click();
+
+  const input = topMask()!.querySelector<HTMLInputElement>('[data-rename-input]')!;
+  input.value = '改过名的关';
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  topMask()!.querySelector<HTMLElement>('[data-rename-save]')?.click();
+
+  const row = topMask()!.querySelector<HTMLElement>('.level-mgr-row');
+  assert.ok((row?.textContent ?? '').includes('改过名的关'), `列表里要显示新名字，实际：${row?.textContent?.slice(0, 80)}`);
+  // 元信息（尺寸/几家/事件）不该因为改名而变化
+  const newMeta = row?.querySelector('.level-mgr-name i')?.textContent ?? '';
+  assert.equal(newMeta, oldMeta, '改名不该动到关卡数据');
+});
+
+check('复制：多一张，原名那张还在', () => {
+  const layer = topMask()!;
+  const before = layer.querySelectorAll('.level-mgr-row').length;
+  layer.querySelector<HTMLElement>('[data-copy]')?.click();
+  const after = topMask()!.querySelectorAll('.level-mgr-row').length;
+  assert.equal(after, before + 1, `复制之后应该多一行，实际 ${before} → ${after}`);
+});
+
+check('删除：少一张（二次确认走的是 confirm，用例里已 stub 成 true）', () => {
+  const layer = topMask()!;
+  const before = layer.querySelectorAll('.level-mgr-row').length;
+  layer.querySelector<HTMLElement>('[data-del]')?.click();
+  const after = topMask()!.querySelectorAll('.level-mgr-row').length;
+  assert.equal(after, before - 1, `删除之后应该少一行，实际 ${before} → ${after}`);
+});
+
+check('导出与云端入口都在，且云端会说明"没开通"而不是静默失败', () => {
+  const layer = topMask()!;
+  assert.ok(layer.querySelector('[data-export]'), '每行要有「导出」');
+  assert.ok(layer.querySelector('[data-act="export-all"]'), '要有「全部导出」');
+  assert.ok(layer.querySelector('[data-act="import"]'), '要有「从文件导入」');
+  assert.ok(layer.querySelector('[data-act="cloud-load"]'), '要有云端入口');
+  // 云端按钮点了会去连；测试环境连不上，界面要给一句原因而不是空白
+  layer.querySelector<HTMLElement>('[data-act="cloud-load"]')?.click();
+});
+
+await wait(400);
+
+check('云端拉不到时，给的是原因而不是空白', () => {
+  const text = topMask()?.querySelector('[data-cloud]')?.textContent ?? '';
+  assert.ok(text.trim().length > 0, '不该是空白');
+  assert.ok(/开通|失败|网络|凭据|还没有/.test(text), `要说明为什么没有，实际：${text.slice(0, 120)}`);
+});
+
+// 收尾
+topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+
+/* ------------------------------------------------------------------ */
+/* 无城席位（F1 第二步）                                                */
+/* ------------------------------------------------------------------ */
+
+console.log('\n无城席位');
+
+for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
+openSetup();
+await wait(40);
+click('[data-tab="levels"]');
+click('[data-level-new]');
+
+check('席位面板有「没有城」，勾上之后不再要求城的时代', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="seats"]')?.click();
+  const layer = topMask()!;
+  const box = layer.querySelector<HTMLInputElement>('[data-cityless-for="A"]');
+  assert.ok(!!box, '每家要有一个「没有城」的勾');
+  box!.checked = true;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  const after = topMask()!;
+  assert.ok(
+    !after.querySelector('[data-era-for="A"]'),
+    '标了没有城，就不该再问"城的时代"',
+  );
+  assert.ok(
+    (after.textContent ?? '').includes('靠开局兵力打'),
+    '要写清这一方靠什么打',
+  );
+});
+
+check('应用之后：seats.cityless 写进去，A 的城位清空', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    seats?: { cityless?: string[] };
+    map?: { citiesA?: unknown[] };
+  };
+  assert.deepEqual(data.seats?.cityless, ['A'], `cityless 应该是 ["A"]，实际 ${JSON.stringify(data.seats?.cityless)}`);
+  assert.equal((data.map?.citiesA ?? []).length, 0, 'A 的城位要一起清掉（不然数据自相矛盾）');
+});
+
+check('画布不再给"没有城"的那一方摆城', () => {
+  topMask()?.querySelector<HTMLElement>('[data-act="canvas"]')?.click();
+  const layer = topMask()!;
+  layer.querySelector<HTMLElement>('[data-seat="A"]')?.click();
+  const canvas = layer.querySelector<HTMLElement>('.level-canvas')!;
+  canvas
+    .querySelector<HTMLElement>('[data-x="5"][data-y="5"]')
+    ?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }));
+
+  const cell = canvas.querySelector<HTMLElement>('[data-x="5"][data-y="5"]');
+  assert.ok(!(cell?.className ?? '').includes('t-city'), '不该给无城席位放下城');
+  assert.ok(
+    (layer.querySelector('[data-foot]')?.textContent ?? '').includes('没有城'),
+    `要说明原因，实际：${layer.querySelector('[data-foot]')?.textContent}`,
+  );
+});
+
+// 收尾
+topMask()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
+topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*

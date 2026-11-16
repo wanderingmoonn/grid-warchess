@@ -512,8 +512,21 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   }, null);
 
   let focusDist = Infinity;
-  for (const c of foeCities) {
-    for (const u of myCombat) focusDist = Math.min(focusDist, distToCity(u, c));
+  if (foeCities.length === 0) {
+    // 无城局（F1）：目标不是城，是敌人本身。不给这个数，`focusDist` 会一路
+    // 变成 99，打法选择会以为"哪儿都不值得去"。
+    for (const u of myCombat) {
+      for (const e of enemyUnitsOf(s, me)) focusDist = Math.min(focusDist, distance(u, e));
+    }
+    // 连敌人都没看见（迷雾里）：按"到战场中央的距离"算，至少不是无穷远
+    if (!Number.isFinite(focusDist)) {
+      const c = { x: Math.floor((s.w - 1) / 2), y: Math.floor((s.h - 1) / 2) };
+      for (const u of myCombat) focusDist = Math.min(focusDist, distance(u, c));
+    }
+  } else {
+    for (const c of foeCities) {
+      for (const u of myCombat) focusDist = Math.min(focusDist, distToCity(u, c));
+    }
   }
   let gate = Infinity;
   for (const u of foeCombat) {
@@ -1258,13 +1271,28 @@ export function cityDistanceField(
   city: City,
   mode: 'land' | 'advance' | 'water' | 'air' = 'land',
 ): number[] {
+  return fieldFromSeeds(s, cityTiles(city), mode);
+}
+
+/**
+ * 从一堆**任意格子**出发算距离图。
+ *
+ * 抽出来的原因：无城对局（F1）里没有敌城可当目标，得从"敌方单位所在格"出发。
+ * 否则 `distanceFields` 交出一张空表，AI 的"推进"永远算不出值——
+ * 实测双方无城时它六百步只动了一次：**不是发呆，是返回了"无动作"**。
+ */
+export function fieldFromSeeds(
+  s: GameState,
+  seeds: Array<{ x: number; y: number }>,
+  mode: 'land' | 'advance' | 'water' | 'air' = 'land',
+): number[] {
   const size = s.w * s.h;
   const dist: number[] = new Array(size).fill(Infinity);
   const queue: Array<{ i: number; cost: number }> = [];
 
-  for (const t of cityTiles(city)) {
-    const i = idx(s, t.x, t.y);
+  for (const t of seeds) {
     if (!inBounds(s, t.x, t.y)) continue;
+    const i = idx(s, t.x, t.y);
     dist[i] = 0;
     queue.push({ i, cost: 0 });
   }
@@ -1366,6 +1394,35 @@ function distanceFields(
   for (const c of s.cities) {
     if (c.owner === me) continue;
     out.set(c.id, cityDistanceField(s, c, mode));
+  }
+  /*
+   * 一张敌城都没有（无城对战）时，目标是**敌方部队**。
+   *
+   * 键用一个不可能和城市 id 撞的字符串；`advanceDistance` 认这个键。
+   * 没有这一步，本回合的"该往哪走"整张表是空的，走位候选只剩一条、分数还是负的。
+   */
+  if (out.size === 0) {
+    const foes = enemyUnitsOf(s, me).map((u) => ({ x: u.x, y: u.y }));
+    if (foes.length > 0) {
+      out.set(VIRTUAL_FOE_FIELD, fieldFromSeeds(s, foes, mode));
+    } else {
+      /*
+       * 连一个敌人都看不见（迷雾 + 双方无城：没有城就没有城提供的视野）。
+       *
+       * 这时候正确的行为是**去搜**，不是原地不动。目标取"战场中央 + 四个角"：
+       * 不需要知道敌人藏在哪（AI 不偷看），只是把部队铺开去找。
+       * 少了这一步，实测六百步只动一次——两支军队在雾里互相看不见，就那么站着。
+       */
+      /*
+       * 目标取**战场中央一个点**，不要一次给四五个点。
+       *
+       * 试过"中央 + 四个角"：每支部队各奔最近的那个点，于是各自在角上站定、
+       * 永远碰不到面（实测两边各守一个角，五百多步没动）。
+       * 只给中央，双方才会往同一处靠，也就在那里撞上。
+       */
+      const seeds = [{ x: Math.floor((s.w - 1) / 2), y: Math.floor((s.h - 1) / 2) }];
+      out.set(VIRTUAL_FOE_FIELD, fieldFromSeeds(s, seeds, mode));
+    }
   }
   return out;
 }
@@ -1775,6 +1832,28 @@ function advanceDistance(
   focusCityId: string | null = null,
   ignoreFoes = false,
 ): number {
+  /*
+   * **没有敌城时，目标退化成"最近的敌人"。**
+   *
+   * 2026-11-16 加这一条，原因是无城对战（F1）：双方都没有城时，
+   * 下面那个循环一次都不进，`best` 留在 Infinity，于是"推进"这一项永远是 0 分或负分，
+   * 所有走法都不划算——实测 AI 六百步只动了一次（**直接返回"无动作"**，不是发呆）。
+   *
+   * 这是结构问题，不是权重问题：没有目标的时候，怎么调参数都没用。
+   * 注意这里**先判有没有敌城**，而不是复用下面的 `ignoreFoes`——
+   * 那个开关的语义是"优势期不必绕开敌人"，和"压根没有目标"是两件事。
+   */
+  const hasFoeCity = s.cities.some((c) => c.owner !== owner);
+  if (!hasFoeCity) {
+    const field = fields.get(VIRTUAL_FOE_FIELD);
+    const d = field?.[y * s.w + x];
+    if (d !== undefined && Number.isFinite(d)) return d * 0.32;
+    // 连敌人都没有（理论上只剩自己）：退回曼哈顿距离，好歹给个方向
+    let near = Infinity;
+    for (const e of enemyUnitsOf(s, owner)) near = Math.min(near, distance({ x, y }, e));
+    return near;
+  }
+
   let best = Infinity;
   for (const c of s.cities) {
     if (c.owner === owner) continue;
@@ -4451,6 +4530,9 @@ export const aiRecruitTrace: {
  * 只在 `on` 时累加，所以线上跑的时候一行额外的味道都没有。
  * 用法见 `scripts/probe-ai-five.ts`。
  */
+/** 没有敌城时，`distanceFields` 里那张"往敌方部队去"的虚拟距离图的键 */
+const VIRTUAL_FOE_FIELD = '__foe_units__';
+
 export const aiTrace = {
   on: false,
   /** 换血：解散旧兵腾位置触发了几次 */
@@ -5915,7 +5997,16 @@ function aiNextActionCore(
   // 弃城期更晚——这时候全军压上去只是把攒的钱换成对面的击杀数。
   const commitAt =
     1.3 - 0.18 * mood.driveRaw.rush + 0.15 * mood.driveRaw.boom;
-  fields.commit = myVal > 0 && myVal >= foeVal * commitAt;
+  /*
+   * **没有敌城就不该进入"全军压城"。**
+   *
+   * 这个判据是"我比对面强三成 → 不追野战，直接压城"。但迷雾里看不见敌人时
+   * `foeVal` 是 0，条件恒真：无城对局（双方都没有城）里 AI 一开局就进了压城模式，
+   * 而压的对象根本不存在——走位候选因此只剩一两条、分数还是负的，
+   * 实测两支军队在雾里站了五百多步。压城的前提是**有城可压**。
+   */
+  const foeCityCount = view.cities.filter((c) => c.owner !== me && !c.ruined).length;
+  fields.commit = foeCityCount > 0 && myVal > 0 && myVal >= foeVal * commitAt;
 
   /*
    * C（2026-11-15）：**僵持破局**。

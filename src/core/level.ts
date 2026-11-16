@@ -284,8 +284,8 @@ export interface LevelSeats {
   /**
    * 第三、第四席的城（左上角）。A/B 用地图自带的那两组，这里只写多出来的。
    *
-   * `count` 是 3 就必须给 C；是 4 就必须给 C 和 D。**没城的席位第一回合就被判出局**
-   * （出局的定义就是"城全丢光"），所以这不是可选项——校验会拦。
+   * `count` 是 3 就必须给 C；是 4 就必须给 C 和 D。
+   * **例外**：在 `cityless` 里点名的席位不需要城，见下面那个字段。
    */
   cities?: Partial<Record<'C' | 'D', MapPoint[]>>;
   /** 哪些席位由电脑操作。不写＝全是真人；写了 B 就是 B 交给电脑 */
@@ -301,6 +301,18 @@ export interface LevelSeats {
    * 要落在"入场那一刻的兵力和兵种"上，别指望科技差一直压着。
    */
   cityEra?: Partial<Record<PlayerId, number>>;  /**
+   * **没有城的席位**（2026-11-16 新增）。
+   *
+   * 语义：这一席开局就没有城、没有产线、没有收入，靠 `deploy` 摆的兵打一场。
+   * 出局条件跟着变：**兵打光即出局**（不是"城全丢光"——它从来没有城）。
+   *
+   * 用来表达"孤军""决斗图"这类玩法。三件事要注意：
+   *   · 必须写 `deploy`，否则开局零兵＝第一帧就出局（校验会拦）；
+   *   · 不能同时有城（`map.citiesA/B` 或 `seats.cities` 里给它城是自相矛盾的）；
+   *   · **兵打光就输，引擎不看你后面还有没有援军**。带波次的关卡要自己保证前期不被打光。
+   */
+  cityless?: PlayerId[];
+  /**
    * 开局**不在场上**的席位。
    *
    * 和"出局"是两件事：出局是打没了，未登场是还没来。所以它不占回合、不算出局、
@@ -527,9 +539,6 @@ export const LEVELS: LevelDef[] = [
       h: 14,
       rows: rowsOf(14, 14, SOLO_PAINT),
       citiesA: [{ x: 1, y: 6 }],
-      // 两座城：产能翻倍，而且必须打两座才算赢。
-      // x 从 10 挪到 11 是为了给河岸留出两列缓冲——守方弓箭手（射程 3）
-      // 站在自己河岸就该够不到这里，而不是站在岸上就能点掉城边的农民。
       citiesB: [
         { x: 11, y: 3 },
         { x: 11, y: 10 },
@@ -538,33 +547,14 @@ export const LEVELS: LevelDef[] = [
     },
     seats: { count: 2, ai: ['B'] },
     setup: { startEra: 1, firstSide: 'A' },
-    /*
-     * 这一关的 AI 比默认更敢冲（`riskAversion: 0.6`）。
-     *
-     * 默认 AI 走一格要算"这个落点会挨多少打"，抵掉推进的收益；只要守方摆出几个兵，
-     * 它就宁可待在桥头。这张图要的是"压过来"，所以让它愿意用伤亡换推进。
-     * 配合三支过河突击队，压力才是持续的——单靠参数不够（实测过：只调参数时
-     * 它最多多过去一两个兵，城一滴血不掉）。
-     */
     ai: { riskAversion: 0.2, cohesion: 0, appetite: 3 },
     deploy: {
       A: [
+        { type: 'lumberjack', x: 4, y: 4 },
         { type: 'militia', x: 4, y: 7 },
         { type: 'archer', x: 3, y: 7 },
         { type: 'militia', x: 4, y: 8 },
       ],
-      /*
-       * 攻方起手：4 近战 + 4 远程 + 2 高机动 + 2 箭塔 + 2 农民。
-       *
-       * 四类各有分工，不能互相替代：
-       *   · 民兵占桥头、扛线；
-       *   · 弓手（射程 3）越过两格宽的河压制西岸——守方站岸边就要挨打；
-       *   · 箭塔钉在桥头两侧，守方想清掉对岸的目标就得先拆塔，而拆塔要拿命换；
-       *   · 农民摆在城后，把两座城的产能真的用起来。
-       *
-       * 塔刻意放在 (9,6)/(9,9) 而不是桥头 (9,7)/(9,8)：建筑占格且不可通行，
-       * 摆在桥头会把自家过河的门口堵死。
-       */
       B: [
         { type: 'militia', x: 9, y: 7 },
         { type: 'militia', x: 9, y: 8 },
@@ -579,22 +569,10 @@ export const LEVELS: LevelDef[] = [
       ],
     },
     goals: [{ kind: 'survive', seat: 'A', untilTurn: 30 }],
-    /*
-     * 禁掉「先后手补偿」：这一关是 1 城对 2 城的不对称布防，后手再补一笔金币，
-     * 等于把设计好的强弱差抹掉一截。（和「断后」同一条理由。）
-     */
-    /*
-     * 闪电战、高机动性不禁，只提醒。
-     *
-     * 这一关守方只有三个兵，攻方的机动优势被放大得很厉害：开了之后难度会从"要小心"
-     * 变成"基本守不住"。但那是玩家自己选的挑战，禁掉不如说清楚——
-     * 所以从 forbid 挪到 warn（`2026-11-15` 实机反馈：「开高机动性直接没法打」）。
-     */
-    expansions: { require:['era-arms'] , forbid: ['turn-order-comp'], warn: ['blitz', 'high-mobility'] },
+    expansions: { require:['era-arms'] , forbid: ['turn-order-comp', 'blackout', 'bloodbath'], warn: ['blitz', 'high-mobility'] },
     /*
      * 三段压力：
-     *   1~5 次行动：桥还在。这是玩家**唯一能主动出门换兵**的窗口，也是这关的全部乐趣；
-     *   第 6 次行动：桥被炸成深水，只能守桥头；
+     *   1~5 次行动：
      *   第 11 次行动：整条河退成浅流——防线从 1 格变成 14 格，逼他把人收拢到城下硬撑。
      *
      * 第二段刻意**不写 `only`**：整条河一起变，包括桥墩那一格。
@@ -621,8 +599,8 @@ export const LEVELS: LevelDef[] = [
         id: 'blow',
         when: { kind: 'turn', at: 10 },
         do: [
-          { kind: 'say', text: '桥被炸断了。' },
-          { kind: 'terrain', zone: { x0: 7, y0: 7, x1: 8, y1: 8 }, to: 'water' },
+          { kind: 'say', text: '桥被洪水冲垮了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'deep' },
         ],
       },
       {
@@ -637,8 +615,8 @@ export const LEVELS: LevelDef[] = [
         id: 'flank-2',
         when: { kind: 'turn', at: 15 },
         do: [
-          { kind: 'say', text: '北边骑兵绕行来了。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }] },
+          { kind: 'say', text: '北边骑兵绕行来了，南边也有先遣部队。' },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'scout', x: 3, y: 13 }] },
         ],
       },
       {
@@ -651,7 +629,7 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'ebb',
-        when: { kind: 'turn', at: 15 },
+        when: { kind: 'turn', at: 18 },
         do: [
           { kind: 'say', text: '水位退了。整条河都能淌过去。' },
           { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'shallow' },
@@ -659,15 +637,23 @@ export const LEVELS: LevelDef[] = [
       },
       {
         id: 'wave-4',
-        when: { kind: 'turn', at: 17 },
+        when: { kind: 'turn', at: 18 },
         do: [
           { kind: 'say', text: '又上来一队长弓手。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'longbow', x: 13, y: 7 }, { type: 'longbow', x: 13, y: 8 }] },
         ],
       },
       {
+        id: 'end',
+        when: { kind: 'turn', at: 22 },
+        do: [
+          { kind: 'say', text: '河断流了。' },
+          { kind: 'terrain', zone: { x0: 7, y0: 0, x1: 8, y1: 13 }, to: 'plain' },
+        ],
+      },
+      {
         id: 'wave-5',
-        when: { kind: 'turn', at: 20 },
+        when: { kind: 'turn', at: 22 },
         do: [
           { kind: 'say', text: '东岸又有人在集结。' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 12, y: 7 }, { type: 'knight', x: 12, y: 8 }, { type: 'knight', x: 13, y: 7 }, { type: 'knight', x: 13, y: 8 }] },
@@ -678,7 +664,7 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'turn', at: 24 },
         do: [
           { kind: 'say', text: '这次是南北夹击。' },
-          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 3, y: 13 }] },
+          { kind: 'spawn', owner: 'B', units: [{ type: 'knight', x: 2, y: 0 }, { type: 'knight', x: 3, y: 0 }, { type: 'knight', x: 2, y: 13 }, { type: 'knight', x: 3, y: 13 }] },
         ],
       },
     ],
@@ -1129,23 +1115,57 @@ export const LEVELS: LevelDef[] = [
 ];
 
 /**
- * 全部关卡（含测试夹具）。探针、自检、内部跳转用它。
+ * 内置关卡之外的来源（玩家在本机做的那些）。
+ *
+ * 用"注册回调"而不是直接 import `userLevels.ts`，是为了**避免循环依赖**：
+ * 那个文件要 import `validateLevel`，这里再反过来 import 它，启动时就会炸。
+ * 回调是惰性的，`allLevels()` 每次现取——玩家刚存的一张关，下一次问就在了。
+ *
+ * 一个来源抛错不该让整个注册表消失（表现会是"所有关卡都不见了"），所以逐个 try。
+ */
+const extraSources: Array<() => LevelDef[]> = [];
+
+export function registerLevelSource(fn: () => LevelDef[]): void {
+  if (!extraSources.includes(fn)) extraSources.push(fn);
+}
+
+function extraLevels(): LevelDef[] {
+  if (extraSources.length === 0) return [];
+  const out: LevelDef[] = [];
+  for (const fn of extraSources) {
+    try {
+      out.push(...fn());
+    } catch {
+      // 一个来源坏了就当它没贡献，别连累内置关卡
+    }
+  }
+  return out;
+}
+
+/**
+ * 全部关卡（含测试夹具、含玩家做的）。探针、自检、内部跳转用它。
  *
  * **玩家菜单不该用它**——那种地方要用 `playableLevels()`，否则"1 个兵打 5 个"
  * 这种专门用来验机制的图会出现在选关列表里，玩家点进去只会觉得是半成品。
  */
 export function allLevels(): LevelDef[] {
-  return LEVELS;
+  const extra = extraLevels();
+  // 没有外部来源时返回同一个数组引用：老代码（和探针）里 `=== LEVELS` 用得着
+  return extra.length > 0 ? [...LEVELS, ...extra] : LEVELS;
 }
 
 /** 玩家能选到的关卡（去掉 `dev` 那些测试夹具） */
 export function playableLevels(): LevelDef[] {
-  return LEVELS.filter((l) => l.dev !== true);
+  return allLevels().filter((l) => l.dev !== true);
 }
 
+/**
+ * 按 id 找关卡。**先内置、后玩家**：同 id 时内置优先，
+ * 这样玩家不可能用一个自制关卡顶掉"孤城"（表现会非常难查）。
+ */
 export function levelById(id: string | null | undefined): LevelDef | null {
   if (!id) return null;
-  return LEVELS.find((l) => l.id === id) ?? null;
+  return LEVELS.find((l) => l.id === id) ?? extraLevels().find((l) => l.id === id) ?? null;
 }
 
 /**
@@ -1211,7 +1231,17 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
   if (!name) errors.push('缺少关卡名');
   if (name.length > 24) errors.push('关卡名太长（最多 24 个字）');
 
-  const checkedMap = validateFixedMap(obj.map);
+  /*
+   * 先看 `seats.cityless`，再校验地图。
+   *
+   * 顺序不能反：地图校验会拦"某一方没有城"，而"没有城"正是无城席位该有的样子。
+   * 这里只做**最宽松的预读**（能认出席位就行），真正的合法性由 `normalizeSeats` 判。
+   */
+  const rawSeats = (obj.seats ?? {}) as Partial<LevelSeats> & Record<string, unknown>;
+  const rawCityless = (Array.isArray(rawSeats.cityless) ? rawSeats.cityless : [])
+    .map((p) => String(p).toUpperCase())
+    .filter((p) => SEAT_ORDER.includes(p as 'A' | 'B' | 'C' | 'D'));
+  const checkedMap = validateFixedMap(obj.map, { allowEmpty: rawCityless });
   if (!checkedMap.ok) {
     // 地图的错因原样带出来：作者在关卡里写错一格，和在地图文件里写错一格，
     // 要看到的是同一句话。
@@ -1802,6 +1832,37 @@ function normalizeSeats(
   }
   const seated = SEAT_ORDER.slice(0, count) as readonly PlayerId[];
 
+  /*
+   * 无城席位（`cityless`）。
+   *
+   * 两道判断：① 只能是这一局坐人的席位；② 不能和城位同时存在——
+   * 两边都写是自相矛盾的配置，静默取一个会让作者查半天。
+   */
+  const cityless: PlayerId[] = [];
+  for (const p of Array.isArray(obj.cityless) ? obj.cityless : []) {
+    const seat = String(p).toUpperCase() as PlayerId;
+    if (!SEAT_ORDER.includes(seat as 'A' | 'B' | 'C' | 'D')) {
+      errors.push(`「没有城」的席位「${String(p)}」不是有效席位（只能是 A/B/C/D）`);
+      continue;
+    }
+    if (!seated.includes(seat)) {
+      errors.push(`「没有城」的席位「${seat}」这一局没坐人（这一关只有 ${seated.join(' / ')} 家）`);
+      continue;
+    }
+    if (!cityless.includes(seat)) cityless.push(seat);
+  }
+  for (const seat of cityless) {
+    const own = [
+      ...(seat === 'A' ? map.citiesA : seat === 'B' ? map.citiesB : []),
+      ...(((obj.cities ?? {}) as Partial<Record<'C' | 'D', MapPoint[]>>)[seat as 'C' | 'D'] ?? []),
+    ];
+    if (own.length > 0) {
+      errors.push(
+        `第 ${seat} 家同时被标成「没有城」又有 ${own.length} 座城位：这两件事只能选一个（想让它没城就把城位删掉）`,
+      );
+    }
+  }
+
   const aiRaw = Array.isArray(obj.ai) ? obj.ai : [];
   const ai: PlayerId[] = [];
   for (const p of aiRaw) {
@@ -1896,6 +1957,7 @@ function normalizeSeats(
   return {
     count: count as 2 | 3 | 4,
     ...(Object.keys(cities).length > 0 ? { cities } : {}),
+    ...(cityless.length > 0 ? { cityless } : {}),
     ai,
     ...(hidden.length > 0 ? { hidden } : {}),
     ...(Object.keys(cityEra).length > 0 ? { cityEra } : {}),
