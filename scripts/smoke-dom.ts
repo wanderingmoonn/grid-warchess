@@ -10320,13 +10320,18 @@ await wait(40);
 click('[data-tab="levels"]');
 click('[data-level-new]');
 
-check('规则面板：扩展能选四档，AI 三个旋钮都在', () => {
+check('规则面板：扩展能选四档，AI 四个旋钮都在', () => {
   topMask()?.querySelector<HTMLElement>('[data-act="rules"]')?.click();
   const layer = topMask()!;
   const rows = layer.querySelectorAll('[data-exp-id]');
   assert.ok(rows.length >= 6, `应该列出全部扩展，实际 ${rows.length}`);
   const knob = layer.querySelectorAll('[data-knob]');
-  assert.equal(knob.length, 3, `三个旋钮，实际 ${knob.length}`);
+  // 风险厌恶 / 战线收拢 / 战意 / 僵局压力
+  assert.equal(knob.length, 4, `四个旋钮，实际 ${knob.length}`);
+  assert.ok(
+    layer.querySelector('[data-knob="pressure"]'),
+    '要有「僵局压力」（无城方的推进加码）',
+  );
   // 每一档都要能选（不是所有包都只有"必须开/禁用"）
   const opts = [...(rows[0] as HTMLSelectElement).options].map((o) => o.value);
   assert.deepEqual(opts, ['none', 'require', 'forbid', 'warn'], `四档：${opts.join(',')}`);
