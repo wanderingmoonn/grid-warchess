@@ -10252,10 +10252,16 @@ a.btn {
 
 .admin-log b { color: #554f45; font-weight: 600; }
 
+/*
+ * 审核台的这两块底色是**写死的浅色**（审核台不跟主题走，它就是一张值班表）。
+ * 所以文字也必须钉成 `--on-light`——不写的话会继承 `--text`，
+ * modern 主题下那是近白色，浅底白字直接看不见（对比度 1.05:1）。
+ */
 .admin-log-item {
   padding: 1px 7px;
   border-radius: 999px;
   background: #f1eee6;
+  color: var(--on-light);
 }
 
 /* 审核台：查看面板里的地图缩略图与折叠 JSON */
@@ -10263,6 +10269,7 @@ a.btn {
   padding: 6px;
   border-radius: 8px;
   background: #efece5;
+  color: var(--on-light);
 }
 
 .admin-thumb svg {
