@@ -99,7 +99,18 @@ export type LevelDo =
    * **不自动拦截"把地图切成两块"**——"断了桥才能守住"本身就是一种设计，
    * 引擎去拦反而是拦创意。这一关能不能打完，是批量自检该管的事。
    */
-  | { kind: 'terrain'; zone: LevelZone; to: LevelTerrain; only?: LevelTerrain[] };
+  | { kind: 'terrain'; zone: LevelZone; to: LevelTerrain; only?: LevelTerrain[] }
+  /**
+   * 点亮一片区域：这些格子此后**一直可见**（地形和上面的单位都不再被迷雾遮住）。
+   *
+   * 用在不希望玩家瞎猜的地方：护送关的终点（不然开着雾根本不知道往哪走）、
+   * 伏兵刷出来的位置（让"那儿有人"这件事立刻成立）。
+   *
+   * **这就是开关**：想点亮就加这条动作，不想让玩家看见的隐秘事件就别加。
+   * 它是"信息"不是"效果"——不改地形、不刷兵、不造成任何规则变化，
+   * 只是把这片从迷雾里揭出来。没开迷雾的对局里它无害（本来就全可见）。
+   */
+  | { kind: 'reveal'; zone: LevelZone };
 
 /**
  * 一件事：什么时候、做什么。
@@ -958,7 +969,16 @@ export const LEVELS: LevelDef[] = [
       {
         id: 'first-gate',
         when: { kind: 'turn', at: 1 },
-        do: [{ kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' }],
+        do: [
+          { kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' },
+          /*
+           * 开局把**终点那一片**点亮。
+           *
+           * 这张关默认开雾：不点亮的话，玩家只知道"往东"，看不到终点在哪一格、
+           * 也不知道城前那排箭塔压着什么位置。`reveal` 是永久的信息，不会随视野收回去。
+           */
+          { kind: 'reveal', zone: { x0: 14, y0: 1, x1: 17, y1: 6 } },
+        ],
       },
       /*
        * 经过中段伏击点（x=7 那片林子）时，追兵从北边冒出来。
@@ -972,6 +992,8 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '北边的林子后头窜出一队追兵！' },
           { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 8, y: 2 }, { type: 'archer', x: 9, y: 2 }] },
+          // 伏兵的位置一起点亮：不然玩家在雾里只听到"有人"，看不见人在哪
+          { kind: 'reveal', zone: { x0: 7, y0: 1, x1: 10, y1: 3 } },
         ],
       },
       /*
@@ -987,6 +1009,7 @@ export const LEVELS: LevelDef[] = [
            * 但它们是**从身后堵退路**的，逼玩家往前、不能回头磨。
            */
           { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 6, y: 4 }, { type: 'militia', x: 6, y: 5 }] },
+          { kind: 'reveal', zone: { x0: 5, y0: 3, x1: 7, y1: 6 } },
         ],
       },
       /*
@@ -1977,7 +2000,15 @@ function normalizeDo(
     return { kind: 'terrain', zone, to: to as LevelTerrain, ...(only && only.length > 0 ? { only } : {}) };
   }
 
-  errors.push(`事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain）`);
+  if (kind === 'reveal') {
+    const zone = normZone(a.zone, `事件「${id}」点亮区域的范围`, map, errors);
+    if (!zone) return undefined;
+    return { kind: 'reveal', zone };
+  }
+
+  errors.push(
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal）`,
+  );
   return undefined;
 }
 

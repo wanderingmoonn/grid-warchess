@@ -100,10 +100,21 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
      * 空间站全可见：站是自己的，虚空只是"还没铺"，不该像未探明地形那样黑着。
      * 而且站就几格大，核心舱视野 4 基本也全罩住了——这条只是把"基本"变成"一定"。
      */
-    const set =
+    let set =
       reveal || boardKindOf(s, id) === 'station'
         ? allTilesOn(s, id)
         : visibleTilesOn(s, p, id);
+    /*
+     * 事件点亮的格子并进可见集（`{ kind: 'reveal' }`）。
+     *
+     * 这里必须 new 一份：`visibleTilesOn` 返回的集合可能是算出来的缓存，
+     * 原地 add 会把"这一方看见的"污染到别的席位/别的图上。
+     */
+    if (id === EARTH && !reveal && (s.revealed?.length ?? 0) > 0) {
+      const merged = new Set(set);
+      for (const i of s.revealed!) merged.add(i);
+      set = merged;
+    }
     visibleSets[id] = set;
     visibleByBoard[id] = Array.from(set);
   }

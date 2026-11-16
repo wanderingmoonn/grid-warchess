@@ -4667,6 +4667,10 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
     applyTerrainEvent(s, act);
     return;
   }
+  if (act.kind === 'reveal') {
+    revealZone(s, act.zone);
+    return;
+  }
   // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
   s.orderDirectives = {
     ...(s.orderDirectives ?? {}),
@@ -4766,6 +4770,31 @@ function deploySeat(s: GameState, seat: PlayerId): void {
  * **不拦截"把地图切成两块"**：那是一种合法设计（"断了桥才能守住"）。
  * 这一关能不能打通，是批量自检的事，不是引擎的事。
  */
+/**
+ * 点亮一片区域：这些格子此后一直可见（见 `GameState.revealed`）。
+ *
+ * 不播报：作者会自己配一句 `say`，引擎再补一句"视野点亮了 N 格"只会把战报弄脏。
+ * 重复点亮同一片是幂等的（Set 去重），所以可以放心放进 `repeat` 的事件里。
+ */
+function revealZone(
+  s: GameState,
+  zone: Extract<import('./level.ts').LevelDo, { kind: 'reveal' }>['zone'],
+): void {
+  const put = new Set(s.revealed ?? []);
+  let added = 0;
+  for (let y = zone.y0; y <= zone.y1; y += 1) {
+    for (let x = zone.x0; x <= zone.x1; x += 1) {
+      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+      const i = y * s.w + x;
+      if (put.has(i)) continue;
+      put.add(i);
+      added += 1;
+    }
+  }
+  if (added === 0) return;
+  s.revealed = [...put];
+}
+
 function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').LevelDo, { kind: 'terrain' }>): void {
   const say = (text: string): void => {
     s.log.push({ turn: s.turn, player: 'A', text, open: true, system: true });

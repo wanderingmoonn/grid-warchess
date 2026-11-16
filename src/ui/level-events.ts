@@ -44,6 +44,7 @@ const DO_KIND_NAME: Record<string, string> = {
   doctrine: '换这一家的打法',
   deploy: '让某一家登场',
   terrain: '改一片地形',
+  reveal: '点亮一片区域',
 };
 const WHEN_KIND_NAME: Record<string, string> = {
   turn: '第 N 次行动',
@@ -185,6 +186,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       return { kind: 'deploy', seat };
     }
     if (kind === 'terrain') return { kind: 'terrain', zone: centerZone(2), to: 'deep' };
+    if (kind === 'reveal') return { kind: 'reveal', zone: centerZone(2) };
     return { kind: 'say', text: '这一关发生了点事。' };
   };
 
@@ -276,6 +278,12 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
           上场（用这一关「摆兵」里给它写好的兵力）
         </span>`;
     }
+    if (act.kind === 'reveal') {
+      return `${kindSel}<span class="level-when-arg">
+          点亮 <button class="btn btn-sm" data-pick-do-zone="${i}:${j}">${esc(zoneText(act.zone))}</button>
+          <span class="field-hint">（这片区域此后一直可见，不再被迷雾遮住）</span>
+        </span>`;
+    }
     return `${kindSel}<span class="level-when-arg">
         把 <button class="btn btn-sm" data-pick-do-zone="${i}:${j}">${esc(zoneText(act.zone))}</button>
         改成
@@ -296,6 +304,10 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         chips.push(`刷兵 ${act.units.length}`);
         const where = act.units.slice(0, 3).map((u) => `(${u.x},${u.y})`).join(' ');
         details.push(`落点 ${where}${act.units.length > 3 ? ' …' : ''}`);
+      } else if (act.kind === 'reveal') {
+        const z = act.zone;
+        const n = (Math.abs(z.x1 - z.x0) + 1) * (Math.abs(z.y1 - z.y0) + 1);
+        chips.push(`点亮 ${n} 格`);
       } else if (act.kind === 'doctrine') chips.push('换打法');
       else if (act.kind === 'deploy') chips.push(`第 ${act.seat} 家登场`);
       else if (act.kind === 'terrain') {
@@ -451,7 +463,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       if (!ev) return null;
       if (pick.slot === 'when') return ev.when.kind === 'enter' ? ev.when.zone : null;
       const act = ev.do[pick.act];
-      return act && act.kind === 'terrain' ? act.zone : null;
+      return act && (act.kind === 'terrain' || act.kind === 'reveal') ? act.zone : null;
     }
     return null;
   };
@@ -524,6 +536,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         if (act.kind === 'terrain') {
           if (!LEVEL_TERRAINS.includes(act.to)) out.push(`${at}：改成「${act.to}」不被允许（桥/城/虚空改不了）`);
           if (outOfBounds(act.zone)) out.push(`${at}：区域整块在地图外，改了也没有效果`);
+        }
+        if (act.kind === 'reveal' && outOfBounds(act.zone)) {
+          out.push(`${at}：点亮区域整块在地图外，点了也没有效果`);
         }
         if (act.kind === 'spawn') {
           if (act.units.length === 0) out.push(`${at}：刷兵没有落点（至少在地图上点一个位置）`);
@@ -602,7 +617,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       if (ev0) {
         if (pick.slot === 'when' && ev0.when.kind === 'enter') ev0.when = { ...ev0.when, zone };
         const act = ev0.do[pick.act];
-        if (pick.slot === 'do' && act && act.kind === 'terrain') act.zone = zone;
+        if (pick.slot === 'do' && act && (act.kind === 'terrain' || act.kind === 'reveal')) act.zone = zone;
       }
       previewZone = null;
       pick = null;

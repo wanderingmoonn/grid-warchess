@@ -17,6 +17,7 @@ import { validateFixedMap } from '../src/core/fixed-maps.ts';
 import { citiesOf } from '../src/core/rules.ts';
 import { lintLevel } from '../src/core/level-lint.ts';
 import { applyAction, isCitylessSeat, isEliminated } from '../src/core/rules.ts';
+import { playerView } from '../src/core/fog.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { downloadLevelFile, downloadLevelsFile, parseLevelFileText } from '../src/core/level-io.ts';
 import { levelUploadBlocker } from '../src/net/levels.ts';
@@ -501,6 +502,71 @@ if (duelChecked.ok) {
     '这一局能推进到有结果（或者在时间上限前一直在打）',
     `winner=${st.winner ?? '-'} turn=${st.turn}`,
   );
+}
+
+/* ── 14. 点亮（reveal）─────────────────────────────────────────── */
+line('14. 点亮区域');
+
+/*
+ * 护送关的核心场景：开着雾，玩家得知道"终点在哪"。
+ * 点亮 = 把这片格子永久并进可见集，不随视野收回去。
+ */
+{
+  const rows = Array.from({ length: 8 }, () => '..........');
+  const v = validateLevel({
+    id: 'user:probe-reveal',
+    version: 1,
+    name: '点亮探针',
+    map: {
+      id: 'levelmap:probe-reveal',
+      name: '点亮探针',
+      w: 10,
+      h: 8,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 7, y: 5 }],
+      source: 'user',
+    },
+    seats: { count: 2, ai: ['B'] },
+    deploy: {
+      A: [{ type: 'militia', x: 2, y: 2 }],
+      B: [{ type: 'militia', x: 7, y: 4 }],
+    },
+    events: [
+      {
+        id: 'reveal-far',
+        // 用 turn 2：turn 1 的事件在建局时就会跑（`createMatch` 末尾调 runLevelEvents），
+        // 写 1 的话'开局看不见'这条根本测不到
+        when: { kind: 'turn', at: 2 },
+        do: [
+          { kind: 'reveal', zone: { x0: 8, y0: 0, x1: 9, y1: 1 } },
+          // repeat 里重复点亮同一片：必须幂等，不该报错也不该重复堆
+          { kind: 'reveal', zone: { x0: 8, y0: 0, x1: 9, y1: 1 } },
+        ],
+      },
+    ],
+  });
+  check(v.ok, '带点亮动作的关卡能过校验', v.ok ? '' : v.errors.join('；'));
+  if (v.ok) {
+    // 默认开雾（DEFAULT_CONFIG.fog 是 true），才谈得上"点亮"
+    const s = createMatch({ ...DEFAULT_CONFIG, level: v.level }, 3);
+    check(s.fog === true, '这一关默认开着雾（不然"点亮"没有意义）');
+    const far = 0 * 10 + 8; // (8,0)：离 A 的兵很远，没点亮时看不见
+    const before = playerView(s, 'A');
+    check(!before.visible.includes(far), '开局看不到远处那一片（雾是开着的）');
+
+    // 推一步让 turn 2 的事件触发
+    const r = applyAction(s, { type: 'END_TURN' });
+    check(r.ok, '能推进一步触发事件', r.ok ? '' : (r as { reason: string }).reason);
+    if (r.ok) {
+      const after = playerView(r.state, 'A');
+      check(after.visible.includes(far), '点亮之后，那片区域在玩家视野里');
+      check((r.state.revealed ?? []).length === 4, '记下了 4 格（重复点亮是幂等的）', `实际 ${(r.state.revealed ?? []).length}`);
+      // 别把整张图都点亮：同一条事件没点的地方仍然不可见
+      const other = 0 * 10 + 0; // (0,0)
+      check(!after.visible.includes(other), '没点亮的格子不会被顺带点亮');
+    }
+  }
 }
 
 /* ── 汇总 ──────────────────────────────────────────────────────── */

@@ -9949,6 +9949,43 @@ check('刷兵：点地图加落点，落点列表里能看见、能删', () => {
   assert.equal(doc.querySelectorAll('.level-spawn-chip').length, after - 1, '点 × 应该删掉那个落点');
 });
 
+/*
+ * 点亮：给"迷雾里不知道该往哪走"的地方用（护送关的终点、伏兵位置）。
+ * 它是独立的动作，加不加就是开关——隐秘事件不加就仍然藏着。
+ */
+check('点亮：能加一条「点亮一片区域」，拖框之后写进 events', () => {
+  const layer = [...doc.querySelectorAll('.modal-mask')].pop()!;
+  const last = layer.querySelectorAll<HTMLSelectElement>('[data-do-add-kind]');
+  const sel = last[last.length - 1]!;
+  const evIdx = sel.dataset.doAddKind!;
+  sel.value = 'reveal';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  // 按钮必须取**同一条事件**的那个：面板里每条事件都有自己的"再做一个动作"
+  layer.querySelector<HTMLElement>(`[data-do-add="${evIdx}"]`)?.click();
+
+  const top = [...doc.querySelectorAll('.modal-mask')].pop()!;
+  const card = top.querySelector<HTMLElement>(`[data-ev="${evIdx}"]`);
+  const pickBtns = card?.querySelectorAll<HTMLElement>('[data-pick-do-zone]') ?? [];
+  assert.ok(pickBtns.length > 0, '点亮那一行要有「选区域」按钮');
+  pickBtns[pickBtns.length - 1]!.click();
+  dragOnMap(4, 4, 5, 5);
+
+  const afterCard = [...doc.querySelectorAll('.modal-mask')]
+    .pop()!
+    .querySelector<HTMLElement>(`[data-ev="${evIdx}"]`);
+  const afterBtns = afterCard?.querySelectorAll<HTMLElement>('[data-pick-do-zone]') ?? [];
+  const text = afterBtns[afterBtns.length - 1]?.textContent ?? '';
+  assert.ok(text.includes('4,4') && text.includes('5,5'), `区域文本要跟着变，实际：${text}`);
+
+  // 应用后 JSON 里要有 reveal，zone 是刚拖的那一块
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as { events?: Array<{ do?: Array<{ kind?: string; zone?: { x0: number; y0: number; x1: number; y1: number } }> }> };
+  const reveals = (data.events ?? []).flatMap((e) => (e.do ?? []).filter((a) => a.kind === 'reveal'));
+  assert.equal(reveals.length, 1, `应该有一条点亮动作，实际 ${reveals.length}`);
+  assert.deepEqual(reveals[0]?.zone, { x0: 4, y0: 4, x1: 5, y1: 5 }, `点亮的区域不对：${JSON.stringify(reveals[0]?.zone)}`);
+});
+
 // 收尾：关掉事件面板与编辑器
 {
   [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
