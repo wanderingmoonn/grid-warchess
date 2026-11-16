@@ -473,7 +473,14 @@ function hpClass(ratio: number): string {
 
 /** 时代用罗马数字表示，比阿拉伯数字更像"时代" */
 function romanEra(era: number): string {
-  return ['I', 'II', 'III', 'IV', 'V'][era - 1] ?? String(era);
+  /*
+   * 八档都在表里（2026-11-16 补 VI~VIII）。
+   *
+   * 之前只写到 V，第六时代之后会掉回阿拉伯数字——棋盘上于是出现
+   * "I / V / 6 / 7 / 8" 混排：同一枚角标两种写法，看着像出了 bug。
+   * 兜底保留 String(era)：以后再加时代没来得及补表，也只是数字而不是空。
+   */
+  return ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'][era - 1] ?? String(era);
 }
 
 /**
