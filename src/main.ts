@@ -148,6 +148,7 @@ import {
   saveSeat,
   submitDraft,
   submitTurn,
+  submitTurnForce,
   type RoomSeat,
   type RoomSnapshot,
 } from './net/room.ts';
@@ -5369,9 +5370,7 @@ async function runAiLoop(): Promise<void> {
   /*
    * 房间里的 AI 走完之后必须**把整局推上去**，否则云端还停在行动前那一版，
    * 轮询按 `adoptDecision` 判"回合不同 → 采纳云端"，棋盘会当场倒退。
-   * `startTurn` 就是提交时用来做乐观锁的那个进度号（云端此刻的值）。
    */
-  const startTurn = state.turn;
   const pushing = room !== null;
   // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
   if (pushing) dirty = true;
@@ -5380,8 +5379,26 @@ async function runAiLoop(): Promise<void> {
     await runAiTurn(token);
   }
 
-  if (pushing && token === aiToken && room && state.turn !== startTurn) {
-    await pushTurn(room, startTurn, '电脑这一回合已提交');
+  /*
+   * 电脑这一轮走完，**强制**推上去（不带乐观锁）。
+   *
+   * 这里不敢再用"提交前那个进度号"做锁：AI 一回合里会做好几个动作，
+   * `state.turn` 一路在涨，等循环结束时那个号早就不是云端手里的号了，
+   * 带锁的写法会被静默挡掉——观战端于是永远停在"轮到电脑"那一帧
+   * （用户看到的"观战方卡在 AI 行动回合"）。
+   * 电脑这一方只有本机会写，不存在合法的并发冲突，所以可以放心覆盖。
+   */
+  if (pushing && room) {
+    try {
+      const ok = await submitTurnForce(room.code, state);
+      if (ok) {
+        dirty = false;
+        pushOkCount += 1;
+        render();
+      }
+    } catch {
+      /* 网络不通就下次再说：轮到人时还会再提一次 */
+    }
   }
 
   if (token !== aiToken) return; // 被新的调用接管了，交给它渲染
