@@ -21,6 +21,7 @@ const KIND_NAME: Record<string, string> = {
   survive: '守住一段时间',
   escort: '把兵送到某处',
   assassinate: '消灭某个目标',
+  gold: '攒到指定金币',
 };
 
 export interface LevelGoalsOptions {
@@ -122,6 +123,7 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
         ...(target ? { unitType: target } : {}),
       };
     }
+    if (kind === 'gold') return { kind: 'gold', seat: seats[0] ?? 'A', amount: 300 };
     return { kind: 'survive', seat: seats[0] ?? 'A', untilTurn: 20 };
   };
 
@@ -146,6 +148,13 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
           <select class="level-mini-select" data-unit="${i}">${unitOpts(g.unitType, true)}</select>
           送到
           <button class="btn btn-sm" data-pick="${i}">${esc(zoneText(g.zone))}</button>
+        </span>`;
+    } else if (g.kind === 'gold') {
+      body = `<span class="level-when-arg">
+          <select class="level-mini-select" data-seat="${i}">${seatOpts(g.seat)}</select>
+          手上攒到
+          <input type="number" class="level-mini-num" min="1" max="99999" data-amount="${i}" value="${g.amount}">
+          金币<span class="field-hint">（看的是当前钱包，花钱会把它推远）</span>
         </span>`;
     } else {
       body = `<span class="level-when-arg">
@@ -256,6 +265,9 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
     if (until !== null) {
       const g = goals[Number(until)];
       if (g && g.kind === 'survive') g.untilTurn = Math.max(1, Math.round(Number((el as HTMLInputElement).value) || 1));
+      if (g && g.kind === 'gold') {
+        g.amount = Math.max(1, Math.min(99999, Math.round(Number((el as HTMLInputElement).value) || 1)));
+      }
       return;
     }
     const label = el.getAttribute('data-label');
@@ -282,7 +294,7 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
     const seat = el.getAttribute('data-seat');
     if (seat !== null) {
       const g = goals[Number(seat)];
-      if (g && (g.kind === 'survive' || g.kind === 'escort')) g.seat = val as PlayerId;
+      if (g && (g.kind === 'survive' || g.kind === 'escort' || g.kind === 'gold')) g.seat = val as PlayerId;
       renderList();
       return;
     }

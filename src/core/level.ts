@@ -115,7 +115,15 @@ export type LevelDo =
    * （事件常在对方回合触发，只亮当下一手等于玩家没看见）。
    * **写负数 = 一直亮**（比如 `turns: -1`），给"地图上永久该知道的位置"用。
    */
-  | { kind: 'reveal'; zone: LevelZone; turns?: number };
+  | { kind: 'reveal'; zone: LevelZone; turns?: number }
+  /**
+   * 给某一席加金币（`amount` 写负数就是扣，扣到 0 为止，不会变负）。
+   *
+   * 为什么单开一条：刷兵表达不了"这一家突然有钱了"。刷兵不看钱也不吃钱，
+   * 而作者想说的话往往是"援军带着军费到了"或"补给线被劫了"——那是钱包的事，
+   * 不是兵的事。扣款封底 0，避免把一个负资产丢进 AI 的估值里。
+   */
+  | { kind: 'gold'; seat: PlayerId; amount: number };
 
 /**
  * 一件事：什么时候、做什么。
@@ -264,11 +272,20 @@ export type LevelGoal =
    * 否则对方一边死一边补同型兵，这个条件永远不会成立。P4 里没有关卡用它，
    * 留待以后给单位加"标记"之后再用它做真正的首领。
    */
-  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string; label?: string };
+  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string; label?: string }
+  /**
+   * 攒钱：这一席手上金币到 `amount` 就算赢。
+   *
+   * 和"守到第 N 次行动"是同一类"过程目标"，区别只在于衡量的是经济而不是时间。
+   * 读的是**当前**金币（不是累计收入）——所以花钱会把它推远，作者想让它成立，
+   * 就得保证这一关的金矿/收入撑得起这个数（或者由 `gold` 事件往里面注钱）。
+   */
+  | { kind: 'gold'; seat: PlayerId; amount: number };
 
 /** 胜利条件的人话版本。顶栏、选关页、开局战报都用它，免得三处各写一遍措辞 */
 export function goalText(goal: LevelGoal): string {
   if (goal.kind === 'survive') return `守住 ${goal.untilTurn} 次行动`;
+  if (goal.kind === 'gold') return `手上攒到 ${goal.amount} 金币`;
   if (goal.kind === 'escort') {
     const { x0, y0, x1, y1 } = goal.zone;
     const at = x0 === x1 && y0 === y1 ? `(${x0}, ${y0})` : `(${x0}, ${y0})–(${x1}, ${y1})`;
@@ -2409,7 +2426,19 @@ function normalizeGoals(
       continue;
     }
 
-    errors.push(`胜利条件「${kind}」不认识（只能是 survive / escort / assassinate）`);
+    if (kind === 'gold') {
+      const seat = seatOf(g.seat, '胜利条件「攒钱」的那一方');
+      if (!seat) continue;
+      const amount = Math.round(Number(g.amount));
+      if (!Number.isFinite(amount) || amount < 1 || amount > 99999) {
+        errors.push(`胜利条件「攒钱」的金额要在 1~99999（现在 ${String(g.amount)}）`);
+        continue;
+      }
+      out.push({ kind: 'gold', seat, amount });
+      continue;
+    }
+
+    errors.push(`胜利条件「${kind}」不认识（只能是 survive / escort / assassinate / gold）`);
   }
   return out.length > 0 ? out : undefined;
 }
@@ -2522,8 +2551,24 @@ function normalizeDo(
     return { kind: 'reveal', zone, ...(turns !== undefined && turns !== 1 ? { turns } : {}) };
   }
 
+  if (kind === 'gold') {
+    const seat = String(a.seat ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`事件「${id}」给金币的对象是「${String(a.seat)}」，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    const amount = Math.round(Number(a.amount));
+    if (!Number.isFinite(amount) || amount === 0 || amount < -9999 || amount > 9999) {
+      errors.push(
+        `事件「${id}」给的金币要在 -9999~9999 之间且不能是 0（现在 ${String(a.amount)}）；负数表示扣`,
+      );
+      return undefined;
+    }
+    return { kind: 'gold', seat, amount };
+  }
+
   errors.push(
-    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal）`,
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold）`,
   );
   return undefined;
 }

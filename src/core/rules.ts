@@ -3780,6 +3780,11 @@ function levelGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): Pl
     // 到点了。守方要是已经出局，那就轮不到它赢（这一手之前的 checkWinner 早该判完了）
     return isEliminated(s, goal.seat) ? null : goal.seat;
   }
+  if (goal.kind === 'gold') {
+    // 出局的人不该靠"手上还有钱"赢：城丢光之后金币只是数字
+    if (isEliminated(s, goal.seat)) return null;
+    return (s.players[goal.seat]?.gold ?? 0) >= goal.amount ? goal.seat : null;
+  }
   if (goal.kind === 'escort') {
     const arrived = s.units.some(
       (u) =>
@@ -4737,6 +4742,29 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
   }
   if (act.kind === 'reveal') {
     revealZone(s, act.zone, act.turns);
+    return;
+  }
+  if (act.kind === 'gold') {
+    /*
+     * 加减金币。**封底 0**：负数扣到 0 就停，不让某一席变成负债。
+     * 变负会渗到 AI 的估值里（它会算"我这回合能造几个"），而"造不起"和
+     * "倒欠钱"在规则上是同一件事，没必要让后者存在。
+     */
+    const p = s.players[act.seat];
+    if (p) {
+      const before = p.gold;
+      p.gold = Math.max(0, p.gold + act.amount);
+      const delta = p.gold - before;
+      if (delta !== 0) {
+        s.log.push({
+          turn: s.turn,
+          player: act.seat,
+          text: `${p.name} ${delta > 0 ? `获得 ${delta}` : `失去 ${-delta}`} 金币`,
+          open: true,
+          system: true,
+        });
+      }
+    }
     return;
   }
   // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来

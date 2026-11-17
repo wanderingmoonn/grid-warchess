@@ -45,6 +45,7 @@ const DO_KIND_NAME: Record<string, string> = {
   deploy: '让某一家登场',
   terrain: '改一片地形',
   reveal: '点亮一片区域',
+  gold: '给某一家金币',
 };
 const WHEN_KIND_NAME: Record<string, string> = {
   turn: '第 N 次行动',
@@ -187,6 +188,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
     if (kind === 'terrain') return { kind: 'terrain', zone: centerZone(2), to: 'deep' };
     if (kind === 'reveal') return { kind: 'reveal', zone: centerZone(2) };
+    if (kind === 'gold') return { kind: 'gold', seat: seats[0] ?? 'A', amount: 100 };
     return { kind: 'say', text: '这一关发生了点事。' };
   };
 
@@ -290,6 +292,14 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
             forever ? 'checked' : ''
           }> 一直亮</label>
           <span class="field-hint">（到期重新没入迷雾；1 次 ≈ 亮到下一手）</span>
+        </span>`;
+    }
+    if (act.kind === 'gold') {
+      return `${kindSel}<span class="level-when-arg">
+          <select class="level-mini-select" data-gold-seat="${i}:${j}">${seatOptions(act.seat)}</select>
+          <input type="number" class="level-mini-num" min="-9999" max="9999" data-gold-amount="${i}:${j}" value="${act.amount}">
+          金币
+          <span class="field-hint">（正数给钱，负数扣钱；扣到 0 为止，不会变负）</span>
         </span>`;
     }
     return `${kindSel}<span class="level-when-arg">
@@ -710,6 +720,24 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       const act = events[i!]?.do[j!];
       // 记在动作上，但不写进 JSON：这是"下一个点要放什么"的界面状态
       if (act && act.kind === 'spawn') (act as { lastType?: string }).lastType = val;
+      return;
+    }
+    const goldSeat = el.getAttribute('data-gold-seat');
+    if (goldSeat) {
+      const [i, j] = goldSeat.split(':').map(Number);
+      const act = events[i!]?.do[j!];
+      if (act && act.kind === 'gold') act.seat = val as PlayerId;
+      return;
+    }
+    const goldAmount = el.getAttribute('data-gold-amount');
+    if (goldAmount) {
+      const [i, j] = goldAmount.split(':').map(Number);
+      const act = events[i!]?.do[j!];
+      if (act && act.kind === 'gold') {
+        // 0 没有意义（等于什么都没做），退到 ±1
+        const n = Math.round(Number(val) || 0);
+        act.amount = n === 0 ? 1 : Math.max(-9999, Math.min(9999, n));
+      }
       return;
     }
     const docSeat = el.getAttribute('data-doc-seat');
