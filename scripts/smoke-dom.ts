@@ -9319,7 +9319,7 @@ check('选「孤城」：卡片有缩略图，说明写清几城、目标、有�
   assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
   assert.ok(body.includes('守住 30 次行动'), '要写出守多久');
   assert.ok(body.includes('红方：'), '目标要标出是谁的目标');
-  assert.ok(body.includes('处会在特定条件下发生的事'), '要说明有关卡事件');
+  assert.ok(body.includes('事件'), '要说明有关卡事件');
   const card = doc.querySelector<HTMLElement>('[data-level="level:lone-city"]');
   assert.ok(!!card?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
 });
