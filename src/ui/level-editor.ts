@@ -160,6 +160,10 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
           <label class="editor-field"><span>名称</span><input data-name maxlength="24"></label>
           <label class="editor-field"><span>一句话简介</span><input data-brief maxlength="120"></label>
         </div>
+        <label class="editor-check level-story-check">
+          <input type="checkbox" data-story />
+          这一关是剧情关（存下来会出现在「关卡」栏，而不只是「我的关卡」）
+        </label>
         <div class="level-editor-grid">
           <textarea class="level-json" spellcheck="false" wrap="off"></textarea>
           <div class="level-side">
@@ -191,6 +195,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
   const ta = q<HTMLTextAreaElement>('.level-json');
   const nameEl = q<HTMLInputElement>('[data-name]');
   const briefEl = q<HTMLInputElement>('[data-brief]');
+  const storyEl = q<HTMLInputElement>('[data-story]');
   const issuesEl = q<HTMLDivElement>('.level-issues');
   const summaryEl = q<HTMLDivElement>('.level-summary');
   const footEl = q<HTMLDivElement>('[data-foot]');
@@ -254,6 +259,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
     const level = parsed.level;
     if (document.activeElement !== nameEl) nameEl.value = level.name;
     if (document.activeElement !== briefEl) briefEl.value = level.brief ?? '';
+    if (document.activeElement !== storyEl) storyEl.checked = level.story === true;
     renderSummary(level);
     renderIssues([], lintLevel(level));
     saveBtn.disabled = readOnly;
@@ -385,11 +391,18 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
    * 在 **change（失焦）** 时写，不是每敲一个字就写：一是免得和用户正在编辑的
    * 文本互相打断，二是 JSON 重新序列化会把光标位置和注释性的格式全部冲掉。
    */
-  const writeBack = (field: 'name' | 'brief', value: string): void => {
+  const writeBack = (field: 'name' | 'brief' | 'story', value: string | boolean): void => {
     const parsed = parseLevelText(text);
     if (!parsed.ok) return; // JSON 还是坏的，先别动它
-    const next: LevelDef = { ...parsed.level, [field]: value.trim() };
-    if (field === 'brief' && !value.trim()) delete (next as { brief?: string }).brief;
+    const next: LevelDef = { ...parsed.level };
+    if (field === 'story') {
+      // 只有"是"才写字段：写 `story: false` 会让 JSON 里多一句要解释的废话
+      if (value === true) next.story = true;
+      else delete (next as { story?: boolean }).story;
+    } else {
+      next[field] = String(value).trim();
+      if (field === 'brief' && !String(value).trim()) delete (next as { brief?: string }).brief;
+    }
     try {
       ta.value = exportLevelText(next);
     } catch {
@@ -415,6 +428,7 @@ export function openLevelEditor(opts: LevelEditorOptions = {}): void {
     const el = ev.target as HTMLElement;
     if (el === nameEl) writeBack('name', nameEl.value);
     if (el === briefEl) writeBack('brief', briefEl.value);
+    if (el === storyEl) writeBack('story', storyEl.checked);
   });
 
   mask.addEventListener('click', (ev) => {

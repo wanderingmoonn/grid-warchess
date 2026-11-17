@@ -29,6 +29,7 @@
 import { validateFixedMap, type FixedMap, type MapPoint } from './fixed-maps.ts';
 import { expansionById } from './expansions.ts';
 import { ERAS, UNIT_TYPES } from './config.ts';
+import { STORY_RAW } from '../levels/story/index.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
 import type { MatchConfig, PlayerId, Terrain, UnitTypeDef } from './types.ts';
@@ -431,6 +432,17 @@ export interface LevelDef {
    * 全标了 `demo`——它们本来就是照"验证功能"做的，难度高低不代表教学价值。
    */
   demo?: boolean;
+  /**
+   * **本地标记成"剧情关"**（2026-11-17）。
+   *
+   * 给开发者的自测口子：在编辑器里勾一下，这张关立刻出现在「关卡」栏，
+   * 不用等它进仓库的 `src/levels/story/`。只有**本机**看得到——它随关卡 JSON
+   * 一起存，但云端上传走的是另一条路，不会因为勾了它就把别人的关塞进主线。
+   *
+   * 和 `demo` 的分工：`demo` 是"这是示例关，进编辑器栏"；`story` 是
+   * "这是主线关，进关卡栏"。两个都写时以 `story` 为准（见 `storyLevels`）。
+   */
+  story?: boolean;
   /**
    * 这一关自带、别的对局里没有的兵种。
    *
@@ -1732,10 +1744,33 @@ function extraLevels(): LevelDef[] {
  * **玩家菜单不该用它**——那种地方要用 `playableLevels()`，否则"1 个兵打 5 个"
  * 这种专门用来验机制的图会出现在选关列表里，玩家点进去只会觉得是半成品。
  */
+/**
+ * 清洗过的剧情关。第一次用到时才算（懒加载），之后走缓存。
+ *
+ * 每条都过 `validateLevel`：
+ *   · 合法的留下，并且**自动丢掉 `demo` 标记**（validateLevel 的返回里没有这个字段）
+ *     ——所以 JSON 里就算手滑写了 `demo: true`，它也不会跑去「编辑器」栏；
+ *   · 不合法的**跳过并记一条日志**，不能让一份手改坏的 JSON 把整个游戏打不开。
+ */
+let storyCache: LevelDef[] | null = null;
+function storyList(): LevelDef[] {
+  if (storyCache) return storyCache;
+  const out: LevelDef[] = [];
+  for (const raw of STORY_RAW) {
+    const v = validateLevel(raw);
+    if (v.ok) out.push(v.level);
+    else console.warn('[story] 主线关数据不合法，已跳过：', v.errors.join('；'));
+  }
+  storyCache = out;
+  return out;
+}
+
 export function allLevels(): LevelDef[] {
   const extra = extraLevels();
+  const story = storyList();
   // 没有外部来源时返回同一个数组引用：老代码（和探针）里 `=== LEVELS` 用得着
-  return extra.length > 0 ? [...LEVELS, ...extra] : LEVELS;
+  if (extra.length === 0 && story.length === 0) return LEVELS;
+  return [...LEVELS, ...story, ...extra];
 }
 
 /** 玩家能选到的关卡（去掉 `dev` 那些测试夹具） */
@@ -1753,9 +1788,18 @@ export function playableLevels(): LevelDef[] {
  * 现在返回空数组是**正常状态**：主线设计还没定。界面那边有专门的空状态。
  */
 export function storyLevels(): LevelDef[] {
-  // 只数**内建**的：玩家自制关和云端关不属于"主线"，它们在「编辑器」栏的
-  // "我的关卡 / 别人的"里，由界面单独列
-  return LEVELS.filter((l) => l.dev !== true && l.demo !== true);
+  /*
+   * 两个来源：
+   *   · `src/levels/story/` 下的 JSON（开发者和维护者提交进来的）；
+   *   · `LEVELS` 里没标 `demo` 的内建关（以后如果直接写在代码里）。
+   * 玩家自制关和云端关不算主线——它们在「编辑器」栏的"我的关卡 / 别人的"里。
+   */
+  return [
+    ...storyList(),
+    ...LEVELS.filter((l) => l.dev !== true && l.demo !== true),
+    // 本机自己做的、在编辑器里勾了「这一关是剧情关」的（给开发者自测用）
+    ...extraLevels().filter((l) => l.story === true && l.dev !== true),
+  ];
 }
 
 /** **编辑器示例关**（菜单的「编辑器」栏）：演示编辑器能做哪些事。 */
@@ -1770,7 +1814,12 @@ export function demoLevels(): LevelDef[] {
  */
 export function levelById(id: string | null | undefined): LevelDef | null {
   if (!id) return null;
-  return LEVELS.find((l) => l.id === id) ?? extraLevels().find((l) => l.id === id) ?? null;
+  return (
+    LEVELS.find((l) => l.id === id) ??
+    storyList().find((l) => l.id === id) ??
+    extraLevels().find((l) => l.id === id) ??
+    null
+  );
 }
 
 /**
@@ -1884,6 +1933,7 @@ export function validateLevel(raw: unknown): { ok: true; level: LevelDef } | { o
       ...(setup ? { setup: structuredClone(setup) } : {}),
       ...(units ? { units: structuredClone(units) } : {}),
       ...(banUnits ? { banUnits: [...banUnits] } : {}),
+      ...(obj.story === true ? { story: true } : {}),
       ...(aiTuning ? { ai: aiTuning } : {}),
     },
   };
