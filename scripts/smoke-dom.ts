@@ -9696,6 +9696,28 @@ check('点「恢复成初始模板」能回到一张合规的关', () => {
  * 一路点了七八次保存（每次都真的存了一遍）。**关窗才是那个"结束了"的信号**，
  * 所以这一条钉的是"窗口没了"，不是"底部文案对不对"。
  */
+check('勾「这一关是剧情关」：JSON 里写出 story，取消勾选就删掉', () => {
+  /*
+   * 2026-11-17：给开发者的自测口子——勾上之后这张关会进「关卡」栏
+   * （`storyLevels()` 认这个字段），不用等它进仓库的 src/levels/story/。
+   *
+   * 这里只验"勾选有没有写进 JSON"：写入是唯一有状态的一步，
+   * 过滤逻辑在 core 里（`storyLevels` 读 `extraLevels` 的 s.story）。
+   */
+  const box = [...doc.querySelectorAll<HTMLInputElement>('.modal-mask [data-story]')].pop();
+  assert.ok(!!box, '编辑器要有「这一关是剧情关」勾选');
+
+  box!.checked = true;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+  let ta = [...doc.querySelectorAll<HTMLTextAreaElement>('textarea.level-json')].pop()!;
+  assert.ok(ta.value.includes('"story": true'), `勾上要写出 story，实际：${ta.value.slice(0, 160)}`);
+
+  box!.checked = false;
+  box!.dispatchEvent(new window.Event('change', { bubbles: true }));
+  ta = [...doc.querySelectorAll<HTMLTextAreaElement>('textarea.level-json')].pop()!;
+  assert.ok(!ta.value.includes('story'), `取消勾选要把字段删掉（别留 story: false），实际：${ta.value.slice(0, 160)}`);
+});
+
 check('点保存：窗口自己关掉、选关页里出现这张关，并且给一句提示', () => {
   const mask = [...doc.querySelectorAll('.modal-mask')].pop();
   mask?.querySelector<HTMLElement>('[data-act="save"]')?.click();
