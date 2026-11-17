@@ -22,6 +22,7 @@ import { isAiSide } from '../src/core/ai-meta.ts';
 import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
 import { allLevels, demoLevels, levelById, playableLevels, storyLevels, validateLevel } from '../src/core/level.ts';
+import { lintLevel } from '../src/core/level-lint.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
 
@@ -1243,7 +1244,8 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
    */
   const blow = (lv.events ?? []).find((e) => e.id === 'blow');
   check(!!blow, '关卡有炸桥事件');
-  const blowAt = blow?.when.kind === 'turn' ? blow.when.at : 0;
+  const blowWhen = blow?.when;
+  const blowAt = blowWhen && 'kind' in blowWhen && blowWhen.kind === 'turn' ? blowWhen.at : 0;
   const blowTo = blow?.do.find((d) => d.kind === 'terrain') as { to?: string } | undefined;
   let cur = s;
   for (let i = 0; i < 30 && cur.turn < blowAt && !cur.winner; i++) {
@@ -1280,6 +1282,108 @@ line('26. 关卡刷兵：落点被占时会就近找位，不该有"站不住"')
 
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
+/* ------------------------------------------------------------------ */
+/* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const lintOf = (events: unknown[]) => {
+    const v = validateLevel({ ...structuredClone(base), id: 'level:tmp-lint', name: 'lint 探针', events });
+    return v.ok ? lintLevel(v.level) : [];
+  };
+  const say = (text: string) => [{ kind: 'say', text }];
+
+  const missing = lintOf([{ id: 'a', when: { kind: 'fired', id: 'nope' }, do: say('x') }]);
+  check(
+    missing.some((i) => i.severity === 'error' && i.text.includes('不存在的「nope」')),
+    '引用不存在的事件：lint 报错',
+  );
+
+  const cycle = lintOf([
+    { id: 'a', when: { kind: 'fired', id: 'b' }, do: say('x') },
+    { id: 'b', when: { kind: 'fired', id: 'a' }, do: say('y') },
+  ]);
+  check(
+    cycle.some((i) => i.severity === 'error' && i.text.includes('互相等待')),
+    '互相等待的两个事件：lint 报错',
+  );
+
+  const repeatRef = lintOf([
+    { id: 'a', when: { kind: 'enter', zone: { x0: 1, y0: 1, x1: 2, y1: 2 } }, repeat: true, do: say('x') },
+    { id: 'b', when: { kind: 'fired', id: 'a' }, do: say('y') },
+  ]);
+  check(
+    repeatRef.some((i) => i.severity === 'warn' && i.text.includes('重复触发')),
+    '引用 repeat 事件：给一条提醒（不算错）',
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* 事件条件：组合树 / 比较符 / fired 链（2026-11-17）                    */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const withEvents = (events: unknown[]) =>
+    validateLevel({ ...structuredClone(base), id: 'level:tmp-ev', name: '事件条件探针', events });
+
+  const say = (text: string) => [{ kind: 'say', text }];
+
+  const empty = withEvents([{ id: 'e1', when: { all: [] }, do: say('x') }]);
+  check(!empty.ok, '空组被拦下（不能当成"恒真"）', empty.ok ? '' : empty.errors[0]?.slice(0, 40));
+
+  const leaf = withEvents([{ id: 'e1', when: { kind: 'turn', at: 2 }, do: say('x') }]);
+  check(leaf.ok, '老写法（单条件叶子）仍然合法');
+
+  const nested = withEvents([
+    {
+      id: 'e1',
+      when: {
+        all: [
+          { kind: 'turn', at: 3, op: '<=' },
+          { any: [{ kind: 'unitDied' }, { kind: 'enter', zone: { x0: 1, y0: 1, x1: 3, y1: 3 } }] },
+          { not: { kind: 'fired', id: 'e0' } },
+        ],
+      },
+      do: say('x'),
+    },
+    { id: 'e0', when: { kind: 'turn', at: 1 }, do: say('y') },
+  ]);
+  check(nested.ok, '嵌套 all / any / not 通过校验', nested.ok ? '' : nested.errors[0]?.slice(0, 50));
+
+  const badOp = withEvents([{ id: 'e1', when: { kind: 'turn', at: 2, op: '≈' }, do: say('x') }]);
+  check(!badOp.ok, '不认识的比较符被拦下');
+
+  const selfRef = withEvents([{ id: 'e1', when: { kind: 'fired', id: 'e1' }, do: say('x') }]);
+  check(!selfRef.ok, '引用自己的条件被拦下（永远不会触发）');
+
+  /*
+   * 运行时：A 在第 2 次行动触发，B 的条件是"A 已发生"。
+   * B 不需要等下一次动作——同一批的**第二遍扫描**就能看到 A。
+   */
+  const chained = withEvents([
+    { id: 'a', when: { kind: 'turn', at: 2 }, do: say('A 触发了') },
+    { id: 'b', when: { kind: 'fired', id: 'a' }, do: say('B 跟着触发') },
+  ]);
+  if (chained.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: chained.level }, 3);
+    for (let i = 0; i < 20 && st.turn < 2 && !st.winner; i += 1) {
+      const r = applyAction(st, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      st = r.state;
+    }
+    const said = st.log.filter((l) => l.system === true).map((l) => l.text);
+    check(
+      said.includes('A 触发了') && said.includes('B 跟着触发'),
+      'fired 链在同一批里传播',
+      said.slice(-3).join(' / '),
+    );
+  } else {
+    check(false, 'fired 链在同一批里传播', '关卡没通过校验');
+  }
+}
+
 if (failed === 0) {
   console.log(`全部通过（关卡「${levelById(probe.id)?.name}」，${STEPS} 步样本）`);
 } else {

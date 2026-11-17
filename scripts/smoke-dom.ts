@@ -10142,6 +10142,59 @@ check('补回播报再应用：事件的 JSON 结构正确', () => {
   assert.ok((data.events?.[0]?.id ?? '').length > 0, 'id 必须自动生成');
 });
 
+check('条件改成「全部满足」：加子条件后存下来是一棵 all 树', () => {
+  /*
+   * 2026-11-17：条件从"一个"变成"一棵树"。这里走一遍作者会做的动作：
+   * 把根条件换成「全部满足」→ 再加一个条件 → 保存，看 JSON 里是不是 all 数组。
+   */
+  const editor = [...doc.querySelectorAll('.modal-mask')].pop();
+  editor?.querySelector<HTMLElement>('[data-act="events"]')?.click();
+
+  const rootKind = doc.querySelector<HTMLSelectElement>('[data-when-kind="0:"]');
+  assert.ok(!!rootKind, '根条件要有一个类型下拉');
+  rootKind!.value = 'all';
+  rootKind!.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  assert.ok(!!doc.querySelector('.when-group'), '换成「全部满足」之后要出现一个组');
+  const children = (): number =>
+    [...doc.querySelectorAll<HTMLSelectElement>('[data-when-kind]')].filter(
+      (el) => (el.dataset.whenKind ?? '') !== '0:',
+    ).length;
+  assert.equal(children(), 1, '组里先自动放一个默认条件');
+
+  // 加第二个条件
+  const addBtn = doc.querySelector<HTMLElement>('[data-when-add="0::leaf"]');
+  assert.ok(!!addBtn, '组下面要有「+ 条件」');
+  addBtn!.click();
+  assert.equal(children(), 2, '点一次「+ 条件」应当多一个子条件');
+
+  // 第二个条件换成「有单位走进区域」，验证叶子参数也能带路径
+  const second = [...doc.querySelectorAll<HTMLSelectElement>('[data-when-kind]')].filter(
+    (el) => (el.dataset.whenKind ?? '') !== '0:',
+  )[1]!;
+  second.value = 'enter';
+  second.dispatchEvent(new window.Event('change', { bubbles: true }));
+
+  // 再往根上挂一个「或组」：验证嵌套两层
+  const addGroup = doc.querySelector<HTMLElement>('[data-when-add="0::group"]');
+  assert.ok(!!addGroup, '组下面要有「+ 或组」');
+  addGroup!.click();
+  assert.equal(doc.querySelectorAll('.when-group').length, 2, '应当嵌套出第二个组');
+
+  [...doc.querySelectorAll('.modal-mask')].pop()?.querySelector<HTMLElement>('[data-act="apply"]')?.click();
+
+  const ta = doc.querySelector<HTMLTextAreaElement>('textarea.level-json')!;
+  const data = JSON.parse(ta.value) as {
+    events?: Array<{ when?: { all?: Array<{ kind?: string }> } }>;
+  };
+  const when = data.events?.[0]?.when;
+  assert.ok(Array.isArray(when?.all), `存下来应当是 all 数组，实际：${JSON.stringify(when).slice(0, 120)}`);
+  assert.equal(when!.all!.length, 3, '两个条件 + 一个嵌套的或组');
+  assert.equal(when!.all![0]?.kind, 'turn', '第一个还是默认的「第 N 次行动」');
+  assert.equal(when!.all![1]?.kind, 'enter', '第二个改成了「走进区域」');
+  assert.ok(Array.isArray((when!.all![2] as { any?: unknown })?.any), '第三个是一个 any 组');
+});
+
 /** 在地图上拖一个矩形（jsdom 没有 Pointer Events，用 MouseEvent 派发同名事件） */
 const dragOnMap = (x0: number, y0: number, x1: number, y1: number): void => {
   const canvas = [...doc.querySelectorAll<HTMLElement>('.level-canvas')].pop()!;

@@ -68,13 +68,61 @@ export interface LevelZone {
  * 同一套结算），事件也会跟着被"演练"。只读局面的话，演练的结果和真走完全一致，
  * 试完扔掉就行；一旦读了外面的东西，试走和真走就会算出两套答案。
  */
-export type LevelWhen =
-  /** 行动序号到第几（1 起）。注意这是"第几次行动"，不是"第几轮" */
-  | { kind: 'turn'; at: number }
+/** `turn` 条件的比较符。不写默认 `>=`（老数据全是这个语义） */
+export type TurnOp = '>=' | '<=' | '=' | '>' | '<';
+
+/**
+ * 一个「叶子」条件：单个判断。
+ *
+ * 三种老叶子保持不变（`turn` 多了可选的 `op`），新增 `fired`——
+ * "某条事件已经发生过"。它是 `fired` 记录的直接读取，
+ * 所以和"标志位"等价，只是不用另外存一个状态。
+ */
+export type LevelWhenLeaf =
+  /**
+   * 行动序号和 `at` 的关系（1 起）。注意这是"第几次行动"，不是"第几轮"。
+   *
+   * `op` 不写＝`>=`。**别轻易用 `=`**：某次结算没跑到事件（动作被拒之类），
+   * 这一刻就永久错过且不报错——`>=` 存在的理由就是这个。
+   */
+  | { kind: 'turn'; at: number; op?: TurnOp }
   /** 某个单位死了。只写 owner 就是"这一家的任何一个兵死" */
   | { kind: 'unitDied'; owner?: PlayerId; type?: string }
   /** 某个单位从区域外走进区域内 */
-  | { kind: 'enter'; zone: LevelZone; owner?: PlayerId };
+  | { kind: 'enter'; zone: LevelZone; owner?: PlayerId }
+  /**
+   * 某条事件**已经发生过**。用 `id` 引用本关里的另一条事件。
+   *
+   * 这是"把事件串起来"的最小手段：事件 A 里说"伏兵已出动"，事件 B 的条件里
+   * 写 `fired(A)`，就得到"伏兵出动之后再做 B"。
+   *
+   * 两个要知道的语义：
+   *   · **一次就是永远**。`repeat` 事件第一次触发之后这条就恒为真，
+   *     没法表达"每次 A 都触发 B"（将来要"计数"才做得到）；
+   *   · 同一批里能传播：这一批先执行的 A，后面的 B 在同一批的第二遍扫描里能看到。
+   */
+  | { kind: 'fired'; id: string };
+
+/**
+ * 事件条件：叶子，或者一棵组合树。
+ *
+ * ```
+ * { all: [...] }   全部成立
+ * { any: [...] }   任一成立
+ * { not: X }       X 不成立
+ * ```
+ *
+ * 为什么是树而不是"条件 + 运算符"的平坦数组：树天然带括号和优先级，
+ * 不需要给作者解释"AND 比 OR 先算"。编辑器那边用缩进表达层级。
+ *
+ * 空组是**错误**（校验会拦），不是"永远成立"——触发器里"无条件成立"意味着
+ * 每次动作都触发，那是灾难而不是特征。
+ */
+export type LevelWhen =
+  | LevelWhenLeaf
+  | { all: LevelWhen[] }
+  | { any: LevelWhen[] }
+  | { not: LevelWhen };
 
 /** 事件触发后做什么。一批动作按数组顺序执行。 */
 export type LevelDo =
@@ -2155,14 +2203,57 @@ function normalizeEvents(
   return out.length > 0 ? out : undefined;
 }
 
+/**
+ * 校验一条触发条件：可能是叶子，也可能是组合树。
+ *
+ * 三个约束：
+ *   · **空组是错误**（不是"恒真"）。触发器里"无条件成立"意味着每次动作都触发。
+ *   · 嵌套最多 3 层。再深说明作者写出了绕来绕去的东西，编辑器也没法展示。
+ *   · 组里的子条件只要有一条不合法，那一组整体作废（`undefined`），
+ *     不保留"半棵树"——半棵树的行为没人能预期。
+ */
 function normalizeWhen(
   raw: unknown,
   id: string,
   map: FixedMap,
   seated: readonly PlayerId[],
   errors: string[],
+  depth = 0,
 ): LevelWhen | undefined {
-  const w = (raw ?? {}) as Partial<LevelWhen> & Record<string, unknown>;
+  if (!raw || typeof raw !== 'object') {
+    errors.push(`事件「${id}」的触发条件是空的`);
+    return undefined;
+  }
+  if (depth > 3) {
+    errors.push(`事件「${id}」的条件嵌套超过 3 层，收拢一下`);
+    return undefined;
+  }
+  const group = (key: 'all' | 'any', value: unknown): LevelWhen | undefined => {
+    if (!Array.isArray(value)) {
+      errors.push(`事件「${id}」的「${key}」应该是一串条件`);
+      return undefined;
+    }
+    if (value.length === 0) {
+      errors.push(`事件「${id}」的「${key}」里一个条件都没有：空组的含义是"无条件成立"，不是作者想要的`);
+      return undefined;
+    }
+    const list: LevelWhen[] = [];
+    for (const sub of value) {
+      const n = normalizeWhen(sub, id, map, seated, errors, depth + 1);
+      if (!n) return undefined;
+      list.push(n);
+    }
+    return key === 'all' ? { all: list } : { any: list };
+  };
+  const raw2 = raw as Record<string, unknown>;
+  if ('all' in raw2) return group('all', raw2.all);
+  if ('any' in raw2) return group('any', raw2.any);
+  if ('not' in raw2) {
+    const inner = normalizeWhen(raw2.not, id, map, seated, errors, depth + 1);
+    return inner ? { not: inner } : undefined;
+  }
+
+  const w = raw2;
   const kind = String(w.kind ?? '');
   /* 归属席位：可写可不写，写了就必须是这一局坐人的 */
   const ownerOf = (value: unknown): PlayerId | undefined | null => {
@@ -2181,7 +2272,26 @@ function normalizeWhen(
       errors.push(`事件「${id}」的回合数要在 1~999（现在 ${String(w.at)}）`);
       return undefined;
     }
-    return { kind: 'turn', at };
+    const rawOp = w.op === undefined ? '>=' : String(w.op);
+    if (!['>=', '<=', '=', '>', '<'].includes(rawOp)) {
+      errors.push(`事件「${id}」的比较符「${rawOp}」不认识（只能是 >= / <= / = / > / <）`);
+      return undefined;
+    }
+    // 默认 >= 不写进数据：老关卡的 JSON 里本来就没有这个字段
+    return rawOp === '>=' ? { kind: 'turn', at } : { kind: 'turn', at, op: rawOp as TurnOp };
+  }
+
+  if (kind === 'fired') {
+    const ref = typeof w.id === 'string' ? w.id.trim() : '';
+    if (!ref) {
+      errors.push(`事件「${id}」的「已发生」条件没写事件 id`);
+      return undefined;
+    }
+    if (ref === id) {
+      errors.push(`事件「${id}」的条件引用了它自己：永远不会触发`);
+      return undefined;
+    }
+    return { kind: 'fired', id: ref };
   }
 
   if (kind === 'unitDied') {
@@ -2199,7 +2309,9 @@ function normalizeWhen(
     return { kind: 'enter', zone, ...(owner ? { owner } : {}) };
   }
 
-  errors.push(`事件「${id}」的触发条件「${kind}」不认识（只能是 turn / unitDied / enter）`);
+  errors.push(
+    `事件「${id}」的触发条件「${kind}」不认识（只能是 turn / unitDied / enter / fired，或者 all / any / not 组合）`,
+  );
   return undefined;
 }
 
