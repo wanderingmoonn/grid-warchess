@@ -9,6 +9,7 @@ import './style.css';
 import * as tutorial from './ui/tutorial.ts';
 import { openAdminPanel } from './ui/admin-panel.ts';
 import { openBattleCard } from './ui/battle-card.ts';
+import { shouldExpandLog } from './ui/log-fold.ts';
 import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
@@ -1126,6 +1127,16 @@ function myTurn(): boolean {
  */
 let opsOpen = false;
 let logOpen = false;
+/**
+ * 上一次渲染时，这一局已经触发过多少个关卡事件。
+ *
+ * 用来判断"**刚刚**发生了新事件"——计数变大就展开战报。用负数开局表示"还没建立基线"：
+ * 读档/换局进来时 fired 里可能已经有内容，那不是"刚发生"，不该把战报弹开。
+ *
+ * 为什么按 `fired` 计数而不是按 log 条数：事件的 `do` 里可能只有 `terrain` / `reveal`
+ * 这种不写战报的动作，作者也可能把 `say` 写成两句。计数是"事件发生了"这件事本身。
+ */
+let lastFiredCount = -1;
 
 /**
  * 星图上选中节点/航线时，侧栏那张卡的内容。
@@ -1213,6 +1224,31 @@ function starPanelInfo(): StarPanelInfo | null {
 }
 
 function panelInput(known?: PlayerView): PanelInput {
+  /*
+   * 关卡事件刚触发 → 把战报展开。
+   *
+   * 战报默认是收起的（它一场能滚几十行），事件却可能只在战报里说一句话：
+   * 援军来了、桥塌了、邪龙又下了一颗蛋。收着的时候玩家根本不知道发生了什么，
+   * 只能靠棋盘上突然多出来的一队兵自己猜。所以每次有新事件触发就展开一次，
+   * 不管玩家上一秒是不是刚把它收起来——这是"有事发生了"的强制提示。
+   *
+   * 复盘里不展开：那是回放别人（或自己）的棋，翻到某一手时不该突然把面板撑开。
+   */
+  const firedCount = state.levelState?.fired?.length ?? 0;
+  /*
+   * 首次进对局（`lastFiredCount` 还是 -1）也算一次：开局那一两条事件
+   * （"任务开始，往东走""北面的天裂了"）本来就该被看见，而它们在建局时
+   * 就已经触发完了，等不到"下一次变化"。
+   */
+  /*
+   * 复盘期间连基线都不动：回放的 `state` 是另一份（跳到某一手的快照），
+   * 拿它的计数当基线，退出复盘后会凭空"多出"一批事件。
+   */
+  if (replay === null) {
+    if (shouldExpandLog(lastFiredCount, firedCount, false)) logOpen = true;
+    lastFiredCount = firedCount;
+  }
+
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {

@@ -359,6 +359,7 @@ import {
   teamNameOf,
 } from '../src/core/rules.ts';
 import { buildBattleCard } from '../src/core/battle-card.ts';
+import { shouldExpandLog } from '../src/ui/log-fold.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
@@ -20578,6 +20579,19 @@ test('同盟：同队不能互打、能穿行，打光敌人就收场', () => {
     );
     assert.equal(card.sides[1]!.side, 'C', '对面只有 C');
   }
+});
+
+test('战报折叠：关卡事件触发时展开，复盘里不展开', () => {
+  /*
+   * 战报默认收起（一场能滚几十行），但事件往往只在里面说一句话。
+   * 判断逻辑抽在 `ui/log-fold.ts`：这里锁三件事——有事件才展开、计数没变不重复
+   * 展开、复盘不展开（回放某一手时不该把面板撑开）。
+   */
+  assert.equal(shouldExpandLog(-1, 0, false), false, '这一局没有事件：不展开');
+  assert.equal(shouldExpandLog(-1, 1, false), true, '首次进局已经有事件：要展开（开局播报）');
+  assert.equal(shouldExpandLog(3, 3, false), false, '计数没变：不重复展开');
+  assert.equal(shouldExpandLog(3, 4, false), true, '刚触发新事件：展开');
+  assert.equal(shouldExpandLog(0, 1, true), false, '复盘：不展开');
 });
 
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑
