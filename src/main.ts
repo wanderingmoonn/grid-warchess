@@ -9,6 +9,7 @@ import './style.css';
 import * as tutorial from './ui/tutorial.ts';
 import { openAdminPanel } from './ui/admin-panel.ts';
 import { openBattleCard } from './ui/battle-card.ts';
+import { logEventSays } from './ui/log-fold.ts';
 import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
@@ -1126,6 +1127,14 @@ function myTurn(): boolean {
  */
 let opsOpen = false;
 let logOpen = false;
+/**
+ * 上一次渲染时，这一局已经触发过哪些关卡事件（id）。
+ *
+ * 只用来判断"**刚刚**触发了哪几条"，进而在它们带 `say` 时把战报展开。
+ * 用集合而不是计数：`fired` 是 Set，重复触发同一 id 不会让长度变化，
+ * 而我们要的正是"这条 id 是不是新的"。
+ */
+const lastFired = new Set<string>();
 
 /**
  * 星图上选中节点/航线时，侧栏那张卡的内容。
@@ -1213,6 +1222,38 @@ function starPanelInfo(): StarPanelInfo | null {
 }
 
 function panelInput(known?: PlayerView): PanelInput {
+  /*
+   * 关卡事件刚触发 → 把战报展开。
+   *
+   * 战报默认是收起的（它一场能滚几十行），事件却可能只在战报里说一句话：
+   * 援军来了、桥塌了、邪龙又下了一颗蛋。收着的时候玩家根本不知道发生了什么，
+   * 只能靠棋盘上突然多出来的一队兵自己猜。所以每次有新事件触发就展开一次，
+   * 不管玩家上一秒是不是刚把它收起来——这是"有事发生了"的强制提示。
+   *
+   * 复盘里不展开：那是回放别人（或自己）的棋，翻到某一手时不该突然把面板撑开。
+   */
+  /*
+   * 战报只在**带 `say` 的事件**触发时展开。
+   *
+   * 不带 `say` 的事件（刷兵、改地形、点亮一片）很可能是作者有意不让玩家知道的
+   * 暗手，替它写进战报等于剧透；带 `say` 的则是作者明确要说的那句话。
+   */
+  const fired = state.levelState?.fired ?? [];
+  if (replay === null) {
+    const events = state.config.level?.events ?? [];
+    const says = logEventSays(lastFired, fired, (id) => {
+      const ev = events.find((e) => e.id === id);
+      return ev?.do.some((a) => a.kind === 'say') ?? false;
+    });
+    if (says) logOpen = true;
+    /*
+     * 复盘期间不动基线：回放的 `state` 是另一份（跳到某一手的快照），
+     * 拿它当基线，退出复盘后会把老事件当成"刚刚发生"再展开一次。
+     */
+    lastFired.clear();
+    for (const id of fired) lastFired.add(id);
+  }
+
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {

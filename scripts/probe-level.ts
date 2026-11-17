@@ -21,7 +21,7 @@ import { aiNextAction } from '../src/core/ai.ts';
 import { isAiSide } from '../src/core/ai-meta.ts';
 import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
-import { allLevels, levelById, playableLevels, validateLevel } from '../src/core/level.ts';
+import { allLevels, demoLevels, levelById, playableLevels, storyLevels, validateLevel } from '../src/core/level.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
 
@@ -990,8 +990,29 @@ line('23. 地图上的桥不该自己塌');
 /* ── 24. 玩家关冒烟：三关都能建、都能跑 ─────────────────────── */
 line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
 {
+  /*
+   * 2026-11-17 菜单分成两栏：
+   *   · 「关卡」= 主线 / 教学关（`demo` 不写）——现在还没设计，空着是正常状态；
+   *   · 「编辑器」= 示例关（`demo: true`）——内建那五张。
+   * 两栏加起来就是"玩家可见的关卡"，也就是 `playableLevels()`。
+   */
+  const demos = demoLevels();
+  const stories = storyLevels();
   const menu = playableLevels();
-  check(menu.length === 5, `菜单里正好五关（${menu.map((l) => l.name).join(' / ')}）`);
+  check(demos.length === 5, `编辑器栏有五张示例关（${demos.map((l) => l.name).join(' / ')}）`);
+  check(
+    demos.every((l) => l.demo === true),
+    '示例关都标了 demo——不标的话它们会被当成主线关塞进「关卡」栏',
+  );
+  check(
+    stories.length === 0,
+    `「关卡」栏现在是空的（主线 / 教学关还没设计），实际 ${stories.map((l) => l.name).join(' / ') || '空'}`,
+    '这张新关没写 demo=true，被当成主线关了',
+  );
+  check(
+    menu.length === demos.length + stories.length,
+    `两栏加起来等于玩家可见的关卡（${demos.length} + ${stories.length} = ${menu.length}）`,
+  );
   check(
     allLevels().length > menu.length,
     `夹具关还在注册表里（全 ${allLevels().length} 张，玩家可见 ${menu.length} 张）`,
@@ -1091,10 +1112,17 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
       check(fine.ok, '邪龙：没禁的兵种照常能造', fine.ok ? '' : (fine as { reason: string }).reason);
     }
 
-    // 完全体要在第 26 次行动之后下场
-    let wave = s;
+    /*
+     * 完全体要在第 26 次行动之后下场。
+     *
+     * 这里**另开一局带 `godMode`**：AI 的攻击性拉满之后，两家由电脑代打的玩家
+     * 撑不到第 26 次行动（实测第 24 次就打崩了），循环提前退出，boss 自然还没刷。
+     * 那测的就不是"事件会不会触发"，而是"这关难不难"——后者不该由探针来判。
+     * `godMode` 让玩家席位不判负，于是能稳定跑到完全体那一波。
+     */
+    let wave = createMatch({ ...DEFAULT_CONFIG, level: v.level, godMode: true }, 7);
     try {
-      for (let i = 0; i < 160 && !wave.winner && wave.turn < 27; i += 1) {
+      for (let i = 0; i < 200 && !wave.winner && wave.turn < 27; i += 1) {
         const a = aiNextAction(wave) ?? ({ type: 'END_TURN' } as Action);
         const r = applyAction(wave, a);
         wave = r.ok ? r.state : (applyAction(wave, { type: 'END_TURN' } as Action) as { state: GameState }).state;

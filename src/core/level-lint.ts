@@ -259,6 +259,29 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
 
   /* ---- 胜负 ---- */
   for (const goal of level.goals ?? []) {
+    /*
+     * 护送：点亮区域必须和终点**完全一致**。
+     *
+     * 玩家看不见"终点判定框"，他是拿雾里亮起来的那片当终点的。亮区只要比终点
+     * 大一圈，就会出现"信使明明已经到了亮着的地方，怎么没赢"——实测踩过。
+     */
+    if (goal.kind === 'escort') {
+      const z = goal.zone;
+      for (const e of level.events ?? []) {
+        for (const act of e.do) {
+          if (act.kind !== 'reveal') continue;
+          const r = act.zone;
+          const same = r.x0 === z.x0 && r.y0 === z.y0 && r.x1 === z.x1 && r.y1 === z.y1;
+          const overlap = r.x0 <= z.x1 && r.x1 >= z.x0 && r.y0 <= z.y1 && r.y1 >= z.y0;
+          if (same || !overlap) continue;
+          out.push({
+            severity: 'warn',
+            text: `事件「${e.id}」点亮的区域 (${r.x0},${r.y0})–(${r.x1},${r.y1}) 和「护送」的终点 (${z.x0},${z.y0})–(${z.x1},${z.y1}) 不一致：玩家会拿亮区当终点，走到边上以为赢了。`,
+          });
+        }
+      }
+      continue;
+    }
     if (goal.kind !== 'assassinate') continue;
     /*
      * 斩首的目标必须是"造不出来"的兵种。

@@ -359,6 +359,7 @@ import {
   teamNameOf,
 } from '../src/core/rules.ts';
 import { buildBattleCard } from '../src/core/battle-card.ts';
+import { logEventSays } from '../src/ui/log-fold.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
@@ -20578,6 +20579,23 @@ test('同盟：同队不能互打、能穿行，打光敌人就收场', () => {
     );
     assert.equal(card.sides[1]!.side, 'C', '对面只有 C');
   }
+});
+
+test('战报折叠：只有带 say 的事件才展开', () => {
+  /*
+   * 战报默认收起，但事件的 `do` 里写了 `say` 就是"这句话要给玩家看"。
+   * 不带 `say` 的（刷兵、改地形、点亮）很可能是暗手，抖到战报上等于剧透。
+   */
+  const sayIds = new Set(['omen', 'wave-1']);
+  const hasSay = (id: string) => sayIds.has(id);
+
+  assert.equal(logEventSays(new Set(), [], hasSay), false, '这一局没有事件：不展开');
+  assert.equal(logEventSays(new Set(), ['omen'], hasSay), true, '首次进局、事件带 say：展开');
+  assert.equal(logEventSays(new Set(), ['ambush-terrain'], hasSay), false, '没有 say 的事件：不展开');
+  assert.equal(logEventSays(new Set(['omen']), ['omen', 'wave-1'], hasSay), true, '新事件带 say：展开');
+  assert.equal(logEventSays(new Set(['omen', 'wave-1']), ['omen', 'wave-1'], hasSay), false, '都触发过：不重复展开');
+  // repeat 事件每回合都会"再触发"一次，但 id 早就在 fired 里 —— 不该每回合弹一次
+  assert.equal(logEventSays(new Set(['omen']), ['omen', 'omen'], hasSay), false, 'repeat 事件重复触发：不再展开');
 });
 
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑
