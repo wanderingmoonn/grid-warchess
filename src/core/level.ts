@@ -28,7 +28,7 @@
 
 import { validateFixedMap, type FixedMap, type MapPoint } from './fixed-maps.ts';
 import { expansionById } from './expansions.ts';
-import { ERAS } from './config.ts';
+import { ERAS, UNIT_TYPES } from './config.ts';
 // 只取类型，编译后不留 import：types.ts 那边也是用内联 `import('./level.ts')` 的
 // 类型位置引用来避开循环依赖，两边都不会在运行期真的互相加载。
 import type { MatchConfig, PlayerId, Terrain, UnitTypeDef } from './types.ts';
@@ -180,6 +180,21 @@ export interface LevelAiTuning {
    * 0.4 左右 = 愿意用伤亡换推进（攻坚图）；1 = 默认；1.5 以上 = 极度惜命（护主）。
    */
   riskAversion?: number;
+  /**
+   * **僵局压力**，0~3，默认 0（不启用）。
+   *
+   * 有些关会停在一个"谁都不动"的稳定态：攻方压在火力圈外、守方缩在城里，
+   * 双方每回合的最优解都是"别动"。这个值让"朝目标推进"的分**随回合数加码**
+   * （`1 + pressure × turn/25`，封顶 4 倍），越拖越往对面压。
+   *
+   * 和 `riskAversion` 分工不同：那个管"怕不怕死"，这个管"拖下去值不值得动"。
+   * 0.5~1 是"慢慢加压"，2 以上是"这一关不允许僵持"。
+   *
+   * **只对没有城的席位生效**：有城的 AI 是防守方，给它加码只会让它丢下城墙去送。
+   * 另外它还会打开一层"督战"：核心 AI 认为这一回合没事可做时，替它挑一个
+   * 还能动、且这一步真的更接近敌城的单位走一步（否则二十多个单位里只有三四个在动）。
+   */
+  pressure?: number;
 }
 export interface LevelSetup {
   /** 开局时代（1 起）。锁了它，开局金币、可造兵种也就一起锁了 */
@@ -234,7 +249,13 @@ export type LevelGoal =
   /** 守到第 `untilTurn` 次行动时（守方还活着）算赢 */
   | { kind: 'survive'; seat: PlayerId; untilTurn: number }
   /** 这一席的任意一个兵（或指定兵种）走进区域算赢 */
-  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string }
+  /**
+   * 这一席的任意一个兵（或指定兵种）走进区域算赢。
+   *
+   * `label` 是显示给人看的名字（"信使"）。不写就用 `unitType` 去全局兵种表查；
+   * 关卡独有兵种查不到，那就只能显示 id —— 顶栏会写成"把「messenger」送到…"。
+   */
+  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string; label?: string }
   /**
    * 斩首：`loser` 场上再没有该兵种的兵时，`winner` 赢。
    *
@@ -250,7 +271,11 @@ export function goalText(goal: LevelGoal): string {
   if (goal.kind === 'escort') {
     const { x0, y0, x1, y1 } = goal.zone;
     const at = x0 === x1 && y0 === y1 ? `(${x0}, ${y0})` : `(${x0}, ${y0})–(${x1}, ${y1})`;
-    const who = goal.unitType ? `「${goal.unitType}」` : '一个兵';
+    const who = goal.label
+      ? `「${goal.label}」`
+      : goal.unitType
+        ? `「${UNIT_TYPES[goal.unitType]?.name ?? goal.unitType}」`
+        : '一个兵';
     return `把${who}送到 ${at}`;
   }
   const what = goal.label ?? (goal.unitType ? `「${goal.unitType}」` : '主力');
@@ -394,6 +419,18 @@ export interface LevelDef {
    * 关掉标记也不会删掉它们——探针二十多段全靠它们，删了等于把回归覆盖一起删。
    */
   dev?: boolean;
+  /**
+   * **编辑器示例关**：菜单里进「编辑器」那一栏，不进「关卡」。
+   *
+   * 菜单分两栏之后（2026-11-17）定下的口径：
+   *   · 不写 `demo` = **主线 / 教学关**，进「关卡」——那是给玩家一条完整流程的；
+   *   · `demo: true` = 用来展示"关卡编辑器能做什么"的样本，进「编辑器」。
+   *
+   * 这两栏的区别不是难度，而是**目的**：主线关要有教学节奏和叙事，示例关只要
+   * 每张演示一两个编辑器能力（部署、事件、晚到的一家、同盟……）。所以内建那五张
+   * 全标了 `demo`——它们本来就是照"验证功能"做的，难度高低不代表教学价值。
+   */
+  demo?: boolean;
   /**
    * 这一关自带、别的对局里没有的兵种。
    *
@@ -641,6 +678,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:lone-city',
     version: LEVEL_VERSION,
+    demo: true,
     name: '孤城',
     brief: '14×14。你只有一座城，河对岸有两座。桥会被炸，水会退——撑到第 30 次行动。',
     map: {
@@ -785,6 +823,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:behead',
     version: LEVEL_VERSION,
+    demo: true,
     name: '斩首',
     brief: '12×12。敌方主帅缩在城下的箭塔后面。第 18 次行动之前杀掉他，否则他撑住了。',
     map: {
@@ -874,6 +913,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:latecomer',
     version: LEVEL_VERSION,
+    demo: true,
     name: '黄雀',
     brief: '16×16。先和对面打。第 8 次行动，第三家带着铁器时代的兵从东南角进场。',
     map: {
@@ -951,6 +991,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:escort',
     version: LEVEL_VERSION,
+    demo: true,
     name: '护送',
     brief: '18×8。你没有城，带着信使穿过走廊。东边城下一片箭塔，路上还有追兵。',
     map: {
@@ -986,9 +1027,9 @@ export const LEVELS: LevelDef[] = [
        */
       cityEra: { B: 1 },
     },
-    setup: { startEra: 2, firstSide: 'A' },
+    setup: { startEra: 3, firstSide: 'A' },
     /*
-     * 开局兵力：一支铁器时代的护卫队 + 一个信使。
+     * 开局兵力：一支**火器时代**的护卫队 + 一个信使。
      *
      * 玩家兵种领先（时代 2 铁器，对面青铜），但**没有城**——领先只体现在这
      * 几个兵身上，打完就没了。信使是护送目标，弱、跑不快，得有人护着。
@@ -997,10 +1038,18 @@ export const LEVELS: LevelDef[] = [
       A: [
         // 信使单独在前，东边留出通道；护卫队散在两侧和后头，别把路堵死
         { type: 'messenger', x: 2, y: 3 },
-        { type: 'knight', x: 1, y: 2 },
-        { type: 'knight', x: 1, y: 5 },
-        { type: 'longbow', x: 0, y: 4 },
-        { type: 'crossbow', x: 0, y: 2 },
+        /*
+         * 护卫队是**火器（第 3 代）**，敌城压在青铜：这是这一关的"科技优势"。
+         *
+         * 以前给的是铁器（骑士/长弓/弩兵），只领先一代——实机里 AI 开局就把城
+         * 升上去，优势当场没了。两把火枪（射程 4、破甲）配戟兵顶线、骠骑兵收尾，
+         * 对青铜的民兵/弓手是压着打；但只要 AI 把钱花在升级上，这个差距还是会被抹平
+         * （见 `cityEra` 那段注释）。
+         */
+        { type: 'musketeer', x: 1, y: 2 },
+        { type: 'musketeer', x: 1, y: 5 },
+        { type: 'halberdier', x: 0, y: 4 },
+        { type: 'hussar', x: 0, y: 2 },
       ],
       /*
        * 城防 = 五座箭塔围住城（射程 3，覆盖两条绕城通道）。
@@ -1051,13 +1100,14 @@ export const LEVELS: LevelDef[] = [
         do: [
           { kind: 'say', text: '护送信使穿过走廊，到东边去。别让追兵追上。' },
           /*
-           * 开局把**终点那一片**点亮，亮 10 次行动（约 5 轮）。
+           * 开局把**终点区域**点亮，亮 10 次行动（约 5 轮）。
            *
-           * 这张关默认开雾：不点亮的话，玩家只知道"往东"，看不到终点在哪一格、
-           * 也不知道城前那排箭塔压着什么位置。但它**不是永久信息**——
-           * 亮够看清路线就熄，后面仍然得靠自己的视野。
+           * 区域必须和 `goals[].zone` **一模一样**（15..17 × 2..5）。以前这里写成
+           * 14..17 × 1..6，比真正的终点大一圈——玩家看着"信使已经在亮着的区域里了"，
+           * 其实还差一列（x=14 不算），于是"到了却没赢"。亮区就是判定区，
+           * 别让它俩有任何差别。
            */
-          { kind: 'reveal', zone: { x0: 14, y0: 1, x1: 17, y1: 6 }, turns: 10 },
+          { kind: 'reveal', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, turns: 10 },
         ],
       },
       /*
@@ -1108,13 +1158,22 @@ export const LEVELS: LevelDef[] = [
      * escort 的 unitType 指向信使，所以只有它到达才算赢，护卫队到没用。
      * 失败不用另写：cityless 的"兵打光即输"自动兜住。
      */
-    goals: [{ kind: 'escort', seat: 'A', zone: { x0: 15, y0: 2, x1: 17, y1: 5 }, unitType: 'messenger' }],
+    goals: [
+      {
+        kind: 'escort',
+        seat: 'A',
+        zone: { x0: 15, y0: 2, x1: 17, y1: 5 },
+        unitType: 'messenger',
+        label: '信使',
+      },
+    ],
   },
 
   /* ── 玩家关 5：邪龙（两人合作）────────────────────────────── */
   {
     id: 'level:evil-dragon',
     version: LEVEL_VERSION,
+    demo: true,
     name: '邪龙',
     brief: '28×18，两人各守一座城。北面裂隙里会不断飞出龙——先攒兵，再谈反击。',
     map: {
@@ -1176,20 +1235,17 @@ export const LEVELS: LevelDef[] = [
       'sword-saint',
     ],
     /*
-     * 邪龙军团的 AI：**攻击性三个旋钮全部拉满**。
-     *
-     * 只写 `doctrine: 'rush'` 是不够的——它改的是"倾向"，改不动每一格的那笔账：
-     * AI 每走一格都会算"这个落点会被几个人打到、掉多少血"，再用它抵消
-     * "朝目标推进"的收益。推进一格只值几分，站进射程要扣二十分往上，所以它
-     * 宁可停在山脊上不动。这三个旋钮就是改那笔账的：
-     *
-     *   · riskAversion 0.2（最小）：愿意用伤亡换推进，不因为挨打就缩；
-     *   · cohesion 0：谁快谁先上，不等队友——一群飞龙本来就该各打各的；
-     *   · appetite 3（最大）：把"朝目标推进"的分数放大三倍。
-     *
-     * 这一关要的就是"它们真的会压过来"，而不是在山脊上排队。
+     * 三个旋钮 + 一个僵局压力：
+     *   · riskAversion 0.3：愿意用伤亡换推进，但不至于站着送；
+     *   · cohesion 0：不等队友，谁快谁先上；
+     *   · appetite 3：推进分放大三倍；
+     *   · pressure 2：**越拖越压**。观战里出现过"三方都不动"的稳定态——
+     *     攻方压在圈外、守方缩在城里，每回合的最优解都是"别动"。
+     *     光把前面三项拉满治不了这个（它们改的是"怕不怕死"，不是"拖下去值不值得动"），
+     *     所以再加一条随回合加码的推进分：turn 25 时 ×2、turn 50 时 ×3、封顶 ×4；
+     *     核心 AI 认为"没事可做"时还会督战推进一步（见 ai.ts 的 `pressureAdvance`）。
      */
-    ai: { riskAversion: 0.2, cohesion: 0, appetite: 3 },
+    ai: { riskAversion: 0.3, cohesion: 0, appetite: 3, pressure: 1 },
     /*
      * 开局兵力：每城一辆坦克、两个步兵班、两个重机枪组、一个建筑队，
      * 外加两只侦察气球。
@@ -1338,8 +1394,8 @@ export const LEVELS: LevelDef[] = [
               { type: 'evil-dragon-king', x: 13, y: 1 },
               { type: 'bone-dragon', x: 11, y: 1 },
               { type: 'bone-dragon', x: 11, y: 2 },
-              { type: 'demon', x: 15, y: 1 },
-              { type: 'demon', x: 15, y: 2 },
+              { type: 'demon', x: 14, y: 1 },
+              { type: 'demon', x: 14, y: 2 },
               { type: 'dragoon-rider', x: 12, y: 1 },
               { type: 'dragoon-rider', x: 12, y: 2 },
             ],
@@ -1361,20 +1417,6 @@ export const LEVELS: LevelDef[] = [
         when: { kind: 'unitDied', type: 'evil-dragon-king' },
         do: [{ kind: 'say', text: '邪龙王栽下去了。剩下的不过是一群没了主人的野兽——清干净。' }],
       },
-    ],
-    /*
-     * 两条正面的胜利条件：**守住就算赢**。
-     *
-     * 不写的话，这一关只有"把邪龙军团清光"这一种赢法——问题是恶魔会召唤小恶魔、
-     * 残兵会散到地图角落，玩家把主力和 boss 都打死了，还得满地图追最后几只，
-     * 实测会卡到两百多次行动都结束不了。
-     *
-     * 两条 survive 各写一边：任一玩家撑到第 45 次行动就赢（另一个人先倒下不影响，
-     * 这正是"合作"该有的宽容）。两座城都丢光时 survive 不成立，走默认的失败。
-     */
-    goals: [
-      { kind: 'survive', seat: 'A', untilTurn: 45 },
-      { kind: 'survive', seat: 'B', untilTurn: 45 },
     ],
   },
 
@@ -1699,6 +1741,27 @@ export function allLevels(): LevelDef[] {
 /** 玩家能选到的关卡（去掉 `dev` 那些测试夹具） */
 export function playableLevels(): LevelDef[] {
   return allLevels().filter((l) => l.dev !== true);
+}
+
+/**
+ * **主线 / 教学关**（菜单的「关卡」栏）。
+ *
+ * 2026-11-17 菜单分成「关卡」和「编辑器」两栏之后的口径：这一栏装的是"给玩家
+ * 一条完整流程"的关——有教学节奏、有叙事。内建那五张都不在这里：它们是照
+ * "验证编辑器功能"做的，难度高低不代表教学价值，所以全标了 `demo`。
+ *
+ * 现在返回空数组是**正常状态**：主线设计还没定。界面那边有专门的空状态。
+ */
+export function storyLevels(): LevelDef[] {
+  // 只数**内建**的：玩家自制关和云端关不属于"主线"，它们在「编辑器」栏的
+  // "我的关卡 / 别人的"里，由界面单独列
+  return LEVELS.filter((l) => l.dev !== true && l.demo !== true);
+}
+
+/** **编辑器示例关**（菜单的「编辑器」栏）：演示编辑器能做哪些事。 */
+export function demoLevels(): LevelDef[] {
+  // 同上：内建示例关。玩家复制出来的那份没有 demo 标记，会出现在"我的关卡"里
+  return LEVELS.filter((l) => l.dev !== true && l.demo === true);
 }
 
 /**
@@ -2079,10 +2142,19 @@ function normalizeAiTuning(raw: unknown, errors: string[]): LevelAiTuning | unde
   };
   const cohesion = num(obj.cohesion, 0, 2, 'cohesion');
   const appetite = num(obj.appetite, 0.2, 3, 'appetite');
-  const riskAversion = num(obj.riskAversion, 0.2, 2, 'riskAversion');
+  /*
+   * 区间必须和 `LevelAiTuning` 的注释、编辑器的滑杆**同一份**。
+   *
+   * 这里曾经卡在 0.2，而文档和界面上早就写着"0 = 完全不计伤亡"——于是关卡里
+   * 写 `riskAversion: 0`，被这一行悄悄夹回 0.2，作者看到的和实际生效的不是一回事。
+   * 同一个坑还让 `pressure` 整个丢掉（normalize 不认识它）。
+   */
+  const riskAversion = num(obj.riskAversion, 0, 2, 'riskAversion');
+  const pressure = num(obj.pressure, 0, 3, 'pressure');
   if (cohesion !== undefined) out.cohesion = cohesion;
   if (appetite !== undefined) out.appetite = appetite;
   if (riskAversion !== undefined) out.riskAversion = riskAversion;
+  if (pressure !== undefined) out.pressure = pressure;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -2262,7 +2334,14 @@ function normalizeGoals(
       const zone = normZone(g.zone, '胜利条件「护送」的终点区域', map, errors);
       if (!zone) continue;
       const unitType = typeof g.unitType === 'string' && g.unitType.trim() ? g.unitType.trim() : undefined;
-      out.push({ kind: 'escort', seat, zone, ...(unitType ? { unitType } : {}) });
+      const label = typeof g.label === 'string' && g.label.trim() ? g.label.trim().slice(0, 12) : undefined;
+      out.push({
+        kind: 'escort',
+        seat,
+        zone,
+        ...(unitType ? { unitType } : {}),
+        ...(label ? { label } : {}),
+      });
       continue;
     }
 

@@ -2045,6 +2045,11 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,objective,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,objective,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
+  if ((globalThis as { __AI_DBG__?: boolean }).__AI_DBG__ === true && unit.owner === 'C') {
+    console.log(
+      `[dbg] ${unit.id} ${unit.x},${unit.y}→${x},${y} b=${String(before)} a=${String(after)} prog=${progress.toFixed(2)} obj=${String(objective)} air=${airLayer(def)}`,
+    );
+  }
 
   /*
    * ── 集结：让跑得最前的那几个停下来等 ──
@@ -2084,7 +2089,31 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   // 1 → 0.15（默认惩罚），0 → 1（不惩罚），2 → 更狠（夹到 0.05）
   const lineHold = cohesion <= 1 ? 1 - (1 - 0.15) * cohesion : Math.max(0.05, 0.15 - (cohesion - 1) * 0.1);
   const advanceWeight = aheadOfLine ? lineHold : 1;
-  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush*0.35)) * advanceWeight * (tuning?.appetite ?? 1);
+  /*
+   * 僵局压力（关卡级 `pressure`，默认 0 = 不启用）。
+   *
+   * 有些关打久了会停在一个"谁都不动"的稳定态：攻方压在火力圈外，守方缩在城里，
+   * 双方每回合的最优解都是"别动"。光调 `riskAversion` 治不了——它关掉的是
+   * "怕死"，关不掉"往前也没赚头"。这里换个方向：**让往前这件事越拖越值钱**。
+   *
+   * `s.turn / 25` 让压力随回合线性加码，`Math.min(3, …)` 封顶在 4 倍原始值
+   * （pressure = 3 时封顶 ×4）。没有关卡的普通对局是 0，一个字都不变。
+   */
+  /*
+   * 只对**没有城**的席位生效。
+   *
+   * 僵局压力想解决的是"攻方压不上去"，而"没有城"正是攻方最典型的形态
+   * （邪龙军团那种：没有产线，不压上就只能等死）。有城的 AI 是防守方，
+   * 给它加码只会让它丢下城墙去送——那不是这一项要的。
+   */
+  const pressure =
+    citiesOf(s, unit.owner).length === 0 ? Math.max(0, Math.min(3, tuning?.pressure ?? 0)) : 0;
+  const pressureMul = pressure > 0 ? 1 + pressure * Math.min(3, s.turn / 25) : 1;
+  let score =
+    progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush * 0.35)) *
+    advanceWeight *
+    (tuning?.appetite ?? 1) *
+    pressureMul;
   /*
    * 地形分：**这一格对这个兵**值多少护甲，而不是"这一格值多少"。
    *
@@ -2129,7 +2158,15 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * `riskAversion` 是关卡级的"愿意用多少伤亡换推进"。
    * 默认 1 就是原来的算法；攻坚图写 0.4，它就肯顶着火力往前走。
    */
-  const riskMul = Math.min(2, Math.max(0.2, s.config.level?.ai?.riskAversion ?? 1));
+  /*
+   * 下限放到 **0**（2026-11-16）：0 = 完全不计伤亡。
+   *
+   * 原来卡在 0.2，本意是"别让 AI 蠢到站火里送死"。但落到「邪龙」这种关就很怪：
+   * 飞龙在城火力圈外停住不动，只靠邪龙王隔空下蛋——因为"逼近一格"只值五六分，
+   * 而"这一步会挨打/可能会死"即使乘 0.2 也有十几分。作者要的是"它们就是不怕死"，
+   * 那就得留一个真能关掉这笔账的档位。默认仍是 1，普通对局一个字不变。
+   */
+  const riskMul = Math.min(2, Math.max(0, s.config.level?.ai?.riskAversion ?? 1));
   score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4) * riskMul;
   if (risk.lethal) score -= (30 + Math.min(75,cost*0.2)) * riskMul;
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
@@ -2142,7 +2179,12 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * 罚得比眼前那一刀轻（同样的伤害在这里只算 12~42 分），够用它躲开空地就行。
    */
   const soonRisk = all.tactical.soon(moved, killed);
-  score -= Math.max(0, soonRisk.damage - risk.damage) / Math.max(1,def.maxHp) * (12 + Math.min(30,cost*0.1));
+  // 这一项也要跟着 `riskAversion` 走：只管"眼前这一刀"的话，0 档仍然会被
+  // "下下回合够得着"劝退，冲不进去。
+  score -=
+    (Math.max(0, soonRisk.damage - risk.damage) / Math.max(1, def.maxHp)) *
+    (12 + Math.min(30, cost * 0.1)) *
+    riskMul;
 
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
   for (const city of s.cities) {
@@ -6304,6 +6346,48 @@ function isOffensive(s: GameState, me: PlayerId, a: Action): boolean {
  * 塞进评分里要在每个评分点上写一遍，而否定式天然适合放在出口处。
  * 做法是借 core 已有的 `rejected` 机制：否掉一个、再问一次，直到它给出一个守家的动作。
  */
+/**
+ * 督战：核心 AI 认为"这一回合没值得做的事"时，替它挑一个"往敌城挪一步"的单位。
+ *
+ * 为什么需要这一层（2026-11-16，观战「邪龙」时发现的"三方都不动"）：
+ *
+ * 评分链上"值得做"的门槛是 `best.v > 0`。一批单位站在离城十几格的开阔地上时，
+ * 往前一步的推进分（0.3~1）× 各种系数之后仍然可能是负的——推进那点分抵不过
+ * 地形分和拥挤分。于是它们每回合都拿到 null，二十多个单位里只有三四个在动，
+ * 大军就那么停在半路上。核心评分本身没错（它只做"这一步值不值"），错的是
+ * **没有任何机制去兜住"整支军队都不想动"这个局面**。
+ *
+ * 只在关卡写了 `pressure` 时启用，而且只在核心已经放弃之后才走这一步，
+ * 所以普通对局一个字都不变。挑的是"能走、且离最近的敌城更近"的格子——
+ * 不评估威胁、不看队形，就是要它们压过去。
+ */
+function pressureAdvance(s: GameState): Action | null {
+  const me = s.current;
+  const foeCities = enemyCitiesOf(s, me).filter((c) => !c.ruined);
+  if (foeCities.length === 0) return null;
+  const nearest = (x: number, y: number): number =>
+    Math.min(...foeCities.map((c) => distToCity({ x, y } as Unit, c)));
+
+  /** 找"还能动、且这一步真的更接近敌城"的单位里最靠前的那一个 */
+  let picked: { action: Action; gain: number } | null = null;
+  for (const u of unitsOf(s, me)) {
+    if (u.moved || u.acted) continue;
+    const cat = utype(s, u.type).category;
+    if (cat === 'economy' || cat === 'builder') continue;
+    const now = nearest(u.x, u.y);
+    const reach = reachableTiles(s, u);
+    for (const i of reach.keys()) {
+      const x = i % s.w;
+      const y = Math.floor(i / s.w);
+      const d = nearest(x, y);
+      if (d >= now) continue;
+      const gain = now - d;
+      if (!picked || gain > picked.gain) picked = { action: { type: 'MOVE', unitId: u.id, x, y }, gain };
+    }
+  }
+  return picked?.action ?? null;
+}
+
 export function aiNextAction(
   s: GameState,
   budget: AiBudget = DEFAULT_BUDGET,
@@ -6312,7 +6396,17 @@ export function aiNextAction(
 ): Action | null {
   const me = s.current;
   if (orderDirectiveOf(s, me).strategy !== 'hold') {
-    return aiNextActionCore(s, budget, rejected, depth);
+    const a = aiNextActionCore(s, budget, rejected, depth);
+    if (a) return a;
+    // 深度推演里不做督战：那是"试走"，不该把对手的推演也拖进这一步
+    if (
+      depth === 0 &&
+      (s.config.level?.ai?.pressure ?? 0) > 0 &&
+      citiesOf(s, me).length === 0
+    ) {
+      return pressureAdvance(s);
+    }
+    return a;
   }
   const blocked = new Set(rejected);
   for (let i = 0; i < 24; i++) {

@@ -9246,17 +9246,32 @@ console.log('\n关卡模式');
 openSetup();
 await wait(40);
 
-check('左侧多了「关卡」一页，和战役 / 地图同级', () => {
+check('左侧四页：关卡 / 编辑器 / 战役 / 地图', () => {
   const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
-  assert.deepEqual(tabs, ['levels', 'battle', 'maps'], `三页的顺序应该是 关卡 / 战役 / 地图，实际 ${tabs.join(',')}`);
+  assert.deepEqual(
+    tabs,
+    ['levels', 'editor', 'battle', 'maps'],
+    `四页的顺序应该是 关卡 / 编辑器 / 战役 / 地图，实际 ${tabs.join(',')}`,
+  );
 });
 
-check('关卡页只列玩家关，测试夹具不出现', () => {
+check('「关卡」栏现在是空的：主线 / 教学关还没设计，并指路编辑器', () => {
   click('[data-tab="levels"]');
   const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
-  assert.equal(ids[0], '', '第一张应该是「自由对局」');
+  // 只剩「自由对局」那一张（data-level="")
+  assert.deepEqual(ids, [''], `关卡栏应该只有「自由对局」，实际 ${ids.join(',') || '空'}`);
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('还在设计'), `空状态要说清为什么空，实际：${body.slice(0, 160)}`);
+  assert.ok(body.includes('编辑器'), '空状态要指路「编辑器」那一栏');
+});
+
+check('编辑器栏列出五张示例关，测试夹具不出现', () => {
+  click('[data-tab="editor"]');
+  const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
+  assert.ok(!ids.includes(''), '编辑器栏不该有「自由对局」——它属于关卡栏');
+  assert.equal(ids[0], 'level:lone-city', `编辑器栏第一张应该是「孤城」，实际 ${ids[0]}`);
   const named = ids.filter(Boolean);
-  assert.equal(named.length, 5, `菜单里应该只有五关，实际 ${named.length}：${named.join(',')}`);
+  assert.equal(named.length, 5, `编辑器栏应该列五张示例关，实际 ${named.length}：${named.join(',')}`);
   assert.ok(named.includes('level:lone-city'), '缺「孤城」');
   assert.ok(named.includes('level:behead'), '缺「斩首」');
   assert.ok(named.includes('level:latecomer'), '缺「黄雀」');
@@ -9394,7 +9409,7 @@ check('换扩展：抽屉复用原来那份列表，锁定项写在上面', () =
 });
 
 check('选「斩首」：两条目标都标了归属', () => {
-  click('[data-tab="levels"]');
+  click('[data-tab="editor"]');
   click('[data-level="level:behead"]');
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('消灭对方全部守将'), `要写清斩首目标，实际：${body.slice(0, 240)}`);
@@ -9409,6 +9424,7 @@ check('选「黄雀」：说清第三家要中途才登场', () => {
 });
 
 check('切回「自由对局」：人数开关回来，关卡不残留', () => {
+  click('[data-tab="levels"]');
   click('[data-level=""]');
   click('[data-tab="battle"]');
   assert.ok(doc.querySelector('[data-players]'), '自由对局下应该有人数开关');
@@ -9424,7 +9440,7 @@ check('切回「自由对局」：人数开关回来，关卡不残留', () => {
  */
 openSetup();
 await wait(40);
-click('[data-tab="levels"]');
+click('[data-tab="editor"]');
 click('[data-level="level:lone-city"]');
 click('[data-act="start"]');
 await wait(150);
@@ -9510,7 +9526,8 @@ console.log('\n关卡编辑器');
 
 openSetup();
 await wait(40);
-click('[data-tab="levels"]');
+// 「我的关卡」和「新建关卡」都在编辑器栏（2026-11-17 菜单分栏之后）
+click('[data-tab="editor"]');
 
 check('选关页有「我的关卡」分组和一个新建入口', () => {
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
@@ -9522,8 +9539,8 @@ check('选关页有「我的关卡」分组和一个新建入口', () => {
    */
   const groups = [...doc.querySelectorAll('.field-label')].map((el) => el.textContent ?? '');
   assert.ok(
-    groups.some((t) => t.includes('选一关')) && groups.some((t) => t.includes('我的关卡')),
-    `两个分组都要在，实际：${groups.join(' | ')}`,
+    groups.some((t) => t.includes('示例关')) && groups.some((t) => t.includes('我的关卡')),
+    `「示例关」和「我的关卡」两个分组都要在，实际：${groups.join(' | ')}`,
   );
 });
 
@@ -10317,16 +10334,21 @@ console.log('\n扩展与 AI');
 for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
 openSetup();
 await wait(40);
-click('[data-tab="levels"]');
+click('[data-tab="editor"]');
 click('[data-level-new]');
 
-check('规则面板：扩展能选四档，AI 三个旋钮都在', () => {
+check('规则面板：扩展能选四档，AI 四个旋钮都在', () => {
   topMask()?.querySelector<HTMLElement>('[data-act="rules"]')?.click();
   const layer = topMask()!;
   const rows = layer.querySelectorAll('[data-exp-id]');
   assert.ok(rows.length >= 6, `应该列出全部扩展，实际 ${rows.length}`);
   const knob = layer.querySelectorAll('[data-knob]');
-  assert.equal(knob.length, 3, `三个旋钮，实际 ${knob.length}`);
+  // 风险厌恶 / 战线收拢 / 战意 / 僵局压力
+  assert.equal(knob.length, 4, `四个旋钮，实际 ${knob.length}`);
+  assert.ok(
+    layer.querySelector('[data-knob="pressure"]'),
+    '要有「僵局压力」（无城方的推进加码）',
+  );
   // 每一档都要能选（不是所有包都只有"必须开/禁用"）
   const opts = [...(rows[0] as HTMLSelectElement).options].map((o) => o.value);
   assert.deepEqual(opts, ['none', 'require', 'forbid', 'warn'], `四档：${opts.join(',')}`);
@@ -10402,7 +10424,7 @@ console.log('\n关卡管理');
 for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
 openSetup();
 await wait(40);
-click('[data-tab="levels"]');
+click('[data-tab="editor"]');
 
 check('选关页有「管理 / 导入导出」入口', () => {
   assert.ok(!!doc.querySelector('[data-level-manage]'), '「我的关卡」分组里要有管理入口');
@@ -10483,7 +10505,7 @@ console.log('\n无城席位');
 for (const m of [...doc.querySelectorAll<HTMLElement>('.modal-mask')]) m.remove();
 openSetup();
 await wait(40);
-click('[data-tab="levels"]');
+click('[data-tab="editor"]');
 click('[data-level-new]');
 
 check('席位面板有「没有城」，勾上之后不再要求城的时代', () => {

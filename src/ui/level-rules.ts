@@ -37,9 +37,9 @@ const KNOBS: Array<{
   {
     key: 'riskAversion',
     name: '风险厌恶',
-    min: 0.2,
+    min: 0,
     max: 2,
-    hint: '小 = 敢用伤亡换推进；大 = 惜命。默认 1。',
+    hint: '0 = 完全不计伤亡；小 = 敢用伤亡换推进；大 = 惜命。默认 1。',
   },
   {
     key: 'cohesion',
@@ -54,6 +54,13 @@ const KNOBS: Array<{
     min: 0.2,
     max: 3,
     hint: '放大或缩小「朝目标推进」的分。默认 1。',
+  },
+  {
+    key: 'pressure',
+    name: '僵局压力',
+    min: 0,
+    max: 3,
+    hint: '0 = 不启用；越大越"拖不起"：推进分随回合加码，逼它压过去。默认 0。',
   },
 ];
 
@@ -79,6 +86,7 @@ export function openLevelRules(opts: LevelRulesOptions): void {
     riskAversion: level.ai?.riskAversion ?? 1,
     cohesion: level.ai?.cohesion ?? 1,
     appetite: level.ai?.appetite ?? 1,
+    pressure: level.ai?.pressure ?? 0,
   };
 
   const mask = document.createElement('div');
@@ -189,8 +197,9 @@ export function openLevelRules(opts: LevelRulesOptions): void {
       ai.riskAversion = 1;
       ai.cohesion = 1;
       ai.appetite = 1;
+      ai.pressure = 0;
       renderAi();
-      footEl.textContent = 'AI 回到默认（三个都是 1）。';
+      footEl.textContent = 'AI 回到默认（前三项是 1，僵局压力 0）。';
       return;
     }
     if (act === 'cancel') {
@@ -218,8 +227,9 @@ export function openLevelRules(opts: LevelRulesOptions): void {
         };
       }
 
-      // 三个都是默认值就不写 `ai`：少一个字段，JSON 也少一句要解释的话
-      const isDefault = ai.riskAversion === 1 && ai.cohesion === 1 && ai.appetite === 1;
+      // 都是默认值就不写 `ai`：少一个字段，JSON 也少一句要解释的话
+      const isDefault =
+        ai.riskAversion === 1 && ai.cohesion === 1 && ai.appetite === 1 && ai.pressure === 0;
       if (isDefault) delete (next as { ai?: unknown }).ai;
       else next.ai = { ...ai };
 
