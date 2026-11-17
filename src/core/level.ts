@@ -420,6 +420,18 @@ export interface LevelDef {
    */
   dev?: boolean;
   /**
+   * **编辑器示例关**：菜单里进「编辑器」那一栏，不进「关卡」。
+   *
+   * 菜单分两栏之后（2026-11-17）定下的口径：
+   *   · 不写 `demo` = **主线 / 教学关**，进「关卡」——那是给玩家一条完整流程的；
+   *   · `demo: true` = 用来展示"关卡编辑器能做什么"的样本，进「编辑器」。
+   *
+   * 这两栏的区别不是难度，而是**目的**：主线关要有教学节奏和叙事，示例关只要
+   * 每张演示一两个编辑器能力（部署、事件、晚到的一家、同盟……）。所以内建那五张
+   * 全标了 `demo`——它们本来就是照"验证功能"做的，难度高低不代表教学价值。
+   */
+  demo?: boolean;
+  /**
    * 这一关自带、别的对局里没有的兵种。
    *
    * 为什么不用全局兵种表加：`守将`这种是关卡概念，不该出现在别的对局的规则书、
@@ -666,6 +678,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:lone-city',
     version: LEVEL_VERSION,
+    demo: true,
     name: '孤城',
     brief: '14×14。你只有一座城，河对岸有两座。桥会被炸，水会退——撑到第 30 次行动。',
     map: {
@@ -810,6 +823,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:behead',
     version: LEVEL_VERSION,
+    demo: true,
     name: '斩首',
     brief: '12×12。敌方主帅缩在城下的箭塔后面。第 18 次行动之前杀掉他，否则他撑住了。',
     map: {
@@ -899,6 +913,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:latecomer',
     version: LEVEL_VERSION,
+    demo: true,
     name: '黄雀',
     brief: '16×16。先和对面打。第 8 次行动，第三家带着铁器时代的兵从东南角进场。',
     map: {
@@ -976,6 +991,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:escort',
     version: LEVEL_VERSION,
+    demo: true,
     name: '护送',
     brief: '18×8。你没有城，带着信使穿过走廊。东边城下一片箭塔，路上还有追兵。',
     map: {
@@ -1157,6 +1173,7 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:evil-dragon',
     version: LEVEL_VERSION,
+    demo: true,
     name: '邪龙',
     brief: '28×18，两人各守一座城。北面裂隙里会不断飞出龙——先攒兵，再谈反击。',
     map: {
@@ -1724,6 +1741,27 @@ export function allLevels(): LevelDef[] {
 /** 玩家能选到的关卡（去掉 `dev` 那些测试夹具） */
 export function playableLevels(): LevelDef[] {
   return allLevels().filter((l) => l.dev !== true);
+}
+
+/**
+ * **主线 / 教学关**（菜单的「关卡」栏）。
+ *
+ * 2026-11-17 菜单分成「关卡」和「编辑器」两栏之后的口径：这一栏装的是"给玩家
+ * 一条完整流程"的关——有教学节奏、有叙事。内建那五张都不在这里：它们是照
+ * "验证编辑器功能"做的，难度高低不代表教学价值，所以全标了 `demo`。
+ *
+ * 现在返回空数组是**正常状态**：主线设计还没定。界面那边有专门的空状态。
+ */
+export function storyLevels(): LevelDef[] {
+  // 只数**内建**的：玩家自制关和云端关不属于"主线"，它们在「编辑器」栏的
+  // "我的关卡 / 别人的"里，由界面单独列
+  return LEVELS.filter((l) => l.dev !== true && l.demo !== true);
+}
+
+/** **编辑器示例关**（菜单的「编辑器」栏）：演示编辑器能做哪些事。 */
+export function demoLevels(): LevelDef[] {
+  // 同上：内建示例关。玩家复制出来的那份没有 demo 标记，会出现在"我的关卡"里
+  return LEVELS.filter((l) => l.dev !== true && l.demo === true);
 }
 
 /**
