@@ -3454,19 +3454,20 @@ check('新对局按选中的尺寸和扩展生成', () => {
   assert.ok(html.includes('老兵'), '侧栏应该显示已启用的扩展');
 });
 
-await checkAsync('固定地图：开局界面有画廊，选中/取消都能实时生效', async () => {
+await checkAsync('固定地图：从战役页点「换图」弹出小窗口，选中/取消实时生效', async () => {
   openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
 
-  // 选图在「地图」页：和战役设置分开，一条长卷里不再既讲规则又挑地图
-  const mapsTab = doc.querySelector<HTMLElement>('[data-tab="maps"]');
-  assert.ok(mapsTab, '开始界面左侧要有「地图」这一页');
-  mapsTab!.click();
+  /*
+   * 2026-11-17：地图不再是一栏。只有自由对局会选图，所以它降成战役页
+   * 「在哪张图上打」那一行的「换图」弹出来的小窗口。
+   */
+  assert.ok(!doc.querySelector('[data-tab="maps"]'), '左侧不该再有「地图」一栏');
+  const openBtn = doc.querySelector<HTMLElement>('[data-act="pick-map"]');
+  assert.ok(!!openBtn, '战役页要有「换图」');
+  openBtn!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.ok(
-    doc.querySelector<HTMLElement>('[data-tab="maps"]')!.classList.contains('active'),
-    '点过之后「地图」要是选中态',
-  );
+  assert.ok(!!doc.querySelector('.map-pick-layer'), '点「换图」应当弹出选图小窗口');
 
   const cards = [...doc.querySelectorAll<HTMLElement>('[data-map]')];
   assert.ok(cards.length >= 5, `内置四张 + 随机，实际 ${cards.length}`);
@@ -3481,18 +3482,27 @@ await checkAsync('固定地图：开局界面有画廊，选中/取消都能实�
   builtin.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
 
-  const picked = doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!;
-  assert.ok(picked.classList.contains('active'), '点了之后要变成选中态');
-  assert.ok(!doc.querySelector<HTMLElement>('[data-map=""]')!.classList.contains('active'), '随机那张要取消选中');
+  // 点一张＝就它了：窗口自己关掉，战役页那条要显示这张图
+  assert.ok(!doc.querySelector('.map-pick-layer'), '选完应当自动关窗');
+  const row = doc.querySelector('.start-map-row');
+  assert.ok(!!row, '战役页要有「在哪张图上打」这一条');
+  assert.ok(!!row!.querySelector('svg'), '选中固定地图后这一条要有缩略图');
+  assert.ok(!(row!.textContent ?? '').includes('随机地形'), '不该还写着随机地形');
 
-  // 点回"随机"＝取消固定地图：必须能退回去
+  // 再打开能退回随机：必须能退
+  doc.querySelector<HTMLElement>('[data-act="pick-map"]')!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
   doc.querySelector<HTMLElement>('[data-map=""]')!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.ok(doc.querySelector<HTMLElement>('[data-map=""]')!.classList.contains('active'), '能退回到随机');
+  assert.ok(
+    (doc.querySelector('.start-map-row')?.textContent ?? '').includes('随机地形'),
+    '能退回到随机地形',
+  );
 
   // 真正开一局：地图必须是那张图（不是随机生成的）
-  const target = doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!;
-  target.click();
+  doc.querySelector<HTMLElement>('[data-act="pick-map"]')!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
   const before = doc.querySelectorAll('.tile').length;
   click('[data-act="start"]');
@@ -3508,16 +3518,25 @@ await checkAsync('固定地图：开局界面有画廊，选中/取消都能实�
   );
 });
 
-await checkAsync('地图页：选图和传图在同一页，没解析前只有"选文件"', async () => {
+await checkAsync('编辑器页：地图和关卡都在这一栏，没解析前只有"选文件"', async () => {
   openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
-  doc.querySelector<HTMLElement>('[data-tab="maps"]')!.click();
+  /*
+   * 2026-11-17：地图不再单开一栏。选图降成战役页里的一个弹层（只有自由对局用得上），
+   * 上传和管理挪进「编辑器」——它们和上传关卡是同一种事：交付内容。
+   */
+  assert.ok(!doc.querySelector('[data-tab="maps"]'), '左侧不该再有「地图」一栏');
+  doc.querySelector<HTMLElement>('[data-tab="editor"]')!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
 
   const body = doc.querySelector('.modal-body')!;
-  assert.ok(body.textContent!.includes('上传地图'), '地图页要有「上传地图」这一块');
+  assert.ok(body.textContent!.includes('上传地图'), '编辑器页要有「上传地图」这一块');
+  assert.ok(body.textContent!.includes('我的关卡'), '关卡那半也要在同一页');
   assert.ok(body.querySelector('[data-act="map-file"]'), '要有「选择地图文件…」');
-  assert.ok(body.querySelector('input[data-field="map-file"]'), '要有一个隐藏的文件选择框');
+  assert.ok(
+    doc.querySelector('input[data-field="map-file"]'),
+    '要有一个隐藏的文件选择框（放在面板上，不在某一页里）',
+  );
   assert.ok(
     body.querySelector('a[href*="example-map"]'),
     '要给一个能下载的模板，否则没人知道该画成什么样',
@@ -9253,12 +9272,16 @@ console.log('\n关卡模式');
 openSetup();
 await wait(40);
 
-check('左侧四页：关卡 / 编辑器 / 战役 / 地图', () => {
+check('左侧三页：关卡 / 战役 / 编辑器', () => {
+  /*
+   * 2026-11-17：地图从导航里撤掉了。只有自由对局会选图，它变成战役页里的一个小窗口；
+   * 上传和管理并进「编辑器」——和上传关卡是同一种事。
+   */
   const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
   assert.deepEqual(
     tabs,
-    ['levels', 'editor', 'battle', 'maps'],
-    `四页的顺序应该是 关卡 / 编辑器 / 战役 / 地图，实际 ${tabs.join(',')}`,
+    ['levels', 'battle', 'editor'],
+    `三页的顺序应该是 关卡 / 战役 / 编辑器，实际 ${tabs.join(',')}`,
   );
 });
 
@@ -9458,14 +9481,18 @@ check('简报页能一键跳车：换成自由对局', () => {
   assert.ok(!foot.includes('关卡「'), `摘要里不该还有关卡，实际：${foot}`);
 });
 
-check('战役页能看到当前地图，并能一键去换图', () => {
+check('战役页能看到当前地图，点和「换图」弹出小窗口', () => {
   const row = doc.querySelector('.start-map-row');
   assert.ok(!!row, '战役页顶部要有「在哪张图上打」这一条');
-  doc.querySelector<HTMLElement>('[data-act="to-maps"]')?.click();
+  doc.querySelector<HTMLElement>('[data-act="pick-map"]')?.click();
+  assert.ok(!!doc.querySelector('.map-pick-layer'), '点「换图」应当弹出选图小窗口');
   assert.ok(
-    !!doc.querySelector('[data-map]'),
-    '点「换图」应当落到地图页（有 data-map 卡片）',
+    doc.querySelectorAll('.map-pick-layer [data-map]').length >= 5,
+    '小窗口里要有随机 + 内置图',
   );
+  // 关掉窗口，别把状态带进后面的用例
+  doc.querySelector<HTMLElement>('[data-act="pick-map-close"]')?.click();
+  assert.ok(!doc.querySelector('.map-pick-layer'), '点「关闭」应当收起小窗口');
 });
 
 check('切回「自由对局」：人数开关回来，关卡不残留', () => {

@@ -9894,6 +9894,59 @@ a.btn {
  * 以前地图只能在「地图」页看，选完图回到战役页就只剩底部摘要里一行小字。
  * 这一条把"这张图长什么样"钉在规则页最上面，配一个「换图」直达按钮。
  */
+/*
+ * 「选地图」小窗口（2026-11-17）。
+ *
+ * 地图原来是独立一页，现在只有自由对局会用到它，于是降成战役页里的一层弹窗。
+ * 样式上跟 `.pool-layer` 不同：那个是整面覆盖（兵种池内容极多），
+ * 这个是居中一张卡（挑一张图就走）。
+ */
+.map-pick-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 18, 14, 0.42);
+  border-radius: inherit;
+}
+
+.map-pick-card {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, 100%);
+  max-height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.map-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.map-pick-head b {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.map-pick-head .field-hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.map-pick-body {
+  padding: 14px 16px 18px;
+  overflow-y: auto;
+}
+
 .start-map-row {
   display: flex;
   align-items: center;
