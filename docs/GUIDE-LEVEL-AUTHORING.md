@@ -316,7 +316,7 @@ events: [
 
 | 形状 | 作用 |
 |---|---|
-| `{ kind: 'say', text }` | 往战报里写一句（双方都看得到） |
+| `{ kind: 'say', text }` | 往战报里写一句（双方都看得到）。**带 `say` 的事件会把战报自动展开**，不带的不展开——想让玩家知道，就必须配一句 |
 | `{ kind: 'spawn', owner, units }` | 凭空刷兵，**不看钱不看产线**，只看格子站不站得住 |
 | `{ kind: 'doctrine', seat, strategy }` | 改这一席电脑的打法：`'auto' \| 'rush' \| 'boom' \| 'hold'` |
 | `{ kind: 'deploy', seat }` | 让 `hidden` 里的某一席上场（放城 + 摆它在 `deploy` 里写好的兵） |
