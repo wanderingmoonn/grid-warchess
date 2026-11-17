@@ -785,7 +785,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
          */
         const warnLine =
           warn.length > 0
-            ? `<div class="field-hint is-warn">开了「${warn.join('、')}」这一关会明显变难——想挑战可以开，但难度不是设计过的那个。</div>`
+            ? `<div class="field-hint is-warn">开了「${warn.join('、')}」这一关会明显变难。</div>`
             : '';
         return lockLine + warnLine;
       })();
@@ -1328,7 +1328,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               }
               ${
                 (config.level.events ?? []).length > 0
-                  ? `<div class="field-hint">这一关有 ${(config.level.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  ? `<div class="field-hint">这一关有 ${(config.level.events ?? []).length} 个事件。</div>`
                   : ''
               }
               ${
@@ -1436,7 +1436,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-hint">${fixedLine}</div>
               ${
                 (config.level?.events ?? []).length > 0
-                  ? `<div class="field-hint">这一关有 ${(config.level?.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  ? `<div class="field-hint">这一关有 ${(config.level?.events ?? []).length} 个事件。</div>`
                   : ''
               }
               ${expLockNote}
