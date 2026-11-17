@@ -1327,6 +1327,53 @@ console.log('');
 }
 
 /* ------------------------------------------------------------------ */
+/* 局势条件 + 事件里直接判胜利（2026-11-17）                            */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const mk = (events: unknown[]) =>
+    validateLevel({ ...structuredClone(base), id: 'level:tmp-state', name: '局势条件探针', events });
+
+  // 金币条件 + 直接判胜
+  const winLevel = mk([
+    { id: 'e1', when: { kind: 'gold', seat: 'A', value: 1 }, do: [{ kind: 'win', seat: 'A' }] },
+  ]);
+  check(winLevel.ok, '「金币 + 直接判胜」能通过校验', winLevel.ok ? '' : winLevel.errors[0]);
+  if (winLevel.ok) {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: winLevel.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    check(r.ok && r.state.winner === 'A', '事件判胜会结算（gold>=1 开局就成立）', String(r.ok ? r.state.winner : 'no'));
+  }
+
+  // 城血条件：开局城有血，`<= 0` 不该触发
+  const hpLevel = mk([
+    { id: 'gone', when: { kind: 'cityHp', seat: 'A', op: '<=', value: 0 }, do: [{ kind: 'say', text: '城没了' }] },
+  ]);
+  if (hpLevel.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: hpLevel.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    if (r.ok) st = r.state;
+    check(
+      !st.log.some((l) => l.text === '城没了'),
+      '城血条件在开局不误触发',
+      `城血 ${st.cities.find((c) => c.owner === 'A')?.hp ?? '?'}`,
+    );
+  }
+
+  // 时代条件：开局城是 1 级
+  const eraLevel = mk([
+    { id: 'era', when: { kind: 'cityEra', seat: 'A', value: 1 }, do: [{ kind: 'say', text: '已经是 1 级' }] },
+  ]);
+  if (eraLevel.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: eraLevel.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    if (r.ok) st = r.state;
+    check(st.log.some((l) => l.text === '已经是 1 级'), '城时代条件成立时触发');
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
 

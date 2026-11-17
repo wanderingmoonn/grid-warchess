@@ -3822,6 +3822,15 @@ function checkWinner(s: GameState): PlayerId | null {
   if (s.config.godMode === true) return null;
 
   /*
+   * 事件里 `{ kind: 'win' }` 判出的胜者（2026-11-17）。
+   *
+   * 必须排在所有常规判定前面：那个动作是作者**明确说"这一局到此为止"**，
+   * 用 `decided` 记一笔而不是直接写 `s.winner`，是因为 `applyAction` 结尾会
+   * 用 `checkWinner` 重新赋 winner——直接写会被下一次判定覆盖。
+   */
+  if (s.levelState?.decided) return s.levelState.decided;
+
+  /*
    * 关卡目标：**提前**宣布赢。
    *
    * 排在扩展的特殊胜利之前：扩展那条是"通用规则的一个例外"（比如占了月球就赢），
@@ -4811,16 +4820,55 @@ function eventMatches(
       (u) => (!when.owner || u.owner === when.owner) && (!when.type || u.type === when.type),
     );
   }
+  /*
+   * 局势条件（2026-11-17）：读的是**当前局面**，和边沿无关。
+   * 城全没了按 0 算：`cityHp <= 0` 就是"城被打光了"，作者不用另写一条。
+   */
+  if (when.kind === 'cityEra' || when.kind === 'cityHp' || when.kind === 'gold') {
+    let actual: number;
+    if (when.kind === 'gold') {
+      actual = cur.players[when.seat]?.gold ?? 0;
+    } else {
+      const own = cur.cities.filter((c) => c.owner === when.seat && !c.ruined);
+      actual =
+        own.length === 0
+          ? 0
+          : when.kind === 'cityEra'
+            ? Math.max(...own.map((c) => c.era))
+            : Math.min(...own.map((c) => c.hp));
+    }
+    return cmpNum(actual, when.op, when.value);
+  }
+
   // enter：从区域外走进区域内（原本就在里面、只是挪了一格的不算"进入"）
   return moved.some((m) => {
-    if (when.owner && m.owner !== when.owner) return false;
-    const z = when.zone;
+    if (when.kind === 'enter' && when.owner && m.owner !== when.owner) return false;
+    const z = when.kind === 'enter' ? when.zone : null;
+    if (!z) return false;
     const inside = (x: number, y: number): boolean => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1;
     return !inside(m.fromX, m.fromY) && inside(m.x, m.y);
   });
 }
 
 function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
+  if (act.kind === 'win') {
+    /*
+     * 记在 `levelState.decided` 而不是直接写 `s.winner`：`applyAction` 结尾会用
+     * `checkWinner` 重新赋一次 winner，直接写会被下一次判定覆盖掉。
+     * 一局只认第一次（先判先赢）。
+     */
+    if (!s.levelState?.decided) {
+      s.levelState = { ...s.levelState, fired: s.levelState?.fired ?? [], decided: act.seat };
+      s.log.push({
+        turn: s.turn,
+        player: act.seat,
+        text: `${s.players[act.seat]?.name ?? act.seat} 达成条件，这一局结束了。`,
+        open: true,
+        system: true,
+      });
+    }
+    return;
+  }
   if (act.kind === 'say') {
     /*
      * 旁白写进战报，**公开**（`open`）——这一关发生的事双方都该看到。

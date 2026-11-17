@@ -312,6 +312,12 @@ events: [
 | `{ kind: 'enter', zone: {...} }` | 有单位走进区域（可加 `owner` 限定） |
 | `{ kind: 'fired', id: 'ambush-1' }` | **另一条事件已经发生过**。用它把事件串起来 |
 | `{ kind: 'fired', id: 'trap', times: 3 }` | 已经发生过 **3 次**（可加 `op`，默认 `>=`）。只有 `repeat: true` 的事件次数会超过 1 |
+| `{ kind: 'cityEra', seat: 'B', op: '>=', value: 2 }` | B 家**最高的那座城**的时代等级 |
+| `{ kind: 'cityHp', seat: 'B', op: '<=', value: 20 }` | B 家**最低的那座城**的血量（有城快破了） |
+| `{ kind: 'gold', seat: 'A', op: '>=', value: 300 }` | A 家手上的金币 |
+
+三条局势条件都读**当前局面**（不是"发生过"），`op` 默认 `>=`。
+**城全没了按 0 算**：`cityHp <= 0` 就是"城被打光了"，不用另写一条。
 
 默认每条只触发一次。`enter` 想反复触发要写 `repeat: true`。
 
@@ -430,6 +436,7 @@ when: {
 | `{ kind: 'deploy', seat }` | 让 `hidden` 里的某一席上场（放城 + 摆它在 `deploy` 里写好的兵） |
 | `{ kind: 'terrain', zone, to, only? }` | 改地形（炸桥、塌方、水淹） |
 | `{ kind: 'reveal', zone, turns? }` | 点亮一片区域：亮 N 次行动（默认 1），到期重新没入迷雾 |
+| `{ kind: 'win', seat }` | **直接判这一席胜利**，不用等胜利条件。一局只认第一次（先判先赢） |
 
 **`terrain` 的三条兜底**（引擎做，作者不用管）：
 1. 城格跳过；

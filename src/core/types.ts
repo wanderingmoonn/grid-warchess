@@ -2109,6 +2109,13 @@ export interface GameState {
      */
     counts?: Record<string, number>;
     /**
+     * 事件里 `{ kind: 'win' }` 判出的胜者（2026-11-17）。
+     *
+     * 存在这里而不是直接写 `s.winner`：`applyAction` 结尾会用 `checkWinner`
+     * 重新算一次，直接写会被覆盖。`checkWinner` 会**先认这个**。
+     */
+    decided?: PlayerId;
+    /**
      * 还没登场的席位（关卡 `seats.hidden`）。
      *
      * 它们不占回合、不算出局、不参与"还剩几家"——但**仍然在 `seatsOf` 里**，

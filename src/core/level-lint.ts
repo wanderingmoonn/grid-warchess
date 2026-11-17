@@ -308,6 +308,27 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
     }
   }
 
+  /*
+   * 局势条件看的是"这一家的城"。没有城的席位（`cityless`）这两条恒为 0，
+   * 写了就是永远不会成立的那一半——提醒一句，作者大多是想写给有城的那家。
+   */
+  const stateLeaves = (when: LevelWhen): Array<{ kind: string; seat: string }> => {
+    if ('all' in when) return when.all.flatMap(stateLeaves);
+    if ('any' in when) return when.any.flatMap(stateLeaves);
+    if ('not' in when) return stateLeaves(when.not);
+    return when.kind === 'cityEra' || when.kind === 'cityHp' ? [when] : [];
+  };
+  for (const ev of level.events ?? []) {
+    for (const leaf of stateLeaves(ev.when)) {
+      if ((level.seats?.cityless ?? []).includes(leaf.seat as never)) {
+        out.push({
+          severity: 'warn',
+          text: `事件「${ev.id}」的条件看的是第 ${leaf.seat} 家的城，但这一席没有城：这一条恒为 0。`,
+        });
+      }
+    }
+  }
+
   /* ---- 事件 ---- */
   for (const ev of level.events ?? []) {
     const hasSay = ev.do.some((a) => a.kind === 'say');

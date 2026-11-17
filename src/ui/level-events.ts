@@ -47,6 +47,7 @@ const DO_KIND_NAME: Record<string, string> = {
   terrain: '改一片地形',
   reveal: '点亮一片区域',
   gold: '给某一家金币',
+  win: '直接判某一家胜利',
 };
 const WHEN_KIND_NAME: Record<string, string> = {
   turn: '第 N 次行动',
@@ -198,6 +199,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (kind === 'terrain') return { kind: 'terrain', zone: centerZone(2), to: 'deep' };
     if (kind === 'reveal') return { kind: 'reveal', zone: centerZone(2) };
     if (kind === 'gold') return { kind: 'gold', seat: seats[0] ?? 'A', amount: 100 };
+    if (kind === 'win') return { kind: 'win', seat: seats[0] ?? 'A' };
     return { kind: 'say', text: '这一关发生了点事。' };
   };
 
@@ -340,6 +342,23 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         的单位走进 <button class="btn btn-sm" data-pick-when-zone="${key}">${esc(zoneText(node.zone))}</button>
       </span>${del}</div>`;
     }
+    if (node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold') {
+      const label =
+        node.kind === 'cityEra' ? '最高的城的时代' : node.kind === 'cityHp' ? '最低的城的血量' : '手上的金币';
+      const opSel = `<select class="level-mini-select" data-when-op="${key}" title="怎么比">${(
+        ['>=', '<=', '=', '>', '<'] as const
+      )
+        .map((o) => `<option value="${o}" ${(node.op ?? '>=') === o ? 'selected' : ''}>${o}</option>`)
+        .join('')}</select>`;
+      return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel}
+          <select class="level-mini-select" data-when-seat="${key}">${seatOptions(node.seat)}</select>
+          的 ${label} ${opSel}
+          <input type="number" min="0" max="99999" class="level-mini-num" data-when-value="${key}" value="${node.value}">
+        </span>${del}</div>`;
+    }
+
+    if (node.kind !== 'fired') return `${kindSel}${del}`;
+
     // fired：从本关其它事件里挑一个，可选"已经发生过几次"
     const others = events.filter((e) => e.id !== events[Number(key.split(':')[0])]?.id);
     const firedSel = `<select class="level-mini-select" data-when-fired="${key}">${
@@ -467,6 +486,13 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
           <input type="number" class="level-mini-num" min="-9999" max="9999" data-gold-amount="${i}:${j}" value="${act.amount}">
           金币
           <span class="field-hint">（正数给钱，负数扣钱；扣到 0 为止，不会变负）</span>
+        </span>`;
+    }
+    if (act.kind === 'win') {
+      return `${kindSel}<span class="level-when-arg">
+          <select class="level-mini-select" data-win-seat="${i}:${j}">${seatOptions(act.seat)}</select>
+          赢
+          <span class="field-hint">（事件一触发就结算，不用等胜利条件；一局只认第一次）</span>
         </span>`;
     }
     return `${kindSel}<span class="level-when-arg">
@@ -867,6 +893,15 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       }
       return;
     }
+    const whenValue = el.getAttribute('data-when-value');
+    if (whenValue) {
+      const key = parseKey(whenValue);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && (node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold')) {
+        node.value = Math.max(0, Math.min(99999, Math.round(Number((el as HTMLInputElement).value) || 0)));
+      }
+      return;
+    }
     const times = el.getAttribute('data-when-times');
     if (times) {
       const key = parseKey(times);
@@ -930,6 +965,16 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       renderList();
       return;
     }
+    const whenSeat = el.getAttribute('data-when-seat');
+    if (whenSeat !== null) {
+      const key = parseKey(whenSeat);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && (node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold')) {
+        node.seat = val as PlayerId;
+      }
+      renderList();
+      return;
+    }
     const whenType = el.getAttribute('data-when-type');
     if (whenType !== null) {
       const key = parseKey(whenType);
@@ -941,7 +986,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (whenOp !== null) {
       const key = parseKey(whenOp);
       const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
-      if (node && 'kind' in node && node.kind === 'turn') {
+      if (node && 'kind' in node && (node.kind === 'turn' || node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold')) {
         // 默认值 `>=` 不写进数据：少一个字段少一句要解释的话
         if (val === '>=') delete node.op;
         else node.op = val as '>=' | '<=' | '=' | '>' | '<';
@@ -965,6 +1010,13 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         else node.op = val as '>=' | '<=' | '=' | '>' | '<';
       }
       renderList();
+      return;
+    }
+    const winSeat = el.getAttribute('data-win-seat');
+    if (winSeat) {
+      const [i, j] = winSeat.split(':').map(Number);
+      const act = events[i!]?.do[j!];
+      if (act && act.kind === 'win') act.seat = val as PlayerId;
       return;
     }
     const doKind = el.getAttribute('data-do-kind');

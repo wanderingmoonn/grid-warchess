@@ -104,7 +104,22 @@ export type LevelWhenLeaf =
    * 同一批里能传播：这一批先执行的 A，后面的 B 在同一批的第二遍扫描里能看到
    * （看到的是**这一遍开头**的次数，所以同一批里 A 触发两次不会串成 2）。
    */
-  | { kind: 'fired'; id: string; times?: number; op?: TurnOp };
+  | { kind: 'fired'; id: string; times?: number; op?: TurnOp }
+  /**
+   * 这一席**最高的**城的时代等级（没有城＝0）。`op` 默认 `>=`。
+   *
+   * 用"最高"而不是"某一座"：作者想说的是"这一家已经升到铁器了"，
+   * 而不是"它第 2 座城升到铁器了"。
+   */
+  | { kind: 'cityEra'; seat: PlayerId; op?: TurnOp; value: number }
+  /**
+   * 这一席**最低的**城的血量（没有城＝0）。`op` 默认 `>=`。
+   *
+   * 用"最低"：想说的是"它有一座城快破了"，用 `<=` 配一个低值来写。
+   */
+  | { kind: 'cityHp'; seat: PlayerId; op?: TurnOp; value: number }
+  /** 这一席手上的金币。`op` 默认 `>=` */
+  | { kind: 'gold'; seat: PlayerId; op?: TurnOp; value: number };
 
 /**
  * 事件条件：叶子，或者一棵组合树。
@@ -174,7 +189,17 @@ export type LevelDo =
    * 而作者想说的话往往是"援军带着军费到了"或"补给线被劫了"——那是钱包的事，
    * 不是兵的事。扣款封底 0，避免把一个负资产丢进 AI 的估值里。
    */
-  | { kind: 'gold'; seat: PlayerId; amount: number };
+  | { kind: 'gold'; seat: PlayerId; amount: number }
+  /**
+   * **直接判定这一席胜利**（2026-11-17）。
+   *
+   * 给"胜利条件写不出来的那种赢"用：护送某人到某地之后触发一段剧情，剧情走完
+   * 才算赢；或者"撑到援军抵达"——援军是事件刷出来的，胜利也由那一条事件说了算。
+   *
+   * 判定记在 `levelState.decided`：`checkWinner` 会**先认它**，所以不会被后面
+   * 的常规判定覆盖。一局只认第一次（先判先赢）。
+   */
+  | { kind: 'win'; seat: PlayerId };
 
 /**
  * 一件事：什么时候、做什么。
@@ -2284,6 +2309,27 @@ function normalizeWhen(
     return rawOp === '>=' ? { kind: 'turn', at } : { kind: 'turn', at, op: rawOp as TurnOp };
   }
 
+  if (kind === 'cityEra' || kind === 'cityHp' || kind === 'gold') {
+    const seat = ownerOf(w.seat);
+    if (!seat) {
+      errors.push(`事件「${id}」的「${kind}」条件要写是哪一家（seat）`);
+      return undefined;
+    }
+    const value = Math.round(Number(w.value));
+    if (!Number.isFinite(value) || value < 0 || value > 99999) {
+      errors.push(`事件「${id}」的「${kind}」阈值要在 0~99999（现在 ${String(w.value)}）`);
+      return undefined;
+    }
+    const rawOp = w.op === undefined ? '>=' : String(w.op);
+    if (!['>=', '<=', '=', '>', '<'].includes(rawOp)) {
+      errors.push(`事件「${id}」的比较符「${rawOp}」不认识（只能是 >= / <= / = / > / <）`);
+      return undefined;
+    }
+    const out = { kind, seat, value } as { kind: typeof kind; seat: PlayerId; value: number; op?: TurnOp };
+    if (rawOp !== '>=') out.op = rawOp as TurnOp;
+    return out;
+  }
+
   if (kind === 'fired') {
     const ref = typeof w.id === 'string' ? w.id.trim() : '';
     if (!ref) {
@@ -2732,8 +2778,17 @@ function normalizeDo(
     return { kind: 'gold', seat, amount };
   }
 
+  if (kind === 'win') {
+    const seat = String(a.seat ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`事件「${id}」判胜利的那一方是「${String(a.seat)}」，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    return { kind: 'win', seat };
+  }
+
   errors.push(
-    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold）`,
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold / win）`,
   );
   return undefined;
 }
