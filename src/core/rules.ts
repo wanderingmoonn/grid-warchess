@@ -4206,7 +4206,7 @@ function buildingVolley(s: GameState, b: Unit, focus?: Unit): number {
    */
   const byVictim = new Map<PlayerId, { names: Set<string>; dmg: number }>();
   const noteVictim = (u: Unit, dmg: number): void => {
-    if (u.owner === b.owner) return;
+    if (sameTeam(s, u.owner, b.owner)) return;
     const box = byVictim.get(u.owner) ?? { names: new Set<string>(), dmg: 0 };
     box.names.add(utype(s, u.type).name);
     box.dmg += dmg;
@@ -4220,7 +4220,14 @@ function buildingVolley(s: GameState, b: Unit, focus?: Unit): number {
    */
   const canHit = (u: Unit): boolean =>
     u.hp > 0 &&
-    u.owner !== b.owner &&
+    /*
+     * **同盟不算敌人**（2026-11-17 修）。
+     *
+     * 这里原来写的是 `u.owner !== b.owner`：只排除"同一个主人"，不排除同盟。
+     * 关卡可以用 `seats.teams` 把两席编成一边，那种局里塔会把盟军当靶子打。
+     * 溅射那边一直用的是 `sameTeam()`，两条路口径不一致——现在统一。
+     */
+    !sameTeam(s, u.owner, b.owner) &&
     s.units.includes(u) &&
     boardIdOf(u) === boardIdOf(b) &&
     distance(b, u) > 0 &&
