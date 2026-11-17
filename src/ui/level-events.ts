@@ -24,6 +24,7 @@ import {
   type LevelDef,
   type LevelTerrain,
   type LevelWhen,
+  type LevelWhenLeaf,
   type LevelZone,
 } from '../core/level.ts';
 import type { PlayerId } from '../core/types.ts';
@@ -173,7 +174,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     return `e${Date.now().toString(36)}`;
   };
 
-  const defaultWhen = (kind: LevelWhen['kind']): LevelWhen => {
+  const defaultWhen = (kind: LevelWhenLeaf['kind']): LevelWhenLeaf => {
     if (kind === 'unitDied') return { kind: 'unitDied' };
     if (kind === 'enter') return { kind: 'enter', zone: centerZone(2) };
     return { kind: 'turn', at: 5 };
@@ -205,6 +206,14 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   /* ---------- 渲染：卡片 ---------- */
 
   function whenControls(ev: LevelEvent, i: number): string {
+    /*
+     * 条件现在可以是树（多条件）。这个编辑器还没跟上（阶段 2 才做），
+     * 所以遇到树就**只读**：给一句话让作者去 JSON 里改，而不是硬按第一个叶子
+     * 渲染——那样一保存就把另外几个条件丢掉了。
+     */
+    if (!('kind' in ev.when)) {
+      return `<div class="field-hint">这条事件有多个条件（组合树）。先在下面的 JSON 里改，编辑器之后会支持。</div>`;
+    }
     const when = ev.when;
     const kindSel = `<select class="level-mini-select" data-when-kind="${i}">${Object.entries(WHEN_KIND_NAME)
       .map(([k, n]) => `<option value="${k}" ${when.kind === k ? 'selected' : ''}>${esc(n)}</option>`)
@@ -223,10 +232,14 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
           <select class="level-mini-select" data-when-type="${i}">${unitOptionsHtml(when.type, true)}</select>
           死了</span>`;
     }
-    return `${kindSel}<span class="level-when-arg">
+    if (when.kind === 'enter') {
+      return `${kindSel}<span class="level-when-arg">
         <select class="level-mini-select" data-when-owner="${i}">${seatOptions(when.owner, true)}</select>
         的单位走进 <button class="btn btn-sm" data-pick-when-zone="${i}">${esc(zoneText(when.zone))}</button>
       </span>`;
+    }
+    // fired：引用另一条事件。编辑器阶段 2 才做选择器，现在先显示 id
+    return `${kindSel}<span class="level-when-arg">事件「${esc(when.id)}」已发生</span>`;
   }
 
   function doControls(act: LevelDo, i: number, j: number): string {
@@ -370,11 +383,23 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       listEl.innerHTML = '<div class="editor-empty">还没有事件，时间轴是空的。</div>';
       return;
     }
+    /*
+     * 条件可能是组合树（没有 `kind`）。这类归到"看情况触发"那一组——
+     * "第几次行动"只对单条件 `turn` 有意义。
+     */
+    const turnAt = (w: LevelWhen): number | null =>
+      'kind' in w && w.kind === 'turn' ? w.at : null;
+    const judgeLabel = (w: LevelWhen): [string, string] => {
+      if (!('kind' in w)) return ['多条件', '满足组合条件时'];
+      if (w.kind === 'unitDied') return ['兵死了', '有人阵亡时'];
+      if (w.kind === 'fired') return ['事件已发生', '之前那件事之后'];
+      return ['走进区域', '踩到点上时'];
+    };
     const withAt = events
-      .map((ev, i) => ({ ev, i }))
-      .filter((x): x is { ev: LevelEvent & { when: { kind: 'turn'; at: number } }; i: number } => x.ev.when.kind === 'turn')
-      .sort((a, b) => a.ev.when.at - b.ev.when.at);
-    const others = events.map((ev, i) => ({ ev, i })).filter((x) => x.ev.when.kind !== 'turn');
+      .map((ev, i) => ({ ev, i, at: turnAt(ev.when) }))
+      .filter((x) => x.at !== null)
+      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    const others = events.map((ev, i) => ({ ev, i })).filter((x) => turnAt(x.ev.when) === null);
 
     const row = (x: { ev: LevelEvent; i: number }, at: string, sub: string): string => {
       const sum = summarize(x.ev);
@@ -395,7 +420,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
           withAt.length > 0
             ? withAt
                 .map((x) =>
-                  row(x, `第 ${x.ev.when.kind === 'turn' ? x.ev.when.at : 0} 次`, `约第 ${Math.ceil((x.ev as { when: { at: number } }).when.at / Math.max(1, seatCount))} 轮`),
+                  row(x, `第 ${x.at ?? 0} 次`, `约第 ${Math.ceil((x.at ?? 0) / Math.max(1, seatCount))} 轮`),
                 )
                 .join('')
             : '<div class="editor-empty">还没有按时机触发的事件。</div>'
@@ -404,7 +429,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
           others.length > 0
             ? `<div class="level-timeline-group">看情况触发</div>${others
                 .map((x) =>
-                  row(x, x.ev.when.kind === 'unitDied' ? '兵死了' : '走进区域', x.ev.when.kind === 'unitDied' ? '有人阵亡时' : '踩到点上时'),
+                  row(x, ...judgeLabel(x.ev.when)),
                 )
                 .join('')}`
             : ''
@@ -432,7 +457,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
           <button class="btn btn-sm level-event-del" data-ev-del="${i}">删除</button>
         </div>
         ${
-          ev.when.kind === 'enter'
+          'kind' in ev.when && ev.when.kind === 'enter'
             ? `<label class="editor-check level-event-repeat"><input type="checkbox" data-repeat="${i}" ${
                 ev.repeat ? 'checked' : ''
               }> 每次走进都触发（不勾＝只触发一次）</label>`
@@ -462,7 +487,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   }
 
   function renderSummary(): void {
-    const turns = events.map((e) => (e.when.kind === 'turn' ? e.when.at : null)).filter((n): n is number => n !== null);
+    const turns = events
+      .map((e) => ('kind' in e.when && e.when.kind === 'turn' ? e.when.at : null))
+      .filter((n): n is number => n !== null);
     const early = turns.length > 0 ? Math.min(...turns) : null;
     const late = turns.length > 0 ? Math.max(...turns) : null;
     summaryEl.textContent =
@@ -480,7 +507,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (pick.kind === 'zone') {
       const ev = events[pick.ev];
       if (!ev) return null;
-      if (pick.slot === 'when') return ev.when.kind === 'enter' ? ev.when.zone : null;
+      if (pick.slot === 'when') return 'kind' in ev.when && ev.when.kind === 'enter' ? ev.when.zone : null;
       const act = ev.do[pick.act];
       return act && (act.kind === 'terrain' || act.kind === 'reveal') ? act.zone : null;
     }
@@ -540,11 +567,13 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       if (seen.has(ev.id)) out.push(`${tag}：事件 id「${ev.id}」重复了，触发记录会分不清`);
       seen.add(ev.id);
 
-      if (ev.when.kind === 'turn' && (!Number.isFinite(ev.when.at) || ev.when.at < 1)) {
-        out.push(`${tag}：触发时机要是大于 0 的行动序号`);
-      }
-      if (ev.when.kind === 'enter' && outOfBounds(ev.when.zone)) {
-        out.push(`${tag}：进入区域整块在地图外，永远不会触发`);
+      if ('kind' in ev.when) {
+        if (ev.when.kind === 'turn' && (!Number.isFinite(ev.when.at) || ev.when.at < 1)) {
+          out.push(`${tag}：触发时机要是大于 0 的行动序号`);
+        }
+        if (ev.when.kind === 'enter' && outOfBounds(ev.when.zone)) {
+          out.push(`${tag}：进入区域整块在地图外，永远不会触发`);
+        }
       }
       if (ev.do.length === 0) out.push(`${tag}：一个动作都没有`);
       for (const [j, act] of ev.do.entries()) {
@@ -634,7 +663,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       if (!pick || pick.kind !== 'zone') return;
       const ev0 = events[pick.ev];
       if (ev0) {
-        if (pick.slot === 'when' && ev0.when.kind === 'enter') ev0.when = { ...ev0.when, zone };
+        if (pick.slot === 'when' && 'kind' in ev0.when && ev0.when.kind === 'enter') {
+          ev0.when = { ...ev0.when, zone };
+        }
         const act = ev0.do[pick.act];
         if (pick.slot === 'do' && act && (act.kind === 'terrain' || act.kind === 'reveal')) act.zone = zone;
       }
@@ -671,7 +702,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     const at = el.getAttribute('data-when-at');
     if (at) {
       const act = events[Number(at)]?.when;
-      if (act && act.kind === 'turn') act.at = Math.max(1, Math.round(Number((el as HTMLInputElement).value) || 1));
+      if (act && 'kind' in act && act.kind === 'turn') {
+        act.at = Math.max(1, Math.round(Number((el as HTMLInputElement).value) || 1));
+      }
     }
   });
 
@@ -682,21 +715,23 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     const whenKind = el.getAttribute('data-when-kind');
     if (whenKind !== null) {
       const ev0 = events[Number(whenKind)];
-      if (ev0) ev0.when = defaultWhen(val as LevelWhen['kind']);
+      if (ev0) ev0.when = defaultWhen(val as LevelWhenLeaf['kind']);
       renderAll();
       return;
     }
     const whenOwner = el.getAttribute('data-when-owner');
     if (whenOwner !== null) {
       const when = events[Number(whenOwner)]?.when;
-      if (when && (when.kind === 'unitDied' || when.kind === 'enter')) when.owner = (val || undefined) as PlayerId | undefined;
+      if (when && 'kind' in when && (when.kind === 'unitDied' || when.kind === 'enter')) {
+        when.owner = (val || undefined) as PlayerId | undefined;
+      }
       renderList();
       return;
     }
     const whenType = el.getAttribute('data-when-type');
     if (whenType !== null) {
       const when = events[Number(whenType)]?.when;
-      if (when && when.kind === 'unitDied') when.type = val || undefined;
+      if (when && 'kind' in when && when.kind === 'unitDied') when.type = val || undefined;
       return;
     }
     const doKind = el.getAttribute('data-do-kind');

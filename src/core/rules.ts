@@ -4634,8 +4634,23 @@ function spawnFromEvent(s: GameState, owner: PlayerId, type: string, x: number, 
   return null;
 }
 
-/** 一次动作里最多让多少条事件生效。防的是"写错的条件每次动作都成立"把一局刷爆 */
-const MAX_EVENTS_PER_ACTION = 12;
+/**
+ * 一次动作里最多让多少条事件生效。防的是"写错的条件每次动作都成立"把一局刷爆。
+ *
+ * 2026-11-17 从 12 提到 32：`turn` 现在支持 `=` / `<`，被截断的事件**下一手
+ * 不一定还成立**，所以不能再指望"留到下一手"兜底。同时超限不再是静默 break——
+ * 打一条控制台日志，作者能查到"我写了 40 条，为什么只跑了 32 条"。
+ */
+const MAX_EVENTS_PER_ACTION = 32;
+
+/**
+ * 最多扫几遍。
+ *
+ * 事件之间可以靠 `fired` 引用串起来（A 触发后 B 才成立）。一遍扫完只看得到
+ * **这一遍开头**的 fired，所以 A→B 需要第二遍、A→B→C 需要第三遍。
+ * 3 遍够覆盖实际剧本；再多说明作者写出了环（校验那边会另外提示）。
+ */
+const MAX_EVENT_PASSES = 3;
 
 /**
  * 跑一遍关卡事件表。
@@ -4664,8 +4679,7 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
    * 下面那次差量比较要为每一步付一次钱——实测会把电脑想一手的耗时抬高一截。
    */
   const fired = new Set(cur.levelState?.fired ?? []);
-  const pending = events.filter((e) => e.repeat === true || !fired.has(e.id));
-  if (pending.length === 0) return;
+  if (events.every((e) => e.repeat !== true && fired.has(e.id))) return;
 
   /*
    * 差量用 id 建表来算，不写 `filter + some`。
@@ -4690,17 +4704,46 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
     }
   }
 
-  let ran = 0;
-  for (const ev of pending) {
-    if (ran >= MAX_EVENTS_PER_ACTION) break;
-    if (!eventMatches(ev.when, cur, died, moved)) continue;
+  /*
+   * 多遍扫描（2026-11-17）。
+   *
+   * 每一遍都用**这一遍开始时**的 fired 快照去判断，所以"谁写在前面"不影响结果：
+   * A 在第一遍执行完，第二遍时引用 A 的 B 才看到它。
+   * 同一批里执行过的事件（尤其是 `repeat`）记在 `executed` 里，不会因为多扫一遍
+   * 而重复执行。
+   */
+  const executed = new Set<string>();
+  let total = 0;
+  let truncated = false;
+  for (let pass = 0; pass < MAX_EVENT_PASSES; pass += 1) {
+    const snapshot = new Set(fired);
+    let ranThisPass = 0;
+    for (const ev of events) {
+      if (total >= MAX_EVENTS_PER_ACTION) {
+        truncated = true;
+        break;
+      }
+      if (executed.has(ev.id)) continue;
+      if (ev.repeat !== true && snapshot.has(ev.id)) continue;
+      if (!eventMatches(ev.when, cur, died, moved, snapshot)) continue;
 
-    fired.add(ev.id);
-    ran += 1;
-    for (const act of ev.do) runEventAction(cur, act);
+      fired.add(ev.id);
+      executed.add(ev.id);
+      ranThisPass += 1;
+      total += 1;
+      for (const act of ev.do) runEventAction(cur, act);
+    }
+    if (ranThisPass === 0) break;
   }
 
-  if (ran > 0) {
+  if (truncated) {
+    console.warn(
+      `[level] 一次动作触发了超过 ${MAX_EVENTS_PER_ACTION} 条事件，剩下的被截断：` +
+        `这一关可能有条件写得过宽（每次都成立）。`,
+    );
+  }
+
+  if (total > 0) {
     /*
      * 注意是 `{ ...cur.levelState, fired }`，不是 `{ fired }`。
      *
@@ -4717,7 +4760,18 @@ function eventMatches(
   cur: GameState,
   died: Unit[],
   moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>,
+  fired: ReadonlySet<string>,
 ): boolean {
+  /*
+   * 组合节点先展开。短路是有意的：`all` 里前面一条不成立就不再看后面——
+   * 每一个叶子都是纯读，没有副作用，短路安全。
+   */
+  if ('all' in when) return when.all.every((w) => eventMatches(w, cur, died, moved, fired));
+  if ('any' in when) return when.any.some((w) => eventMatches(w, cur, died, moved, fired));
+  if ('not' in when) return !eventMatches(when.not, cur, died, moved, fired);
+
+  if (when.kind === 'fired') return fired.has(when.id);
+
   if (when.kind === 'turn') {
     /*
      * 用 `>=` 而不是 `===`。
@@ -4726,6 +4780,11 @@ function eventMatches(
      * 用等号的话，一旦某次结算没有跑事件（比如动作被拒、或者扩展里某条路径
      * 直接改了局面），这一刻就永远错过了，而且不报错——作者只会觉得"事件没生效"。
      */
+    const op = when.op ?? '>=';
+    if (op === '<=') return cur.turn <= when.at;
+    if (op === '=') return cur.turn === when.at;
+    if (op === '>') return cur.turn > when.at;
+    if (op === '<') return cur.turn < when.at;
     return cur.turn >= when.at;
   }
   if (when.kind === 'unitDied') {
