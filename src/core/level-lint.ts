@@ -14,7 +14,7 @@ import { CONFIG, UNIT_TYPES, navigable, passable } from './config.ts';
 import { EXPANSIONS } from './expansions.ts';
 import { loadCustomUnits } from './customUnits.ts';
 import { terrainFromChar } from './mapgen.ts';
-import { LEVEL_TERRAINS, type DeployUnit, type LevelDef, type LevelDo } from './level.ts';
+import { LEVEL_TERRAINS, type DeployUnit, type LevelDef, type LevelDo, type LevelWhen } from './level.ts';
 import type { PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
 export interface LevelIssue {
@@ -216,6 +216,72 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
         severity: 'error',
         text: `第 ${seat} 家标成了「开局未登场」，但没有任何事件把它叫上场（缺一个「让某家登场」的动作）。它会永远不出现。`,
       });
+    }
+  }
+
+  /* ---- 事件条件的引用（`fired` 串事件） ---- */
+
+  /*
+   * 条件里可以写 `fired: '某条事件'`。这类引用有两个必须查的错：
+   *   · 引用了不存在的 id —— 条件永远不成立，而且不报错；
+   *   · 互相等待（A 等 B、B 等 A）—— 两件事都不会触发。
+   * 还有一个值得提醒但不算错的：引用了一个 `repeat` 事件——它第一次触发之后
+   * `fired` 就恒为真，引用它的条件不会"每次跟着再来一次"。
+   */
+  const eventIds = new Set((level.events ?? []).map((e) => e.id));
+  const firedRefs = (when: LevelWhen): string[] => {
+    if ('all' in when) return when.all.flatMap(firedRefs);
+    if ('any' in when) return when.any.flatMap(firedRefs);
+    if ('not' in when) return firedRefs(when.not);
+    return when.kind === 'fired' ? [when.id] : [];
+  };
+  const refGraph = new Map<string, string[]>();
+  for (const ev of level.events ?? []) {
+    const refs = firedRefs(ev.when);
+    refGraph.set(ev.id, refs);
+    for (const ref of refs) {
+      if (!eventIds.has(ref)) {
+        out.push({
+          severity: 'error',
+          text: `事件「${ev.id}」的条件引用了不存在的「${ref}」：这个条件永远不会成立。`,
+        });
+        continue;
+      }
+      const target = (level.events ?? []).find((e) => e.id === ref);
+      if (target?.repeat === true) {
+        out.push({
+          severity: 'warn',
+          text: `事件「${ev.id}」引用了会重复触发的「${ref}」：它第一次触发之后这个条件就恒为真，「${ev.id}」不会跟着再来一次。`,
+        });
+      }
+    }
+  }
+  /* 找环：DFS 的三色标记，找到一条就报，报多了也是同一件事 */
+  const mark = new Map<string, 0 | 1 | 2>();
+  const findCycle = (id: string, trail: string[]): string[] | null => {
+    const st = mark.get(id) ?? 0;
+    if (st === 1) {
+      const at = trail.indexOf(id);
+      return [...(at >= 0 ? trail.slice(at) : trail), id];
+    }
+    if (st === 2) return null;
+    mark.set(id, 1);
+    for (const next of refGraph.get(id) ?? []) {
+      if (!refGraph.has(next)) continue;
+      const found = findCycle(next, [...trail, id]);
+      if (found) return found;
+    }
+    mark.set(id, 2);
+    return null;
+  };
+  for (const id of refGraph.keys()) {
+    const cycle = findCycle(id, []);
+    if (cycle) {
+      out.push({
+        severity: 'error',
+        text: `事件之间互相等待（${cycle.join(' → ')}）：它们一条都不会触发，因为谁也等不到谁。`,
+      });
+      break;
     }
   }
 

@@ -707,10 +707,20 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   function problems(): string[] {
     const out: string[] = [];
     const seen = new Set<string>();
+    const allIds = new Set(events.map((e) => e.id));
+    const refsOf = (w: LevelWhen): string[] => {
+      if ('all' in w) return w.all.flatMap(refsOf);
+      if ('any' in w) return w.any.flatMap(refsOf);
+      if ('not' in w) return refsOf(w.not);
+      return w.kind === 'fired' ? [w.id] : [];
+    };
     for (const [i, ev] of events.entries()) {
       const tag = `第 ${i + 1} 条`;
       if (seen.has(ev.id)) out.push(`${tag}：事件 id「${ev.id}」重复了，触发记录会分不清`);
       seen.add(ev.id);
+      for (const ref of refsOf(ev.when)) {
+        if (!allIds.has(ref)) out.push(`${tag}：条件引用了不存在的「${ref}」，这个条件永远不会成立`);
+      }
 
       if ('kind' in ev.when) {
         if (ev.when.kind === 'turn' && (!Number.isFinite(ev.when.at) || ev.when.at < 1)) {

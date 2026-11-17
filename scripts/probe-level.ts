@@ -22,6 +22,7 @@ import { isAiSide } from '../src/core/ai-meta.ts';
 import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
 import { allLevels, demoLevels, levelById, playableLevels, storyLevels, validateLevel } from '../src/core/level.ts';
+import { lintLevel } from '../src/core/level-lint.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
 
@@ -1281,6 +1282,43 @@ line('26. 关卡刷兵：落点被占时会就近找位，不该有"站不住"')
 
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
+/* ------------------------------------------------------------------ */
+/* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const lintOf = (events: unknown[]) => {
+    const v = validateLevel({ ...structuredClone(base), id: 'level:tmp-lint', name: 'lint 探针', events });
+    return v.ok ? lintLevel(v.level) : [];
+  };
+  const say = (text: string) => [{ kind: 'say', text }];
+
+  const missing = lintOf([{ id: 'a', when: { kind: 'fired', id: 'nope' }, do: say('x') }]);
+  check(
+    missing.some((i) => i.severity === 'error' && i.text.includes('不存在的「nope」')),
+    '引用不存在的事件：lint 报错',
+  );
+
+  const cycle = lintOf([
+    { id: 'a', when: { kind: 'fired', id: 'b' }, do: say('x') },
+    { id: 'b', when: { kind: 'fired', id: 'a' }, do: say('y') },
+  ]);
+  check(
+    cycle.some((i) => i.severity === 'error' && i.text.includes('互相等待')),
+    '互相等待的两个事件：lint 报错',
+  );
+
+  const repeatRef = lintOf([
+    { id: 'a', when: { kind: 'enter', zone: { x0: 1, y0: 1, x1: 2, y1: 2 } }, repeat: true, do: say('x') },
+    { id: 'b', when: { kind: 'fired', id: 'a' }, do: say('y') },
+  ]);
+  check(
+    repeatRef.some((i) => i.severity === 'warn' && i.text.includes('重复触发')),
+    '引用 repeat 事件：给一条提醒（不算错）',
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* 事件条件：组合树 / 比较符 / fired 链（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
