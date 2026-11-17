@@ -17,6 +17,7 @@
  */
 
 import { hasAbility } from './abilities.ts';
+import { enterMemoScope, exitMemoScope, memoByState, memoTable } from './memo.ts';
 import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
 import { hasHold, holdOf, holdRoom } from './carry.ts';
 import { isProducer, produceUsableCount } from './produce.ts';
@@ -912,6 +913,21 @@ const WATER_GOOD_SHARE = 0.14;
  *   · 有水但窄 → 0.2（点缀，不改打法）
  */
 function seaDemand(s: GameState, me: PlayerId): number {
+  // 一次决策里它要被问两遍（`fields.sea` 和采购那一段各一次），
+  // 而每次都要跑一趟全图连通性搜索。结果只取决于地形与城的归属，记一份即可。
+  const cache = memoTable<Map<string, number>>('sea-demand');
+  if (cache) {
+    const byPlayer = memoByState(cache, s, () => new Map<string, number>());
+    const hit = byPlayer.get(me);
+    if (hit !== undefined) return hit;
+    const v = seaDemandNow(s, me);
+    byPlayer.set(me, v);
+    return v;
+  }
+  return seaDemandNow(s, me);
+}
+
+function seaDemandNow(s: GameState, me: PlayerId): number {
   const wet = waterShare(s);
   if (wet < WATER_MIN_SHARE) return 0;
   if (!canReachEnemyByLand(s, me)) return 1;
@@ -5717,7 +5733,25 @@ function outputFrom(s: GameState, shooters: Unit[], targets: Unit[]): number {
   return total;
 }
 
+/**
+ * 决策作用域的开关：作用域内的重复查询（光环、视野）走缓存，出门即失效。
+ * 见 `memo.ts`——那里写了为什么必须是显式作用域而不是永久缓存。
+ */
 function aiNextActionCore(
+  s: GameState,
+  budget: AiBudget = DEFAULT_BUDGET,
+  rejected: ReadonlySet<string> = new Set(),
+  depth = 0,
+): Action | null {
+  const owner = enterMemoScope();
+  try {
+    return aiNextActionCoreInner(s, budget, rejected, depth);
+  } finally {
+    if (owner) exitMemoScope();
+  }
+}
+
+function aiNextActionCoreInner(
   s: GameState,
   budget: AiBudget = DEFAULT_BUDGET,
   rejected: ReadonlySet<string> = new Set(),
