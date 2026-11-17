@@ -287,8 +287,19 @@ export function godBarHtml(ui: GodUi): string {
   `;
 }
 
-function countUnits(s: GameState, p: PlayerId): number {
+/**
+ * 「场上」那两个数字（N 兵 · N 城）。
+ *
+ * 抽成导出是因为摆兵时它每一下都在变，而货架那一大块**不该**为了这两个数字
+ * 整块重写（几百个按钮 + 图标）。main.ts 就地把这两处文字改掉。
+ */
+export function countUnits(s: GameState, p: PlayerId): number {
   return s.units.filter((u) => u.owner === p).length;
+}
+
+/** 场上那一行的文字：`N 兵 · N 城`。货架和就地刷新共用同一份口径 */
+export function godSideCountText(s: GameState, p: PlayerId): string {
+  return `${countUnits(s, p)} 兵 · ${s.cities.filter((c) => c.owner === p).length} 城`;
 }
 
 /**
@@ -453,7 +464,7 @@ export function godShelfHtml(ui: GodUi): string {
     <div class="god-side-row">
       <span class="vs-dot ${p === 'A' ? 'a' : 'b'}"></span>
       <b>${s.players[p].name}</b>
-      <span class="hint">${countUnits(s, p)} 兵 · ${s.cities.filter((c) => c.owner === p).length} 城</span>
+      <span class="hint" data-god-count="${p}">${godSideCountText(s, p)}</span>
       <button class="btn btn-sm btn-quiet-danger" data-act="god-clear" data-side="${p}">撤走部队</button>
     </div>`;
 

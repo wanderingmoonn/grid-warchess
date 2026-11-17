@@ -122,7 +122,7 @@ import {
   type MatchTimeline,
 } from './core/timeline.ts';
 import { uploadReport } from './net/reports.ts';
-import { godBarHtml, godShelfHtml } from './ui/god-panel.ts';
+import { godBarHtml, godShelfHtml, godSideCountText } from './ui/god-panel.ts';
 import type { GodBrush } from './ui/god-panel.ts';
 import { openMapUpload } from './ui/map-upload.ts';
 import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
@@ -1555,6 +1555,38 @@ function ensureArtIndex(): void {
   void loadUnitArtIndex().then(() => render());
 }
 
+/**
+ * 上一次完整渲染交给棋盘的参数，供"只刷几格"的快路径复用。
+ *
+ * 拖动刷地形时唯一会变的是格子自己的地形 class：可达格、威胁圈、选区、
+ * 城市、棋子都没动。所以这几格不需要重算一整套，把它们连同上下左右
+ * 交给 `renderBoard` 的 `only` 参数就够了（邻格要跟，是因为丘陵的外缘阴影
+ * 和森林的疏密是看邻居算的）。
+ */
+let lastBoardUi: BoardUi | null = null;
+/** 上次渲染时的格子数：地图换了（新开一局、换图）就不许再走快路径 */
+let lastBoardCells = 0;
+
+/** 拖动刷地形的轻量重绘：只碰这几格（含四邻），其余层一个节点都不动 */
+function renderPaintedCells(cells: number[]): void {
+  if (!lastBoardUi || lastBoardCells !== state.w * state.h) {
+    render();
+    return;
+  }
+  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  const ids = new Set<number>();
+  for (const i of cells) {
+    ids.add(i);
+    const x = i % state.w;
+    const y = (i - x) / state.w;
+    if (x > 0) ids.add(i - 1);
+    if (x < state.w - 1) ids.add(i + 1);
+    if (y > 0) ids.add(i - state.w);
+    if (y < state.h - 1) ids.add(i + state.w);
+  }
+  renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(lastBoardUi, activeBoardId), ids);
+}
+
 function render(): void {
   ensureArtIndex();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
@@ -1668,6 +1700,9 @@ function render(): void {
    * 选中/可达/染色这类"图内坐标"在 boardUiFor 里按图过滤。
    */
   renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
+  // 快路径要复用这一份：拖动刷地形时只有几格变了，没必要把上面那套重算一遍
+  lastBoardUi = boardUi;
+  lastBoardCells = state.w * state.h;
 
   /*
    * 笔刷在手时，棋盘自己吃掉触摸手势。
@@ -6652,8 +6687,33 @@ function godDetailSig(): string {
   return `${h.length}:${h.slice(0, 64)}`;
 }
 
+/**
+ * 「场上」那两行的数字：就地改，不重排货架。
+ *
+ * 摆兵时它是每一下都在变的唯一一处内容，而它夹在一个几百按钮的长列表下面。
+ * 改一次 `textContent` 是几十纳秒的事，重写整块 innerHTML 是几十毫秒的事。
+ */
+function syncGodSideCounts(): void {
+  for (const p of seatsOf(state)) {
+    const el = sideEl.querySelector(`[data-god-count="${p}"]`);
+    if (!el) continue;
+    const text = godSideCountText(state, p);
+    if (el.textContent !== text) el.textContent = text;
+  }
+}
+
 function renderGodShelf(): void {
   const pickedSig = godPickedSig();
+  /*
+   * 场上的兵数/城数**不进签名**。
+   *
+   * 它们以前在签名里，于是摆一个兵 = 整块重写几百个按钮的 innerHTML
+   * （每个按钮还带一行兵种属性提示）。那正是"摆兵比画地形卡"的来源：
+   * 画地形时兵数不变、货架不动；摆兵时每一下都重排一遍。
+   *
+   * 这两个数字本来就只有一处显示（下面「场上」那两行），就地改两个字就够了。
+   */
+  syncGodSideCounts();
   const sig = [
     Object.keys(state.unitTypes).length,
     godSide,
@@ -6662,8 +6722,6 @@ function renderGodShelf(): void {
     // 换包 / 换时代都要重排整个货架，这两格必须进签名
     godPack,
     godEra,
-    state.units.length,
-    state.cities.length,
     // 各席位的金币都进签名：沙盒现在是两人局专属，但按席位写一遍不会错，
     // 也不会哪天"沙盒支持三家"时漏掉重画
     ...seatsOf(state).map((p) => state.players[p].gold),
@@ -6823,8 +6881,8 @@ let godStroke: {
 /** 拖动刚结束的那一格。用来吞掉松手后派生出来的那一下 click */
 let godDragTail: { x: number; y: number; at: number } | null = null;
 
-/** 画一格（同一笔里画过的跳过） */
-function godStrokePaint(x: number, y: number): void {
+/** 画一格（同一笔里画过的跳过）。`touched` 收下真画上的那些格，供轻量重绘用 */
+function godStrokePaint(x: number, y: number, touched?: number[]): void {
   const stroke = godStroke;
   if (!stroke) return;
   const key = y * state.w + x;
@@ -6837,6 +6895,7 @@ function godStrokePaint(x: number, y: number): void {
   }
   state = r.state;
   stroke.painted += 1;
+  if (touched) touched.push(key);
 }
 
 /** 能不能起笔：和 `onGodClick` 的门槛保持一致（那边拦什么，这边也拦什么） */
@@ -6912,6 +6971,8 @@ function godStrokeMove(e: PointerEvent): void {
   const points = coalesced.length > 0 ? coalesced : [e];
 
   let dirty = false;
+  /** 这一批真画上的格：地形笔刷只需要重画它们 */
+  const touched: number[] = [];
   for (const ev of points) {
     const at = cellAtPoint(boardEl, ev.clientX, ev.clientY);
     if (!at) continue;
@@ -6924,17 +6985,26 @@ function godStrokeMove(e: PointerEvent): void {
      */
     if (stroke.cells.size === 0) {
       const beforeFirst = stroke.painted;
-      godStrokePaint(stroke.last.x, stroke.last.y);
+      godStrokePaint(stroke.last.x, stroke.last.y, touched);
       if (stroke.painted !== beforeFirst) dirty = true;
     }
     if (at.x === stroke.last.x && at.y === stroke.last.y) continue;
     const before = stroke.painted;
-    for (const c of lineBetween(stroke.last, at)) godStrokePaint(c.x, c.y);
+    for (const c of lineBetween(stroke.last, at)) godStrokePaint(c.x, c.y, touched);
     stroke.last = at;
     if (stroke.painted !== before) dirty = true;
   }
   // 一帧最多重绘一次：每个格子都 render 会让 20×20 的拖动掉到个位数帧
-  if (dirty) render();
+  if (dirty) {
+    /*
+     * 地形笔刷只动了格子自己的 class，走轻量重绘；其余笔刷（摆兵、摆城、
+     * 橡皮）会改棋子层和侧栏的数字，还是走完整重绘——它们每帧也才一两下。
+     *
+     * 松手时 `godStrokeEnd` 会完整重绘一次，所以这里省下的只是"划过的那几十帧"。
+     */
+    if (godBrush.kind === 'terrain') renderPaintedCells(touched);
+    else render();
+  }
 }
 
 function godStrokeEnd(e: PointerEvent): void {

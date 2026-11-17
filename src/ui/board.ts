@@ -486,7 +486,21 @@ export function refreshCellVar(el: HTMLElement, cols: number): void {
   setVar(el, '--cell', `${cellSize}px`);
 }
 
-export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): void {
+/**
+ * 画棋盘。
+ *
+ * `only` 是"只重画这几格"的快路径：拖动刷地形时，一次划过十几格，
+ * 每格都走完整重绘（雾视图、棋子层、城市层、侧栏）就是自己给自己找卡。
+ * 那种场合真正变的只有格子自己的 class，其余各层一个节点都不用碰。
+ * 传了 `only` 就**只动格子层**：棋子/城市/地上的东西/烈度都不重画，
+ * 调用方必须确保这几层确实没变（刷地形改不了它们，所以是安全的）。
+ */
+export function renderBoard(
+  el: HTMLElement,
+  view: PlayerView,
+  ui: BoardUi,
+  only?: ReadonlySet<number>,
+): void {
   ensureStructure(el);
   const s = view.state;
   const tilesEl = el.querySelector<HTMLElement>('.tiles');
@@ -498,10 +512,12 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   // 读的是 dataset 不是 rect：位置本来就是按格坐标算的，四个数字在手边，
   // 没必要为此让浏览器把布局算一遍。
   const prevPos = new Map<string, { x: number; y: number }>();
-  unitsEl.querySelectorAll<HTMLElement>('.unit').forEach((node) => {
-    const id = node.dataset.id;
-    if (id) prevPos.set(id, { x: Number(node.dataset.x), y: Number(node.dataset.y) });
-  });
+  if (!only) {
+    unitsEl.querySelectorAll<HTMLElement>('.unit').forEach((node) => {
+      const id = node.dataset.id;
+      if (id) prevPos.set(id, { x: Number(node.dataset.x), y: Number(node.dataset.y) });
+    });
+  }
 
   const cellSize = Math.max(18, (el.clientWidth - 12) / s.w);
   setVar(el, '--cell', `${cellSize}px`);
@@ -628,6 +644,8 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
+      // 快路径：只碰这一段里点名的那几格
+      if (only && !only.has(i)) continue;
       const tile = s.tiles[i];
       const node = layer.nodes[i];
       if (!tile || !node) continue;
@@ -766,6 +784,16 @@ if (layer.cls[i] !== cls) {
       if (node.title !== tip) node.title = tip;
     }
   }
+
+  /*
+   * 快路径到此为止。
+   *
+   * 下面这些层（地上的东西、烈度、扩展视图、城市、棋子、补间）全都和
+   * "这一格的地形变了"无关，重画它们只是白花钱——而拖动刷地形时，
+   * 这条路径每个 pointermove 都会走一次。
+   * 松手之后 `godStrokeEnd` 会走一次完整重绘，那时各层照旧对齐。
+   */
+  if (only) return;
 
   // ---- 地上的东西（水雷/地雷……）----
   //
