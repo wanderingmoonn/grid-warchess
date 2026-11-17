@@ -47,7 +47,8 @@ import {
   applyLevelToConfig,
   goalText,
   levelById,
-  playableLevels,
+  demoLevels,
+  storyLevels,
   type LevelDef,
 } from '../core/level.ts';
 import { cloneAsUserLevel, deleteUserLevel, isUserLevelId, userLevelList } from '../core/userLevels.ts';
@@ -337,7 +338,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 关卡单独一页，而不是塞在战役页顶上：它会一直长（每加一张关卡就多一张卡），
      * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
      */
-    let tab: 'battle' | 'maps' | 'levels' = 'battle';
+    let tab: 'battle' | 'maps' | 'levels' | 'editor' = 'battle';
     /**
      * 这套面板是不是已经自动拉过一次云端关卡（2026-11-16）。
      *
@@ -1098,24 +1099,48 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const myLevels = userLevelList();
       // 云端关卡：读缓存（同步、不联网），点「从云端刷新」才真去拉
       const cloudLevels = cachedCloudLevels();
-      const presetLevels = playableLevels().filter((l) => !isUserLevelId(l.id));
+      /*
+       * 2026-11-17：菜单拆成「关卡」和「编辑器」两栏。
+       *
+       *   · 「关卡」= 主线 / 教学关（`demo` 不写）。现在是空的——主线设计还没定；
+       *   · 「编辑器」= 内建那五张示例关 + 玩家自己的关（`demo: true`）。
+       *
+       * 两栏的区别是**目的**不是难度：示例关各演示一两个编辑器能力，主线关要有
+       * 教学节奏和叙事。所以那五张全标了 `demo`。
+       */
+      const demoPresets = demoLevels().filter((l) => !isUserLevelId(l.id));
+      const storyPresets = storyLevels().filter((l) => !isUserLevelId(l.id));
       const editingMine = !!config.level && isUserLevelId(config.level.id);
-      const levelsView = `
+      const levelsViewWith = (presets: typeof demoPresets, kind: 'story' | 'demo'): string => `
             <section class="field">
               <div class="field-label">
-                选一关 <span class="field-hint">关卡决定地图、几家、谁交给电脑</span>
+                ${kind === 'story' ? '主线 / 教学关' : '示例关'}
+                <span class="field-hint">${
+                  kind === 'story' ? '有教学节奏的关卡，目前还在设计' : '每张演示一两个编辑器能力'
+                }</span>
               </div>
               <div class="map-gallery">
-                <button type="button" class="map-card ${levelOn ? '' : 'active'}" data-level="" title="自己定所有设置">
+                ${
+                  kind === 'story'
+                    ? `<button type="button" class="map-card ${levelOn ? '' : 'active'}" data-level="" title="自己定所有设置">
                   <span class="map-card-thumb is-random">自由</span>
                   <b>自由对局</b>
                   <i>自己选地图和对手</i>
-                </button>
-                ${presetLevels.map(levelCard).join('')}
+                </button>`
+                    : ''
+                }
+                ${presets.map(levelCard).join('')}
               </div>
-              <div class="field-hint">预制关卡是只读的（那是平衡基准）。想改就选中它，点「复制成我的关卡」。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。</div>
+              <div class="field-hint">${
+                kind === 'story'
+                  ? presets.length === 0
+                    ? '主线 / 教学关还在设计，这一栏暂时是空的。想看关卡编辑器能做什么，点左边「编辑器」——那五张关都是用它搭出来的。'
+                    : '选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
+                  : '示例关是只读的。想改就选中它，点「复制成我的关卡」——那一步之后它就归你了。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
+              }</div>
             </section>
 
+            ${kind === 'demo' ? `
             <section class="field">
               <div class="field-label">
                 我的关卡 <span class="field-hint">自己做，只存在这台设备上</span>
@@ -1152,6 +1177,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   : '选一张之后可以编辑或删除。删除不影响已经存下来的对局——那一局跑的是开局时的快照。'
               }</div>
             </section>
+            ` : ''}
 
             ${
               config.level
@@ -1230,6 +1256,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-hint">地图在「地图」页挑，人数和对手在「战役」页定。选择一张关卡，这三样都会按关卡来。</div>
             </section>`
             }`;
+
+      /*
+       * 两栏长的是同一张页面，只是内容不同：
+       *   · 「关卡」= 主线 / 教学关（现在空着，有专门的空状态）；
+       *   · 「编辑器」= 内建示例关 + 我的关卡。
+       */
+      const storyView = levelsViewWith(storyPresets, 'story');
+      const levelsView = levelsViewWith(demoPresets, 'demo');
 
       /*
        * ── 任务简报（选了关卡时）──
@@ -1446,7 +1480,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <nav class="start-nav">
               <button class="start-nav-item ${tab === 'levels' ? 'active' : ''}" data-tab="levels">
                 <b>关卡</b>
-                <span>选关 · 剧情</span>
+                <span>主线 · 教学</span>
+              </button>
+              <button class="start-nav-item ${tab === 'editor' ? 'active' : ''}" data-tab="editor">
+                <b>编辑器</b>
+                <span>示例 · 自制</span>
               </button>
               <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
                 <b>${levelOn ? '简报' : '战役'}</b>
@@ -1481,13 +1519,24 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                      <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
-                       <p>内建关卡：地图、几家、谁交给电脑都按关卡来。选「自由对局」就全部自己定。</p>`
+                       <p>主线与教学关：一关一关往下走。现在还在设计，选「自由对局」先自己开一局。</p>`
+                    : tab === 'editor'
+                      ? `<h2>编辑器</h2>
+                       <p>这几张关都是用关卡编辑器搭出来的，各演示一两个能力：改地图、摆兵、写事件、定胜负、设同盟。想改哪张就选中它复制一份。</p>`
                     : `<h2>地图</h2>
                      <p>挑一张现成的地图，或者把自己画的上传上去——传上去的图，所有玩家开局都能选到。</p>`
               }
             </div>
 
-            <div class="modal-body">${tab === 'battle' ? battleView : tab === 'maps' ? mapsView : levelsView}</div>
+            <div class="modal-body">${
+              tab === 'battle'
+                ? battleView
+                : tab === 'maps'
+                  ? mapsView
+                  : tab === 'editor'
+                    ? levelsView
+                    : storyView
+            }</div>
 
             <div class="modal-foot start-foot">
               <div class="start-summary">${summary}</div>
@@ -1571,7 +1620,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const tabBtn = target.closest<HTMLElement>('[data-tab]');
       if (tabBtn?.dataset.tab) {
         const t = tabBtn.dataset.tab;
-        const next = t === 'maps' ? 'maps' : t === 'levels' ? 'levels' : 'battle';
+        // 白名单要跟着导航一起长：新加的页漏在这里，点了会掉回「战役」
+        const next =
+          t === 'maps' ? 'maps' : t === 'levels' ? 'levels' : t === 'editor' ? 'editor' : 'battle';
         if (next === tab) return;
         tab = next;
         resetScroll = true;
