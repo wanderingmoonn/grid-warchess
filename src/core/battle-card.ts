@@ -8,7 +8,7 @@
  * 数据全部来自 GameState，不依赖录制器：关掉"详细记录"的局也要能出卡。
  * 唯一借用的历史信息是 `city.capturedTurn`（攻陷回合），那是规则自己写的。
  */
-import { citiesOf, cityName, unitsOf, utype } from './rules.ts';
+import { citiesOf, cityName, sameTeam, teamOf, unitsOf, utype } from './rules.ts';
 import { seatsOf } from './types.ts';
 import type { GameState, PlayerId } from './types.ts';
 
@@ -56,14 +56,39 @@ const sideStats = (s: GameState, p: PlayerId): BattleCardSide => {
 };
 
 /**
- * 敌方席位（两人局就一个，多人局取全部）。
+ * 敌方的**队**（没写 `seats.teams` 时每队一个人，结果和以前一样）。
  *
  * 必须走 `seatsOf` 而不是 `Object.keys(s.players)`：状态里的 players 恒有
  * A/B/C/D 四个键（存档结构固定），两人局照样四键齐全，直接遍历会凭空多出
  * 两个 0 兵 0 城的"幽灵席位"，卡面统计和"我方打对方几个"全会错。
+ *
+ * 同盟局里队友**不算敌方**：以前按 `p !== me` 排，合作关的卡会写成
+ * "我方 3 兵 对 蓝方 4 兵 + 绿方 6 兵"——把队友算进敌人，卡面直接是假的。
  */
-const foesOf = (s: GameState, me: PlayerId): PlayerId[] =>
-  seatsOf(s).filter((p) => p !== me && s.players[p]);
+const foeTeamsOf = (s: GameState, me: PlayerId): PlayerId[][] => {
+  const out: PlayerId[][] = [];
+  for (const p of seatsOf(s)) {
+    if (!s.players[p] || sameTeam(s, p, me)) continue;
+    const group = teamOf(s, p);
+    if (out.some((g) => g.includes(p))) continue;
+    out.push(group);
+  }
+  return out;
+};
+
+/** 一支队伍合并后的统计（单人队就是原来那一份） */
+const teamStats = (s: GameState, group: PlayerId[]): BattleCardSide => {
+  const parts = group.filter((p) => s.players[p]).map((p) => sideStats(s, p));
+  if (parts.length === 1) return parts[0]!;
+  return {
+    side: group[0]!,
+    name: group.map((p) => s.players[p]?.name ?? `${p} 方`).join(' + '),
+    units: parts.reduce((n, x) => n + x.units, 0),
+    cities: parts.reduce((n, x) => n + x.cities, 0),
+    hp: parts.reduce((n, x) => n + x.hp, 0),
+    era: parts.reduce((n, x) => Math.max(n, x.era), 0),
+  };
+};
 
 /**
  * 破城回合：**某一方**最早一次夺城的回合。
@@ -76,12 +101,13 @@ const foesOf = (s: GameState, me: PlayerId): PlayerId[] =>
  */
 function firstCaptureTurn(
   s: GameState,
-  by: PlayerId | null,
+  by: PlayerId[] | null,
 ): { turn: number; city: string } | null {
-  if (!by) return null;
+  if (!by || by.length === 0) return null;
   let best: { turn: number; city: string } | null = null;
   for (const c of s.cities) {
-    if (c.owner !== by || c.capturedTurn === undefined) continue;
+    // 按**队**找：同盟局里"你们第几回合破的城"，不该只看 winner 那一席的城
+    if (!by.includes(c.owner) || c.capturedTurn === undefined) continue;
     if (!best || c.capturedTurn < best.turn) {
       best = { turn: c.capturedTurn, city: cityName(c) };
     }
@@ -104,26 +130,33 @@ function firstCaptureTurn(
  * 不按 category 过滤掉建筑：军营、箭塔真的会杀人。把建筑排除掉会出现
  * "营地砍了 6 个，卡面却写没有击杀"——那比让建筑上榜更难看。
  */
-function bestUnit(s: GameState, me: PlayerId): BattleCardData['mvp'] {
+function bestUnit(s: GameState, group: PlayerId[]): BattleCardData['mvp'] {
   const kills = new Map<string, number>();
-  const tally = s.killTally?.[me];
-  const hasTally = !!tally && Object.keys(tally).length > 0;
+  const tallies = group.map((p) => s.killTally?.[p]).filter((x) => !!x && Object.keys(x).length > 0);
+  const hasTally = tallies.length > 0;
 
   if (hasTally) {
-    for (const [type, n] of Object.entries(tally!)) {
-      if (!n || n <= 0 || !s.unitTypes[type]) continue;
-      kills.set(type, n);
+    // 同盟局把队友的击杀也并进来：卡是"我们这一边"的战报，不是某一个人的
+    for (const tally of tallies) {
+      for (const [type, n] of Object.entries(tally!)) {
+        if (!n || n <= 0 || !s.unitTypes[type]) continue;
+        kills.set(type, (kills.get(type) ?? 0) + n);
+      }
     }
   } else {
-    for (const u of unitsOf(s, me)) {
-      if (!u.kills) continue;
-      kills.set(u.type, (kills.get(u.type) ?? 0) + u.kills);
+    for (const p of group) {
+      for (const u of unitsOf(s, p)) {
+        if (!u.kills) continue;
+        kills.set(u.type, (kills.get(u.type) ?? 0) + u.kills);
+      }
     }
   }
 
   const aliveByType = new Map<string, number>();
-  for (const u of unitsOf(s, me)) {
-    aliveByType.set(u.type, (aliveByType.get(u.type) ?? 0) + 1);
+  for (const p of group) {
+    for (const u of unitsOf(s, p)) {
+      aliveByType.set(u.type, (aliveByType.get(u.type) ?? 0) + 1);
+    }
   }
 
   let best: { type: string; kills: number; alive: number } | null = null;
@@ -138,13 +171,16 @@ function bestUnit(s: GameState, me: PlayerId): BattleCardData['mvp'] {
 }
 
 export function buildBattleCard(s: GameState, me: PlayerId, build: string): BattleCardData {
-  const foes = foesOf(s, me);
-  const mine = sideStats(s, me);
-  const theirs = foes.map((p) => sideStats(s, p));
-  // 破城回合按**赢家**算：输了也要能说清"对方第几回合破的城"
-  const by = s.winner ?? me;
-  const cap = firstCaptureTurn(s, by);
-  const mvp = bestUnit(s, me);
+  const myTeam = teamOf(s, me);
+  const mine = teamStats(s, myTeam);
+  const theirs = foeTeamsOf(s, me).map((g) => teamStats(s, g));
+  /*
+   * 破城回合按**赢的那一队**算：输了也要能说清"对方第几回合破的城"。
+   * 同盟局里"你"指的是整队，所以后面那句用 `myTeam.includes` 而不是 `by === me`。
+   */
+  const winTeam = s.winner ? teamOf(s, s.winner) : myTeam;
+  const cap = firstCaptureTurn(s, winTeam);
+  const mvp = bestUnit(s, myTeam);
   const winTurn = cap?.turn ?? null;
 
   const steps: string[] = [];
@@ -153,7 +189,9 @@ export function buildBattleCard(s: GameState, me: PlayerId, build: string): Batt
       ((s.config.expansionIds?.length ?? 0) > 0 ? `，${s.config.expansionIds!.length} 个扩展` : ''),
   );
   if (cap) {
-    steps.push(`第 ${cap.turn} 回合${by === me ? '你' : '对方'}拿下第一座城：${cap.city}`);
+    steps.push(
+      `第 ${cap.turn} 回合${winTeam.includes(me) ? '你' : '对方'}拿下第一座城：${cap.city}`,
+    );
   } else {
     steps.push('整局没破城——赢的方式不是攻城');
   }
@@ -163,7 +201,8 @@ export function buildBattleCard(s: GameState, me: PlayerId, build: string): Batt
   return {
     winner: s.winner,
     me,
-    iWon: s.winner === me,
+    // 按队判：同盟局里队友赢了也是"你赢了"，否则蓝方打开卡会看到"失败"
+    iWon: s.winner ? sameTeam(s, s.winner, me) : false,
     board: `${s.w}×${s.h}`,
     turns: s.turn,
     winTurn,

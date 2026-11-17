@@ -192,6 +192,24 @@ function playImpact(node: HTMLElement, strength: number): void {
   });
 }
 
+
+/**
+ * 城市时代 → 城区贴图档（2026-11-15）。
+ *
+ * 顺序就是 `ERAS` 的顺序（青铜→聚变），用**时代名派生的 slug** 而不是编号：
+ * 以后在中间插入一个时代，这里跟着插一格就行，不会整排错位。
+ */
+const CITY_ERA_SLUG = [
+  'bronze',
+  'iron',
+  'gunpowder',
+  'steam',
+  'mechanized',
+  'info',
+  'armor',
+  'fusion',
+] as const;
+
 const TERRAIN_CLASS: Record<string, string> = {
   plain: 't-plain',
   forest: 't-forest',
@@ -455,7 +473,14 @@ function hpClass(ratio: number): string {
 
 /** 时代用罗马数字表示，比阿拉伯数字更像"时代" */
 function romanEra(era: number): string {
-  return ['I', 'II', 'III', 'IV', 'V'][era - 1] ?? String(era);
+  /*
+   * 八档都在表里（2026-11-16 补 VI~VIII）。
+   *
+   * 之前只写到 V，第六时代之后会掉回阿拉伯数字——棋盘上于是出现
+   * "I / V / 6 / 7 / 8" 混排：同一枚角标两种写法，看着像出了 bug。
+   * 兜底保留 String(era)：以后再加时代没来得及补表，也只是数字而不是空。
+   */
+  return ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'][era - 1] ?? String(era);
 }
 
 /**
@@ -470,6 +495,47 @@ function incomeBadgeOf(cost: ResourceCost): string {
   if (gold > 0) return `+${gold}`;
   const first = Object.entries(cost).find(([, n]) => (n ?? 0) > 0);
   return first ? `+${first[1]}${resourceShort(first[0])}` : '';
+}
+
+/* `.board` 的内边距：左右各 6px、上下各 6px。格局要减掉它才是内容区 */
+export const BOARD_PAD = 12;
+
+export interface BoardBox {
+  /** 棋盘外框（含 padding） */
+  w: number;
+  h: number;
+  /** 一格多宽 —— 长宽同值，这就是"格子是正方形"的保证 */
+  cell: number;
+}
+
+/**
+ * 算棋盘该占多大。
+ *
+ * **不能拿 `min(容器宽, 可用高)` 当棋盘边长**——那只对正方形地图成立。
+ * 地图允许 8~40 的长宽各自取值（`12×10` 这种），一旦外框是方的、格子又按
+ * `repeat(w,1fr)` 均分，格子就会被拉成长方形：短的那边被抻长。
+ * 玩家在 2026-11-16 的实机上就是这么发现的。
+ *
+ * 正确做法是**先算一格多大，再反推外框**：宽、高各除一次取小的，
+ * 这样两轴的格宽必然相同，格子恒为正方形，多出来的屏幕空间留白。
+ *
+ * 地板沿用原来的语义（整块不小于 160px）：图太大时宁可让格子小于 16px，
+ * 也不要让棋盘撑破容器。
+ */
+export function fitBoardBox(cols: number, rows: number, availW: number, availH: number): BoardBox {
+  const c = Number.isFinite(cols) && cols > 0 ? Math.round(cols) : 1;
+  const r = Number.isFinite(rows) && rows > 0 ? Math.round(rows) : 1;
+  const innerW = Math.max(0, availW - BOARD_PAD);
+  const innerH = Math.max(0, availH - BOARD_PAD);
+  const fit = Math.min(innerW / c, innerH / r);
+  // 地板：整块不小于 160（和旧行为一致），换算成"一格"就是 160 / 长边
+  const floor = 160 / Math.max(c, r);
+  const cell = Math.max(fit, floor);
+  return {
+    w: Math.round(cell * c + BOARD_PAD),
+    h: Math.round(cell * r + BOARD_PAD),
+    cell,
+  };
 }
 
 /*
@@ -661,7 +727,25 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
            * 档位名直接用时代名派生的词（civil/brick/concrete/alloy），
            * 别用数字：以后加时代不会让 1~8 的映射全乱。
            */
-          node.dataset.cityEra = city.era <= 4 ? 'civil' : 'concrete';
+          node.dataset.cityEra = CITY_ERA_SLUG[Math.min(CITY_ERA_SLUG.length, Math.max(1, city.era)) - 1]!;
+          /*
+           * 城市块的边长与"这一格在块内的偏移"（2026-11-16）。
+           *
+           * 为什么需要：512 的城区贴图**不是无缝图**，平铺时每隔几格就会露一条
+           * 接缝——倍数调小（镜头拉近）时这条缝会正好穿过城里，看着就是"断层"。
+           * 渐变混合消不掉它，镜像拼接又会变成万花筒。
+           *
+           * 所以改成**一座城铺一整张图**：`background-size` 按块边长算，
+           * 位置按块内偏移算。这样接缝只会出现在城的边界上——那里本来就画着城墙，
+           * 看不出来。代价是同代的城市图案相同，靠 `--city-jitter` 做一点色差区分。
+           */
+          node.dataset.citySize = String(city.size);
+          node.dataset.cx = String(x - city.x);
+          node.dataset.cy = String(y - city.y);
+          // 每座城一个稳定的轻微明暗/色相偏移（由 id 哈希得来，存档重开也不变）
+          let hash = 0;
+          for (let k = 0; k < city.id.length; k++) hash = (hash * 31 + city.id.charCodeAt(k)) | 0;
+          node.dataset.cityJitter = String((Math.abs(hash) % 7) - 3);
           /*
            * 城市块的四条边（`data-ct/cr/cb/cl`）：邻居**不是同一座城**就是块的边界。
            *
@@ -865,7 +949,14 @@ export function renderBoard(el: HTMLElement, view: PlayerView, ui: BoardUi): voi
         delete node.dataset.wb;
         delete node.dataset.wl;
       }
-if (layer.cls[i] !== cls) {
+// 城市块取景参数（整张图铺满一座城，见 style.css 里 t-city 的说明）
+      if (node.dataset.citySize) {
+        node.style.setProperty('--cs', node.dataset.citySize);
+        node.style.setProperty('--cx', node.dataset.cx ?? '0');
+        node.style.setProperty('--cy', node.dataset.cy ?? '0');
+        node.style.setProperty('--cj', node.dataset.cityJitter ?? '0');
+      }
+      if (layer.cls[i] !== cls) {
         // className 整体赋值比 classList 逐项增删快，而且不会有残留：
         // 上一帧的 reach、这一帧没有，整体赋值一次就干净了
         node.className = cls;

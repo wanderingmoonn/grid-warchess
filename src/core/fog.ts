@@ -100,10 +100,22 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
      * 空间站全可见：站是自己的，虚空只是"还没铺"，不该像未探明地形那样黑着。
      * 而且站就几格大，核心舱视野 4 基本也全罩住了——这条只是把"基本"变成"一定"。
      */
-    const set =
+    let set =
       reveal || boardKindOf(s, id) === 'station'
         ? allTilesOn(s, id)
         : visibleTilesOn(s, p, id);
+    /*
+     * 事件点亮的格子并进可见集（`{ kind: 'reveal' }`）。
+     *
+     * 这里必须 new 一份：`visibleTilesOn` 返回的集合可能是算出来的缓存，
+     * 原地 add 会把"这一方看见的"污染到别的席位/别的图上。
+     */
+    if (id === EARTH && !reveal && (s.revealed?.length ?? 0) > 0) {
+      const merged = new Set(set);
+      // 只并**还没过期**的：`until >= turn` 表示"亮到这一手为止"
+      for (const r of s.revealed!) if (r.until >= s.turn) merged.add(r.i);
+      set = merged;
+    }
     visibleSets[id] = set;
     visibleByBoard[id] = Array.from(set);
   }
@@ -218,16 +230,21 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
       if (set.has(i)) continue;
       const tile = boardOf(cloned, id).tiles[i];
       /*
-       * 看不见的桥要还原成**原来的地形**，不是一律还原成水。
+       * 看不见的桥要还原成**桥下那块地**，不是一律还原成水。
        *
-       * 桥现在也能架在沼泽上（`buildOn: ['water', 'marsh']`），
-       * 一律还原成水的话，沼泽上那座桥在迷雾里会凭空变成一条河——
+       * 桥现在也能架在沼泽上（`buildOn: ['water', 'marsh']`），而水位还可能被
+       * 事件改浅。一律还原成水的话，沼泽上那座桥在迷雾里会凭空变成一条河——
        * 河过不去、沼泽能过（移动力 2），玩家按错的地形做判断。
-       * 原地形建桥那一刻记在 `custom.deckFrom` 里；老存档没有这个字段，退回水面。
+       *
+       * 优先读局面的 `bridgeDeck`（事件改水位时会同步更新），再退回单位上
+       * 建桥那一刻记的 `custom.deckFrom`；老存档两样都没有，退回水面。
        */
       if (tile && tile.terrain === 'bridge') {
-        const from = u.custom?.deckFrom;
-        tile.terrain = from === 'marsh' ? 'marsh' : 'water';
+        const recorded = u.custom?.deckFrom;
+        const bed =
+          cloned.bridgeDeck?.[String(i)] ??
+          (typeof recorded === 'string' ? (recorded as typeof tile.terrain) : undefined);
+        tile.terrain = bed ?? 'water';
       }
     }
   }

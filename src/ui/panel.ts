@@ -96,6 +96,8 @@ import {
   adjacentRequirementText,
   hidesInFog,
   hiddenFromAllFoes,
+  sameTeam,
+  teamNameOf,
 } from '../core/rules.ts';
 import { upgradeTargetOf } from '../core/era-routes.ts';
 import { seatsOf } from '../core/types.ts';
@@ -366,8 +368,14 @@ function panelHtml(input: PanelInput): string {
   const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
 
 
+  /*
+   * 终局那一格写"谁赢了"，不再只写"对局结束"。
+   *
+   * 同盟局必须写**队名**（`teamNameOf`）：`winner` 只是队里第一个还活着的席位，
+   * 直接用它会让"两个人合作打赢了"显示成"只有红方赢了"，蓝方看着像输了。
+   */
   const turnBadge = s.winner
-    ? `<span class="turn-badge">对局结束</span>`
+    ? `<span class="turn-badge">${escapeHtml(teamNameOf(s, s.winner))} 胜利</span>`
     : spectator
       ? `<span class="turn-badge watching">${input.replay ? '复盘 · 全图视角' : '观战中 · 全图视角'}</span>`
       : quit
@@ -429,6 +437,14 @@ function panelHtml(input: PanelInput): string {
        * 于是这一行一直把红方标成"（你）"——复盘别人的棋时，第一眼就以为自己是其中一方。
        */
       const mine = !spectator && p === me;
+      /*
+       * 同队的那几家要标出来。
+       *
+       * 合作关里两个真人各看各的屏（视野不共享），但席位栏如果不写"盟友"，
+       * 玩家就得靠记位数才知道"蓝方是自己人"——尤其 3 家局里绿方一出来，
+       * 很容易把队友当成第三个敌人。
+       */
+      const mate = !spectator && p !== me && sameTeam(s, p, me);
       const cities = citiesOf(s, p).length;
       /*
        * 出局有两张脸：主动认输，和最后一座城被人接管。
@@ -438,7 +454,7 @@ function panelHtml(input: PanelInput): string {
       const on = p === s.current;
       return `<div class="seat-row${on ? ' active' : ''}${quit ? ' quit' : ''}">
         <span class="vs-dot ${p.toLowerCase()}"></span>
-        <b>${escapeHtml(s.players[p].name)}${mine ? '（你）' : ''}</b>
+        <b>${escapeHtml(s.players[p].name)}${mine ? '（你）' : mate ? '（盟友）' : ''}</b>
         <span class="seat-stats">${resLine(p)} · 城 ${cities}</span>
       </div>`;
     })
@@ -2251,6 +2267,13 @@ export interface TopbarState {
   /** 观战位：既不是等对方，也不是轮到我 */
   spectator?: boolean;
   /**
+   * 关卡目标（"守住 20 次行动（还剩 12）"）。空串＝普通对局，不占位。
+   *
+   * 放顶栏而不是塞进战报：这是**这一局每一刻都要知道的事**，
+   * 埋在战报里等于让玩家自己记着"我到底在守到什么时候"。
+   */
+  goalLine?: string;
+  /**
    * 正在复盘（看一份回放）。
    *
    * 和观战位不是一回事：观战位至少还是**一局活着的棋**，对面可能正在走；
@@ -2291,6 +2314,8 @@ export function topbarShell(): string {
       <span class="side-dot a" data-ref="dot"></span>
       <span data-ref="who"></span>
     </div>
+    <!-- 关卡目标：普通对局没有这一块（hidden） -->
+    <span class="level-goal" data-ref="goal" hidden></span>
     <!-- 扩展的常驻徽章（季节、以后的潮汐/瘟疫……）：只读文字，由 main 填 -->
     <div class="topbar-badges" data-ref="topbar-badges"></div>
     <!--
@@ -2348,6 +2373,8 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     s.god ? 1 : 0,
     s.fog ? 1 : 0,
     s.blackout ? 1 : 0,
+    // 目标那一行里的"还剩几次"每回合都会变，进签名才会跟着重绘
+    s.goalLine ?? '',
   ].join('|');
   if (topbarSigs.get(root) === sig) return false;
   topbarSigs.set(root, sig);
@@ -2377,6 +2404,13 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
   if (room) {
     room.hidden = !s.roomCode;
     if (s.roomCode) room.textContent = `${s.spectator ? '观战' : '房间'} ${s.roomCode}`;
+  }
+
+  const goal = ref('goal');
+  if (goal) {
+    const text = s.goalLine ?? '';
+    goal.hidden = text === '';
+    if (text !== '') goal.textContent = text;
   }
 
   const pause = ref('pause');

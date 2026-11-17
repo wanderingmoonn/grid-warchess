@@ -354,7 +354,12 @@ import {
   isEliminated,
   hasQuit,
   produceAt,
+  sameTeam,
+  teamOf,
+  teamNameOf,
 } from '../src/core/rules.ts';
+import { buildBattleCard } from '../src/core/battle-card.ts';
+import { logEventSays } from '../src/ui/log-fold.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
@@ -1759,8 +1764,8 @@ test('不能用没启用的兵种产兵', () => {
 
 test('回合结束切换玩家并结算收入', () => {
   const s = fresh();
+  // 2026-11-16：底薪删掉，收入全部来自城与经济单位（各时代城收入已 +20 补回）
   const bIncome =
-    CONFIG.baseIncome +
     2 * eraDef(1).cityIncome +
     s.units.filter((u) => u.owner === 'B').reduce((sum, u) => sum + unitIncome(s, u), 0);
   const r = applyAction(s, { type: 'END_TURN' });
@@ -6250,6 +6255,115 @@ test('架桥：沼泽上也能架，建成即通车', () => {
   const costOnMarsh = stepCostInto(marshState, onMarsh, fromIdx, mi);
   assert.equal(costOnMarsh, 2, '沼泽本身是 2 步（改之前就是这个数）');
   assert.equal(costOnBridge, 1, '桥面应该是 1 步');
+});
+
+test('事件改水位：桥面不动、河床跟着变，拆桥还原成浅水', () => {
+  /*
+   * 2026-11-16 的实机关卡问题：孤城关有一个"整条河刷成浅水"的事件，
+   * 但 AI 会自己搭桥——事件把桥格也刷掉，玩家的桥就这么被一个改水位的事件吃了。
+   *
+   * 现在的口径：
+   *   · 桥面永远不参与地形改动（改了就变成"架在浅水上的桥"，桥单位也会被挤掉）；
+   *   · 但桥下的**河床**要跟着水位走，否则拆桥后脚下凭空冒出一条河；
+   *   · 判断 `only` 看的是河床，不是桥面（作者写 only:['water'] 时意图是"只改水域"）。
+   */
+  const W = 12;
+  const H = 8;
+  const rows = Array.from({ length: H }, (_, y) =>
+    Array.from({ length: W }, (_, x) => (x === 5 ? '~' : '.')).join(''),
+  );
+  const mk = (only?: string[]) => ({
+    id: 'dev:bridge-deck',
+    version: 1,
+    name: '桥探针',
+    map: {
+      id: 'levelmap:bridge-deck',
+      name: '桥探针',
+      w: W,
+      h: H,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 9, y: 5 }],
+      source: 'user',
+    },
+    seats: { count: 2, ai: ['B'] },
+    setup: { startEra: 1 },
+    deploy: {
+      A: [{ type: 'militia', x: 2, y: 1 }],
+      B: [{ type: 'militia', x: 9, y: 4 }],
+    },
+    events: [
+      {
+        id: 'ebb',
+        when: { kind: 'turn', at: 2 },
+        do: [
+          {
+            kind: 'terrain',
+            zone: { x0: 5, y0: 0, x1: 5, y1: H - 1 },
+            to: 'shallow',
+            ...(only ? { only } : {}),
+          },
+        ],
+      },
+    ],
+  });
+
+  /** 建一张图，再人工摆一座"已建成的工兵桥"（(5,4)，桥下是水） */
+  const withBridge = (only?: string[]) => {
+    const s = createMatch({ ...DEFAULT_CONFIG, level: mk(only) as never }, 3);
+    assert.equal(s.w, W, '关卡地图要真的生效（别静默回落成随机图）');
+    const i = 4 * W + 5;
+    s.tiles[i]!.terrain = 'bridge';
+    s.bridgeDeck = { ...(s.bridgeDeck ?? {}), [String(i)]: 'water' };
+    const bu = place(s, 'A', 'bridge', 5, 4);
+    bu.custom = { deckFrom: 'water' };
+    // 桥上站一个民兵：桥塌成浅水时不该淹死
+    s.units.push({
+      id: 'inf-on-bridge',
+      type: 'militia',
+      owner: 'A',
+      x: 5,
+      y: 4,
+      hp: 10,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+    return s;
+  };
+
+  const tick = (state: GameState, n: number): GameState => {
+    let cur = state;
+    for (let k = 0; k < n; k += 1) {
+      const r = applyAction(cur, { type: 'END_TURN' });
+      if (!r.ok) break;
+      cur = r.state;
+    }
+    return cur;
+  };
+
+  const key = String(4 * W + 5);
+
+  // ① 事件不改桥面，只改河床
+  const s1 = tick(withBridge(), 4);
+  assert.equal(s1.tiles[4 * W + 5]!.terrain, 'bridge', '桥面不该被改水位的事件吃掉');
+  assert.equal(s1.bridgeDeck?.[key], 'shallow', '桥下的河床要跟着水位变浅');
+  assert.equal(s1.tiles[3 * W + 5]!.terrain, 'shallow', '河道本身确实变浅了');
+  const bu = s1.units.find((u) => u.type === 'bridge');
+  assert.equal(bu?.custom?.deckFrom, 'shallow', '迷雾还原用的那份记录也要同步');
+
+  // ② 拆桥：还原成浅水，桥上的兵留在原地
+  const s2 = tick({ ...s1, units: s1.units.filter((u) => u.type !== 'bridge') }, 1);
+  assert.equal(s2.tiles[4 * W + 5]!.terrain, 'shallow', '桥塌了要还原成浅水，不是水域');
+  assert.ok(
+    s2.units.some((u) => u.id === 'inf-on-bridge'),
+    '桥塌成浅水时，站在桥上的陆军不该淹死（浅水能站）',
+  );
+  assert.equal(s2.bridgeDeck?.[key], undefined, '塌掉之后河床记录要清掉');
+
+  // ③ only 看的是河床：写 water 命中，写 plain 不命中
+  assert.equal(tick(withBridge(['water']), 4).bridgeDeck?.[key], 'shallow', 'only:[water] 应该命中桥下的水');
+  assert.equal(tick(withBridge(['plain']), 4).bridgeDeck?.[key], 'water', 'only:[plain] 不该动桥下的水');
 });
 
 test('选卡：建造单位不列"没选到"的建筑', () => {
@@ -20347,6 +20461,141 @@ test('手搓一张第二张图（不挂任何扩展）：走子、开火、威�
     [...threat].every((i) => i >= 0 && i < W * W),
     '威胁圈的格号必须属于第二张图（否则会画到地球的格子上）',
   );
+});
+
+test('同盟：同队不能互打、能穿行，打光敌人就收场', () => {
+  /*
+   * 3 家：A、B 一队（两个真人合作），C 一队（强敌）。
+   *
+   * 检查四件事，正好是"加队伍"最容易漏的四条：
+   *   ① 同队不能攻击（打兵、打城都拦）；
+   *   ② 同队可以**穿过**，但不能停在别人身上；
+   *   ③ 打光敌人之后按队收场（不然 A、B 打不了对方，对局永远结束不了）；
+   *   ④ AI 不把队友当目标。
+   */
+  const W = 12;
+  const H = 8;
+  const rows = Array.from({ length: H }, () => '.'.repeat(W));
+  const level = {
+    id: 'dev:coop',
+    version: 1,
+    name: '合作探针',
+    map: {
+      id: 'levelmap:coop',
+      name: '合作探针',
+      w: W,
+      h: H,
+      rows,
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 9, y: 1 }],
+      source: 'user',
+    },
+    seats: {
+      count: 3,
+      ai: ['C'],
+      cities: { C: [{ x: 9, y: 5 }] },
+      teams: [
+        ['A', 'B'],
+        ['C'],
+      ],
+    },
+    setup: { startEra: 1 },
+    deploy: {
+      A: [{ type: 'knight', x: 3, y: 3 }],
+      B: [{ type: 'militia', x: 4, y: 3 }],
+      C: [{ type: 'militia', x: 8, y: 3 }],
+    },
+  } as never;
+
+  const s = createMatch({ ...BASE, level }, 7);
+  assert.equal(s.w, W, '关卡地图要真的生效（别静默回落成随机图）');
+  assert.deepEqual(s.config.level?.seats?.teams, [['A', 'B'], ['C']], 'teams 要原样存进快照');
+
+  // 判据本身：A/B 同队、A/C 不同队；没有 teams 的对局退化成"只有自己"
+  assert.equal(sameTeam(s, 'A', 'B'), true, 'A/B 应该同队');
+  assert.equal(sameTeam(s, 'A', 'C'), false, 'A/C 不该同队');
+  const plain = fresh();
+  assert.equal(sameTeam(plain, 'A', 'B'), false, '没写 teams 时两家仍然敌对');
+
+  const a = s.units.find((u) => u.owner === 'A')!;
+  const b = s.units.find((u) => u.owner === 'B')!;
+  s.current = 'A';
+
+  // ① 打兵：拦
+  const atk = applyAction(s, { type: 'ATTACK', unitId: a.id, targetId: b.id });
+  assert.equal(atk.ok, false, '同队不能互相攻击');
+  assert.ok(atk.reason.includes('友军'), `理由该说友军，实际：${atk.reason}`);
+
+  // ① 打城：拦
+  const bCity = s.cities.find((c) => c.owner === 'B')!;
+  const siege = applyAction(s, {
+    type: 'ATTACK',
+    unitId: a.id,
+    targetId: `city:${bCity.id}`,
+  });
+  assert.equal(siege.ok, false, '同队的城也不能打');
+
+  // ② 穿行：B 的兵挡在 (4,3)，A 的骑士在 (3,3)，(5,3) 在它背后
+  const reach = reachableTiles(s, a);
+  assert.ok(reach.has(3 * W + 5), '同队单位可以穿过去（不该挡路）');
+  assert.equal(
+    reach.has(3 * W + 4),
+    false,
+    '穿过可以，但**不能停在**队友身上——那一格仍然是它的',
+  );
+
+  // ③ 打光 C：按队收场，赢家是 A 或 B（不是"没人赢"）
+  const killed = structuredClone(s);
+  killed.units = killed.units.filter((u) => u.owner !== 'C');
+  killed.cities = killed.cities.filter((c) => c.owner !== 'C');
+  killed.current = 'A';
+  const end = applyAction(killed, { type: 'END_TURN' });
+  assert.ok(end.ok, '能结束回合');
+  if (end.ok) {
+    assert.ok(
+      end.state.winner === 'A' || end.state.winner === 'B',
+      `只剩一个队时应当收场并判给队里的人，实际 winner=${end.state.winner ?? 'null'}`,
+    );
+
+    // 队伍信息：A/B 一队、C 自己一队；队名要把两个名字都写出来
+    assert.deepEqual(teamOf(end.state, 'A'), ['A', 'B'], 'teamOf 要给出整队');
+    assert.deepEqual(teamOf(end.state, 'C'), ['C'], '单人队就是自己');
+    assert.ok(
+      teamNameOf(end.state, 'A').includes(' + '),
+      `同盟队名要用 + 连起来，实际：${teamNameOf(end.state, 'A')}`,
+    );
+    assert.equal(teamNameOf(plain, 'A'), plain.players.A.name, '没写 teams 时队名就是人名');
+
+    /*
+     * 战报卡：winner 是 A，但看卡的是 B（同队）。
+     * 以前 `iWon: winner === me` 会让 B 看到"失败"——合作关里最刺眼的那句假话。
+     */
+    const card = buildBattleCard({ ...end.state, winner: 'A' }, 'B', 'test');
+    assert.equal(card.iWon, true, '队友赢了也是你赢了');
+    assert.equal(card.sides.length, 2, '敌方按队算：C 一队，队友不该被列成敌人');
+    assert.ok(
+      card.sides[0]!.name.includes(' + '),
+      `我方那一边要写队名，实际：${card.sides[0]!.name}`,
+    );
+    assert.equal(card.sides[1]!.side, 'C', '对面只有 C');
+  }
+});
+
+test('战报折叠：只有带 say 的事件才展开', () => {
+  /*
+   * 战报默认收起，但事件的 `do` 里写了 `say` 就是"这句话要给玩家看"。
+   * 不带 `say` 的（刷兵、改地形、点亮）很可能是暗手，抖到战报上等于剧透。
+   */
+  const sayIds = new Set(['omen', 'wave-1']);
+  const hasSay = (id: string) => sayIds.has(id);
+
+  assert.equal(logEventSays(new Set(), [], hasSay), false, '这一局没有事件：不展开');
+  assert.equal(logEventSays(new Set(), ['omen'], hasSay), true, '首次进局、事件带 say：展开');
+  assert.equal(logEventSays(new Set(), ['ambush-terrain'], hasSay), false, '没有 say 的事件：不展开');
+  assert.equal(logEventSays(new Set(['omen']), ['omen', 'wave-1'], hasSay), true, '新事件带 say：展开');
+  assert.equal(logEventSays(new Set(['omen', 'wave-1']), ['omen', 'wave-1'], hasSay), false, '都触发过：不重复展开');
+  // repeat 事件每回合都会"再触发"一次，但 id 早就在 fired 里 —— 不该每回合弹一次
+  assert.equal(logEventSays(new Set(['omen']), ['omen', 'omen'], hasSay), false, 'repeat 事件重复触发：不再展开');
 });
 
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑

@@ -77,21 +77,27 @@ export function aiNameOf(s: GameState): string {
 }
 
 /**
- * 这一方现在是 AI 在走吗？
+ * 这一席现在是电脑在走吗？
  *
- * 配置（aiOpponent / aiAlly）只决定开局时谁托管，
- * 对局中途要能随时改——调平衡的时候"我这回合自己走、下回合交给它"是常态。
- * 所以运行时的 aiControl 优先，没设置过才回落到配置。
+ * 三层，**顺序不能换**：
+ *   1. 对局中途手动托管的（`aiControl`）——优先，因为玩家刚点过，
+ *      下一回合就该听他的，而不是被开局配置顶回去；
+ *   2. `config.aiSeats`——开局时定下的。注意 `[]` 是"全是真人"，不是"没设置"，
+ *      所以判的是 `!== undefined`；
+ *   3. 老存档：config 里没有 `aiSeats`，回落到 `aiOpponent` / `aiAlly`。
+ *      那两个是两家局的语义（B 看前者、其余看后者），老存档、老房间、
+ *      老复盘全靠这一条才对得上。
  */
 export function isAiSide(s: GameState, p: PlayerId): boolean {
   const override = s.aiControl?.[p];
   if (override !== undefined) return override;
+  const seats = s.config.aiSeats;
+  if (seats !== undefined) return seats.includes(p);
   return p === 'B' ? s.config.aiOpponent : s.config.aiAlly;
 }
 
-/** 有一方是 AI 就不需要"把设备交给下一位"的遮罩了 */
+/** 有电脑在场上就不需要"把设备交给下一位"的遮罩了 */
 export function anyAiSide(s: GameState): boolean {
-  // 三人四人局里 AI 一律不进场（见 setup.ts 的 twoSeats），但这里仍按席位全查一遍：
-  // 万一 AI 的托管开关从存档/联机里被带进来，遮罩的显示条件也不能算错。
+  // 按席位全查一遍，而不是只问 A/B：三家四家局里丙丁也可以交给电脑。
   return seatsOf(s).some((p) => isAiSide(s, p));
 }

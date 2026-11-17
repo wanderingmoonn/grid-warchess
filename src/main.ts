@@ -7,7 +7,9 @@
 
 import './style.css';
 import * as tutorial from './ui/tutorial.ts';
+import { openAdminPanel } from './ui/admin-panel.ts';
 import { openBattleCard } from './ui/battle-card.ts';
+import { logEventSays } from './ui/log-fold.ts';
 import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
@@ -21,6 +23,8 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
+import { goalText } from './core/level.ts';
+import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
 import type { PlayerView } from './core/fog.ts';
@@ -61,6 +65,7 @@ import {
   unitsOf,
   upgradeCostOf,
   utype,
+  teamNameOf,
 } from './core/rules.ts';
 import {
   clearUnits,
@@ -85,7 +90,8 @@ import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
-import { cellAtPoint, coordsFromEvent, refreshCellVar, renderBoard } from './ui/board.ts';
+import { cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard } from './ui/board.ts';
+import { toast } from './ui/toast.ts';
 import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
@@ -147,6 +153,7 @@ import {
   saveSeat,
   submitDraft,
   submitTurn,
+  submitTurnForce,
   type RoomSeat,
   type RoomSnapshot,
 } from './net/room.ts';
@@ -350,6 +357,19 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
  * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
  * 导入一局、进房间接手一局，都把它置 true。
  */
+/*
+ * `?fresh=1`：作者验证新版关卡时的一键清档。
+ *
+ * 默认**不清**。发布给玩家之后，"静默丢掉存档"是破坏性行为——「继续上一局」会消失，
+ * 配置也会跟着回到默认（新开局的默认配置寄生在这一局的 `state.config` 上）。
+ * 但作者每改一次关卡就进开发者工具清 localStorage 也很烦，所以留一个显式开关：
+ * 地址栏带上 `?fresh=1` 才清，玩家永远碰不到。
+ */
+if (new URLSearchParams(location.search).has('fresh')) {
+  clearMatch();
+  console.info('[存档] 已按 ?fresh=1 清掉本机存档');
+}
+
 let hasRealSave = loadMatch() !== null;
 let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
 
@@ -955,6 +975,13 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+/** 诊断用：进房以来成功提交过几次（?debug=1 里看） */
+let pushOkCount = 0;
+/** 诊断用：最近一次拉到云端快照的时刻与它的 updated_at */
+let lastSnapAt = 0;
+let lastSnapUpdated = '';
+/** 诊断用：最近一次拉到的云端那一局是什么样 */
+let lastSnapHead = '';
 /**
  * 观战人数的心跳与轮询。
  *
@@ -1015,10 +1042,34 @@ function me(): PlayerId {
   // 以前这里跟着 state.current 走，于是 AI 的回合里面板把 AI 的兵当成自己的，
   // 产兵、升级、技能全都亮着（点下去又被 aiBusy 挡住），视野也跟着 AI 走。
   // 现在"我是谁"是固定的，AI 走它的回合时，面板就是一张只读的卡。
-  const aiA = isAiSide(state, 'A');
-  const aiB = isAiSide(state, 'B');
-  if (aiA !== aiB) return aiA ? 'B' : 'A';
+  //
+  // 三家四家局不能只问 A/B 两席：电脑可能坐在 C（关卡「三岔口」就是）。
+  // 改成"场上只有一个真人时，我就是那个真人"——两人局的三种情形和以前完全等价
+  // （人机 → 真人那席；双 AI → 没有真人，跟当前席位走；热座 → 两个真人，跟当前席位走），
+  // 三家四家局则正确地认出了"只有一个真人"的那一局。
+  const humans = seatsOf(state).filter((p) => !isAiSide(state, p));
+  if (humans.length === 1) return humans[0]!;
   return state.current;
+}
+
+/**
+ * 顶栏那一行"这一局的目标"。
+ *
+ * 普通对局没有关卡，返回空串，顶栏那一块就不占位。
+ * 守到第 N 次行动的那一条会带上"还剩几次"——那是玩家真正想知道的东西，
+ * 光写"守住 20 次行动"他得自己数，而顶栏的回合数是**行动序号**，本来就不好数。
+ */
+function levelGoalLine(s: GameState): string {
+  const goals = s.config.level?.goals;
+  if (!goals || goals.length === 0) return '';
+  const parts = goals.map((g) => {
+    if (g.kind === 'survive') {
+      const left = Math.max(0, g.untilTurn - s.turn + 1);
+      return `守住 ${g.untilTurn} 次行动（还剩 ${left}）`;
+    }
+    return goalText(g);
+  });
+  return `目标：${parts.join(' · ')}`;
 }
 
 /**
@@ -1076,6 +1127,14 @@ function myTurn(): boolean {
  */
 let opsOpen = false;
 let logOpen = false;
+/**
+ * 上一次渲染时，这一局已经触发过哪些关卡事件（id）。
+ *
+ * 只用来判断"**刚刚**触发了哪几条"，进而在它们带 `say` 时把战报展开。
+ * 用集合而不是计数：`fired` 是 Set，重复触发同一 id 不会让长度变化，
+ * 而我们要的正是"这条 id 是不是新的"。
+ */
+const lastFired = new Set<string>();
 
 /**
  * 星图上选中节点/航线时，侧栏那张卡的内容。
@@ -1163,6 +1222,38 @@ function starPanelInfo(): StarPanelInfo | null {
 }
 
 function panelInput(known?: PlayerView): PanelInput {
+  /*
+   * 关卡事件刚触发 → 把战报展开。
+   *
+   * 战报默认是收起的（它一场能滚几十行），事件却可能只在战报里说一句话：
+   * 援军来了、桥塌了、邪龙又下了一颗蛋。收着的时候玩家根本不知道发生了什么，
+   * 只能靠棋盘上突然多出来的一队兵自己猜。所以每次有新事件触发就展开一次，
+   * 不管玩家上一秒是不是刚把它收起来——这是"有事发生了"的强制提示。
+   *
+   * 复盘里不展开：那是回放别人（或自己）的棋，翻到某一手时不该突然把面板撑开。
+   */
+  /*
+   * 战报只在**带 `say` 的事件**触发时展开。
+   *
+   * 不带 `say` 的事件（刷兵、改地形、点亮一片）很可能是作者有意不让玩家知道的
+   * 暗手，替它写进战报等于剧透；带 `say` 的则是作者明确要说的那句话。
+   */
+  const fired = state.levelState?.fired ?? [];
+  if (replay === null) {
+    const events = state.config.level?.events ?? [];
+    const says = logEventSays(lastFired, fired, (id) => {
+      const ev = events.find((e) => e.id === id);
+      return ev?.do.some((a) => a.kind === 'say') ?? false;
+    });
+    if (says) logOpen = true;
+    /*
+     * 复盘期间不动基线：回放的 `state` 是另一份（跳到某一手的快照），
+     * 拿它当基线，退出复盘后会把老事件当成"刚刚发生"再展开一次。
+     */
+    lastFired.clear();
+    for (const id of fired) lastFired.add(id);
+  }
+
   const view = known ?? playerView(state, me(), spectating());
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {
@@ -1308,7 +1399,8 @@ function replayUiOf(): ReplayUi {
   const m = s.meta;
   const parts = [`${m.size}×${m.size}`, `${m.players} 人`, m.expansionsText, `种子 ${m.seed}`];
   if (m.build) parts.push(`v${m.build}`);
-  const winner = state.winner ? state.players[state.winner].name : null;
+  // 同盟局要写队名：`winner` 只是队里第一个活着的席位
+  const winner = state.winner ? teamNameOf(state, state.winner) : null;
   return {
     name: replayName,
     index: replayIndex,
@@ -1555,8 +1647,42 @@ function ensureArtIndex(): void {
   void loadUnitArtIndex().then(() => render());
 }
 
+/**
+ * 诊断浮层：`?debug=1` 才出现（2026-11-16）。
+ *
+ * "房间里 AI 不动"这种问题，光看棋盘分不清是**该电脑却没点起来**、
+ * 还是**点起来了但提交被挡**。把这几项直接打在屏幕上，一眼就能定位：
+ * 轮到的席位、AI 席位表、暂停标记、令牌、以及房间里的进度号。
+ */
+function renderDebugHud(): void {
+  if (!new URLSearchParams(location.search).has('debug')) return;
+  const el =
+    document.getElementById('debug-hud') ??
+    (() => {
+      const d = document.createElement('div');
+      d.id = 'debug-hud';
+      d.style.cssText =
+        'position:fixed;left:8px;bottom:8px;z-index:99999;font:12px/1.5 monospace;' +
+        'background:rgba(20,20,20,.88);color:#9fe;padding:8px 10px;border-radius:6px;' +
+        'white-space:pre;pointer-events:none;max-width:52ch';
+      document.body.appendChild(d);
+      return d;
+    })();
+  el.textContent = [
+    `turn=${state.turn} current=${state.current} winner=${state.winner ?? '-'}`,
+    `aiSeats=${JSON.stringify(state.config.aiSeats)} aiOpp=${state.config.aiOpponent} aiAlly=${state.config.aiAlly}`,
+    `aiControl=${JSON.stringify(state.aiControl)} isAiSide(${state.current})=${isAiSide(state, state.current)}`,
+    `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
+    `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
+    `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
+    `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
+      ` 拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'} 远端=${lastSnapHead || '-'}`,
+  ].join('\n');
+}
+
 function render(): void {
   ensureArtIndex();
+  renderDebugHud();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -1756,6 +1882,7 @@ function render(): void {
     god: state.config.godMode === true,
     commander: state.config.commanderMode === true,
     commanderRunning,
+    goalLine: levelGoalLine(state),
   });
   // 没有观察者就每帧量（老行为）；有就只在它标脏之后量。
   // 这一句从"每帧一次强制布局"变成"改窗口 / 换缩放 / 工具栏变高时一次"。
@@ -1861,8 +1988,15 @@ const boardCameras = new Map<BoardId, { zoom: number; left: number; top: number 
  * 本质上就是这两个值悄悄分家了，却没人负责把它们捏回去。
  */
 let lastFitZoom = 0;
-/** 1× 时棋盘该有多大（像素）。放大只是在这个数上乘，不改它 */
-let baseBoardSize = 0;
+/**
+ * 1× 时棋盘外框该是多大（像素）。放大只是在这两个数上乘，不改它们。
+ *
+ * 是**两个**数而不是一个边长：地图允许长宽不等（12×10 / 8×40），
+ * 写成一个边长就等于宣布"棋盘必须是正方形"，那会把格子压成长方形。
+ * 见 `ui/board.ts` 的 `fitBoardBox()`。
+ */
+let baseBoardW = 0;
+let baseBoardH = 0;
 
 /**
  * 棋盘尺寸还有效吗。
@@ -1916,13 +2050,19 @@ function fitBoard(): void {
   // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
   const viewportH = appEl.clientHeight || window.innerHeight;
   const availH = viewportH - chrome - padY;
-  // 160 是地板：窗口被压到极窄时也别让棋盘缩成一个点
-  baseBoardSize = Math.max(160, Math.round(Math.min(width, availH)));
+  /*
+   * 先算一格多大，再反推外框——不能直接把 `min(宽, 可用高)` 当边长。
+   * 那个写法只在正方形地图上成立；12×10 的图会被拉成长方格（玩家实机发现过）。
+   */
+  const fit = fitBoardBox(state?.w ?? 12, state?.h ?? 12, width, availH);
+  baseBoardW = fit.w;
+  baseBoardH = fit.h;
 
   const zoomed = boardZoom > 1;
-  const px = Math.round(baseBoardSize * boardZoom);
-  boardEl.style.width = `${px}px`;
-  boardEl.style.height = `${px}px`;
+  const pxW = Math.round(baseBoardW * boardZoom);
+  const pxH = Math.round(baseBoardH * boardZoom);
+  boardEl.style.width = `${pxW}px`;
+  boardEl.style.height = `${pxH}px`;
   boardEl.classList.toggle('zoomed', zoomed);
   boardScrollEl.classList.toggle('zoomed', zoomed);
 
@@ -1932,8 +2072,8 @@ function fitBoard(): void {
   // 放大之后整块会跟着长大，被 .app 的 overflow:hidden 裁掉——
   // 表现就是"一放大就只能看见左上角，剩下的永远看不到"。
   if (zoomed) {
-    boardScrollEl.style.width = `${baseBoardSize}px`;
-    boardScrollEl.style.height = `${baseBoardSize}px`;
+    boardScrollEl.style.width = `${baseBoardW}px`;
+    boardScrollEl.style.height = `${baseBoardH}px`;
   } else {
     boardScrollEl.style.width = '';
     boardScrollEl.style.height = '';
@@ -2873,7 +3013,7 @@ function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
   dropHeatFlash();
   state = snapshot.state;
-  state.aiControl = { A: false, B: false };
+  state.aiControl = undefined;
   state.fog = fog;
   clearSelection();
   saveMatch(state);
@@ -3261,14 +3401,6 @@ function onDraftClick(typeId: string): void {
   }
 }
 
-function toast(msg: string): void {
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = msg;
-  document.body.appendChild(el);
-  window.setTimeout(() => el.remove(), 2200);
-}
-
 /**
  * 战况烈度的红格在哪一回合已经被"出手"消费掉了。
  *
@@ -3302,6 +3434,16 @@ const HEAT_FLASH_MS = 700;
  */
 function noteStrikeFlash(before: GameState, after: GameState): void {
   const cells = newHeatCells(before, after);
+  /*
+   * 地形变了也要闪。
+   *
+   * 和"这一手打到哪"合并成同一次闪烁（同一套色块、同一个 0.7 秒）——
+   * 一次动作里既塌桥又挨打是可能的，分两次闪会互相盖掉。
+   */
+  const terrain = after.levelState?.terrain;
+  if (terrain && terrain.seq !== before.levelState?.terrain?.seq) {
+    for (const i of terrain.cells) cells.set(i, Math.max(cells.get(i) ?? 0, 1));
+  }
   if (cells.size === 0) return;
 
   heatFlashSeq += 1;
@@ -3400,8 +3542,48 @@ function dispatch(action: Action): boolean {
     clearSelection();
     render();
     if (room) {
-      // 联机里"结束回合"就等于提交：把整局推上去，然后等对面
-      void pushTurn(room, prevTurn);
+      /*
+       * 联机里"结束回合"就等于提交：把整局推上去，然后等对面。
+       *
+       * **等这一步真正落地之后再叫 AI**（2026-11-16）。
+       *
+       * 这一支在房间里 submit 完就 return 了，下面那串"轮到谁"的分支根本走不到；
+       * 而关卡/单人局的房间里对面正是 AI——不点它，棋盘停在"轮到蓝方"不动。
+       * 但又不能点得太早：AI 那一轮跑完也要 `pushTurn`，两次写云端都带乐观锁
+       * （`turn = 提交前那个值`），并发的话先落地的那次把锁推进了，AI 那次被挡掉，
+       * 云端的还是"轮到蓝方"的旧局面，15 秒轮询一拉就把棋盘退回去——
+       * 看着就是"AI 动了一下又不动了"。
+       * 所以挂在 `.then()` 上：提交成功 → 再驱动电脑。
+       */
+      /*
+       * 房间里**有电脑**的时候用强制提交（2026-11-16）。
+       *
+       * 带乐观锁的写法在这里会静默失败：`prevTurn` 是"我以为云端停在几"，
+       * 而这局里云端还会被电脑那一轮推着前进，一旦对不上 `.eq('turn', …)`
+       * 就一行也更新不到——房主本地照样打，观战端永远停在上一帧。
+       * 带 AI 的房间里只有本机会写，不存在合法的并发冲突，所以直接覆盖。
+       */
+      const done = anyAiSide(state)
+        ? submitTurnForce(room.code, state).then((ok) => {
+            if (ok) {
+              dirty = false;
+              pushOkCount += 1;
+              render();
+            }
+          })
+        : pushTurn(room, prevTurn);
+      /*
+       * **不管提交成没成功，都要把电脑点起来**（2026-11-16）。
+       *
+       * 原来只写 `done.then(...)`：`submitTurnForce` 一旦 reject（网络、RLS、超时），
+       * 或者上面那个 `render()` 抛错，这个 then 根本不会执行——于是房主本地这一局
+       * 就停在"轮到蓝方"，云端也跟着停在原地，观战端看过去就是"卡在 AI 回合"。
+       * 提交失败是"云端没跟上"，不该连累"这一局还打不打"。
+       */
+      const kickIfAi = (): void => {
+        if (isAiSide(state, state.current) && !state.winner) kickAiIfNeeded();
+      };
+      void done.then(kickIfAi, kickIfAi);
       return true;
     }
     if (!state.winner) {
@@ -5260,8 +5442,47 @@ async function runAiLoop(): Promise<void> {
   const token = ++aiToken;
   clearSelection();
 
+  /*
+   * 观战位**不在本地跑 AI**（2026-11-16）。
+   *
+   * 房间里 AI 只该由坐席那一端驱动：观战方要是也自己算一遍，它算出来的进展
+   * 云端没有，15 秒轮询一拉就把画面退回旧局面——用户看到的就是"AI 走一轮、
+   * 然后时间倒流"。观战方只要跟着快照看。
+   */
+  if (watching()) return;
+
+  /*
+   * 房间里的 AI 走完之后必须**把整局推上去**，否则云端还停在行动前那一版，
+   * 轮询按 `adoptDecision` 判"回合不同 → 采纳云端"，棋盘会当场倒退。
+   */
+  const pushing = room !== null;
+  // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
+  if (pushing) dirty = true;
+
   while (token === aiToken && !state.winner && !aiPaused && isAiSide(state, state.current)) {
     await runAiTurn(token);
+  }
+
+  /*
+   * 电脑这一轮走完，**强制**推上去（不带乐观锁）。
+   *
+   * 这里不敢再用"提交前那个进度号"做锁：AI 一回合里会做好几个动作，
+   * `state.turn` 一路在涨，等循环结束时那个号早就不是云端手里的号了，
+   * 带锁的写法会被静默挡掉——观战端于是永远停在"轮到电脑"那一帧
+   * （用户看到的"观战方卡在 AI 行动回合"）。
+   * 电脑这一方只有本机会写，不存在合法的并发冲突，所以可以放心覆盖。
+   */
+  if (pushing && room) {
+    try {
+      const ok = await submitTurnForce(room.code, state);
+      if (ok) {
+        dirty = false;
+        pushOkCount += 1;
+        render();
+      }
+    } catch {
+      /* 网络不通就下次再说：轮到人时还会再提一次 */
+    }
   }
 
   if (token !== aiToken) return; // 被新的调用接管了，交给它渲染
@@ -5535,6 +5756,39 @@ function newGameFlow(): void {
 }
 
 /**
+ * 从审核台**直接开一局**这张关卡（2026-11-16）。
+ *
+ * 审核最需要的是"能不能玩"，而不是"JSON 长什么样"。这里复用"新对局"那条路：
+ * 用同一份 `DEFAULT_CONFIG` 加一个 `level` 快照开局，其余设置（AI 速度、动效…）
+ * 都沿用当前这局——试玩完再点"新对局"就回到正常流程。
+ *
+ * 不写进"我的关卡"：那是玩家自己做的东西，审核别人的关卡不该在他的列表里留垃圾。
+ * 想留着改，用选关页的"复制成我的关卡"。
+ */
+function playtestLevel(level: LevelDef): void {
+  try {
+    state = createMatch({ ...DEFAULT_CONFIG, level }, randomSeed(), loadCustomUnits());
+    dropHeatFlash();
+    detachRoom();
+    resetZoom();
+    clearSelection();
+    resetRecorder();
+    saveMatch(state);
+    hasRealSave = true;
+    /*
+     * 首页是挂在 `body` 上的独立一层（见 showTitle 的注释），换局不会自动收掉它。
+     * 不摘掉这一层，试玩就变成"棋盘在下面、首页在上面"——看起来像没开。
+     */
+    document.querySelector('.title-screen')?.remove();
+    render();
+    toast(`试玩：${level.name}（不想要了就点「新对局」）`);
+    kickAiIfNeeded();
+  } catch (err) {
+    toast(err instanceof Error ? err.message : '这张关卡打不开');
+  }
+}
+
+/**
  * 新手教程：开一局钉死的局面，把教练层挂上。
  *
  * 存档在教程期间**挂起**（`suspendSaves`）。这不是防作弊，是防覆盖：教程每走一步
@@ -5611,6 +5865,8 @@ function exitTutorial(): void {
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
 function kickAiIfNeeded(): void {
   aiPaused = false;
+  // 观战位只跟着快照看，本地不驱 AI（见 runAiLoop 顶部那段）
+  if (watching()) return;
   if (isAiSide(state, state.current) && !state.winner) void runAiLoop();
 }
 
@@ -7165,8 +7421,18 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   normalizePlayerNames(state);
   // 房间里的这一局记不记，看它自己的配置；换了局就得重开一个记录器
   resetRecorder();
-  // 房间里两边各走各的：AI 托管在这里没有意义，顺手关掉免得它替人下棋
-  state.aiControl = { A: false, B: false };
+  /*
+   * 进房间只清**手动托管**，不动"这一局本来就有的电脑席位"（2026-11-16）。
+   *
+   * 原来这里写的是 `aiControl = { A: false, B: false }`，理由"房间里两边各走各的"。
+   * 但关卡模式（`config.level`）的对手本来就是 AI：想开个房让人来观战，
+   * 一进房 AI 就被这一行关掉了，对面从此不动——看起来就是"联机房间让 AI 失效"。
+   *
+   * 现在清成 undefined，AI 席位回到 `config.aiSeats` / `aiOpponent` 的声明：
+   *   · 普通联机房：开局面板里 AI 就是关的，清完仍然是关；
+   *   · 关卡 / 单人局开房观战：AI 保留，观战的人看到的是真在打的局面。
+   */
+  state.aiControl = undefined;
   aiToken += 1;
   aiPaused = false;
   dirty = false;
@@ -7181,6 +7447,15 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   saveMatch(state);
   render();
   startRoomPolling();
+  /*
+   * 进房后**主动点一次 AI**（2026-11-16）。
+   *
+   * 上面只是把 `aiControl` 清干净、把 `aiToken` 换掉，AI 循环本身不会自己醒过来，
+   * 要等玩家下一次结束回合才被 `kickAiIfNeeded` 叫起。关卡/单人局开房观战时，
+   * 局面常常正好轮到电脑——不主动点，观战的人会看到一局"对面纹丝不动"的棋，
+   * 和"AI 失效"一模一样。
+   */
+  kickAiIfNeeded();
 }
 
 function leaveRoom(): void {
@@ -7220,6 +7495,7 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
       return;
     }
     dirty = false;
+    pushOkCount += 1;
     toast(okText ?? '这一回合已提交，等对方行动');
     render();
   } catch (err) {
@@ -7229,7 +7505,15 @@ async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): 
 
 function startRoomPolling(): void {
   window.clearInterval(roomTimer);
-  roomTimer = window.setInterval(() => void pollRoom(), 15000);
+  /*
+   * 观战端拉得勤一些（2026-11-16）。
+   *
+   * 15 秒是给"两个人在下"定的：对面走完会提交，我这边等一拍无所谓。
+   * 但观战是**看别人的棋**——房主那边电脑刚走完一回合，观战端最多要等 15 秒
+   * 才看见，感觉上就是"永远慢一步"。观战只读、不写云端，拉勤一点没有副作用。
+   */
+  const beat = watching() ? 4000 : 15000;
+  roomTimer = window.setInterval(() => void pollRoom(), beat);
   startPresence();
 }
 
@@ -7315,6 +7599,9 @@ async function pollRoom(): Promise<void> {
   try {
     const snapshot = await fetchRoom(seat.code);
     if (!snapshot || room?.code !== seat.code) return;
+    lastSnapAt = Date.now();
+    lastSnapUpdated = snapshot.updatedAt;
+    lastSnapHead = `code=${snapshot.code} turn=${snapshot.turn} current=${snapshot.current}`;
 
     // "别人入座了没有"要靠每次拉取刷新：lobby 里那句"等待对面入座…"就是看它
     if (!seat.spectator) {
@@ -7384,8 +7671,10 @@ async function pollRoom(): Promise<void> {
     // 联机没有"本地动作"可挂钩：对面这一回合打到哪，只能靠新旧两份状态的记账差
     const beforeSync = state;
     state = snapshot.state;
-    state.aiControl = { A: false, B: false };
+    state.aiControl = undefined; // 同上：只清手动托管，保留关卡/单人局自带的 AI 席位
     state.fog = fog; // 迷雾是本地偏好，别被对面关掉
+    // 同步到"该电脑走"的那一帧时也要把它点起来，否则观战方看到的是静止画面
+    window.setTimeout(() => kickAiIfNeeded(), 0);
     if (decision.why !== 'finished') noteStrikeFlash(beforeSync, state);
     if (decision.why === 'finished') {
       dirty = false;
@@ -7458,6 +7747,15 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       ? [mine.seat, ...tableSeats.filter((x) => x !== mine.seat)]
       : tableSeats;
     for (const seat of order) {
+      /*
+       * **别去抢电脑的座位**（2026-11-16）。
+       *
+       * 关卡模式里 B 是 AI（`level.seats.ai`），可分享链接被朋友点开时，
+       * 这行会老老实实把两个空位都试一遍，于是人坐进了 B——同一方既有真人
+       * 又有 AI，两边各推一手，表现就是"AI 莫名其妙一直在循环"。
+       * 这一方归电脑，观战者就该去观战位。
+       */
+      if (isAiSide(snapshot.state, seat)) continue;
       const result = await claimSeat(code, seat, token);
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);
@@ -8665,6 +8963,14 @@ if (drift) {
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
 if (forceHome || invited.length < 4) showTitle();
+
+/*
+ * 审核台：`&admin=1` 打开（2026-11-16）。
+ *
+ * 不做独立入口/独立包：这东西只有审核时用，而且要读的云端凭据和游戏是同一套，
+ * 拆出去反而多一类"域名和 publishableKey 对不上"的坑。
+ */
+if (new URLSearchParams(location.search).has('admin')) openAdminPanel({ onPlay: playtestLevel });
 
 /* ── 设置弹窗 ────────────────────────────────────────────────────────────
  *

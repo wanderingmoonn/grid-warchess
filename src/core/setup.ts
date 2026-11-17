@@ -18,9 +18,10 @@ import {
 import { createDraft } from './draft.ts';
 import { generateLayout, generateMultiLayout, layoutFromRows, terrainFromChar, twoCityMinSize } from './mapgen.ts';
 import { validateFixedMap } from './fixed-maps.ts';
-import { refreshMemory, grantOpeningIncome } from './rules.ts';
+import { validateLevel, goalText } from './level.ts';
+import { canStandAt, refreshMemory, grantOpeningIncome, runLevelEvents } from './rules.ts';
 import { PLAYER_ORDER } from './types.ts';
-import type { City, GameState, MatchConfig, PlayerId, Tile, Unit, UnitTypeDef } from './types.ts';
+import type { City, GameState, MatchConfig, PlayerId, Terrain, Tile, Unit, UnitTypeDef } from './types.ts';
 import type { SpawnDef } from './mapgen.ts';
 import { registerResource } from './resources.ts';
 import { nextRandom } from './rng.ts';
@@ -167,6 +168,30 @@ export function createMatch(
   // 前置包没开的时候，依赖它的兵种包必须整包不进場。否则玩家会拿到一堆
   // "有魔法攻击但魔法抗性永远读不到"的兵——比直接不出现更糟。
   /*
+   * 关卡（可选）。**必须最先解析**：它决定开哪些扩展、几家、谁托管、地图、开局部署。
+   *
+   * 校验不过就当作没有关卡（退回普通对局），而不是让整局建不起来——
+   * 和固定地图的兜底同一条理由：一份坏配置不该让玩家连开局都开不了。
+   */
+  const checkedLevel = config.level ? validateLevel(config.level) : null;
+  const level = checkedLevel && checkedLevel.ok ? checkedLevel.level : null;
+  /*
+   * 关卡校验没过 → 这一局会**静默**按随机地图开。
+   *
+   * 这是唯一能留下证据的地方。不加这条，作者看到的是"我的关进游戏变成了随机图"，
+   * 而真实原因（两个兵写在同一格、某一行少了半格）得自己一行行找——
+   * 2026-11-15 就是这么卡住的：`flank-3` 里有两只游骑写在同一个坐标上。
+   *
+   * 跑 `npm run probe:level` 会把每张关卡的错因逐条列出来，比看控制台更快。
+   */
+  if (checkedLevel && !checkedLevel.ok) {
+    console.warn(
+      `[关卡] 「${config.level?.name ?? config.level?.id ?? '?'}」过不了校验，已按随机地图开局：`,
+      checkedLevel.errors,
+    );
+  }
+
+  /*
    * 先把扩展 id 迁移成现在的写法（2026-11-04 十六个包并成四个）。
    *
    * 这一步必须在这里做，不能只做在 enabledExpansionIds 里面：下面好几处是
@@ -174,11 +199,40 @@ export function createMatch(
    * citySize、开局战报里的 extensions 列表）。集合里是新 id、数组里是旧 id 时，
    * 每个都查不到——表现就是"勾了奇想包，兵种表里一个奇想兵都没有"。
    */
-  const expansionIds = normalizeExpansionIds(config.expansionIds);
+  /*
+   * 关卡对扩展的要求，在归一化**之前**套上去。
+   *
+   * 顺序是"先剔禁用的、再补必须开的"：
+   *   · 禁用优先，因为作者的意图是"这一关不能带这个包"，玩家勾了也不算；
+   *   · 必须开的补在最后，`validateLevel` 已经保证同一个包不会两头都写。
+   *
+   * 只动这一局的局部量，**不改调用方的 config**（createMatch 是纯函数）。
+   * 真正生效的集合会由下面 `state.config.expansionIds` 按"实际进场的包"重写，
+   * 所以存档里记的是真实值，不是玩家勾的那串。
+   */
+  const levelExpansions = level?.expansions;
+  const wantExpansions = (() => {
+    const base = [...config.expansionIds];
+    if (!levelExpansions) return base;
+    const forbid = new Set(levelExpansions.forbid ?? []);
+    const kept = base.filter((id) => !forbid.has(id));
+    for (const id of levelExpansions.require ?? []) {
+      if (!forbid.has(id) && !kept.includes(id)) kept.push(id);
+    }
+    return kept;
+  })();
+  const expansionIds = normalizeExpansionIds(wantExpansions);
 
   const extraUnits: Record<string, UnitTypeDef> = {
     ...customUnits,
     ...expansionUnitsFor(expansionIds),
+    /*
+     * 关卡自带的兵种（`LevelDef.units`）最后合并。
+     *
+     * 放最后是因为它可能是对某个兵种的有意改写（"这一关的守将比民兵强一点"），
+     * 作者意图该压过通用表。它们**不进全局**，别的对局看不到、也造不出。
+     */
+    ...(level?.units ?? {}),
   };
   // 城市边长那边还要按包查一次，所以这份集合留着
   const liveExpansions = enabledExpansionIds(expansionIds);
@@ -206,25 +260,51 @@ export function createMatch(
   /**
    * 这一局几家。
    *
-   * 固定地图只有两个城位（`citiesA/B`），所以三人四人局一律走生成器——
-   * 与其让玩家上传的图在四人局里"有一家没城"，不如在选图那一步就不给选
-   * （开始界面里那块会置灰，这里再把一道关）。
+   * 关卡写了就算关卡的（那是这一关的设计），没写才看面板。
+   *
+   * 注意下面那条老注释此刻只对"普通对局 + 固定地图"成立：固定地图只有两个城位
+   * （`citiesA/B`），所以不提供第三四家的城。**关卡不受这条限制**——它自己带
+   * `seats.cities` 给第三四席，见 `LevelSeats`。
    */
-  const playerCount = (config.playerCount ?? 2) as 2 | 3 | 4;
+  const playerCount = (level?.seats?.count ?? config.playerCount ?? 2) as 2 | 3 | 4;
   /**
-   * 三人四人局：只有"指挥官模式"放行，托管整方的两个 AI 开关仍按两席关掉。
+   * 三人四人局：托管整方的 AI 开关以前按两席关掉，现在不关了。
    *
-   * 选卡 BP 和"AI 当对手/队友"都是按两个席位写的（BP 界面只有两栏、先后手补偿
-   * 只算两家），放进三家四家局会造出"蓝方有兵、但没人操作"这种说不清的局面。
-   *
-   * 指挥官模式不一样：它托管的正是**玩家自己这一方**。AI 的多人目标选择
-   * 在 2026-11-04 已经放宽成"所有敌人"（见 ai.ts 的 enemyUnitsOf / primaryFoe），
-   * 所以三家四家局里也能替某一方走完。`config` 是调用方的对象，不改它，用局部量往下传。
+   * 选卡 BP 和"先后手补偿"仍然只按两个席位写（BP 界面只有两栏、补偿只算两家），
+   * 这两样在多人局照样关；但"谁被电脑操作"已经不是两席的事情了：
+   * AI 的多方目标选择在 2026-11-04 放宽成"所有敌人"（见 ai.ts 的 enemyUnitsOf），
+   * 三家四家局里让丙丁交给电脑，它打得动。
    */
   const twoSeats = playerCount === 2;
   const draftMode = twoSeats && config.draftMode === true;
-  const aiOpponent = twoSeats && config.aiOpponent === true;
-  const aiAlly = twoSeats && config.aiAlly === true;
+  /** 这一局坐人的席位，按行动顺序 */
+  const seatList = PLAYER_ORDER.slice(0, playerCount) as PlayerId[];
+  /**
+   * 哪些席位交给电脑。三层优先级，写死顺序：
+   *   1. 关卡规定的（这一关的设计）；
+   *   2. 面板给的 `config.aiSeats`；
+   *   3. 都没有 → 按老的两个布尔推导（两家局的老存档走这条）。
+   *
+   * 三个字段的关系见 `MatchConfig.aiSeats`。注意 `[]` 是**有含义**的（全是真人），
+   * 所以判"有没有设置过"用的是 `!== undefined`，不是长度。
+   */
+  const aiSeatList: PlayerId[] = (() => {
+    const declared = level?.seats?.ai ?? config.aiSeats;
+    if (declared !== undefined) return seatList.filter((p) => declared.includes(p));
+    const legacy: PlayerId[] = [];
+    if (config.aiAlly === true) legacy.push('A');
+    if (config.aiOpponent === true) legacy.push('B');
+    return legacy.filter((p) => seatList.includes(p));
+  })();
+  /*
+   * 老的两个布尔继续写进 config，值由 `aiSeatList` 反算。
+   *
+   * 为什么还留着：报告、面板、指挥官模式判定都还在读它们，而且**两家局必须
+   * 逐字保持原样**（一局人机对战的老复盘要靠这两个字段认出"蓝方是电脑"）。
+   * 两家局下 `aiSeatList` 就来自这两个布尔，反算回去是恒等的。
+   */
+  const aiOpponent = twoSeats && aiSeatList.includes('B');
+  const aiAlly = twoSeats && aiSeatList.includes('A');
   const commanderMode = config.commanderMode === true;
 
   const enabled = config.enabledUnits.filter((id) => catalog[id]);
@@ -286,7 +366,26 @@ export function createMatch(
    * 联机房间、分享链接一路传，谁都能改它。校验不过就退回随机生成——
    * 一张坏图不该让整局建不起来，但也不能让它带着半张地形进场。
    */
-  const fixed = config.fixedMap ? validateFixedMap(config.fixedMap) : null;
+  /*
+   * 关卡自带的地图**优先于** `config.fixedMap`。
+   *
+   * 关卡是"在哪打 + 怎么打"的整包，它的地图是这一关的一部分；面板上那张固定图
+   * 只是上一局留下的记忆，不该覆盖关卡。这里仍然过一遍校验：虽然 `validateLevel`
+   * 已经查过，但这一步是"所有地图进场的唯一关口"，多查一次换来的是
+   * "不存在一条绕过校验的地图路径"。
+   */
+  const levelMap = level?.map ?? null;
+  const fixedSource = levelMap ?? config.fixedMap ?? null;
+  /*
+   * 第二道校验**必须带上 allowEmpty**。
+   *
+   * 不带的话，无城关卡的地图在这里被判无效 → `fixedMap` 变 null →
+   * 静默退回生成器，棋盘尺寸也跟着变（作者会看到"我做的 10×10 图变成了 12×12"）。
+   * 这正是"关卡校验失败会静默回落成随机地图"那一类坑，只是藏在更深一层。
+   */
+  const fixed = fixedSource
+    ? validateFixedMap(fixedSource, { allowEmpty: level?.seats?.cityless ?? [] })
+    : null;
   /*
    * 城位可能"贴边"，而本局的城可能是 3×3（「城郭」扩展）。
    *
@@ -300,14 +399,46 @@ export function createMatch(
     x: Math.max(0, Math.min(Math.max(0, (fixedMap?.w ?? 0) - citySize), c.x)),
     y: Math.max(0, Math.min(Math.max(0, (fixedMap?.h ?? 0) - citySize), c.y)),
   });
+  /*
+   * 多席位能不能用这张固定地图。
+   *
+   * 固定地图（含关卡地图）只有 A/B 两组城位，第三四席的城由关卡额外给。
+   * 所以"三家四家 + 固定地图"成立的条件是：**每一个多出来的席位都有城**。
+   * 缺一个就不走固定布局，退回生成器——宁可换一张随机图，也不要造出
+   * "有一家没城、第一回合就出局"的局面（那看起来像 bug，其实是配置错）。
+   */
+  const extraCities = level?.seats?.cities ?? {};
+  /*
+   * "没有城"的席位不算缺城。
+   *
+   * 以前这里一刀切要求第三四席都有城，于是三家局里只要有一家是 cityless
+   * （合作关的邪龙军团），条件就不成立 → 关卡地图被丢掉、**静默退回随机图**
+   * （玩家看到 28×18 变成了 12×12，而日志里一个字都没有）。
+   */
+  const citylessSeats = level?.seats?.cityless ?? [];
+  const multiOk =
+    playerCount === 2 ||
+    seatList
+      .slice(2)
+      .every(
+        (p) => citylessSeats.includes(p) || (extraCities[p as 'C' | 'D']?.length ?? 0) > 0,
+      );
+  /* 第三四席的城也要夹一次：理由和 A/B 完全相同（开城郭之后 3×3 会伸出棋盘） */
+  const clampExtraCities = (): Partial<Record<'C' | 'D', Array<{ x: number; y: number }>>> => {
+    const out: Partial<Record<'C' | 'D', Array<{ x: number; y: number }>>> = {};
+    if (extraCities.C) out.C = extraCities.C.map(clampCityInto);
+    if (extraCities.D) out.D = extraCities.D.map(clampCityInto);
+    return out;
+  };
   const layout =
-    fixedMap && twoSeats
+    fixedMap && multiOk
       ? layoutFromRows(
           fixedMap.rows,
           fixedMap.citiesA.map(clampCityInto),
           fixedMap.citiesB.map(clampCityInto),
           spawnPool,
           citySize,
+          clampExtraCities(),
         )
       : playerCount > 2
         ? generateMultiLayout(
@@ -376,26 +507,61 @@ export function createMatch(
     unitTypes[id] = { ...def, builds: def.builds ? [...def.builds] : undefined };
   }
 
+  /*
+   * 关卡自带的兵种（`LevelDef.units`）**必须在这里再兜一次**。
+   *
+   * 上面那份是从 `pool`（玩家能造的兵）来的，而关卡兵种多半是 `summonedOnly`——
+   * 谁都造不出、只用部署摆上去，它压根不在池子里。不补这一步，部署里写的 `warden`
+   * 会被当成"本局没有这个兵种"跳过；而 `assassinate` 的判据是"对手场上没有这个兵种"，
+   * 于是开局第一手就判玩家赢——一条配置错误直接变成通关。
+   */
+  for (const [id, def] of Object.entries(level?.units ?? {})) {
+    if (unitTypes[id]) continue;
+    unitTypes[id] = { ...def, builds: def.builds ? [...def.builds] : undefined };
+  }
+
   // ---- 城市 ----
   const cities: City[] = [];
   let citySeq = 1;
   // 开局时代也要按"这一局能走到第几级"夹住：不勾「现代战争」时，
   // 配置里写 startEra: 6 只该得到第五时代，而不是一座没有兵可用、也再造不出兵的城。
-  const startEra = Math.max(1, Math.min(eraCeilingFor(expansionIds), config.startEra));
-  const eraInfo = eraDef(startEra);
+  /*
+   * 起始时代：**关卡写死的优先**。
+   *
+   * 面板那边已经把时代按钮锁了，但锁 UI 只是"不让人点"——`config` 会跟着存档、
+   * 房间、分享链接一路传，谁都能改它。开局金币就是 `startGoldFor(startEra)`，
+   * 一句改过的 config 就能把"1 个兵守住 20 次行动"变成"开着坦克守"。
+   * 所以规则层必须再认一次，和固定地图、扩展规则同一个口径。
+   */
+  const startEra = Math.max(
+    1,
+    Math.min(eraCeilingFor(expansionIds), level?.setup?.startEra ?? config.startEra),
+  );
 
   const placeCity = (owner: PlayerId, left: number, top: number) => {
     const id = `c${citySeq++}`;
+    /*
+     * 这一座城自己的时代。
+     *
+     * 城的 `era` 本来就是逐城独立（收入、可造兵种、升级都读它），建局时统一写
+     * `startEra` 只是"没人给它别的值"。关卡可以让某一席晚点上班、带着高一级的城进城
+     * （`seats.cityEra`）——它进来那一刻就是铁器的城，不用先攒钱升。
+     */
+    const cityEra = Math.max(
+      1,
+      Math.min(eraCeilingFor(expansionIds), level?.seats?.cityEra?.[owner] ?? startEra),
+    );
+    const info = eraDef(cityEra);
     cities.push({
       id,
       x: left,
       y: top,
       size: citySize,
       owner,
-      era: startEra,
-      hp: eraInfo.cityMaxHp,
-      maxHp: eraInfo.cityMaxHp,
-      armor: eraInfo.cityArmor,
+      era: cityEra,
+      hp: info.cityMaxHp,
+      maxHp: info.cityMaxHp,
+      armor: info.cityArmor,
     });
     for (let dy = 0; dy < citySize; dy++) {
       for (let dx = 0; dx < citySize; dx++) {
@@ -407,8 +573,8 @@ export function createMatch(
     }
   };
 
-  /** 这一局实际坐人的席位，按行动顺序 */
-  const seats = PLAYER_ORDER.slice(0, playerCount);
+  /** 这一局实际坐人的席位，按行动顺序（= 前面算 aiSeatList 用的那份） */
+  const seats = seatList;
 
   /*
    * 谁先动。
@@ -420,7 +586,8 @@ export function createMatch(
    * 存档里留一个"随机"字样，就等于每次打开都可能换一个先手。
    */
   const firstSeat: PlayerId = (() => {
-    const want = config.firstSide;
+    // 关卡可以钉死先手（和时代同一个理由：先手差一回合，整张图的强度就变了）
+    const want = level?.setup?.firstSide ?? config.firstSide;
     /*
      * 随机：两人局抽 A/B，三四人局**在所有席位上抽**（等于随机轮转起点）。
      *
@@ -453,7 +620,28 @@ export function createMatch(
     D: layout.spawnsD ?? [],
   };
 
-  for (const p of seats) for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
+  /**
+   * 开局**不在场上**的席位（关卡 `seats.hidden`）。
+   *
+   * 不给城、不给兵、不占回合，但要留在 `seatsOf` 里——"这一局有几个席位"
+   * 是配置决定的事实。它靠事件里的 `deploy` 上场。
+   */
+  const hiddenSeatList = (level?.seats?.hidden ?? []).filter((p) => seatList.includes(p));
+  /**
+   * **没有城的席位**（关卡 `seats.cityless`）。
+   *
+   * 和"未登场"不同：它在场、占回合、要打仗，只是没有城。所以这里只是不摆城，
+   * 出兵照旧走 `deploy`。出局条件在 rules.ts 里单独判（兵打光即出局）。
+   */
+  const citylessList = (level?.seats?.cityless ?? []).filter((p) => seatList.includes(p));
+
+  for (const p of seats) {
+    // 未登场的席位：地图上不给它城（要靠事件里的 deploy 放）
+    if (hiddenSeatList.includes(p)) continue;
+    // 无城席位：本来就不该有城，直接跳过
+    if (citylessList.includes(p)) continue;
+    for (const c of layoutCities[p]) placeCity(p, c.x, c.y);
+  }
 
   // ---- 单位 ----
   const units: Unit[] = [];
@@ -476,7 +664,16 @@ export function createMatch(
     });
   };
 
-  for (const p of seats) for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
+  /*
+   * 关卡点了名的席位**不自动撒兵**：作者写"你只有 1 个兵"，开局就不该变成四个。
+   * 真正摆那几个兵要等 state 建好（见下面的 `levelDeploy` 那一段）。
+   */
+  const levelDeploy = level?.deploy ?? {};
+  for (const p of seats) {
+    if (hiddenSeatList.includes(p)) continue;
+    if ((levelDeploy[p]?.length ?? 0) > 0) continue;
+    for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
+  }
 
   // 开局送两个经济单位，摆在自家城外的空地上——
   // 农民要站在平原才有产出，所以不能塞进城里
@@ -486,6 +683,11 @@ export function createMatch(
   });
   if (econPool.length > 0) {
     for (const owner of seats) {
+      // 关卡写了部署的席位也不送经济单位：那会把它写死的兵力再加两个，
+      // 而作者要的正是"就这几个人"。
+      if ((levelDeploy[owner]?.length ?? 0) > 0) continue;
+      // 还没登场的席位也不发经济单位：它连城都没有，发了也站在虚空里
+      if (hiddenSeatList.includes(owner)) continue;
       const ownCity = cities.find((c) => c.owner === owner);
       if (!ownCity) continue;
       for (let k = 0; k < 2; k++) {
@@ -508,6 +710,14 @@ export function createMatch(
       citySize,
       aiOpponent,
       aiAlly,
+      /*
+       * 通用写法：哪些席位由电脑操作。**永远写**，包括空数组。
+       *
+       * 空数组是有含义的（全是真人），而 `isAiSide` 判的是"这个字段有没有"——
+       * 不写空数组的话，一份三人全人局的 config 会落进"老存档"分支，
+       * 回头去读 aiOpponent/aiAlly，那是两家局的语义，会读出一个假的答案。
+       */
+      aiSeats: [...aiSeatList],
       aiLevel:
         config.aiLevel === 'basic'
           ? 'basic'
@@ -573,6 +783,16 @@ export function createMatch(
        */
       ...(config.aiDoctrine ? { aiDoctrine: config.aiDoctrine } : {}),
       ...(config.aiDoctrineSeat ? { aiDoctrineSeat: config.aiDoctrineSeat } : {}),
+      /*
+       * 关卡快照：整包进局面，不是只存 `level:id`。理由见 MatchConfig.level。
+       *
+       * 这一行绝对不能漏。这个对象是**逐个白名单抄的**，漏一个就等于那个开关在
+       * 开局瞬间被吃掉：2026-10-28 漏过 recordDetail（勾了数据收集却没有摘要）、
+       * 2026-11-06 漏过 aiDoctrine（三组"不同战术"跑出完全相同的对局）。
+       * 关卡漏了比这两个都糟——它不会报错，也不会少一个功能，而是整局**退化成
+       * 普通对局**，玩家只会觉得"这关怎么什么都没有"。
+       */
+      ...(checkedLevel && checkedLevel.ok ? { level: checkedLevel.level } : {}),
     },
     unitTypes,
     turn: 1,
@@ -582,6 +802,33 @@ export function createMatch(
     tiles,
     cities,
     units,
+    /*
+     * 地图自带的桥面：开局时地形就是桥的那些格。
+     *
+     * 必须在**建城之后**扫（建城会把格子改成 city，但城不会压在桥上；
+     * 顺序其实无所谓，写在这里只是因为这是 tiles 定稿的地方）。
+     */
+    mapBridges: (() => {
+      const out: number[] = [];
+      for (let i = 0; i < tiles.length; i += 1) {
+        if (tiles[i]?.terrain === 'bridge') out.push(i);
+      }
+      return out;
+    })(),
+    /*
+     * 地图桥的"河床"：一律按水域记。
+     *
+     * 地图字符只有一个 `=`，它不表达桥下是水还是沼泽，而现有三张内置关的桥
+     * 都是跨水的。记下来是为了让"事件把这一片水位改浅之后，拆桥能还原成浅水"
+     * 这条路对地图桥也成立（以前只有工兵桥才有原地形记录）。
+     */
+    bridgeDeck: (() => {
+      const out: Record<string, Terrain> = {};
+      for (let i = 0; i < tiles.length; i += 1) {
+        if (tiles[i]?.terrain === 'bridge') out[String(i)] = 'water';
+      }
+      return out;
+    })(),
     // 四个席位都建出来（这一局没坐人的席位名字和金币留着也没人读：
     // 所有遍历都走 seatsOf，不会碰它们）。这样 `players[p]` 永远是定义好的。
     players: {
@@ -608,7 +855,99 @@ export function createMatch(
       C: { known: [] },
       D: { known: [] },
     },
+    // 有未登场的席位才写这个字段：普通对局和以前一字不差
+    ...(hiddenSeatList.length > 0 ? { levelState: { fired: [], hidden: [...hiddenSeatList] } } : {}),
   };
+
+  /*
+   * 关卡点名的开局兵（`LevelDef.deploy`）。
+   *
+   * 放在 state 建好之后做，因为"这一格站不站得住"要问规则层（`canStandAt`），
+   * 而规则层要一整份 state。
+   *
+   * 两种摆不上去的情况都**跳过并写进战报**，不让整局建不起来：
+   *   · 兵种这一局没有（关卡没把扩展写进 `require`，或者玩家禁用了那个兵）；
+   *   · 这一格站不住（作者把兵写到水里、山里、或者跟城/别的兵叠上了）。
+   * 静默跳过是最糟的选择——作者会以为"我明明写了"而查不出原因，所以战报里必须有一句。
+   */
+  for (const p of seats) {
+    // 未登场：它的兵要等 `deploy` 事件那一刻才出现（见 rules.ts 的 deploySeat）
+    if (hiddenSeatList.includes(p)) continue;
+    const list = levelDeploy[p];
+    if (!list || list.length === 0) continue;
+    for (const d of list) {
+      const def = state.unitTypes[d.type];
+      if (!def) {
+        state.log.push({
+          turn: 1,
+          player: p,
+          text: `关卡部署里的「${d.type}」这一局没有这个兵种，已跳过`,
+        });
+        continue;
+      }
+      if (!canStandAt(state, d.x, d.y, d.type)) {
+        state.log.push({
+          turn: 1,
+          player: p,
+          text: `关卡部署：${def.name} 在 (${d.x}, ${d.y}) 站不住，已跳过`,
+        });
+        continue;
+      }
+      state.units.push({
+        id: `u${state.nextUnitSeq++}`,
+        type: def.id,
+        owner: p,
+        x: d.x,
+        y: d.y,
+        hp: def.maxHp,
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+    }
+  }
+
+  /*
+   * 无城席位：开局先说一句。
+   *
+   * 玩家看到对面"没有城"时第一反应是"这是 bug 吧"。一句话讲清三件事：
+   * 它没有产线、没有收入、兵打光就输——这样后面看到它不造兵才不会以为是坏了。
+   */
+  if (citylessList.length > 0) {
+    const names = citylessList.map((p) => state.players[p].name).join('、');
+    state.log.push({
+      turn: 1,
+      player: citylessList[0]!,
+      text: `${names}没有城：没有产线、没有收入，兵打光就输。`,
+      open: true,
+      system: true,
+    });
+  }
+
+  /*
+   * 关卡目标先说一句。
+   *
+   * 顶栏也有一行常驻的（`levelGoalLine`），但战报里的这一条是"开局那一刻"的记录：
+   * 复盘时翻到第 1 条就知道这一局在干什么，不用去猜。
+   */
+  if (level?.goals && level.goals.length > 0) {
+    state.log.push({
+      turn: 1,
+      player: 'A',
+      open: true,
+      system: true,
+      text: `这一关的目标：${level.goals.map(goalText).join('；')}`,
+    });
+  }
+
+  /*
+   * 关卡事件：开局也要跑一遍。
+   *
+   * 为的是 `turn: 1` 那类"这一关一开始就发生"的事件（开场旁白、一开始就在场上的
+   * 第三方）。`prev` 传同一份：开局没有"上一手"，所以阵亡/进入区域都不会成立，
+   * 只有回合数条件会命中——这正是我们要的。
+   */
+  runLevelEvents(state, state);
 
   // 选卡模式：开局先打 BP。放在 state 建好之后——抽样要看 unitTypes 里的池子。
   if (draftMode) {

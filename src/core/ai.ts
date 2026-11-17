@@ -74,6 +74,7 @@ import {
   xyOf,
   isAirborne,
   strikeDistance,
+  sameTeam,
 } from './rules.ts';
 import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
@@ -379,7 +380,8 @@ function doomedCity(
  * 双人局下这几个函数和 `other` 完全等价，所以既有对局的行为一点没变。
  */
 function enemySeats(s: GameState, p: PlayerId): PlayerId[] {
-  return seatsOf(s).filter((x) => x !== p);
+  // 同盟局里队友不是敌人（不然 AI 会一直"想打又打不了"，把回合耗在队友身上）
+  return seatsOf(s).filter((x) => !sameTeam(s, x, p));
 }
 
 function enemyUnitsOf(s: GameState, p: PlayerId): Unit[] {
@@ -512,8 +514,21 @@ export function aiMood(s: GameState, traits: AiTraits = aiTraits(s)): AiMood {
   }, null);
 
   let focusDist = Infinity;
-  for (const c of foeCities) {
-    for (const u of myCombat) focusDist = Math.min(focusDist, distToCity(u, c));
+  if (foeCities.length === 0) {
+    // 无城局（F1）：目标不是城，是敌人本身。不给这个数，`focusDist` 会一路
+    // 变成 99，打法选择会以为"哪儿都不值得去"。
+    for (const u of myCombat) {
+      for (const e of enemyUnitsOf(s, me)) focusDist = Math.min(focusDist, distance(u, e));
+    }
+    // 连敌人都没看见（迷雾里）：按"到战场中央的距离"算，至少不是无穷远
+    if (!Number.isFinite(focusDist)) {
+      const c = { x: Math.floor((s.w - 1) / 2), y: Math.floor((s.h - 1) / 2) };
+      for (const u of myCombat) focusDist = Math.min(focusDist, distance(u, c));
+    }
+  } else {
+    for (const c of foeCities) {
+      for (const u of myCombat) focusDist = Math.min(focusDist, distToCity(u, c));
+    }
   }
   let gate = Infinity;
   for (const u of foeCombat) {
@@ -1181,6 +1196,7 @@ function scoreSiege(
   city: City,
   focusCityId: string | null,
   mood: AiMood,
+  foeEcon = 1,
 ): number {
   const dmg = damageToCity(attacker, city, s);
   if (dmg <= 0) return -10;
@@ -1191,6 +1207,15 @@ function scoreSiege(
   // 这一档整体抬过一次：以前破城的收益常常比"打掉一个杂兵"高不了多少，
   // AI 于是宁可在野战里刷人头，也不肯把兵力压到城下——而人头是赢不了棋的。
   let score = (capture ? 260 : (dmg / city.maxHp) * 62) + 26;
+
+  /*
+   * A（2026-11-15）：对面**一个经济单位都没有**时，攻城再加一档。
+   *
+   * 纯爆兵的对手没有产能可打，唯一的胜负手就是把城砸开——他不会靠经济追上来，
+   * 只会用兵换我们的兵。这时候还去跟满血战斗单位换血，等于拿阵容填他的兑换率
+   * （实测表现：站在射程外沿来回挪，一百回合不动手）。
+   */
+  if (foeEcon === 0) score += 30;
 
   // 战术倾向：速攻把攻城当唯一出路（破城是这套规则里唯一通向胜利的动作）；
   // 弃城期根本不往对面走。
@@ -1248,13 +1273,28 @@ export function cityDistanceField(
   city: City,
   mode: 'land' | 'advance' | 'water' | 'air' = 'land',
 ): number[] {
+  return fieldFromSeeds(s, cityTiles(city), mode);
+}
+
+/**
+ * 从一堆**任意格子**出发算距离图。
+ *
+ * 抽出来的原因：无城对局（F1）里没有敌城可当目标，得从"敌方单位所在格"出发。
+ * 否则 `distanceFields` 交出一张空表，AI 的"推进"永远算不出值——
+ * 实测双方无城时它六百步只动了一次：**不是发呆，是返回了"无动作"**。
+ */
+export function fieldFromSeeds(
+  s: GameState,
+  seeds: Array<{ x: number; y: number }>,
+  mode: 'land' | 'advance' | 'water' | 'air' = 'land',
+): number[] {
   const size = s.w * s.h;
   const dist: number[] = new Array(size).fill(Infinity);
   const queue: Array<{ i: number; cost: number }> = [];
 
-  for (const t of cityTiles(city)) {
-    const i = idx(s, t.x, t.y);
+  for (const t of seeds) {
     if (!inBounds(s, t.x, t.y)) continue;
+    const i = idx(s, t.x, t.y);
     dist[i] = 0;
     queue.push({ i, cost: 0 });
   }
@@ -1356,6 +1396,35 @@ function distanceFields(
   for (const c of s.cities) {
     if (c.owner === me) continue;
     out.set(c.id, cityDistanceField(s, c, mode));
+  }
+  /*
+   * 一张敌城都没有（无城对战）时，目标是**敌方部队**。
+   *
+   * 键用一个不可能和城市 id 撞的字符串；`advanceDistance` 认这个键。
+   * 没有这一步，本回合的"该往哪走"整张表是空的，走位候选只剩一条、分数还是负的。
+   */
+  if (out.size === 0) {
+    const foes = enemyUnitsOf(s, me).map((u) => ({ x: u.x, y: u.y }));
+    if (foes.length > 0) {
+      out.set(VIRTUAL_FOE_FIELD, fieldFromSeeds(s, foes, mode));
+    } else {
+      /*
+       * 连一个敌人都看不见（迷雾 + 双方无城：没有城就没有城提供的视野）。
+       *
+       * 这时候正确的行为是**去搜**，不是原地不动。目标取"战场中央 + 四个角"：
+       * 不需要知道敌人藏在哪（AI 不偷看），只是把部队铺开去找。
+       * 少了这一步，实测六百步只动一次——两支军队在雾里互相看不见，就那么站着。
+       */
+      /*
+       * 目标取**战场中央一个点**，不要一次给四五个点。
+       *
+       * 试过"中央 + 四个角"：每支部队各奔最近的那个点，于是各自在角上站定、
+       * 永远碰不到面（实测两边各守一个角，五百多步没动）。
+       * 只给中央，双方才会往同一处靠，也就在那里撞上。
+       */
+      const seeds = [{ x: Math.floor((s.w - 1) / 2), y: Math.floor((s.h - 1) / 2) }];
+      out.set(VIRTUAL_FOE_FIELD, fieldFromSeeds(s, seeds, mode));
+    }
   }
   return out;
 }
@@ -1546,6 +1615,8 @@ interface Fields {
   crowd: Uint8Array;
   /** 视野里有多少敌方单位带溅射：决定"挨着站"该罚多重 */
   foeSplash: number;
+  /** 对面还剩几个经济单位。零 = 纯战斗阵容（见 scoreSiege 的加分与僵持破局） */
+  foeEcon: number;
   /**
    * 这一回合全军该集火的那一个敌人（见 `pickFocusTarget`）。
    *
@@ -1763,6 +1834,28 @@ function advanceDistance(
   focusCityId: string | null = null,
   ignoreFoes = false,
 ): number {
+  /*
+   * **没有敌城时，目标退化成"最近的敌人"。**
+   *
+   * 2026-11-16 加这一条，原因是无城对战（F1）：双方都没有城时，
+   * 下面那个循环一次都不进，`best` 留在 Infinity，于是"推进"这一项永远是 0 分或负分，
+   * 所有走法都不划算——实测 AI 六百步只动了一次（**直接返回"无动作"**，不是发呆）。
+   *
+   * 这是结构问题，不是权重问题：没有目标的时候，怎么调参数都没用。
+   * 注意这里**先判有没有敌城**，而不是复用下面的 `ignoreFoes`——
+   * 那个开关的语义是"优势期不必绕开敌人"，和"压根没有目标"是两件事。
+   */
+  const hasFoeCity = s.cities.some((c) => c.owner !== owner);
+  if (!hasFoeCity) {
+    const field = fields.get(VIRTUAL_FOE_FIELD);
+    const d = field?.[y * s.w + x];
+    if (d !== undefined && Number.isFinite(d)) return d * 0.32;
+    // 连敌人都没有（理论上只剩自己）：退回曼哈顿距离，好歹给个方向
+    let near = Infinity;
+    for (const e of enemyUnitsOf(s, owner)) near = Math.min(near, distance({ x, y }, e));
+    return near;
+  }
+
   let best = Infinity;
   for (const c of s.cities) {
     if (c.owner === owner) continue;
@@ -1952,6 +2045,11 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,objective,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,objective,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
+  if ((globalThis as { __AI_DBG__?: boolean }).__AI_DBG__ === true && unit.owner === 'C') {
+    console.log(
+      `[dbg] ${unit.id} ${unit.x},${unit.y}→${x},${y} b=${String(before)} a=${String(after)} prog=${progress.toFixed(2)} obj=${String(objective)} air=${airLayer(def)}`,
+    );
+  }
 
   /*
    * ── 集结：让跑得最前的那几个停下来等 ──
@@ -1980,8 +2078,42 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     !(def.abilities ?? []).includes('siege-master') &&
     Number.isFinite(all.lineRef) &&
     before < all.lineRef;
-  const advanceWeight = aheadOfLine ? 0.15 : 1;
-  let score = progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush*0.35)) * advanceWeight;
+  /*
+   * 关卡的 AI 参数（`config.level.ai`）只在这里和战意那一项生效。
+   *
+   * `cohesion`：0 = 谁快谁先上，1 = 默认（前面的人等后面）。攻坚图要 0 附近的值——
+   * 河会把战线切成两段，先过去的永远算"在战线前面"，然后永远停着等。
+   */
+  const tuning = s.config.level?.ai;
+  const cohesion = Math.min(2, Math.max(0, tuning?.cohesion ?? 1));
+  // 1 → 0.15（默认惩罚），0 → 1（不惩罚），2 → 更狠（夹到 0.05）
+  const lineHold = cohesion <= 1 ? 1 - (1 - 0.15) * cohesion : Math.max(0.05, 0.15 - (cohesion - 1) * 0.1);
+  const advanceWeight = aheadOfLine ? lineHold : 1;
+  /*
+   * 僵局压力（关卡级 `pressure`，默认 0 = 不启用）。
+   *
+   * 有些关打久了会停在一个"谁都不动"的稳定态：攻方压在火力圈外，守方缩在城里，
+   * 双方每回合的最优解都是"别动"。光调 `riskAversion` 治不了——它关掉的是
+   * "怕死"，关不掉"往前也没赚头"。这里换个方向：**让往前这件事越拖越值钱**。
+   *
+   * `s.turn / 25` 让压力随回合线性加码，`Math.min(3, …)` 封顶在 4 倍原始值
+   * （pressure = 3 时封顶 ×4）。没有关卡的普通对局是 0，一个字都不变。
+   */
+  /*
+   * 只对**没有城**的席位生效。
+   *
+   * 僵局压力想解决的是"攻方压不上去"，而"没有城"正是攻方最典型的形态
+   * （邪龙军团那种：没有产线，不压上就只能等死）。有城的 AI 是防守方，
+   * 给它加码只会让它丢下城墙去送——那不是这一项要的。
+   */
+  const pressure =
+    citiesOf(s, unit.owner).length === 0 ? Math.max(0, Math.min(3, tuning?.pressure ?? 0)) : 0;
+  const pressureMul = pressure > 0 ? 1 + pressure * Math.min(3, s.turn / 25) : 1;
+  let score =
+    progress * 6 * traits.appetite * (1 + (all.needBridge ? 0 : all.mood.driveRaw.rush * 0.35)) *
+    advanceWeight *
+    (tuning?.appetite ?? 1) *
+    pressureMul;
   /*
    * 地形分：**这一格对这个兵**值多少护甲，而不是"这一格值多少"。
    *
@@ -2012,9 +2144,9 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
         killed = previewAttack(s,moved,enemy).toDefender >= enemy.hp ? enemy.id : undefined;
       }
     }
-    for (const city of siegeTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreSiege(s,unit,city,all.focusCityId,all.mood));
+    for (const city of siegeTargets(s,unit)) nowAttack = Math.max(nowAttack,scoreSiege(s,unit,city,all.focusCityId,all.mood,all.foeEcon));
     for (const city of siegeTargets(s,moved)) {
-      const value=scoreSiege(s,moved,city,all.focusCityId,all.mood);
+      const value=scoreSiege(s,moved,city,all.focusCityId,all.mood,all.foeEcon);
       if (value>nextAttack) { nextAttack=value; killed=undefined; }
     }
     score += nextAttack * 0.82 - nowAttack * 0.65;
@@ -2022,8 +2154,21 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const risk = all.tactical.exposure(moved,killed);
   const cost = unitValue(s,unit);
   const loss = risk.damage / Math.max(1,def.maxHp);
-  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4);
-  if (risk.lethal) score -= 30 + Math.min(75,cost*0.2);
+  /*
+   * `riskAversion` 是关卡级的"愿意用多少伤亡换推进"。
+   * 默认 1 就是原来的算法；攻坚图写 0.4，它就肯顶着火力往前走。
+   */
+  /*
+   * 下限放到 **0**（2026-11-16）：0 = 完全不计伤亡。
+   *
+   * 原来卡在 0.2，本意是"别让 AI 蠢到站火里送死"。但落到「邪龙」这种关就很怪：
+   * 飞龙在城火力圈外停住不动，只靠邪龙王隔空下蛋——因为"逼近一格"只值五六分，
+   * 而"这一步会挨打/可能会死"即使乘 0.2 也有十几分。作者要的是"它们就是不怕死"，
+   * 那就得留一个真能关掉这笔账的档位。默认仍是 1，普通对局一个字不变。
+   */
+  const riskMul = Math.min(2, Math.max(0, s.config.level?.ai?.riskAversion ?? 1));
+  score -= loss * (25 + Math.min(60,cost*0.18)) * (1 + all.mood.driveRaw.harass*0.4) * riskMul;
+  if (risk.lethal) score -= (30 + Math.min(75,cost*0.2)) * riskMul;
   score += Math.max(0,currentThreat.damage-risk.damage) / Math.max(1,def.maxHp) * 25;
 
   /*
@@ -2034,7 +2179,12 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * 罚得比眼前那一刀轻（同样的伤害在这里只算 12~42 分），够用它躲开空地就行。
    */
   const soonRisk = all.tactical.soon(moved, killed);
-  score -= Math.max(0, soonRisk.damage - risk.damage) / Math.max(1,def.maxHp) * (12 + Math.min(30,cost*0.1));
+  // 这一项也要跟着 `riskAversion` 走：只管"眼前这一刀"的话，0 档仍然会被
+  // "下下回合够得着"劝退，冲不进去。
+  score -=
+    (Math.max(0, soonRisk.damage - risk.damage) / Math.max(1, def.maxHp)) *
+    (12 + Math.min(30, cost * 0.1)) *
+    riskMul;
 
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
   for (const city of s.cities) {
@@ -3172,7 +3322,7 @@ function unitCandidates(
     for (const c of siegeTargets(s, unit)) {
       out.push({
         action: { type: 'SIEGE', unitId: unit.id, cityId: c.id },
-        score: scoreSiege(s, unit, c, all.focusCityId, all.mood),
+        score: scoreSiege(s, unit, c, all.focusCityId, all.mood, all.foeEcon),
       });
     }
     /*
@@ -4424,6 +4574,9 @@ export const aiRecruitTrace: {
  * 只在 `on` 时累加，所以线上跑的时候一行额外的味道都没有。
  * 用法见 `scripts/probe-ai-five.ts`。
  */
+/** 没有敌城时，`distanceFields` 里那张"往敌方部队去"的虚拟距离图的键 */
+const VIRTUAL_FOE_FIELD = '__foe_units__';
+
 export const aiTrace = {
   on: false,
   /** 换血：解散旧兵腾位置触发了几次 */
@@ -4440,6 +4593,8 @@ export const aiTrace = {
   planFlip: 0,
   /** 三回合计划实际跑了几次（够不够用、有没有被门控挡住） */
   planRuns: 0,
+  /** 僵持破局触发了几次（C，2026-11-15） */
+  staleCalls: 0,
   swapWhy: new Map<string, number>(),
   reset(): void {
     this.swapWhy.clear();
@@ -4450,6 +4605,7 @@ export const aiTrace = {
     this.lookaheadFlip = 0;
     this.planFlip = 0;
     this.planRuns = 0;
+    this.staleCalls = 0;
   },
 };
 
@@ -5830,6 +5986,8 @@ function aiNextActionCore(
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
+    // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
+    foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
   };
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
@@ -5883,7 +6041,46 @@ function aiNextActionCore(
   // 弃城期更晚——这时候全军压上去只是把攒的钱换成对面的击杀数。
   const commitAt =
     1.3 - 0.18 * mood.driveRaw.rush + 0.15 * mood.driveRaw.boom;
-  fields.commit = myVal > 0 && myVal >= foeVal * commitAt;
+  /*
+   * **没有敌城就不该进入"全军压城"。**
+   *
+   * 这个判据是"我比对面强三成 → 不追野战，直接压城"。但迷雾里看不见敌人时
+   * `foeVal` 是 0，条件恒真：无城对局（双方都没有城）里 AI 一开局就进了压城模式，
+   * 而压的对象根本不存在——走位候选因此只剩一两条、分数还是负的，
+   * 实测两支军队在雾里站了五百多步。压城的前提是**有城可压**。
+   */
+  const foeCityCount = view.cities.filter((c) => c.owner !== me && !c.ruined).length;
+  fields.commit = foeCityCount > 0 && myVal > 0 && myVal >= foeVal * commitAt;
+
+  /*
+   * C（2026-11-15）：**僵持破局**。
+   *
+   * 症状：两边都在集兵，谁都不肯先踏进对方射程，于是一路拖到回合上限。
+   * 这不是某一处评分的 bug——只要双向都怕"进射程挨一轮"，就会锁死在这种平衡里。
+   * 所以这里不看单步分数，看**局面是不是在动**：两边战斗单位的总血量连着
+   * 若干个动作没变过，就说明没有任何一方在交换。
+   *
+   * 触发后只做一件事：`commit = true`。它的作用是关掉"追着路过的敌军打"
+   * 那一路（见 Fields.commit 的说明），部队才会真的朝城下压。
+   * 另外三道闸，免得开局集兵期就被误触发：
+   *   · `s.turn >= 20`——前十个回合双方本来就没接触，那不是僵持；
+   *   · `myEcon > foeEcon`——经济落后还去压城是送死，那种局面该继续攒；
+   *   · `myVal >= foeVal * 0.9`——兵力明显不如对面时，压城只是换个地方挨打。
+   */
+  const combatHp = (list: Unit[]): number =>
+    list.reduce(
+      (n, u) => (utype(view, u.type).category === 'combat' ? n + Math.max(0, u.hp) : n),
+      0,
+    );
+  const hpNow = combatHp(unitsOf(view, me)) + combatHp(foeUnits);
+  const prevStale = s.aiStale;
+  const staleN = prevStale && prevStale.hp === hpNow ? prevStale.n + 1 : 0;
+  s.aiStale = { hp: hpNow, n: staleN };
+  const myEcon = unitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length;
+  if (staleN >= 6 && s.turn >= 20 && myEcon > fields.foeEcon && myVal >= foeVal * 0.9) {
+    fields.commit = true;
+    if (aiTrace.on) aiTrace.staleCalls += 1;
+  }
 
   for (const u of unitsOf(view, me)) {
     candidates.push(...unitCandidates(view, u, fields, traits, rejected));
@@ -6149,6 +6346,48 @@ function isOffensive(s: GameState, me: PlayerId, a: Action): boolean {
  * 塞进评分里要在每个评分点上写一遍，而否定式天然适合放在出口处。
  * 做法是借 core 已有的 `rejected` 机制：否掉一个、再问一次，直到它给出一个守家的动作。
  */
+/**
+ * 督战：核心 AI 认为"这一回合没值得做的事"时，替它挑一个"往敌城挪一步"的单位。
+ *
+ * 为什么需要这一层（2026-11-16，观战「邪龙」时发现的"三方都不动"）：
+ *
+ * 评分链上"值得做"的门槛是 `best.v > 0`。一批单位站在离城十几格的开阔地上时，
+ * 往前一步的推进分（0.3~1）× 各种系数之后仍然可能是负的——推进那点分抵不过
+ * 地形分和拥挤分。于是它们每回合都拿到 null，二十多个单位里只有三四个在动，
+ * 大军就那么停在半路上。核心评分本身没错（它只做"这一步值不值"），错的是
+ * **没有任何机制去兜住"整支军队都不想动"这个局面**。
+ *
+ * 只在关卡写了 `pressure` 时启用，而且只在核心已经放弃之后才走这一步，
+ * 所以普通对局一个字都不变。挑的是"能走、且离最近的敌城更近"的格子——
+ * 不评估威胁、不看队形，就是要它们压过去。
+ */
+function pressureAdvance(s: GameState): Action | null {
+  const me = s.current;
+  const foeCities = enemyCitiesOf(s, me).filter((c) => !c.ruined);
+  if (foeCities.length === 0) return null;
+  const nearest = (x: number, y: number): number =>
+    Math.min(...foeCities.map((c) => distToCity({ x, y } as Unit, c)));
+
+  /** 找"还能动、且这一步真的更接近敌城"的单位里最靠前的那一个 */
+  let picked: { action: Action; gain: number } | null = null;
+  for (const u of unitsOf(s, me)) {
+    if (u.moved || u.acted) continue;
+    const cat = utype(s, u.type).category;
+    if (cat === 'economy' || cat === 'builder') continue;
+    const now = nearest(u.x, u.y);
+    const reach = reachableTiles(s, u);
+    for (const i of reach.keys()) {
+      const x = i % s.w;
+      const y = Math.floor(i / s.w);
+      const d = nearest(x, y);
+      if (d >= now) continue;
+      const gain = now - d;
+      if (!picked || gain > picked.gain) picked = { action: { type: 'MOVE', unitId: u.id, x, y }, gain };
+    }
+  }
+  return picked?.action ?? null;
+}
+
 export function aiNextAction(
   s: GameState,
   budget: AiBudget = DEFAULT_BUDGET,
@@ -6157,7 +6396,17 @@ export function aiNextAction(
 ): Action | null {
   const me = s.current;
   if (orderDirectiveOf(s, me).strategy !== 'hold') {
-    return aiNextActionCore(s, budget, rejected, depth);
+    const a = aiNextActionCore(s, budget, rejected, depth);
+    if (a) return a;
+    // 深度推演里不做督战：那是"试走"，不该把对手的推演也拖进这一步
+    if (
+      depth === 0 &&
+      (s.config.level?.ai?.pressure ?? 0) > 0 &&
+      citiesOf(s, me).length === 0
+    ) {
+      return pressureAdvance(s);
+    }
+    return a;
   }
   const blocked = new Set(rejected);
   for (let i = 0; i < 24; i++) {

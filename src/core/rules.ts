@@ -711,9 +711,41 @@ export function others(s: GameState, p: PlayerId): PlayerId[] {
  * 按城判出局会让回合推都推不动（这条以前是藏在 checkWinner 里的同一个特例，
  * 现在抽出来给回合轮转也用）。
  */
+/**
+ * 这一席是不是"还没登场"（关卡 `seats.hidden`）。
+ *
+ * 未登场 ≠ 出局。它没有城、没有兵，但那是**还没来**，不是**打没了**：
+ * 不占回合、不算出局；靠一个 `deploy` 事件把它叫上场。
+ * 普通对局没有 `levelState.hidden`，这个函数恒为 false。
+ */
+export function isHiddenSeat(s: GameState, p: PlayerId): boolean {
+  return s.levelState?.hidden?.includes(p) === true;
+}
+
+/**
+ * 这一席是不是"没有城"的席位（关卡 `seats.cityless`，2026-11-16）。
+ *
+ * 和"未登场"（hidden）是两件不同的事：**它在场、占回合、要打仗，只是没有城**。
+ * 所以它的出局条件是"兵打光"，而不是"城全丢光"——它从来没有城。
+ * 普通对局没有这个字段，这个函数恒为 false。
+ */
+export function isCitylessSeat(s: GameState, p: PlayerId): boolean {
+  return s.config.level?.seats?.cityless?.includes(p) === true;
+}
+
 export function isEliminated(s: GameState, p: PlayerId): boolean {
+  // 未登场：没城是正常的，判成出局会让整局在第一回合就结束
+  if (isHiddenSeat(s, p)) return false;
   if (hasQuit(s, p)) return true;
   if (s.config.godMode === true) return false;
+  /*
+   * 无城席位：兵打光才算输。
+   *
+   * 这是"没城＝出局"的第三个豁免（前两个是 godMode 和 hidden）。
+   * 注意它和 hidden 不能同时成立——那样开局就没有任何东西，谁也不知道该按哪条判；
+   * 关卡校验会把这种组合拦住。
+   */
+  if (isCitylessSeat(s, p)) return unitsOf(s, p).length === 0;
   return citiesOf(s, p).length === 0;
 }
 
@@ -739,6 +771,8 @@ export function nextSeat(s: GameState, from: PlayerId): PlayerId {
   for (let k = 1; k <= seats.length; k += 1) {
     const cand = seats[(start + k) % seats.length]!;
     if (cand === from) break;
+    // 未登场的席位不轮：让它当回合，界面会停在一个"场上什么都没有"的玩家身上
+    if (isHiddenSeat(s, cand)) continue;
     if (isEliminated(s, cand)) continue;
     return cand;
   }
@@ -2543,6 +2577,51 @@ export function heroBlocked(s: GameState, player: PlayerId, def: UnitTypeDef): s
  * 地形一律问 `terrainWalkable`（它按兵种回答）：陆军进不了水，水军上不了岸
  * （桥面算岸），掠水/飞行能进水，高山谁都不能进。城市格按归属判定。
  */
+/**
+ * 这两家算不算**一伙的**（同一个队，或者就是自己）。
+ *
+ * 没写 `seats.teams` 的对局恒等于 `a === b` —— 既有对局一个字都不变。
+ *
+ * 用到它的地方全是"原来写 `owner === owner`"的判定：
+ *   · 打兵 / 打城 / 溅射：同队不能打；
+ *   · 寻路占位：同队可以**穿过**（但终点仍然不能停在别人身上）；
+ *   · 城市与建筑：同队的城能进、建筑能站。
+ */
+export function sameTeam(s: GameState, a: PlayerId, b: PlayerId): boolean {
+  if (a === b) return true;
+  const teams = s.config.level?.seats?.teams;
+  if (!teams || teams.length === 0) return false;
+  return teams.some((group) => group.includes(a) && group.includes(b));
+}
+
+/**
+ * 这一席所在的队伍（含自己）。
+ *
+ * 没写 `seats.teams` 的对局返回 `[p]` —— 一个人一队，界面上"队名"就等于人名，
+ * 所以下面那个 `teamNameOf` 在既有对局里输出和以前一模一样。
+ *
+ * 只在有队伍的对局里，返回值才可能多于一个。席位顺序跟着 `teams` 走（作者写的顺序），
+ * 这样"红方 + 蓝方"这类文案不会因为遍历顺序不同而在两次渲染里换位置。
+ */
+export function teamOf(s: GameState, p: PlayerId): PlayerId[] {
+  const teams = s.config.level?.seats?.teams;
+  if (!teams || teams.length === 0) return [p];
+  return teams.find((group) => group.includes(p)) ?? [p];
+}
+
+/**
+ * 这一席所在队伍的名字。
+ *
+ * 单人队就是那个席位名；同盟队用「 + 」连起来（"红方 + 蓝方"）。
+ * 界面层所有"谁赢了"的地方都该走这个函数，别直接写 `players[winner].name`——
+ * 那会让"两个真人合作打赢了"显示成"只有红方赢了"，蓝方看着像输了。
+ */
+export function teamNameOf(s: GameState, p: PlayerId): string {
+  return teamOf(s, p)
+    .map((x) => s.players[x]?.name ?? `${x} 方`)
+    .join(' + ');
+}
+
 export function blockedFor(
   s: GameState,
   x: number,
@@ -2597,7 +2676,8 @@ export function blockedFor(
   if (tile.cityId) {
     const city = cityById(s, tile.cityId);
     // 废墟可以进：进城那一下就是"接管"这个动作本身
-    if (city && city.owner !== unit.owner && !city.ruined) return true;
+    // 友军的城也不挡：合作关里两人可以走对方的城（但入驻仍然按各家的城算）
+    if (city && !sameTeam(s, city.owner, unit.owner) && !city.ruined) return true;
   }
   return false;
 }
@@ -2744,7 +2824,8 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
       if (air) {
         // 敌方（未成废墟的）城市仍然拦：那一段是防空火力，不是地形
         const city = ft.cityId ? cityById(s, ft.cityId) : null;
-        if (!city || city.owner === unit.owner || city.ruined) continue;
+        // 同队豁免（和地面单位走同一个判据，否则友军的城会拦住空军）
+        if (!city || sameTeam(s, city.owner, unit.owner) || city.ruined) continue;
         return false;
       }
       // 掠水（不是空中层）曾经在这里单独放行水面——那条豁免现在在
@@ -2760,7 +2841,8 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
     for (const c of cellsAt(ax, ay)) {
       const hit = s.units.some((u) => {
         if (!coversTile(s, u, c.x, c.y)) return false;
-        if (u.owner === unit.owner) return false;
+        // 同队不挡路：能穿过去，但停不下来（见 blockedAnchor）
+        if (sameTeam(s, u.owner, unit.owner)) return false;
         if (isAirborne(s, u) !== air) return false;
         if (utype(s, u.type).bridges) return false;
         return true;
@@ -2859,7 +2941,7 @@ export function reachableTiles(s0: GameState, unit: Unit): Map<number, number> {
         if (d.category !== 'building') return true;
         if (d.bridges) return false; // 桥是双向的，谁都能站
         if (d.obstacle) return true; // 墙：自己人也过不去
-        return u.owner !== unit.owner; // 自家设施能站，敌方的先打掉
+        return !sameTeam(s, u.owner, unit.owner); // 自家/友军设施能站，敌方的先打掉
       });
       return blockers.length > 0;
     });
@@ -3455,7 +3537,7 @@ function splashVictims(
    */
   const board = boardIdOf(attacker);
   for (const v of s.units) {
-    if (v.owner === attacker.owner) continue;
+    if (sameTeam(s, v.owner, attacker.owner)) continue;
     if (boardIdOf(v) !== board) continue;
     if (skip.has(v.id)) continue;
     // 占到任意一格就算被覆盖：多格单位只挨一份（名单按单位去重）
@@ -3685,6 +3767,51 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
   if (dctx.result.blasts > 0) sweepDead(s);
 }
 
+/**
+ * 关卡目标现在成立吗？成立就返回赢家。
+ *
+ * 只回答"谁赢"，不回答"谁输"——失败照旧走原来的出局判定（城丢光、没兵又造不起）。
+ * 这是批次 4 敢动这块地基的原因：**只加"提前宣布赢"，不改任何原有判定**。
+ */
+function singleGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): PlayerId | null {
+  if (goal.kind === 'survive') {
+    // 还没到点
+    if (s.turn < goal.untilTurn) return null;
+    // 到点了。守方要是已经出局，那就轮不到它赢（这一手之前的 checkWinner 早该判完了）
+    return isEliminated(s, goal.seat) ? null : goal.seat;
+  }
+  if (goal.kind === 'gold') {
+    // 出局的人不该靠"手上还有钱"赢：城丢光之后金币只是数字
+    if (isEliminated(s, goal.seat)) return null;
+    return (s.players[goal.seat]?.gold ?? 0) >= goal.amount ? goal.seat : null;
+  }
+  if (goal.kind === 'escort') {
+    const arrived = s.units.some(
+      (u) =>
+        u.owner === goal.seat &&
+        (!goal.unitType || u.type === goal.unitType) &&
+        u.x >= goal.zone.x0 &&
+        u.x <= goal.zone.x1 &&
+        u.y >= goal.zone.y0 &&
+        u.y <= goal.zone.y1,
+    );
+    return arrived ? goal.seat : null;
+  }
+  // assassinate：被斩那一方场上已经没有这个兵种的兵了
+  /*
+   * 先确认这个兵种在本局**存在**。
+   *
+   * 不确认的话，关卡把兵种 id 写错（或者那个兵根本没法部署上去），
+   * "场上没有它"就恒为真，第一手直接判玩家赢——一条配置错误变成通关。
+   * 宁可这条目标不成立，也不要白送一场胜利。
+   */
+  if (goal.unitType && !s.unitTypes[goal.unitType]) return null;
+  const stillThere = s.units.some(
+    (u) => u.owner === goal.loser && (!goal.unitType || u.type === goal.unitType),
+  );
+  return stillThere ? null : goal.winner;
+}
+
 function checkWinner(s: GameState): PlayerId | null {
   // 上帝模式不判负。
   //
@@ -3693,6 +3820,51 @@ function checkWinner(s: GameState): PlayerId | null {
   // 按城判负会让第一回合就弹出"你赢了"，沙盒直接没法用。
   // 真正的停止条件是"一方没兵了"，由界面来判（main.ts 的 runGodFight）。
   if (s.config.godMode === true) return null;
+
+  /*
+   * 关卡目标：**提前**宣布赢。
+   *
+   * 排在扩展的特殊胜利之前：扩展那条是"通用规则的一个例外"（比如占了月球就赢），
+   * 而关卡目标说的是"这一局本来是怎么设计的"，后者更该优先。
+   *
+   * 注意这里只做"提前赢"，**不接管"怎么算输"**——城丢光、没兵又造不起，
+   * 仍然由下面的老判定处理。所以守城关城破了自然输，作者不用另写一条失败条件，
+   * 普通对局也一个字都不受影响。
+   */
+  const goals = s.config.level?.goals;
+  if (goals && goals.length > 0) {
+    /*
+     * 分组判定（2026-11-17）：**组内 and，组间 or**。
+     *
+     * 同一组里的每一条都必须成立，而且必须指向**同一个人**——不然"甲攒到钱 &&
+     * 乙被斩首"这种组会同时成立两家，谁赢说不清。
+     * 组按下标顺序试，先成立的那组说了算（作者把最想让人达成的写在前面）。
+     *
+     * 不写 `group` 的条件当第 1 组：老关卡全是这种，于是它们仍然走
+     * "第一条成立即赢"的老路——除非作者自己把两条写进同一组。
+     */
+    const groups = new Map<number, import('./level.ts').LevelGoal[]>();
+    for (const g of goals) {
+      const key = g.group ?? 1;
+      const list = groups.get(key);
+      if (list) list.push(g);
+      else groups.set(key, [g]);
+    }
+    for (const key of [...groups.keys()].sort((a, b) => a - b)) {
+      const list = groups.get(key)!;
+      let seat: PlayerId | null = null;
+      let allHold = true;
+      for (const g of list) {
+        const winner = singleGoalWinner(s, g);
+        if (!winner || (seat !== null && winner !== seat)) {
+          allHold = false;
+          break;
+        }
+        seat = winner;
+      }
+      if (allHold && seat) return seat;
+    }
+  }
 
   // 扩展特殊胜利条件
   for (const e of activeExpansions(s)) {
@@ -3712,9 +3884,25 @@ function checkWinner(s: GameState): PlayerId | null {
    * 两条出局条件：城被打光，或者一个兵都没有且连一个都造不起。
    */
   const seats = seatsOf(s);
-  const alive = seats.filter((p) => {
+  /*
+   * "还剩几家"只数**在场的**席位。
+   *
+   * 未登场的席位不算：否则三家局里丙还没来、甲乙打完只剩乙，
+   * `alive = [乙, 丙]` 会让对局以为"还有两家"而永远不收场，
+   * 而丙要到第 8 回合才来——那时候可能已经卡了好几回合。
+   */
+  const playing = seats.filter((p) => !isHiddenSeat(s, p));
+  const alive = playing.filter((p) => {
     if (isEliminated(s, p)) return false;
     if (unitsOf(s, p).length > 0) return true;
+    /*
+     * 无城席位没有产线：**买得起也造不出来**。
+     *
+     * 少了这一条会出一个很难查的现象——无城方兵打光了，`isEliminated` 说它出局，
+     * 但这里的"买得起一个兵"又把它算成活着，于是这局**永远收不了场**。
+     * 两条腿里必须砍掉这一条。
+     */
+    if (isCitylessSeat(s, p)) return false;
     return Object.values(s.unitTypes).some(
       (d) =>
         d.category !== 'building' &&
@@ -3722,7 +3910,27 @@ function checkWinner(s: GameState): PlayerId | null {
         canPay(s.players[p], recruitResCost(s, p, d)),
     );
   });
-  if (alive.length === seats.length) return null;
+  if (alive.length === playing.length) return null;
+
+  /*
+   * 同盟局按**队**判胜负。
+   *
+   * 这一条不是"顺便支持一下"，是**必须**：友军之间不能互相攻击（见 `sameTeam`
+   * 那几处判定），如果还按"只剩一家"收场，打光敌人之后 A、B 谁也打不了谁，
+   * 对局会永远停在那里。所以"只剩一队"就是结束条件。
+   *
+   * 赢家仍然返回一个 `PlayerId`（队内第一个还活着的席位）——`winner` 的类型
+   * 不扩成"队伍"，界面层再把它翻译成"盟友胜利"。少改一处类型，就少一处
+   * 需要兼容的存档/回放分支。
+   */
+  const teams = s.config.level?.seats?.teams;
+  if (teams && teams.length > 0) {
+    const aliveTeams = teams.filter((g) => g.some((p) => alive.includes(p)));
+    if (aliveTeams.length > 1) return null;
+    if (aliveTeams.length === 1) return aliveTeams[0]!.find((p) => alive.includes(p)) ?? null;
+    return null; // 全灭：同归于尽
+  }
+
   if (alive.length === 1) return alive[0]!;
   // 一家都没了（同归于尽）：判给第一个还站着的……没有，那就平局
   if (alive.length === 0) return null;
@@ -3824,12 +4032,21 @@ export function unitYieldAt(s: GameState, u: Unit, x: number, y: number): Resour
 /**
  * 这一方现在每回合能收多少（**全部资源**）。纯函数，不写状态。
  *
+ * **没有"底薪"**（2026-11-16 删掉）。以前每方每回合先拿 20 金、与城无关，
+ * 于是"没有城"也能攒钱——那让"无城对战"这种玩法在数据上说不通
+ * （攒着钱却造不出兵，界面上一栏数字还在涨）。现在收入全部来自：
+ * 城（按各自时代）、经济单位（按脚下地形）、扩展钩子。
+ * 于是"没有城市 = 没有产出"成了一句话就能讲清的规则。
+ *
+ * 各时代 `cityIncome` 已经各自 +20 补回原来的底薪，**单城局的总收入没有变**；
+ * 双城局每回合多 20（见 `DESIGN-CITYLESS-2026-11-16.md` 2.5）。
+ *
  * 金币那一段仍然过一遍 modifyIncome 钩子（战争经济之类的老扩展读它），
  * 其它资源暂时没有钩子——它们本来就只在多资源扩展里出现，
  * 而那个扩展自己就是唯一的生产者。
  */
 export function incomeResOf(s: GameState, p: PlayerId): ResourceCost {
-  const out: ResourceCost = { gold: CONFIG.baseIncome };
+  const out: ResourceCost = {};
   const add = (id: ResourceId, n: number | undefined): void => {
     if (!n) return;
     out[id] = (out[id] ?? 0) + n;
@@ -4210,8 +4427,9 @@ function finishBuild(s: GameState, u: Unit): void {
  * 往沼泽上架桥会"桥立起来了、路面没变"——陆军照样按沼泽的移动力 2 走，
  * 玩家只会觉得"这桥白造了"。
  *
- * 顺手记下原地形（`custom.deckFrom`）：迷雾里要按原样还回去。
- * 全都还原成水域的话，沼泽上那座桥在看不见的时候会凭空多出一条河。
+ * 原地形记两份：单位上的 `custom.deckFrom`（迷雾里按原样还回去用）和
+ * 局面的 `bridgeDeck`（桥塌之后按它还原）。后者必须存在局面上——
+ * 桥单位被摧毁后就不在 `s.units` 里了，那时再去问单位"你原来架在哪"是问不到的。
  */
 function deckBridge(s: GameState, bridge: Unit): void {
   const def = utype(s, bridge.type);
@@ -4220,6 +4438,7 @@ function deckBridge(s: GameState, bridge: Unit): void {
   if (!tile || tile.terrain === 'bridge') return;
   if (!(def.buildOn ?? []).includes(tile.terrain)) return;
   bridge.custom = { ...(bridge.custom ?? {}), deckFrom: tile.terrain };
+  s.bridgeDeck = { ...(s.bridgeDeck ?? {}), [String(bridge.y * s.w + bridge.x)]: tile.terrain };
   tile.terrain = 'bridge';
 }
 
@@ -4336,6 +4555,569 @@ function commandBlockedBy(s: GameState, action: Action): string | null {
     if (reason) return reason;
   }
   return null;
+}
+
+/* ===========================================================================
+ * 关卡事件
+ * ======================================================================== */
+
+/**
+ * 事件刷兵：不看钱、不看出兵点、不看编制，只看"这一格站不站得住"。
+ *
+ * 和沙盒的 `placeUnit` 是同一条判据（别人的城里不放兵 + 站得住），
+ * 但**没有直接复用它**：`sandbox.ts` 反过来依赖 rules，rules 再去 import sandbox
+ * 就成了环。两边各写一遍判断是这里唯一能接受的做法，所以下面这三条一旦要改，
+ * 记得 `sandbox.placeUnit` 里也有一份。
+ *
+ * 返回失败原因（null = 成功）。
+ */
+function spawnFromEvent(s: GameState, owner: PlayerId, type: string, x: number, y: number): string | null {
+  const def = s.unitTypes[type];
+  if (!def) return `本局没有「${type}」这个兵种`;
+  if (x < 0 || y < 0 || x >= s.w || y >= s.h) return '坐标在棋盘外';
+
+  const placeable = (px: number, py: number): boolean => {
+    const c = cityAt(s, px, py);
+    if (c && c.owner !== owner) return false;
+    return canStandAt(s, px, py, type);
+  };
+
+  /*
+   * 落点被占时**就近找空位**，而不是放弃。
+   *
+   * 内容作者写波次时，坐标是"大概位置"——上一波的人还没走、或者两波写了同一个点，
+   * 兵就刷不出来，而这件事**只在战报里留一句**（"这一格站不住"），没人会去看。
+   * 表现就是"我明明写了增援，游戏里一个都没有"。
+   *
+   * 先试正上方一格圈，再试两格；都找不到才放弃（那说明这一片真的挤满了）。
+   */
+  let tx = x;
+  let ty = y;
+  if (!placeable(x, y)) {
+    let found = false;
+    for (let r = 1; r <= 2 && !found; r += 1) {
+      const ring: Array<[number, number]> = [];
+      for (let dy = -r; dy <= r; dy += 1) {
+        for (let dx = -r; dx <= r; dx += 1) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          ring.push([x + dx, y + dy]);
+        }
+      }
+      // 先近后远：同半径内按曼哈顿距离排，尽量贴着作者写的那个点
+      ring.sort(
+        (a, b) =>
+          Math.abs(a[0] - x) + Math.abs(a[1] - y) - (Math.abs(b[0] - x) + Math.abs(b[1] - y)),
+      );
+      for (const [px, py] of ring) {
+        if (px < 0 || py < 0 || px >= s.w || py >= s.h) continue;
+        if (!placeable(px, py)) continue;
+        tx = px;
+        ty = py;
+        found = true;
+        break;
+      }
+    }
+    if (!found) return '这一格站不住，附近两格也没有空位';
+  }
+
+  s.units.push({
+    id: `u${s.nextUnitSeq++}`,
+    type: def.id,
+    owner,
+    x: tx,
+    y: ty,
+    hp: def.maxHp,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  return null;
+}
+
+/**
+ * 一次动作里最多让多少条事件生效。防的是"写错的条件每次动作都成立"把一局刷爆。
+ *
+ * 2026-11-17 从 12 提到 32：`turn` 现在支持 `=` / `<`，被截断的事件**下一手
+ * 不一定还成立**，所以不能再指望"留到下一手"兜底。同时超限不再是静默 break——
+ * 打一条控制台日志，作者能查到"我写了 40 条，为什么只跑了 32 条"。
+ */
+const MAX_EVENTS_PER_ACTION = 32;
+
+/**
+ * 最多扫几遍。
+ *
+ * 事件之间可以靠 `fired` 引用串起来（A 触发后 B 才成立）。一遍扫完只看得到
+ * **这一遍开头**的 fired，所以 A→B 需要第二遍、A→B→C 需要第三遍。
+ * 3 遍够覆盖实际剧本；再多说明作者写出了环（校验那边会另外提示）。
+ */
+const MAX_EVENT_PASSES = 3;
+
+/**
+ * 跑一遍关卡事件表。
+ *
+ * ── 三件必须记住的事 ────────────────────────────────────────────────
+ *
+ * 1. **只读局面，不读外面的东西**。电脑试走会跑同一套结算，事件也会被演练；
+ *    只读局面，演练结果才和真走一致（试完扔掉即可）。
+ *
+ * 2. **"发生过没有"记在 `s.levelState.fired` 里**，不放模块级变量。
+ *    放程序里会被试走改乱，表现是"有时候事件不触发"，而且查不出来。
+ *
+ * 3. **差量只看 `prev → cur`**，事件自己刷出来的兵不参与判断。
+ *    否则"在区域里刷一个兵"会立刻触发"有人进入区域"，自己点燃自己。
+ *
+ * 参数是"这一手之前"和"这一手之后"两份局面；`cur` 会被就地修改。
+ */
+export function runLevelEvents(prev: GameState, cur: GameState): void {
+  const events = cur.config.level?.events;
+  if (!events || events.length === 0) return;
+  /*
+   * 先把"还没触发的"挑出来，一条都没有就直接走人。
+   *
+   * 这条早退不是优化洁癖：电脑试走时**每一步**都会调用本函数，
+   * 一局里绝大多数动作都不含"新事件"（该触发的早触发了）。不早退的话，
+   * 下面那次差量比较要为每一步付一次钱——实测会把电脑想一手的耗时抬高一截。
+   */
+  const fired = new Set(cur.levelState?.fired ?? []);
+  if (events.every((e) => e.repeat !== true && fired.has(e.id))) return;
+
+  /*
+   * 差量用 id 建表来算，不写 `filter + some`。
+   *
+   * 那种写法是 O(n²)：20 个兵就是 400 次比较，而它会被电脑试走的每一步调用。
+   * 换成 Map/Set 之后是一次遍历，和兵数成正比。
+   */
+  const aliveById = new Map<string, Unit>();
+  for (const u of cur.units) aliveById.set(u.id, u);
+  /** 这一手没了的兵（可能不止一个：溅射、桥塌落水） */
+  const died: Unit[] = [];
+  /** 这一手挪过位置、且挪完活着的兵 */
+  const moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }> = [];
+  for (const u of prev.units) {
+    const now = aliveById.get(u.id);
+    if (!now) {
+      died.push(u);
+      continue;
+    }
+    if (now.x !== u.x || now.y !== u.y) {
+      moved.push({ owner: u.owner, type: u.type, fromX: u.x, fromY: u.y, x: now.x, y: now.y });
+    }
+  }
+
+  /*
+   * 多遍扫描（2026-11-17）。
+   *
+   * 每一遍都用**这一遍开始时**的 fired 快照去判断，所以"谁写在前面"不影响结果：
+   * A 在第一遍执行完，第二遍时引用 A 的 B 才看到它。
+   * 同一批里执行过的事件（尤其是 `repeat`）记在 `executed` 里，不会因为多扫一遍
+   * 而重复执行。
+   */
+  const executed = new Set<string>();
+  let total = 0;
+  let truncated = false;
+  for (let pass = 0; pass < MAX_EVENT_PASSES; pass += 1) {
+    const snapshot = new Set(fired);
+    let ranThisPass = 0;
+    for (const ev of events) {
+      if (total >= MAX_EVENTS_PER_ACTION) {
+        truncated = true;
+        break;
+      }
+      if (executed.has(ev.id)) continue;
+      if (ev.repeat !== true && snapshot.has(ev.id)) continue;
+      if (!eventMatches(ev.when, cur, died, moved, snapshot)) continue;
+
+      fired.add(ev.id);
+      executed.add(ev.id);
+      ranThisPass += 1;
+      total += 1;
+      for (const act of ev.do) runEventAction(cur, act);
+    }
+    if (ranThisPass === 0) break;
+  }
+
+  if (truncated) {
+    console.warn(
+      `[level] 一次动作触发了超过 ${MAX_EVENTS_PER_ACTION} 条事件，剩下的被截断：` +
+        `这一关可能有条件写得过宽（每次都成立）。`,
+    );
+  }
+
+  if (total > 0) {
+    /*
+     * 注意是 `{ ...cur.levelState, fired }`，不是 `{ fired }`。
+     *
+     * `levelState` 里还躺着 `hidden`（谁还没登场）。整块替换会把它抹掉——
+     * 表现是"事件一触发，未登场的席位就被当成已登场"，而它既没城也没兵，
+     * 立刻被判出局。
+     */
+    cur.levelState = { ...cur.levelState, fired: [...fired] };
+  }
+}
+
+function eventMatches(
+  when: import('./level.ts').LevelWhen,
+  cur: GameState,
+  died: Unit[],
+  moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>,
+  fired: ReadonlySet<string>,
+): boolean {
+  /*
+   * 组合节点先展开。短路是有意的：`all` 里前面一条不成立就不再看后面——
+   * 每一个叶子都是纯读，没有副作用，短路安全。
+   */
+  if ('all' in when) return when.all.every((w) => eventMatches(w, cur, died, moved, fired));
+  if ('any' in when) return when.any.some((w) => eventMatches(w, cur, died, moved, fired));
+  if ('not' in when) return !eventMatches(when.not, cur, died, moved, fired);
+
+  if (when.kind === 'fired') return fired.has(when.id);
+
+  if (when.kind === 'turn') {
+    /*
+     * 用 `>=` 而不是 `===`。
+     *
+     * 事件的意图是"到第 N 次行动时发生"，而不是"恰好第 N 次行动那一下发生"。
+     * 用等号的话，一旦某次结算没有跑事件（比如动作被拒、或者扩展里某条路径
+     * 直接改了局面），这一刻就永远错过了，而且不报错——作者只会觉得"事件没生效"。
+     */
+    const op = when.op ?? '>=';
+    if (op === '<=') return cur.turn <= when.at;
+    if (op === '=') return cur.turn === when.at;
+    if (op === '>') return cur.turn > when.at;
+    if (op === '<') return cur.turn < when.at;
+    return cur.turn >= when.at;
+  }
+  if (when.kind === 'unitDied') {
+    return died.some(
+      (u) => (!when.owner || u.owner === when.owner) && (!when.type || u.type === when.type),
+    );
+  }
+  // enter：从区域外走进区域内（原本就在里面、只是挪了一格的不算"进入"）
+  return moved.some((m) => {
+    if (when.owner && m.owner !== when.owner) return false;
+    const z = when.zone;
+    const inside = (x: number, y: number): boolean => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1;
+    return !inside(m.fromX, m.fromY) && inside(m.x, m.y);
+  });
+}
+
+function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
+  if (act.kind === 'say') {
+    /*
+     * 旁白写进战报，**公开**（`open`）——这一关发生的事双方都该看到。
+     * `player` 只是给界面配色的占位：战报条目必须有这么个字段。
+     */
+    s.log.push({ turn: s.turn, player: 'A', text: act.text, open: true, system: true });
+    return;
+  }
+  if (act.kind === 'spawn') {
+    for (const u of act.units) {
+      const why = spawnFromEvent(s, act.owner, u.type, u.x, u.y);
+      // 摆不上去就说一声：静默跳过会让作者以为"我明明写了"
+      if (why) s.log.push({ turn: s.turn, player: 'A', text: `关卡刷兵：${why}（${u.type}）`, open: true, system: true });
+    }
+    return;
+  }
+  if (act.kind === 'deploy') {
+    deploySeat(s, act.seat);
+    return;
+  }
+  if (act.kind === 'terrain') {
+    applyTerrainEvent(s, act);
+    return;
+  }
+  if (act.kind === 'reveal') {
+    revealZone(s, act.zone, act.turns);
+    return;
+  }
+  if (act.kind === 'gold') {
+    /*
+     * 加减金币。**封底 0**：负数扣到 0 就停，不让某一席变成负债。
+     * 变负会渗到 AI 的估值里（它会算"我这回合能造几个"），而"造不起"和
+     * "倒欠钱"在规则上是同一件事，没必要让后者存在。
+     */
+    const p = s.players[act.seat];
+    if (p) {
+      const before = p.gold;
+      p.gold = Math.max(0, p.gold + act.amount);
+      const delta = p.gold - before;
+      if (delta !== 0) {
+        s.log.push({
+          turn: s.turn,
+          player: act.seat,
+          text: `${p.name} ${delta > 0 ? `获得 ${delta}` : `失去 ${-delta}`} 金币`,
+          open: true,
+          system: true,
+        });
+      }
+    }
+    return;
+  }
+  // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
+  s.orderDirectives = {
+    ...(s.orderDirectives ?? {}),
+    [act.seat]: {
+      strategy: act.strategy,
+      ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
+    },
+  };
+}
+
+/**
+ * 给某一席补一座城（未登场席位登场时用）。
+ *
+ * 为什么不复用 `setup.ts` 里那份 `placeCity`：那是 `createMatch` 的局部闭包，
+ * 靠外面的 `citySeq` 编号；rules 也没法 import setup（setup 依赖 rules）。
+ * 所以这里按"现有城 id 的最大值 +1"自己编号，判据和那份保持一致
+ * （城市边长取本局 config、耐久取开局时代的城防）。
+ */
+function addCityFor(s: GameState, owner: PlayerId, left: number, top: number): void {
+  const size = Math.max(CITY.size, Math.round(s.config.citySize ?? CITY.size));
+  /*
+   * 城自己的时代：**关卡给这一席写了就优先**（`seats.cityEra`）。
+   *
+   * 晚到的一家是"带着铁器时代的城进城"的——如果这里退回全局开局时代，
+   * 它进来就是一座青铜城，跟两家打了半局的对手处在同一档，"后发而强"就没了。
+   */
+  const era = Math.max(1, Math.round(s.config.level?.seats?.cityEra?.[owner] ?? s.config.startEra));
+  const info = eraDef(era);
+  const maxSeq = s.cities.reduce((m, c) => Math.max(m, Number(String(c.id).replace(/\D/g, '')) || 0), 0);
+  const id = `c${maxSeq + 1}`;
+  s.cities.push({
+    id,
+    x: left,
+    y: top,
+    size,
+    owner,
+    era,
+    hp: info.cityMaxHp,
+    maxHp: info.cityMaxHp,
+    armor: info.cityArmor,
+  });
+  for (let dy = 0; dy < size; dy += 1) {
+    for (let dx = 0; dx < size; dx += 1) {
+      const tile = s.tiles[(top + dy) * s.w + (left + dx)];
+      if (!tile) continue;
+      tile.terrain = 'city';
+      tile.cityId = id;
+    }
+  }
+}
+
+/**
+ * 让一个未登场的席位上场：放城 + 摆它在关卡 `deploy` 里写好的兵。
+ *
+ * 兵源只用关卡自己那份 `deploy`：如果事件里还要再写一遍坐标，作者就有两处要同步，
+ * 改了一处忘了另一处是迟早的事。
+ */
+function deploySeat(s: GameState, seat: PlayerId): void {
+  const hidden = s.levelState?.hidden ?? [];
+  const say = (text: string): void => {
+    s.log.push({ turn: s.turn, player: 'A', text, open: true, system: true });
+  };
+  if (!hidden.includes(seat)) {
+    say(`第 ${seat} 家已经在场上了`);
+    return;
+  }
+
+  const lv = s.config.level;
+  const pts =
+    seat === 'A'
+      ? lv?.map.citiesA
+      : seat === 'B'
+        ? lv?.map.citiesB
+        : lv?.seats?.cities?.[seat as 'C' | 'D'];
+  for (const p of pts ?? []) addCityFor(s, seat, p.x, p.y);
+
+  s.levelState = { ...(s.levelState ?? { fired: [] }), hidden: hidden.filter((x) => x !== seat) };
+
+  for (const d of lv?.deploy?.[seat] ?? []) {
+    const why = spawnFromEvent(s, seat, d.type, d.x, d.y);
+    if (why) say(`关卡登场：${why}（${d.type}）`);
+  }
+  refreshMemory(s);
+  say(`${s.players[seat]?.name ?? seat} 登场了`);
+}
+
+/**
+ * 改地形（事件用）。
+ *
+ * 三条兜底，对应设计文档第七章：
+ *   1. **城格跳过**——城压在格子上，格子指向城，把城格改成水会得到一座悬空的城；
+ *   2. **格上有兵就挤走**——挤到最近能站的空地；实在无处可去才没了（并说一声）；
+ *      桥本身挤不走（它不会爬），地没了就是没了；
+ *   3. **必须播报**——玩家记住的是"东边有座桥"，桥在他没看的时候没了，
+ *      他不会觉得是剧情，他会觉得是 bug。
+ *
+ * **不拦截"把地图切成两块"**：那是一种合法设计（"断了桥才能守住"）。
+ * 这一关能不能打通，是批量自检的事，不是引擎的事。
+ */
+/**
+ * 点亮一片区域：这些格子此后一直可见（见 `GameState.revealed`）。
+ *
+ * 不播报：作者会自己配一句 `say`，引擎再补一句"视野点亮了 N 格"只会把战报弄脏。
+ * 重复点亮同一片是幂等的（Set 去重），所以可以放心放进 `repeat` 的事件里。
+ */
+function revealZone(
+  s: GameState,
+  zone: Extract<import('./level.ts').LevelDo, { kind: 'reveal' }>['zone'],
+  turns = 1,
+): void {
+  /*
+   * 亮到"第几次行动"。
+   *
+   * `until = turn + turns`：默认 1 的时候，这一手和下一手都还看得见——
+   * 事件常常在**对方的回合**触发（伏兵刷出来那一刻），只亮当前这一手的话，
+   * 轮到玩家时早就灭了，等于没点。
+   * 判定在 `fog.ts` 里是 `until >= turn`，所以 turns=1 实际覆盖两个行动序号，
+   * 两家局正好是一个完整的轮次。
+   */
+  /*
+   * 负数 = 一直亮。用一个大数而不是 `Infinity`：`Infinity` 存进 JSON 会变成 null，
+   * 存档再读出来就成了"亮到 0"，反而全灭。999999 比任何一局的行动数都大。
+   */
+  const FOREVER = 999999;
+  const until = turns < 0 ? FOREVER : s.turn + Math.max(1, Math.round(turns));
+  // 同格取更晚的那个过期点；顺手把已经过期的清掉，别让状态无限长
+  const keep = new Map<number, number>();
+  for (const r of s.revealed ?? []) {
+    if (r.until < s.turn) continue;
+    keep.set(r.i, Math.max(keep.get(r.i) ?? 0, r.until));
+  }
+  let added = 0;
+  for (let y = zone.y0; y <= zone.y1; y += 1) {
+    for (let x = zone.x0; x <= zone.x1; x += 1) {
+      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+      const i = y * s.w + x;
+      const prev = keep.get(i);
+      if (prev !== undefined && prev >= until) continue;
+      if (prev === undefined) added += 1;
+      keep.set(i, until);
+    }
+  }
+  if (added === 0 && keep.size === (s.revealed ?? []).length) return;
+  s.revealed = [...keep].map(([i, at]) => ({ i, until: at }));
+}
+
+function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').LevelDo, { kind: 'terrain' }>): void {
+  const say = (text: string): void => {
+    s.log.push({ turn: s.turn, player: 'A', text, open: true, system: true });
+  };
+
+  const cells = new Set<number>();
+  for (let y = act.zone.y0; y <= act.zone.y1; y += 1) {
+    for (let x = act.zone.x0; x <= act.zone.x1; x += 1) {
+      const i = y * s.w + x;
+      const tile = s.tiles[i];
+      if (!tile) continue;
+      if (tile.cityId) continue; // 城格归城市管
+      /*
+       * 桥格：**桥面不动，桥下的地跟着水位走**。
+       *
+       * 事件改地形说的是"这一片的地貌变了"（水位退了、河断流了），
+       * 桥底下那块河床当然也在这一片里。但桥面本身不能改成浅水——那会得到
+       * 一座"架在浅水上的桥"，而且桥单位会因为脚下不再是桥面被挤掉：
+       * 玩家看到的是"我的桥被一个改水位的事件吃了"，完全没有道理。
+       *
+       * 判断 `only` 时看的是**桥下那块地**，不是桥面：作者写
+       * `only: ['water']` 的意思是"只改变水域"，而这座桥下的河床正是水域。
+       * 拿 'bridge' 去比白名单的话，只要写了 `only` 就永远命中不了桥，
+       * 水位退了之后拆桥又会原地冒出一条河。
+       */
+      if (tile.terrain === 'bridge') {
+        const key = String(i);
+        const bed = s.bridgeDeck?.[key] ?? 'water';
+        if (act.only && !act.only.includes(bed as never)) continue;
+        /*
+         * 改成**深水**会把桥冲垮——这是"事件拆桥"的唯一出口。
+         *
+         * 桥面能架在水上，也能在浅水/干河床上留着（水位退、河断流），但撑不住深水。
+         * 孤城关第 10 次行动那句"桥被洪水冲垮了"就靠这条：不写 only、to: 'deep'。
+         * 作者要拆桥时记得配一句播报，否则桥会安静地消失。
+         */
+        if (act.to === 'deep') {
+          s.units = s.units.filter((u) => !(u.x === x && u.y === y && utype(s, u.type).bridges));
+          if (s.bridgeDeck) delete s.bridgeDeck[key];
+          tile.terrain = act.to;
+          cells.add(i);
+          continue;
+        }
+        if (bed === act.to) continue;
+        s.bridgeDeck = { ...(s.bridgeDeck ?? {}), [key]: act.to };
+        // 迷雾里按 `custom.deckFrom` 还原桥面，两份记录要一起更新
+        const bridgeUnit = s.units.find((u) => u.x === x && u.y === y && utype(s, u.type).bridges);
+        if (bridgeUnit) bridgeUnit.custom = { ...(bridgeUnit.custom ?? {}), deckFrom: act.to };
+        continue; // 桥面没变，不算进"地形变了 N 格"
+      }
+      if (act.only && !act.only.includes(tile.terrain as never)) continue;
+      if (tile.terrain === act.to) continue;
+      tile.terrain = act.to;
+      cells.add(i);
+    }
+  }
+  if (cells.size === 0) return;
+
+  say(`地形变了：${cells.size} 格成为${CONFIG.terrainName[act.to] ?? act.to}`);
+
+  /*
+   * 挤走站不住的兵。
+   *
+   * 判定用 `ignoreUnits: true`：这时候那个人**本来就在这一格上**，
+   * 带着占用去问"能不能站"，永远得到否——那会把所有人都判成"站不住"。
+   */
+  const gone: Unit[] = [];
+  for (const u of s.units) {
+    const n = footprintOf(s, u.type);
+    let touched = false;
+    for (let dy = 0; dy < n && !touched; dy += 1) {
+      for (let dx = 0; dx < n; dx += 1) {
+        if (cells.has((u.y + dy) * s.w + (u.x + dx))) {
+          touched = true;
+          break;
+        }
+      }
+    }
+    if (!touched) continue;
+    if (canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true })) continue;
+
+    const name = utype(s, u.type).name;
+    // 桥挪不了：地没了，桥就是没了
+    if (utype(s, u.type).bridges) {
+      gone.push(u);
+      say(`${name}塌了`);
+      continue;
+    }
+    const spot = freeSpotWithin(s, u, u.type, 6);
+    if (spot) {
+      u.x = spot.x;
+      u.y = spot.y;
+      say(`${name}被挤到 (${spot.x}, ${spot.y})`);
+    } else {
+      gone.push(u);
+      say(`${name}无处可退，没了`);
+    }
+  }
+  if (gone.length > 0) {
+    const ids = new Set(gone.map((u) => u.id));
+    s.units = s.units.filter((u) => !ids.has(u.id));
+  }
+
+  // 地形影响视野（高地看得远），改完要重新算一遍雾
+  refreshMemory(s);
+
+  /*
+   * 记下"这一手改了哪几格"，让界面闪一下。
+   *
+   * 播报是写给"读战报的人"的，闪烁是写给"正盯着棋盘的人"的——同一件事要两种交代：
+   * 桥在他没留意的时候没了，他不一定会去翻战报，但一定会觉得画面出错了。
+   */
+  s.levelState = {
+    ...(s.levelState ?? { fired: [] }),
+    terrain: {
+      seq: (s.levelState?.terrain?.seq ?? 0) + 1,
+      cells: [...cells],
+    },
+  };
 }
 
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
@@ -4485,6 +5267,13 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
     recordDeaths(result.state, rosterBefore, action);
     result.state.winner = result.state.winner ?? checkWinner(result.state);
     refreshMemory(result.state);
+    /*
+     * 关卡事件：**放在最后**，这一手的结算、战损、胜负全判完之后再跑。
+     *
+     * 放前面的坏处是实实在在的：事件刷出来的兵会被算进"这一手干掉了多少人"，
+     * 事件里判的胜负会被后面的 checkWinner 覆盖掉。
+     */
+    runLevelEvents(s, result.state);
   }
 
   return result;
@@ -4506,21 +5295,49 @@ function syncBridges(s: GameState): void {
   for (const u of s.units) {
     if (utype(s, u.type).bridges) alive.add(u.y * s.w + u.x);
   }
+  /*
+   * 地图自带的桥不参与对账。
+   *
+   * `alive` 里装的是"有桥单位撑着的格"，判据是"是桥面但没人撑着 → 塌"。
+   * 地图上画的桥（`=`）本来就没有单位，按这条判据会在**第一步结算就塌掉**，
+   * 站在上面的兵跟着落水——`断后` 关那个守桥的民兵就是这么没的。
+   *
+   * 分界线记在 `state.mapBridges`（建局时扫出来的格号）。工兵架出来的桥
+   * 不在这个集合里，照旧"没单位就塌"。
+   */
+  const statics = s.mapBridges && s.mapBridges.length > 0 ? new Set(s.mapBridges) : null;
   const collapsed: number[] = [];
   for (let i = 0; i < s.tiles.length; i++) {
     const tile = s.tiles[i];
-    if (tile && tile.terrain === 'bridge' && !alive.has(i)) {
-      tile.terrain = 'water';
-      collapsed.push(i);
-    }
+    if (!tile || tile.terrain !== 'bridge') continue;
+    if (alive.has(i)) continue;
+    if (statics?.has(i)) continue; // 地图的一部分，不塌
+    /*
+     * 还原成**桥下那块地**，不是一律还原成水域。
+     *
+     * 以前写死 `water`：水位退成浅水之后，桥一塌，脚下凭空冒出一条河，
+     * 而周围全是能淌过去的浅水。沼泽上架的桥同理。
+     * `bridgeDeck` 是建桥那一刻记下的；旧存档没有这个字段，退回水域（和以前一致）。
+     */
+    const key = String(i);
+    tile.terrain = s.bridgeDeck?.[key] ?? 'water';
+    if (s.bridgeDeck) delete s.bridgeDeck[key];
+    collapsed.push(i);
   }
   if (collapsed.length === 0) return;
 
-  // 桥塌的时候站在桥上的陆军一起没：那一格已经变回水面了，
-  // 留着会得到一个"漂在水上的步兵"，后续所有寻路和攻击判定都会错乱。
+  /*
+   * 桥塌的时候**站不住**的兵一起没。
+   *
+   * 判据是"塌完之后这一格还站得住吗"，不是"桥塌了就一定落水"：
+   * 桥塌成浅水/沼泽时那是能站的地，兵应当留在原地——否则会出现
+   * "水退了，桥断了，站在桥上的兵反而淹死"这种没道理的事。
+   */
   const drowned = s.units.filter((u) => {
     if (utype(s, u.type).domain === 'water') return false; // 船本来就在水上
-    return collapsed.includes(u.y * s.w + u.x);
+    const i = u.y * s.w + u.x;
+    if (!collapsed.includes(i)) return false;
+    return !canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true });
   });
   if (drowned.length === 0) return;
   for (const u of drowned) {
@@ -4722,7 +5539,7 @@ function doAttack(
   if (boardIdOf(attacker) !== boardIdOf(defender)) {
     return { ok: false, reason: '不在同一张图上，打不到' };
   }
-  if (defender.owner === attacker.owner) return { ok: false, reason: '不能攻击友军' };
+  if (sameTeam(s, defender.owner, attacker.owner)) return { ok: false, reason: '不能攻击友军' };
   if (underConstruction(attacker)) {
     return { ok: false, reason: `${utype(s, attacker.type).name} 还在施工，没装好武器` };
   }
@@ -5080,7 +5897,7 @@ function doSiege(
   if (!city) return { ok: false, reason: '城市不存在' };
   if (attacker.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
   if (boardIdOf(attacker) !== boardIdOf(city)) return { ok: false, reason: '不在同一张图上，够不着这座城' };
-  if (city.owner === attacker.owner) return { ok: false, reason: '不能攻击自己的城市' };
+  if (sameTeam(s, city.owner, attacker.owner)) return { ok: false, reason: '不能攻击友军的城市' };
   if (city.ruined) return { ok: false, reason: '这已经是废墟了，派兵入驻才能接管' };
   if (attacker.acted) return { ok: false, reason: '该单位本回合已经攻击过' };
   // 和野战同理：没武器的单位不能攻城。否则桥会对着邻格的城市"攻城"，
@@ -5870,6 +6687,15 @@ export function produceAt(
   if (!eraWindowOk(s, target, era)) {
     return { ok: false, reason: `${target.name} 需要「${eraDef(target.era).name}」时代` };
   }
+  /*
+   * 关卡禁用：单独给一句话。
+   *
+   * 不分开的话，玩家看到的是 `canUseType` 那句"不在本局选用的名单里"——
+   * 那是**选卡模式**的措辞，会让人以为"我还没抽到它"，而不是"这一关不许造"。
+   */
+  if (s.config.level?.banUnits?.includes(target.id)) {
+    return { ok: false, reason: `这一关禁用「${target.name}」` };
+  }
   if (!canUseType(s, owner, target.id)) {
     return { ok: false, reason: `${target.name} 不在本局选用的名单里` };
   }
@@ -6063,13 +6889,20 @@ function doRecruit(
  * 指挥官模式下这一方的生产序列（只读副本）。普通对局返回空数组。
  */
 /**
- * 指挥官模式下这一方"怎么打"：策略 + 进攻方向。
+ * 这一方"怎么打"：策略 + 进攻方向。
  *
- * 普通对局、或者玩家没定过，一律返回 `{ strategy: 'auto' }`——也就是"AI 按自己的
- * 判断来"，和这个机制上线之前的行为完全一致。所以老存档、旧回放读出来都不变。
+ * 两个来源，语义一样（都是"给 AI 的一句话"）：
+ *   · 指挥官模式里玩家排的；
+ *   · 关卡事件里作者写的（"第 6 回合起转猛攻"）。
+ *
+ * 2026-11-15 之前这里有一句 `if (!s.config.commanderMode) return auto`——
+ * 那是"只有指挥官模式才会有这个字段"时代的护栏。关卡事件要复用同一个字段、
+ * 让同一套 AI 读取逻辑生效，所以把护栏去掉了。
+ *
+ * 去掉是安全的：`orderDirectives` 目前只有这两处会写，普通对局读出来仍是 undefined，
+ * 返回 `{ strategy: 'auto' }` 和以前一字不差。老存档、老复盘不受影响。
  */
 export function orderDirectiveOf(s: GameState, player: PlayerId): OrderDirective {
-  if (!s.config.commanderMode) return { strategy: 'auto' };
   return s.orderDirectives?.[player] ?? { strategy: 'auto' };
 }
 
@@ -6208,7 +7041,17 @@ function doSetOrders(s: GameState, queue: string[], sites?: string[]): ActionRes
  */
 function doPlanCommit(s: GameState): ActionResult {
   if (!s.config.commanderMode) return { ok: false, reason: '普通对局没有作战计划' };
-  if (s.config.aiOpponent === true) {
+  /*
+   * 场上有电脑就不需要"互等提交"：它不用排计划，也不会点提交。
+   *
+   * 原来这里判的是 `aiOpponent === true`——两家局时代的写法。三家四家局里
+   * 电脑可能坐在 C/D（见 `MatchConfig.aiSeats`），那两个布尔永远是 false，
+   * 于是"有人机还要等人交计划"，对局就卡在那儿了。
+   */
+  const anyAi = (s.config.aiSeats?.length ?? 0) > 0
+    || s.config.aiOpponent === true
+    || s.config.aiAlly === true;
+  if (anyAi) {
     return { ok: false, reason: '人机局里对面由 AI 代管，不需要互等提交' };
   }
   if (s.winner) return { ok: false, reason: '对局已结束' };
@@ -7058,6 +7901,8 @@ function retireLostSeat(s: GameState, p: PlayerId): void {
   if (seatsOf(s).length === 2) return;
   if (s.config.godMode === true) return;
   if (hasQuit(s, p)) return;
+  // 无城席位天生 0 城，别把它的军队当成"丢城撤离"撤走
+  if (isCitylessSeat(s, p)) return;
   if (citiesOf(s, p).length > 0) return;
   const gone = withdrawUnits(s, p);
   if (gone === 0) return;
@@ -7368,6 +8213,17 @@ function doEndTurn(s: GameState): ActionResult {
   const nextPlayer = nextSeat(s, s.current);
   s.current = nextPlayer;
   s.turn += 1;
+
+  /*
+   * 到期的点亮直接丢掉。
+   *
+   * `fog` 那边已经按 `until` 过滤了，所以这一步**不影响"看得见什么"**——
+   * 它只是不让 `revealed` 随着一局越打越长（每波伏兵都留一条永远过期的记录）。
+   */
+  if (s.revealed && s.revealed.length > 0) {
+    const live = s.revealed.filter((r) => r.until >= s.turn);
+    if (live.length !== s.revealed.length) s.revealed = live;
+  }
 
   // 回合末钩子（天气、维护费一类）。钩子只负责把血扣到 0，
   // 清场仍然由下面的 sweepDead 统一做——扩展不该各自造一套死亡逻辑。

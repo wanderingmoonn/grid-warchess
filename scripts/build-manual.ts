@@ -1483,7 +1483,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
         <li><b>反应射击</b>：敌人踏进射程的那一刻就打，不是等回合末补一炮。打出去的发数从这座建筑
           本回合的攻击次数里扣，和你自己点开火<b>共用同一份</b>——一回合总共还是那么几发，
           变的只是时机：从"挨完打才还手"变成"进门就打"。先打刚进来的那个，它倒了还有余弹就转火。</li>
-        <li><b>你的回合开始</b>，结算收入：基础 ${CONFIG.baseIncome} + 每座城按自己的时代贡献 + 每个经济单位按所在地形产出。</li>
+        <li><b>你的回合开始</b>，结算收入：每座城按自己的时代贡献 + 每个经济单位按所在地形产出。没有城就没有收入。</li>
         <li>你的单位恢复行动力（移动一次、攻击一次）。</li>
         <li>你行动：移动、攻击、攻城、建造、在城市生产、升级城市。</li>
         <li>点「结束行动」，把回合交给对方。</li>
@@ -1783,8 +1783,7 @@ const CORE_BODY_MAIN = `    <section id="goal">
     <section id="economy">
       <h2><span class="sec-num">08</span>经济</h2>
       <div class="formula">
-        每回合收入 = ${CONFIG.baseIncome}（基础）<br />
-        &nbsp;&nbsp;+ Σ 每座城市按自己的时代贡献<br />
+        每回合收入 = Σ 每座城市按自己的时代贡献<br />
         &nbsp;&nbsp;+ Σ 每个经济单位 / 经济建筑按所在地形产出<br />
         &nbsp;&nbsp;+ 相邻水域的额外 ${CONFIG.riverTradeBonus} 金<br />
         <span class="c">再过一个扩展钩子，最后取整</span>
