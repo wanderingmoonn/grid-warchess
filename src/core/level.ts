@@ -96,12 +96,15 @@ export type LevelWhenLeaf =
    * 这是"把事件串起来"的最小手段：事件 A 里说"伏兵已出动"，事件 B 的条件里
    * 写 `fired(A)`，就得到"伏兵出动之后再做 B"。
    *
-   * 两个要知道的语义：
-   *   · **一次就是永远**。`repeat` 事件第一次触发之后这条就恒为真，
-   *     没法表达"每次 A 都触发 B"（将来要"计数"才做得到）；
-   *   · 同一批里能传播：这一批先执行的 A，后面的 B 在同一批的第二遍扫描里能看到。
+   * `times` 是"发生过几次"（2026-11-17 加的计数）：
+   *   · 不写 `times` ＝ 发生过就行（老的语义）；
+   *   · 写 `times` 就按 `op`（默认 `>=`）比次数。**只有 `repeat: true` 的事件**
+   *     次数才会涨过 1——普通事件触发一次就再也不进 pending 了。
+   *
+   * 同一批里能传播：这一批先执行的 A，后面的 B 在同一批的第二遍扫描里能看到
+   * （看到的是**这一遍开头**的次数，所以同一批里 A 触发两次不会串成 2）。
    */
-  | { kind: 'fired'; id: string };
+  | { kind: 'fired'; id: string; times?: number; op?: TurnOp };
 
 /**
  * 事件条件：叶子，或者一棵组合树。
@@ -2291,7 +2294,21 @@ function normalizeWhen(
       errors.push(`事件「${id}」的条件引用了它自己：永远不会触发`);
       return undefined;
     }
-    return { kind: 'fired', id: ref };
+    let times: number | undefined;
+    if (w.times !== undefined) {
+      times = Math.round(Number(w.times));
+      if (!Number.isFinite(times) || times < 1 || times > 999) {
+        errors.push(`事件「${id}」的「已经发生过几次」要在 1~999（现在 ${String(w.times)}）`);
+        return undefined;
+      }
+    }
+    const rawOp = w.op === undefined ? '>=' : String(w.op);
+    if (!['>=', '<=', '=', '>', '<'].includes(rawOp)) {
+      errors.push(`事件「${id}」的比较符「${rawOp}」不认识（只能是 >= / <= / = / > / <）`);
+      return undefined;
+    }
+    if (times === undefined) return { kind: 'fired', id: ref };
+    return { kind: 'fired', id: ref, times, ...(rawOp === '>=' ? {} : { op: rawOp as TurnOp }) };
   }
 
   if (kind === 'unitDied') {

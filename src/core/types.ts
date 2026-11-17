@@ -2097,7 +2097,18 @@ export interface GameState {
    * 普通对局没有这个字段，读出来是 undefined，语义正好等于"没有关卡"。
    */
   levelState?: {
-    fired: string[];    /**
+    fired: string[];
+    /**
+     * 每条事件**触发过几次**（2026-11-17）。
+     *
+     * `fired` 只回答"发生过没有"，而计数型条件要问"发生过几次"。
+     * 普通事件最多 1（触发过就不再进 pending），只有 `repeat` 的事件会往上涨。
+     *
+     * 老存档没有这一项：读的时候按 `fired` 兜底成 1（发生过就是至少一次），
+     * 不能因为加了这个字段就让老存档里的事件"没发生过"。
+     */
+    counts?: Record<string, number>;
+    /**
      * 还没登场的席位（关卡 `seats.hidden`）。
      *
      * 它们不占回合、不算出局、不参与"还剩几家"——但**仍然在 `seatsOf` 里**，

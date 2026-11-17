@@ -1283,6 +1283,50 @@ line('26. 关卡刷兵：落点被占时会就近找位，不该有"站不住"')
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
 /* ------------------------------------------------------------------ */
+/* 计数型条件：fired + times（2026-11-17）                              */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const say = (text: string) => [{ kind: 'say', text }];
+  const counted = validateLevel({
+    ...structuredClone(base),
+    id: 'level:tmp-count',
+    name: '计数探针',
+    events: [
+      /*
+       * `tick` 每手都触发（`repeat` + `turn >= 1` 恒真），`gold +1` 让它在战报里
+       * 不吵；`twice` 在 tick 第 2 次之后成立。
+       */
+      { id: 'tick', when: { kind: 'turn', at: 1 }, repeat: true, do: [{ kind: 'gold', seat: 'A', amount: 1 }] },
+      { id: 'twice', when: { kind: 'fired', id: 'tick', times: 2 }, do: say('已经两次了') },
+    ],
+  });
+  check(counted.ok, '计数条件能通过校验', counted.ok ? '' : counted.errors[0]);
+  if (counted.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: counted.level }, 3);
+    const seenAt: number[] = [];
+    for (let i = 0; i < 6 && !st.winner; i += 1) {
+      const r = applyAction(st, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      st = r.state;
+      if (st.log.some((l) => l.text === '已经两次了')) seenAt.push(st.turn);
+    }
+    check(seenAt.length > 0, '「第 2 次才成立」的条件最终会触发', seenAt.join(','));
+    check(
+      seenAt.length === 0 || seenAt[0]! >= 2,
+      '它不会在第 1 次就触发',
+      `实际第 ${seenAt[0] ?? '-'} 次`,
+    );
+    check(
+      (st.levelState?.counts?.tick ?? 0) >= 2,
+      '次数记在 levelState.counts 里',
+      `tick=${String(st.levelState?.counts?.tick)}`,
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
 
@@ -1316,6 +1360,15 @@ console.log('');
   check(
     repeatRef.some((i) => i.severity === 'warn' && i.text.includes('重复触发')),
     '引用 repeat 事件：给一条提醒（不算错）',
+  );
+
+  const needRepeat = lintOf([
+    { id: 'a', when: { kind: 'turn', at: 2 }, do: say('x') },
+    { id: 'b', when: { kind: 'fired', id: 'a', times: 2 }, do: say('y') },
+  ]);
+  check(
+    needRepeat.some((i) => i.severity === 'error' && i.text.includes('不是 repeat')),
+    '要它发生 2 次但它不是 repeat：报错（永远不成立）',
   );
 }
 

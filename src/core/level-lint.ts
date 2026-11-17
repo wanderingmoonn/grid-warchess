@@ -229,29 +229,52 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
    * `fired` 就恒为真，引用它的条件不会"每次跟着再来一次"。
    */
   const eventIds = new Set((level.events ?? []).map((e) => e.id));
-  const firedRefs = (when: LevelWhen): string[] => {
-    if ('all' in when) return when.all.flatMap(firedRefs);
-    if ('any' in when) return when.any.flatMap(firedRefs);
-    if ('not' in when) return firedRefs(when.not);
-    return when.kind === 'fired' ? [when.id] : [];
+  /** 条件里所有 `fired` 叶子（带次数） */
+  const firedLeaves = (when: LevelWhen): Array<{ id: string; times?: number; op?: string }> => {
+    if ('all' in when) return when.all.flatMap(firedLeaves);
+    if ('any' in when) return when.any.flatMap(firedLeaves);
+    if ('not' in when) return firedLeaves(when.not);
+    return when.kind === 'fired' ? [when] : [];
+  };
+  /** 这个条件至少需要目标事件发生几次 */
+  const needTimes = (leaf: { times?: number; op?: string }): number => {
+    if (leaf.times === undefined) return 1;
+    if (leaf.op === '>') return leaf.times + 1;
+    if (leaf.op === '<' || leaf.op === '<=') return 1;
+    return leaf.times;
   };
   const refGraph = new Map<string, string[]>();
   for (const ev of level.events ?? []) {
-    const refs = firedRefs(ev.when);
-    refGraph.set(ev.id, refs);
-    for (const ref of refs) {
-      if (!eventIds.has(ref)) {
+    const leaves = firedLeaves(ev.when);
+    refGraph.set(
+      ev.id,
+      leaves.map((l) => l.id),
+    );
+    for (const leaf of leaves) {
+      if (!eventIds.has(leaf.id)) {
         out.push({
           severity: 'error',
-          text: `事件「${ev.id}」的条件引用了不存在的「${ref}」：这个条件永远不会成立。`,
+          text: `事件「${ev.id}」的条件引用了不存在的「${leaf.id}」：这个条件永远不会成立。`,
         });
         continue;
       }
-      const target = (level.events ?? []).find((e) => e.id === ref);
+      const target = (level.events ?? []).find((e) => e.id === leaf.id);
       if (target?.repeat === true) {
+        /*
+         * 引用了会重复触发的事件：
+         *   · 写了次数 → 正是它的用途（"第 3 次走进来"），不提醒；
+         *   · 没写次数 → 第一次之后条件恒为真，作者可能想要"每次跟着来"。
+         */
+        if (leaf.times === undefined) {
+          out.push({
+            severity: 'warn',
+            text: `事件「${ev.id}」引用了会重复触发的「${leaf.id}」：它第一次触发之后这个条件就恒为真，「${ev.id}」不会跟着再来一次。要"第几次"就填次数。`,
+          });
+        }
+      } else if (needTimes(leaf) >= 2) {
         out.push({
-          severity: 'warn',
-          text: `事件「${ev.id}」引用了会重复触发的「${ref}」：它第一次触发之后这个条件就恒为真，「${ev.id}」不会跟着再来一次。`,
+          severity: 'error',
+          text: `事件「${ev.id}」要「${leaf.id}」发生 ${needTimes(leaf)} 次，但它不是 repeat 事件：普通事件只触发一次，这个条件永远不会成立。`,
         });
       }
     }

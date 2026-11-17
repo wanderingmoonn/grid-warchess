@@ -340,7 +340,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         的单位走进 <button class="btn btn-sm" data-pick-when-zone="${key}">${esc(zoneText(node.zone))}</button>
       </span>${del}</div>`;
     }
-    // fired：从本关其它事件里挑一个
+    // fired：从本关其它事件里挑一个，可选"已经发生过几次"
     const others = events.filter((e) => e.id !== events[Number(key.split(':')[0])]?.id);
     const firedSel = `<select class="level-mini-select" data-when-fired="${key}">${
       others.length === 0
@@ -349,7 +349,19 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
             .map((e) => `<option value="${esc(e.id)}" ${node.id === e.id ? 'selected' : ''}>${esc(e.id)}</option>`)
             .join('')
     }</select>`;
-    return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel} ${firedSel} 已发生</span>${del}</div>`;
+    /*
+     * 次数：留空＝"发生过就行"（老语义）。填了才按比较符比。
+     * 比较符只在填了次数时才有意义，所以下拉放在输入框前面、默认 >=。
+     */
+    const opSel = `<select class="level-mini-select" data-when-times-op="${key}" title="次数怎么比">${(
+      ['>=', '=', '>', '<=', '<'] as const
+    )
+      .map((o) => `<option value="${o}" ${(node.op ?? '>=') === o ? 'selected' : ''}>${o}</option>`)
+      .join('')}</select>`;
+    const timesInput = `<input type="number" min="1" max="999" class="level-mini-num" data-when-times="${key}"
+        value="${node.times ?? ''}" placeholder="—" title="留空＝只要发生过就算">`;
+    return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel} ${firedSel} 已发生
+        ${opSel}${timesInput} 次<span class="field-hint">（不填次数＝发生过就行）</span></span>${del}</div>`;
   }
 
   /** 递归渲染：叶子一行，组是"标题 + 缩进的子节点 + 加按钮" */
@@ -855,6 +867,22 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       }
       return;
     }
+    const times = el.getAttribute('data-when-times');
+    if (times) {
+      const key = parseKey(times);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'fired') {
+        const raw = (el as HTMLInputElement).value.trim();
+        if (!raw) {
+          // 清空＝回到"发生过就行"，顺手把比较符也删掉（留着是死字段）
+          delete node.times;
+          delete node.op;
+        } else {
+          node.times = Math.max(1, Math.min(999, Math.round(Number(raw) || 1)));
+        }
+      }
+      return;
+    }
     const at = el.getAttribute('data-when-at');
     if (at) {
       const key = parseKey(at);
@@ -926,6 +954,17 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       const key = parseKey(whenFired);
       const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
       if (node && 'kind' in node && node.kind === 'fired' && val) node.id = val;
+      return;
+    }
+    const timesOp = el.getAttribute('data-when-times-op');
+    if (timesOp !== null) {
+      const key = parseKey(timesOp);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'fired' && node.times !== undefined) {
+        if (val === '>=') delete node.op;
+        else node.op = val as '>=' | '<=' | '=' | '>' | '<';
+      }
+      renderList();
       return;
     }
     const doKind = el.getAttribute('data-do-kind');

@@ -4680,6 +4680,12 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
    */
   const fired = new Set(cur.levelState?.fired ?? []);
   if (events.every((e) => e.repeat !== true && fired.has(e.id))) return;
+  /*
+   * 触发次数。老存档没有 `counts`：按 `fired` 兜底成 1——"发生过"至少算一次，
+   * 不能因为加了字段就让老存档里的事件变成"没发生过"。
+   */
+  const counts: Record<string, number> = { ...(cur.levelState?.counts ?? {}) };
+  for (const id of fired) if (counts[id] === undefined) counts[id] = 1;
 
   /*
    * 差量用 id 建表来算，不写 `filter + some`。
@@ -4717,6 +4723,8 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
   let truncated = false;
   for (let pass = 0; pass < MAX_EVENT_PASSES; pass += 1) {
     const snapshot = new Set(fired);
+    // 次数也取"这一遍开头"的：同一遍里 A 触发两次不会串成 2，和 fired 一个道理
+    const snapshotCounts = { ...counts };
     let ranThisPass = 0;
     for (const ev of events) {
       if (total >= MAX_EVENTS_PER_ACTION) {
@@ -4725,9 +4733,10 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
       }
       if (executed.has(ev.id)) continue;
       if (ev.repeat !== true && snapshot.has(ev.id)) continue;
-      if (!eventMatches(ev.when, cur, died, moved, snapshot)) continue;
+      if (!eventMatches(ev.when, cur, died, moved, snapshot, snapshotCounts)) continue;
 
       fired.add(ev.id);
+      counts[ev.id] = (counts[ev.id] ?? 0) + 1;
       executed.add(ev.id);
       ranThisPass += 1;
       total += 1;
@@ -4751,8 +4760,17 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
      * 表现是"事件一触发，未登场的席位就被当成已登场"，而它既没城也没兵，
      * 立刻被判出局。
      */
-    cur.levelState = { ...cur.levelState, fired: [...fired] };
+    cur.levelState = { ...cur.levelState, fired: [...fired], counts };
   }
+}
+
+/** 数字和比较符的比较。`turn` 和「已经发生过几次」共用这一份 */
+function cmpNum(a: number, op: '>=' | '<=' | '=' | '>' | '<' | undefined, b: number): boolean {
+  if (op === '<=') return a <= b;
+  if (op === '=') return a === b;
+  if (op === '>') return a > b;
+  if (op === '<') return a < b;
+  return a >= b;
 }
 
 function eventMatches(
@@ -4761,16 +4779,22 @@ function eventMatches(
   died: Unit[],
   moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>,
   fired: ReadonlySet<string>,
+  counts: Readonly<Record<string, number>>,
 ): boolean {
   /*
    * 组合节点先展开。短路是有意的：`all` 里前面一条不成立就不再看后面——
    * 每一个叶子都是纯读，没有副作用，短路安全。
    */
-  if ('all' in when) return when.all.every((w) => eventMatches(w, cur, died, moved, fired));
-  if ('any' in when) return when.any.some((w) => eventMatches(w, cur, died, moved, fired));
-  if ('not' in when) return !eventMatches(when.not, cur, died, moved, fired);
+  if ('all' in when) return when.all.every((w) => eventMatches(w, cur, died, moved, fired, counts));
+  if ('any' in when) return when.any.some((w) => eventMatches(w, cur, died, moved, fired, counts));
+  if ('not' in when) return !eventMatches(when.not, cur, died, moved, fired, counts);
 
-  if (when.kind === 'fired') return fired.has(when.id);
+  if (when.kind === 'fired') {
+    const n = counts[when.id] ?? 0;
+    // 不写 times ＝ "发生过就行"（老语义）
+    if (when.times === undefined) return n > 0;
+    return cmpNum(n, when.op, when.times);
+  }
 
   if (when.kind === 'turn') {
     /*
@@ -4780,12 +4804,7 @@ function eventMatches(
      * 用等号的话，一旦某次结算没有跑事件（比如动作被拒、或者扩展里某条路径
      * 直接改了局面），这一刻就永远错过了，而且不报错——作者只会觉得"事件没生效"。
      */
-    const op = when.op ?? '>=';
-    if (op === '<=') return cur.turn <= when.at;
-    if (op === '=') return cur.turn === when.at;
-    if (op === '>') return cur.turn > when.at;
-    if (op === '<') return cur.turn < when.at;
-    return cur.turn >= when.at;
+    return cmpNum(cur.turn, when.op, when.at);
   }
   if (when.kind === 'unitDied') {
     return died.some(

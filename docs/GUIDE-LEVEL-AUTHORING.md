@@ -311,6 +311,7 @@ events: [
 | `{ kind: 'unitDied', owner: 'A' }` | A 的任何兵死了（可再加 `type` 限定兵种） |
 | `{ kind: 'enter', zone: {...} }` | 有单位走进区域（可加 `owner` 限定） |
 | `{ kind: 'fired', id: 'ambush-1' }` | **另一条事件已经发生过**。用它把事件串起来 |
+| `{ kind: 'fired', id: 'trap', times: 3 }` | 已经发生过 **3 次**（可加 `op`，默认 `>=`）。只有 `repeat: true` 的事件次数会超过 1 |
 
 默认每条只触发一次。`enter` 想反复触发要写 `repeat: true`。
 
@@ -358,7 +359,35 @@ when: {
 |---|---|
 | 引用了不存在的 id | **报错**：这个条件永远不会成立 |
 | A 等 B、B 等 A（互相等待） | **报错**：两件事一条都不会触发 |
-| 引用了 `repeat: true` 的事件 | 只提醒不算错：它第一次触发之后条件恒为真，"跟着再来一次"做不到 |
+| 引用了 `repeat: true` 的事件、但没写次数 | 只提醒不算错：它第一次触发之后条件恒为真，"跟着再来一次"做不到 |
+| 写了 `times`，但目标**不是** `repeat` | **报错**：普通事件只触发一次，"第 2 次"永远等不到 |
+
+#### 计数：第几次才发生
+
+"敌人第三次踩进雷区才引爆"：
+
+```ts
+[
+  {
+    id: 'trap',
+    // 每次走进都算一次，所以必须 repeat
+    when: { kind: 'enter', zone: { x0: 6, y0: 6, x1: 8, y1: 8 }, owner: 'B' },
+    repeat: true,
+    do: [{ kind: 'say', text: '轰。' }],
+  },
+  {
+    id: 'blow',
+    when: { kind: 'fired', id: 'trap', times: 3 },
+    do: [
+      { kind: 'say', text: '第三声雷之后，地裂了。' },
+      { kind: 'terrain', zone: { x0: 6, y0: 6, x1: 8, y1: 8 }, to: 'deep' },
+    ],
+  },
+]
+```
+
+次数记在局面里（`levelState.counts`），存档 / 复盘都带着走。
+**`times` 不填就是"发生过就行"**，和以前完全一样。
 
 #### 一个限时任务的例子
 
