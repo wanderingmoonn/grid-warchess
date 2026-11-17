@@ -313,6 +313,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 战役页只剩一行摘要，而全表照旧在——只是要按一下才出来。
      */
     let poolOpen = false;
+    /**
+     * 「选地图」小窗口是否打开（2026-11-17）。
+     *
+     * 地图不再占一栏——只有自由对局才会选图，单开一页等于让所有人每次开局
+     * 都从它旁边经过。现在它是战役页「在哪张图上打」那一行点出来的弹层。
+     */
+    let mapPickOpen = false;
+    /**
+     * 「任务简报」小窗口是否打开（2026-11-17）。
+     *
+     * 简报以前是侧栏里的一页：选了关，导航上那一项就从「战役」改名成「简报」，
+     * 战役页整个被顶掉。玩家点错一关就再也找不到"人数 / 时代"，而且他也可以
+     * 一次都不看简报直接开打。现在它是个弹窗：底部「确定」打开，看要求、挑扩展，
+     * 窗口右下角才是「开始对局」。
+     */
+    let briefOpen = false;
     /* 关卡模式的「换扩展」抽屉：和兵种池一样，是盖在面板上的一层 */
     let expDrawerOpen = false;
 
@@ -338,7 +354,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 关卡单独一页，而不是塞在战役页顶上：它会一直长（每加一张关卡就多一张卡），
      * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
      */
-    let tab: 'battle' | 'maps' | 'levels' | 'editor' = 'battle';
+    let tab: 'battle' | 'levels' | 'editor' = 'battle';
     /**
      * 这套面板是不是已经自动拉过一次云端关卡（2026-11-16）。
      *
@@ -443,12 +459,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
     const paint = () => {
       autoFetchCloudLevels();
-      /*
-       * 关卡局没有「地图」页。如果玩家正停在那页时点了关卡（或上车时记着 maps），
-       * 就把他挪到简报页——否则会画出一页没有对应标签的内容，
-       * 看起来像是点了导航却跳到了别的地方。
-       */
-      if (config.level && tab === 'maps') tab = 'battle';
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
       // 点一个兵种就"弹回顶部"就是这么来的——所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
@@ -775,7 +785,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
          */
         const warnLine =
           warn.length > 0
-            ? `<div class="field-hint is-warn">开了「${warn.join('、')}」这一关会明显变难——想挑战可以开，但难度不是设计过的那个。</div>`
+            ? `<div class="field-hint is-warn">开了「${warn.join('、')}」这一关会明显变难。</div>`
             : '';
         return lockLine + warnLine;
       })();
@@ -836,6 +846,28 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       })();
 
       const battleViewFull = `
+            <section class="field">
+              <div class="field-label">
+                在哪张图上打 <span class="field-hint">${
+                  config.fixedMap ? '联机两边、复盘重开都是同一张' : '随机地形每局不同'
+                }</span>
+              </div>
+              <div class="start-map-row">
+                <span class="start-map-thumb">${
+                  config.fixedMap
+                    ? mapThumbSvg(config.fixedMap, 2, undefined)
+                    : '<span class="is-random">随机</span>'
+                }</span>
+                <span class="start-map-body">
+                  <b>${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}</b>
+                  <span>${
+                    config.fixedMap ? `${config.fixedMap.w} × ${config.fixedMap.h}` : '每局现生成'
+                  }</span>
+                </span>
+                <button class="btn btn-sm" data-act="pick-map">换图</button>
+              </div>
+            </section>
+
             <section class="field">
               <div class="field-label">
                 数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
@@ -1111,6 +1143,71 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const demoPresets = demoLevels().filter((l) => !isUserLevelId(l.id));
       const storyPresets = storyLevels().filter((l) => !isUserLevelId(l.id));
       const editingMine = !!config.level && isUserLevelId(config.level.id);
+      /*
+       * 编辑器页的「地图」区：传图 + 看地图库。
+       *
+       * 和「自定义关卡」并排放在编辑器里，是因为它们是同一种东西——**交付物**。
+       * 以前一个在开局面板、一个在上帝模式侧栏，作者画完图得先想"我该去哪个面板"。
+       */
+      const mapStudioView = `
+            <section class="field">
+              <div class="field-label">
+                上传地图 <span class="field-hint">传上去要审核，通过之后所有玩家开局都能选到</span>
+                <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新地图库</button>
+              </div>
+              ${
+                mapDraft
+                  ? `<div class="map-draft">
+                       <span class="map-draft-thumb">${mapThumbSvg(mapDraft, thumbCity)}</span>
+                       <div class="map-draft-meta">
+                         <b>${esc(mapDraft.name)}</b>
+                         <span>${mapDraft.w} × ${mapDraft.h} · 城 ${mapDraft.citiesA.length} : ${mapDraft.citiesB.length}</span>
+                         <span class="field-hint">看一眼缩略图，确认是这个文件再传。</span>
+                       </div>
+                       <div class="map-draft-act">
+                         <button class="btn btn-sm btn-primary" data-act="map-upload">提交审核</button>
+                         <button class="btn btn-sm" data-act="map-cancel">取消</button>
+                       </div>
+                     </div>`
+                  : `<div class="chip-row">
+                       <button class="btn btn-sm" data-act="map-file">选择地图文件…</button>
+                       <a class="btn btn-sm" href="maps/example-map.txt" download="example-map.txt">下载一个模板</a>
+                     </div>
+                     <div class="field-hint">
+                       支持 <code>.json</code> 或纯文本网格${TERRAIN_LEGEND}，用 <code>A</code>/<code>B</code> 标两边城的左上角。
+                       单文件 ≤ ${Math.round(MAP_MAX_BYTES / 1024)}KB，${MAP_MIN_SIZE}~${MAP_MAX_SIZE} 格见方。
+                       先在本地解析校验，不合格的文件不会发出去。
+                     </div>`
+              }
+              ${mapNote ? `<div class="map-note ${mapBad ? 'is-bad' : 'is-ok'}">${esc(mapNote)}</div>` : ''}
+            </section>
+
+            <section class="field">
+              <div class="field-label">
+                地图库 <span class="field-hint">${
+                  userCards.length > 0 ? `${userCards.length} 张公开的图` : '还没有公开的图'
+                }</span>
+              </div>
+              ${
+                userCards.length > 0
+                  ? `<div class="map-gallery">${userCards
+                      .map((m) =>
+                        mapCard(
+                          m.id,
+                          esc(m.name),
+                          `${m.w}×${m.h}`,
+                          mapThumbSvg(m, thumbCity),
+                          m.id === pickedMapId,
+                          `${m.author ? ` · ${esc(m.author)}` : ''}${m.pending ? ' · 待审核' : ''}`,
+                        ),
+                      )
+                      .join('')}</div>`
+                  : `<div class="field-hint">库里还没有公开的图。上面传一张，审核通过后所有玩家开局都能选到。</div>`
+              }
+              ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
+            </section>
+      `;
+
       const levelsViewWith = (presets: typeof demoPresets, kind: 'story' | 'demo'): string => `
             <section class="field">
               <div class="field-label">
@@ -1231,7 +1328,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               }
               ${
                 (config.level.events ?? []).length > 0
-                  ? `<div class="field-hint">这一关有 ${(config.level.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  ? `<div class="field-hint">这一关有 ${(config.level.events ?? []).length} 个事件。</div>`
                   : ''
               }
               ${
@@ -1255,7 +1352,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-label">现在是自由对局</div>
               <div class="field-hint">地图在「地图」页挑，人数和对手在「战役」页定。选择一张关卡，这三样都会按关卡来。</div>
             </section>`
-            }`;
+            }
+
+            ${kind === 'demo' ? mapStudioView : ''}`;
 
       /*
        * 两栏长的是同一张页面，只是内容不同：
@@ -1337,7 +1436,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-hint">${fixedLine}</div>
               ${
                 (config.level?.events ?? []).length > 0
-                  ? `<div class="field-hint">这一关有 ${(config.level?.events ?? []).length} 处会在特定条件下发生的事——第一次遇到时你会从战报里看到。</div>`
+                  ? `<div class="field-hint">这一关有 ${(config.level?.events ?? []).length} 个事件。</div>`
                   : ''
               }
               ${expLockNote}
@@ -1352,7 +1451,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </button>
             </section>`;
 
-      const battleView = levelOn ? briefingView : battleViewFull;
+      /*
+       * 战役页**始终**是战役页（2026-11-17）。
+       *
+       * 以前选了关就把这一页换成"简报"：侧栏那一项改名叫「简报」，玩家点错一关
+       * 就再也找不到"人数 / 时代"在哪了。现在简报是个小窗口，战役页一直在原地。
+       */
+      const battleView = battleViewFull;
 
       /*
        * 地图页：选图与传图是同一件事的两头。
@@ -1361,110 +1466,53 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 两端被拆到两个互不相干的地方，玩家画完图得先想"我该去哪个面板"。
        * 现在合成一页：上面挑，下面传，传完那张图直接出现在上面的画廊里并被选中。
        */
-      const mapsView = `
-            ${
-              config.level
-                ? `<section class="field">
-                     <div class="field-label">这一局的地图 <span class="field-hint">由关卡自带，换不了</span></div>
-                     <div class="map-gallery">
-                       <button type="button" class="map-card active is-locked" data-level="${esc(config.level.id)}" title="这一关的地图" disabled>
-                         <span class="map-card-thumb">${mapThumbSvg(config.level.map, thumbCity, config.level.seats?.cities)}</span>
-                         <b>${esc(config.level.name)}</b>
-                         <i>${config.level.map.w}×${config.level.map.h} · 关卡</i>
-                       </button>
-                     </div>
-                     <div class="field-hint">这一关的图是手摆的，城位也一起写死了。想换一张，去「关卡」页选「自由对局」。</div>
-                   </section>`
-                : (config.playerCount ?? 2) > 2
-                  ? `<section class="field">
-                     <div class="field-label">这一局的地图 <span class="field-hint">${(config.playerCount ?? 2)} 人图由种子生成</span></div>
-                     <div class="field-hint">多人局不用固定地图：一张上传的手绘图只有两个城位（A/B），塞不下第三第四家。这一局按种子生成一张 ${(config.playerCount ?? 2)} 方对称图——四家是 90° 旋转对称（严格相同），三家是三足鼎立、各区地形数量配平。关卡不受这条限制：它自己带第三四家的城位。</div>
-                   </section>`
-                : `<section class="field">
-              <div class="field-label">
-                这一局的地图 <span class="field-hint">${mapHint}</span>
-              </div>
-              <div class="map-gallery">
-                <button type="button" class="map-card ${pickedMapId ? '' : 'active'}" data-map="" title="按种子每局生成">
-                  <span class="map-card-thumb is-random">随机</span>
-                  <b>随机地形</b>
-                  <i>按种子生成</i>
-                </button>
-                ${builtinCards
-                  .map((m) =>
-                    mapCard(m.id, esc(m.name), `${m.w}×${m.h}`, mapThumbSvg(m, thumbCity), m.id === pickedMapId),
-                  )
-                  .join('')}
-              </div>
-              <div class="field-hint">内置图是手摆的对称图，两边条件一样，不随机、不可改。选了固定地图，战役页里的地貌 / 对称 / 尺寸 / 种子都不再起作用。</div>
-            </section>`
-            }
+      /*
+       * 地图从「一栏」降成「一个小窗」（2026-11-17）。
+       *
+       * 只有自由对局才会选图，单开一栏等于让所有人每次开局都从它旁边经过。
+       * 现在它挂在战役页「在哪张图上打」那一行的「换图」上，点开是个小窗口。
+       *
+       * 这里只产出**选**的一半；"传"那一半挪到「编辑器」页——那才是"做内容"的地方，
+       * 和上传关卡放在一起（地图和关卡本来就是同一种交付物）。
+       */
+      const mapPickerView = `
+        <div class="field-label">这一局的地图 <span class="field-hint">${mapHint}</span></div>
+        <div class="map-gallery">
+          <button type="button" class="map-card ${pickedMapId ? '' : 'active'}" data-map="" title="按种子每局生成">
+            <span class="map-card-thumb is-random">随机</span>
+            <b>随机地形</b>
+            <i>按种子生成</i>
+          </button>
+          ${builtinCards
+            .map((m) => mapCard(m.id, esc(m.name), `${m.w}×${m.h}`, mapThumbSvg(m, thumbCity), m.id === pickedMapId))
+            .join('')}
+        </div>
+        <div class="field-hint">内置图是手摆的对称图，两边条件一样，不随机、不可改。选了固定地图，地貌 / 对称 / 尺寸 / 种子都不再起作用。</div>
 
-            ${
-              config.level
-                ? `<section class="field">
-              <div class="field-label">地图库</div>
-              <div class="field-hint">关卡局不掺和地图库：这一关的图是写死的，选别的图、传新图都不会生效。想自由选图，先去「关卡」页选「自由对局」。</div>
-            </section>`
-                : ``
-            }
-            ${''}
-            <section class="field" ${config.level ? 'hidden' : ''}>
-              <div class="field-label">
-                玩家上传 <span class="field-hint">${userCards.length > 0 ? `${userCards.length} 张，来自地图库` : '来自地图库'}</span>
-                <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新</button>
-              </div>
-              ${
-                userCards.length > 0
-                  ? `<div class="map-gallery">${userCards
-                      .map((m) =>
-                        mapCard(
-                          m.id,
-                          esc(m.name),
-                          `${m.w}×${m.h}`,
-                          mapThumbSvg(m, thumbCity),
-                          m.id === pickedMapId,
-                          `${m.author ? ` · ${esc(m.author)}` : ''}${m.pending ? ' · 待审核' : ''}`,
-                        ),
-                      )
-                      .join('')}</div>`
-                  : `<div class="field-hint">库里还没有公开的图。下面传一张上去，审核通过后所有人都能在这里选到它。</div>`
-              }
-              ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
-            </section>
+        <div class="field-label" style="margin-top:16px">
+          玩家上传 <span class="field-hint">${userCards.length > 0 ? `${userCards.length} 张，来自地图库` : '来自地图库'}</span>
+          <button class="btn btn-sm" data-act="map-refresh" style="margin-left:auto">刷新</button>
+        </div>
+        ${
+          userCards.length > 0
+            ? `<div class="map-gallery">${userCards
+                .map((m) =>
+                  mapCard(
+                    m.id,
+                    esc(m.name),
+                    `${m.w}×${m.h}`,
+                    mapThumbSvg(m, thumbCity),
+                    m.id === pickedMapId,
+                    `${m.author ? ` · ${esc(m.author)}` : ''}${m.pending ? ' · 待审核' : ''}`,
+                  ),
+                )
+                .join('')}</div>`
+            : `<div class="field-hint">库里还没有公开的图。想传一张，去「编辑器」页的地图区——审核通过后所有人都能在这里选到它。</div>`
+        }
+        ${cloudNote ? `<div class="map-note">${esc(cloudNote)}</div>` : ''}
+      `;
 
-            <section class="field" ${config.level ? 'hidden' : ''}>
-              <div class="field-label">
-                上传地图 <span class="field-hint">传上去要审核，通过之后所有玩家开局都能选到</span>
-              </div>
-              ${
-                mapDraft
-                  ? `<div class="map-draft">
-                       <span class="map-draft-thumb">${mapThumbSvg(mapDraft, thumbCity)}</span>
-                       <div class="map-draft-meta">
-                         <b>${esc(mapDraft.name)}</b>
-                         <span>${mapDraft.w} × ${mapDraft.h} · 城 ${mapDraft.citiesA.length} : ${mapDraft.citiesB.length}</span>
-                         <span class="field-hint">看一眼缩略图，确认是这个文件再传。</span>
-                       </div>
-                       <div class="map-draft-act">
-                         <button class="btn btn-sm btn-primary" data-act="map-upload">提交审核</button>
-                         <button class="btn btn-sm" data-act="map-cancel">取消</button>
-                       </div>
-                     </div>`
-                  : `<div class="chip-row">
-                       <button class="btn btn-sm" data-act="map-file">选择地图文件…</button>
-                       <a class="btn btn-sm" href="maps/example-map.txt" download="example-map.txt">下载一个模板</a>
-                     </div>
-                     <div class="field-hint">
-                       支持 <code>.json</code> 或纯文本网格${TERRAIN_LEGEND}，用 <code>A</code>/<code>B</code> 标两边城的左上角。
-                       单文件 ≤ ${Math.round(MAP_MAX_BYTES / 1024)}KB，${MAP_MIN_SIZE}~${MAP_MAX_SIZE} 格见方。
-                       先在本地解析校验，不合格的文件不会发出去。
-                     </div>`
-              }
-              ${mapNote ? `<div class="map-note ${mapBad ? 'is-bad' : 'is-ok'}">${esc(mapNote)}</div>` : ''}
-            </section>
 
-            <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" ${config.level ? 'disabled' : ''} hidden />`;
 
       const summary = `${config.level ? `关卡「${esc(config.level.name)}」 · ` : ''}${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
         (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
@@ -1482,28 +1530,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <b>关卡</b>
                 <span>主线 · 教学</span>
               </button>
+              <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
+                <b>战役</b>
+                <span>规则 · 时代 · 兵种</span>
+              </button>
               <button class="start-nav-item ${tab === 'editor' ? 'active' : ''}" data-tab="editor">
                 <b>编辑器</b>
-                <span>示例 · 自制</span>
+                <span>关卡 · 地图</span>
               </button>
-              <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
-                <b>${levelOn ? '简报' : '战役'}</b>
-                <span>${levelOn ? '目标 · 兵力 · 扩展' : '规则 · 时代 · 兵种'}</span>
-              </button>
-              ${
-                /*
-                 * 关卡局不给「地图」页。
-                 *
-                 * 那张图是关卡带的，改不了；留一页只放一张不可点的卡片，
-                 * 等于请玩家进去看一遍"你不能改"。与其解释，不如不出现。
-                 */
-                levelOn
-                  ? ''
-                  : `<button class="start-nav-item ${tab === 'maps' ? 'active' : ''}" data-tab="maps">
-                <b>地图</b>
-                <span>选图 · 上传</span>
-              </button>`
-              }
             </nav>
             <div class="start-rail-foot">同一个种子永远生成同一张地图</div>
           </aside>
@@ -1520,29 +1554,29 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
                        <p>主线与教学关：一关一关往下走。现在还在设计，选「自由对局」先自己开一局。</p>`
-                    : tab === 'editor'
-                      ? `<h2>编辑器</h2>
-                       <p>这几张关都是用关卡编辑器搭出来的，各演示一两个能力：改地图、摆兵、写事件、定胜负、设同盟。想改哪张就选中它复制一份。</p>`
-                    : `<h2>地图</h2>
-                     <p>挑一张现成的地图，或者把自己画的上传上去——传上去的图，所有玩家开局都能选到。</p>`
+                    : `<h2>编辑器</h2>
+                       <p>关卡和地图都能从这里做：下面几关是用编辑器搭出来的示例（各演示一两个能力），再往下可以新建自己的关、上传自己画的地图。</p>`
               }
             </div>
 
             <div class="modal-body">${
-              tab === 'battle'
-                ? battleView
-                : tab === 'maps'
-                  ? mapsView
-                  : tab === 'editor'
-                    ? levelsView
-                    : storyView
+              tab === 'battle' ? battleView : tab === 'editor' ? levelsView : storyView
             }</div>
 
             <div class="modal-foot start-foot">
               <div class="start-summary">${summary}</div>
               <div class="start-actions">
                 <button class="btn" data-act="cancel">取消</button>
-                <button class="btn btn-primary" data-act="start">开始对局</button>
+                ${
+                  /*
+                   * 选了关：这里先是「确定」，点开简报窗口（看要求、挑扩展），
+                   * 真正的「开始对局」在窗口右下角。以前按钮直接就是开始，
+                   * 玩家可以一次都不看简报就开打，也可能点错了关却找不到回战役的路。
+                   */
+                  config.level
+                    ? `<button class="btn btn-primary" data-act="confirm-level">确定</button>`
+                    : `<button class="btn btn-primary" data-act="start">开始对局</button>`
+                }
               </div>
             </div>
           </div>
@@ -1566,6 +1600,46 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                  </div>`
               : ''
           }
+          ${
+            /*
+             * 选地图的小窗口。只有自由对局会用到它，所以不进导航——
+             * 战役页「在哪张图上打」那一行的「换图」点开就是这里。
+             */
+            mapPickOpen
+              ? `<div class="picker-layer" data-picker="map" data-act="map-pick-backdrop" role="dialog" aria-modal="true" aria-label="选地图">
+                   <div class="picker-card">
+                     <div class="picker-head">
+                       <b>选一张地图</b>
+                       <span class="field-hint">点一张就选中，关掉窗口回战役页</span>
+                       <button class="btn btn-sm" data-act="pick-map-close">关闭</button>
+                     </div>
+                     <div class="picker-body">${mapPickerView}</div>
+                   </div>
+                 </div>`
+              : ''
+          }
+          ${
+            /*
+             * 任务简报小窗口。和选图窗口共用 `.picker-*` 那一套——都是"盖上来看
+             * 一眼、决定完就走"的层，没必要各写一份样式。
+             */
+            briefOpen && config.level
+              ? `<div class="picker-layer" data-picker="brief" data-act="brief-backdrop" role="dialog" aria-modal="true" aria-label="任务简报">
+                   <div class="picker-card">
+                     <div class="picker-head">
+                       <b>任务简报</b>
+                       <span class="field-hint">${esc(config.level.name)} —— 看一眼要求，挑好扩展再开始</span>
+                     </div>
+                     <div class="picker-body">${briefingView}</div>
+                     <div class="picker-foot">
+                       <button class="btn" data-act="brief-cancel">取消</button>
+                       <button class="btn btn-primary" data-act="start">开始对局</button>
+                     </div>
+                   </div>
+                 </div>`
+              : ''
+          }
+          <input type="file" data-field="map-file" accept=".json,.txt,application/json,text/plain" hidden />
           ${
             expDrawerOpen && levelOn
               ? `<div class="exp-drawer-layer" data-act="exp-backdrop">
@@ -1604,6 +1678,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     mask.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
 
+      // 点在小窗口的遮罩上＝关掉它（点在卡片里不算，卡片是它的子元素）
+      if ((target as HTMLElement).dataset?.act === 'brief-backdrop') {
+        briefOpen = false;
+        tab = 'levels';
+        paint();
+        return;
+      }
+      if ((target as HTMLElement).dataset?.act === 'map-pick-backdrop') {
+        mapPickOpen = false;
+        paint();
+        return;
+      }
       if (target === mask) {
         // 兵种池盖在面板上：这时候点外面是"关掉这一层"，而不是把整个开局
         // 设置也一起关掉——两百多个兵种还没看完就被弹出去，得重来一遍。
@@ -1621,8 +1707,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (tabBtn?.dataset.tab) {
         const t = tabBtn.dataset.tab;
         // 白名单要跟着导航一起长：新加的页漏在这里，点了会掉回「战役」
-        const next =
-          t === 'maps' ? 'maps' : t === 'levels' ? 'levels' : t === 'editor' ? 'editor' : 'battle';
+        const next = t === 'levels' ? 'levels' : t === 'editor' ? 'editor' : 'battle';
         if (next === tab) return;
         tab = next;
         resetScroll = true;
@@ -1742,6 +1827,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         Object.assign(config, applyLevelToConfig(config, picked));
         // 换了关，抽屉里「这一关锁定哪些包」已经变了，收起来重新看
         expDrawerOpen = false;
+        /*
+         * 点「自由对局」不只是清掉关卡——它同时是"我要自己定规则"的意思，
+         * 所以顺手把页面切回战役页。以前只清数据不切页，玩家点完还站在关卡页，
+         * 得自己再点一次「战役」才知道发生了什么（2026-11-17 实机反馈：
+         * "想打自由对局要点很多次"）。
+         */
+        if (!picked) tab = 'battle';
         paint();
         return;
       }
@@ -1968,6 +2060,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const id = mapBtn.dataset.map ?? '';
         const picked = id ? fixedMapById(id) : null;
         config.fixedMap = picked ?? undefined;
+        // 在小窗口里点图＝"就它了"，选完把窗口收掉（主面板上的卡片不受影响）
+        mapPickOpen = false;
         // 尺寸跟着地图走：面板上那排尺寸按钮显示的是"这一局多大"，
         // 选了 16×16 的图却还亮着 20×20，就是在说一句和事实相反的话。
         if (picked) config.size = picked.w;
@@ -2011,6 +2105,33 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const ordered = EXPANSIONS.filter((e) => ids.has(e.id)).map((e) => e.id);
         close({ config: { ...config, expansionIds: ordered }, seed: currentSeed });
       }
+      /*
+       * 选了关之后，底部那颗是「确定」不是「开始对局」：它只负责把简报窗口打开。
+       * 真正的开局在窗口右下角——这一步是用户要的"先看要求再决定"。
+       */
+      if (act === 'confirm-level') {
+        briefOpen = true;
+        paint();
+        return;
+      }
+      if (act === 'brief-cancel') {
+        // 取消 ≠ 关掉一切：退回「关卡」栏，让玩家换一张（或什么都不选）
+        briefOpen = false;
+        tab = 'levels';
+        paint();
+        return;
+      }
+      if (act === 'pick-map') {
+        mapPickOpen = true;
+        paint();
+        return;
+      }
+      if (act === 'pick-map-close') {
+        mapPickOpen = false;
+        paint();
+        return;
+      }
+
       if (act === 'reroll') {
         currentSeed = randomSeed();
         paint();

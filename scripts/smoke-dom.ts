@@ -3454,19 +3454,20 @@ check('新对局按选中的尺寸和扩展生成', () => {
   assert.ok(html.includes('老兵'), '侧栏应该显示已启用的扩展');
 });
 
-await checkAsync('固定地图：开局界面有画廊，选中/取消都能实时生效', async () => {
+await checkAsync('固定地图：从战役页点「换图」弹出小窗口，选中/取消实时生效', async () => {
   openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
 
-  // 选图在「地图」页：和战役设置分开，一条长卷里不再既讲规则又挑地图
-  const mapsTab = doc.querySelector<HTMLElement>('[data-tab="maps"]');
-  assert.ok(mapsTab, '开始界面左侧要有「地图」这一页');
-  mapsTab!.click();
+  /*
+   * 2026-11-17：地图不再是一栏。只有自由对局会选图，所以它降成战役页
+   * 「在哪张图上打」那一行的「换图」弹出来的小窗口。
+   */
+  assert.ok(!doc.querySelector('[data-tab="maps"]'), '左侧不该再有「地图」一栏');
+  const openBtn = doc.querySelector<HTMLElement>('[data-act="pick-map"]');
+  assert.ok(!!openBtn, '战役页要有「换图」');
+  openBtn!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.ok(
-    doc.querySelector<HTMLElement>('[data-tab="maps"]')!.classList.contains('active'),
-    '点过之后「地图」要是选中态',
-  );
+  assert.ok(!!doc.querySelector('[data-picker="map"]'), '点「换图」应当弹出选图小窗口');
 
   const cards = [...doc.querySelectorAll<HTMLElement>('[data-map]')];
   assert.ok(cards.length >= 5, `内置四张 + 随机，实际 ${cards.length}`);
@@ -3481,18 +3482,27 @@ await checkAsync('固定地图：开局界面有画廊，选中/取消都能实�
   builtin.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
 
-  const picked = doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!;
-  assert.ok(picked.classList.contains('active'), '点了之后要变成选中态');
-  assert.ok(!doc.querySelector<HTMLElement>('[data-map=""]')!.classList.contains('active'), '随机那张要取消选中');
+  // 点一张＝就它了：窗口自己关掉，战役页那条要显示这张图
+  assert.ok(!doc.querySelector('[data-picker="map"]'), '选完应当自动关窗');
+  const row = doc.querySelector('.start-map-row');
+  assert.ok(!!row, '战役页要有「在哪张图上打」这一条');
+  assert.ok(!!row!.querySelector('svg'), '选中固定地图后这一条要有缩略图');
+  assert.ok(!(row!.textContent ?? '').includes('随机地形'), '不该还写着随机地形');
 
-  // 点回"随机"＝取消固定地图：必须能退回去
+  // 再打开能退回随机：必须能退
+  doc.querySelector<HTMLElement>('[data-act="pick-map"]')!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
   doc.querySelector<HTMLElement>('[data-map=""]')!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.ok(doc.querySelector<HTMLElement>('[data-map=""]')!.classList.contains('active'), '能退回到随机');
+  assert.ok(
+    (doc.querySelector('.start-map-row')?.textContent ?? '').includes('随机地形'),
+    '能退回到随机地形',
+  );
 
   // 真正开一局：地图必须是那张图（不是随机生成的）
-  const target = doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!;
-  target.click();
+  doc.querySelector<HTMLElement>('[data-act="pick-map"]')!.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  doc.querySelector<HTMLElement>(`[data-map="${id}"]`)!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
   const before = doc.querySelectorAll('.tile').length;
   click('[data-act="start"]');
@@ -3508,16 +3518,25 @@ await checkAsync('固定地图：开局界面有画廊，选中/取消都能实�
   );
 });
 
-await checkAsync('地图页：选图和传图在同一页，没解析前只有"选文件"', async () => {
+await checkAsync('编辑器页：地图和关卡都在这一栏，没解析前只有"选文件"', async () => {
   openSetup();
   await new Promise((resolve) => setTimeout(resolve, 60));
-  doc.querySelector<HTMLElement>('[data-tab="maps"]')!.click();
+  /*
+   * 2026-11-17：地图不再单开一栏。选图降成战役页里的一个弹层（只有自由对局用得上），
+   * 上传和管理挪进「编辑器」——它们和上传关卡是同一种事：交付内容。
+   */
+  assert.ok(!doc.querySelector('[data-tab="maps"]'), '左侧不该再有「地图」一栏');
+  doc.querySelector<HTMLElement>('[data-tab="editor"]')!.click();
   await new Promise((resolve) => setTimeout(resolve, 30));
 
   const body = doc.querySelector('.modal-body')!;
-  assert.ok(body.textContent!.includes('上传地图'), '地图页要有「上传地图」这一块');
+  assert.ok(body.textContent!.includes('上传地图'), '编辑器页要有「上传地图」这一块');
+  assert.ok(body.textContent!.includes('我的关卡'), '关卡那半也要在同一页');
   assert.ok(body.querySelector('[data-act="map-file"]'), '要有「选择地图文件…」');
-  assert.ok(body.querySelector('input[data-field="map-file"]'), '要有一个隐藏的文件选择框');
+  assert.ok(
+    doc.querySelector('input[data-field="map-file"]'),
+    '要有一个隐藏的文件选择框（放在面板上，不在某一页里）',
+  );
   assert.ok(
     body.querySelector('a[href*="example-map"]'),
     '要给一个能下载的模板，否则没人知道该画成什么样',
@@ -4227,12 +4246,19 @@ check('开局面板有"数据收集"开关，默认开', () => {
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
 });
 
-await checkAsync('数据收集排在最前面，而且会记住上次的选择', async () => {
-  // 排位：它必须是 .modal-body 里的第一块，在所有对局选项之前
-  const first = doc.querySelector('.modal-body > section');
+await checkAsync('战役页：地图条在最上面，数据收集紧随其后，而且会记住上次的选择', async () => {
+  /*
+   * 地图条（在哪张图上打）2026-11-17 提到第一块：自选图以前只能在「地图」页看，
+   * 选完回到战役页就只剩底部摘要一行小字。数据收集还是紧跟着它，仍然对局选项之前。
+   */
+  const blocks = [...doc.querySelectorAll('.modal-body > section')];
   assert.ok(
-    first?.querySelector('[data-field="record"]'),
-    '数据收集应当是面板里的第一块，实际第一块是：' + (first?.textContent ?? '').trim().slice(0, 20),
+    (blocks[0]?.textContent ?? '').includes('在哪张图上打'),
+    '第一块应当是"在哪张图上打"，实际：' + (blocks[0]?.textContent ?? '').trim().slice(0, 20),
+  );
+  assert.ok(
+    blocks[1]?.querySelector('[data-field="record"]'),
+    '数据收集应当紧随其后，实际第二块是：' + (blocks[1]?.textContent ?? '').trim().slice(0, 20),
   );
 
   // 勾上 → 取消 → 重新打开，应当还是勾着的
@@ -9246,12 +9272,16 @@ console.log('\n关卡模式');
 openSetup();
 await wait(40);
 
-check('左侧四页：关卡 / 编辑器 / 战役 / 地图', () => {
+check('左侧三页：关卡 / 战役 / 编辑器', () => {
+  /*
+   * 2026-11-17：地图从导航里撤掉了。只有自由对局会选图，它变成战役页里的一个小窗口；
+   * 上传和管理并进「编辑器」——和上传关卡是同一种事。
+   */
   const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
   assert.deepEqual(
     tabs,
-    ['levels', 'editor', 'battle', 'maps'],
-    `四页的顺序应该是 关卡 / 编辑器 / 战役 / 地图，实际 ${tabs.join(',')}`,
+    ['levels', 'battle', 'editor'],
+    `三页的顺序应该是 关卡 / 战役 / 编辑器，实际 ${tabs.join(',')}`,
   );
 });
 
@@ -9289,32 +9319,52 @@ check('选「孤城」：卡片有缩略图，说明写清几城、目标、有�
   assert.ok(body.includes('胜利条件'), `要写清怎么算赢，实际：${body.slice(0, 240)}`);
   assert.ok(body.includes('守住 30 次行动'), '要写出守多久');
   assert.ok(body.includes('红方：'), '目标要标出是谁的目标');
-  assert.ok(body.includes('处会在特定条件下发生的事'), '要说明有关卡事件');
+  assert.ok(body.includes('事件'), '要说明有关卡事件');
   const card = doc.querySelector<HTMLElement>('[data-level="level:lone-city"]');
   assert.ok(!!card?.querySelector('svg.map-thumb'), '关卡卡片要有缩略图');
 });
 
-check('选了关卡：整页变成任务简报，配置器不再出现', () => {
+check('选了关卡：战役页还在，点「确定」才弹出简报', () => {
+  /*
+   * 2026-11-17：简报从"一页"改成"一个窗口"。
+   *
+   * 以前选了关，侧栏那一项就从「战役」改名成「简报」、战役页整个被顶掉：
+   * 玩家点错一关就再也找不到人数和时代，而且他完全可以一次都不看简报直接开打。
+   */
   click('[data-tab="battle"]');
-  const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('目标'), '要写出目标');
-  assert.ok(body.includes('双方开局'), '要写出双方兵力');
-  assert.ok(body.includes('这一关固定'), '要写清这一关固定了什么');
+  /*
+   * 1) 战役页没被顶掉：数据收集那一块就是战役页的标志。
+   *    `[data-players]` 在关卡局里本来就不渲染（换成"这一关是 N 家"的说明），
+   *    所以不能拿它当判据。
+   */
+  assert.ok(doc.querySelector('[data-field="record"]'), '战役页不该被简报顶掉');
+
+  // 2) 底部主按钮变成「确定」
+  const footBtn = doc.querySelector<HTMLElement>('.start-foot [data-act="confirm-level"]');
+  assert.ok(!!footBtn, '底部主按钮应当是「确定」');
+  assert.equal((footBtn!.textContent ?? '').trim(), '确定');
+
+  // 3) 点它才弹出简报
+  footBtn!.click();
+  const layer = doc.querySelector<HTMLElement>('[data-picker="brief"]');
+  assert.ok(!!layer, '点「确定」应当弹出任务简报');
+  const brief = layer!.textContent ?? '';
+  assert.ok(brief.includes('目标'), '简报里要写出目标');
+  assert.ok(brief.includes('双方开局'), '要写出双方兵力');
+  assert.ok(brief.includes('这一关固定'), '要写清这一关固定了什么');
 
   /*
-   * 关键：**这些控件根本不该存在**，而不是灰掉。
+   * 配置器**不该出现在简报里**——那些属于战役页。
    * 灰掉的开关看起来像"差一步就能改"，玩家会反复去点、反复怀疑自己漏了什么。
    */
-  const gone = ['[data-players]', '[data-era]', '[data-size]', '[data-first]',
-                '[data-role]', '[data-draft-mode]', '[data-mapstyle]'];
-  for (const sel of gone) {
-    assert.equal(doc.querySelectorAll('.modal-body ' + sel).length, 0, '关卡简报页不该有 ' + sel);
+  for (const sel of ['[data-players]', '[data-era]', '[data-size]', '[data-first]', '[data-mapstyle]']) {
+    assert.equal(layer!.querySelectorAll(sel).length, 0, '简报里不该有 ' + sel);
   }
 
-  const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
-  assert.ok(!tabs.includes('maps'), '关卡局不该有「地图」页');
+  // 4) 右下角才是「开始对局」
+  assert.ok(layer!.querySelector('.picker-foot [data-act="start"]'), '窗口右下角要有「开始对局」');
 
-  const balance = doc.querySelectorAll('.level-balance > div');
+  const balance = layer!.querySelectorAll('.level-balance > div');
   assert.equal(balance.length, 2, '两家局应该有两张兵力卡');
   assert.ok((balance[0].textContent ?? '').includes('兵'), '兵力卡要写几个兵');
 });
@@ -9423,6 +9473,48 @@ check('选「黄雀」：说清第三家要中途才登场', () => {
   assert.ok(body.includes('绿方'), '要指名是哪一家晚到');
 });
 
+check('已选关卡时点「自由对局」：清掉关卡并直接落到战役页', () => {
+  /*
+   * 2026-11-17：以前点「自由对局」只清数据、不切页，玩家点完还站在关卡页，
+   * 得自己再点一次「战役」——那一步就是"想打自由对局要点很多次"的来源之一。
+   */
+  click('[data-tab="editor"]');
+  click('[data-level="level:lone-city"]');
+  click('[data-tab="levels"]');
+  click('[data-level=""]');
+  assert.ok(doc.querySelector('[data-players]'), '点完应当已经在战役页（有人数开关）');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(!body.includes('由关卡决定'), `关卡不该残留，实际：${body.slice(0, 160)}`);
+});
+
+check('简报窗口点「取消」：退回「关卡」栏，不把整个面板关掉', () => {
+  /*
+   * 2026-11-17：简报里原来那两个"跳车"按钮（换成自由对局 / 换一张关）去掉了，
+   * 换成窗口右下角一个「取消」——取消的语义是"这一关我再想想"，所以退回关卡栏，
+   * 而不是把整个开局面板关掉。
+   *
+   * 这里自己走一遍完整流程（选关 → 确定 → 取消），不依赖上一条留下的状态。
+   */
+  doc.querySelector<HTMLElement>('[data-act="exp-close"]')?.click();
+  click('[data-tab="editor"]');
+  click('[data-level="level:lone-city"]');
+  const confirm = doc.querySelector<HTMLElement>('[data-act="confirm-level"]');
+  assert.ok(!!confirm, '选了关之后底部应当是「确定」');
+  confirm!.click();
+  const layer = doc.querySelector<HTMLElement>('[data-picker="brief"]');
+  assert.ok(!!layer, '点「确定」应当弹出简报');
+
+  const cancel = layer!.querySelector<HTMLElement>('[data-act="brief-cancel"]');
+  assert.ok(!!cancel, '简报窗口要有「取消」');
+  cancel!.click();
+  assert.ok(!doc.querySelector('[data-picker="brief"]'), '取消之后简报窗口应当关掉');
+  assert.ok(
+    doc.querySelector('[data-tab="levels"]')?.classList.contains('active'),
+    '取消之后应当落在「关卡」栏',
+  );
+  assert.ok(!!doc.querySelector('.modal-mask'), '面板本身不该被关掉');
+});
+
 check('切回「自由对局」：人数开关回来，关卡不残留', () => {
   click('[data-tab="levels"]');
   click('[data-level=""]');
@@ -9442,7 +9534,11 @@ openSetup();
 await wait(40);
 click('[data-tab="editor"]');
 click('[data-level="level:lone-city"]');
-click('[data-act="start"]');
+// 2026-11-17：关卡局是先「确定」开简报、再在简报里「开始对局」
+click('[data-act="confirm-level"]');
+await wait(30);
+assert.ok(!!doc.querySelector('[data-picker="brief"]'), '点「确定」应当弹出任务简报');
+click('[data-picker="brief"] [data-act="start"]');
 await wait(150);
 
 check('开局后顶栏常驻一行关卡目标', () => {
