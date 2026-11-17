@@ -246,6 +246,16 @@ export const LEVEL_TERRAINS: readonly LevelTerrain[] = [
 /**
  * 这一关怎么算赢。
  *
+ * **`group` 决定"多条条件之间怎么连"**（2026-11-17 加）：
+ *   · 同一组（`group` 相同）→ **全部满足**才算赢（and）；
+ *   · 不同组 → 任一组满足即赢（or），按出战顺序判，先满足的那组说了算；
+ *   · 不写 `group` → 当作第 1 组，等价于旧行为（任意一条成立即赢，因为每条自成一组的写法也能表达）。
+ *
+ * 为什么用"分组"而不是再加一个 `{kind:'all', of:[…]}` 的嵌套结构：
+ * 嵌套会让编辑器长成一棵树（要缩进、要拖进拖出），而作者真正想说的九成是
+ * "这几条要一起做到"，分组就是一颗扁平的芯片，改一个数字即可。
+ * 出局/胜负的语义没变：每一组内部仍然只回答"谁赢"，不回答"谁输"。
+ *
  * 只表达"谁赢"，**不表达"怎么输"**。这不是偷懒，是刻意的：原引擎的失败判定
  * （城丢光、没兵又造不起）本来就在跑，关卡不需要另写一套。于是：
  *   · 守城关：守满时限 → 提前判守方赢；城丢了 → 照普通规则判攻方赢。
@@ -256,7 +266,7 @@ export const LEVEL_TERRAINS: readonly LevelTerrain[] = [
  */
 export type LevelGoal =
   /** 守到第 `untilTurn` 次行动时（守方还活着）算赢 */
-  | { kind: 'survive'; seat: PlayerId; untilTurn: number }
+  | { kind: 'survive'; seat: PlayerId; untilTurn: number; group?: number }
   /** 这一席的任意一个兵（或指定兵种）走进区域算赢 */
   /**
    * 这一席的任意一个兵（或指定兵种）走进区域算赢。
@@ -264,7 +274,7 @@ export type LevelGoal =
    * `label` 是显示给人看的名字（"信使"）。不写就用 `unitType` 去全局兵种表查；
    * 关卡独有兵种查不到，那就只能显示 id —— 顶栏会写成"把「messenger」送到…"。
    */
-  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string; label?: string }
+  | { kind: 'escort'; seat: PlayerId; zone: LevelZone; unitType?: string; label?: string; group?: number }
   /**
    * 斩首：`loser` 场上再没有该兵种的兵时，`winner` 赢。
    *
@@ -272,7 +282,7 @@ export type LevelGoal =
    * 否则对方一边死一边补同型兵，这个条件永远不会成立。P4 里没有关卡用它，
    * 留待以后给单位加"标记"之后再用它做真正的首领。
    */
-  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string; label?: string }
+  | { kind: 'assassinate'; winner: PlayerId; loser: PlayerId; unitType?: string; label?: string; group?: number }
   /**
    * 攒钱：这一席手上金币到 `amount` 就算赢。
    *
@@ -280,7 +290,7 @@ export type LevelGoal =
    * 读的是**当前**金币（不是累计收入）——所以花钱会把它推远，作者想让它成立，
    * 就得保证这一关的金矿/收入撑得起这个数（或者由 `gold` 事件往里面注钱）。
    */
-  | { kind: 'gold'; seat: PlayerId; amount: number };
+  | { kind: 'gold'; seat: PlayerId; amount: number; group?: number };
 
 /** 胜利条件的人话版本。顶栏、选关页、开局战报都用它，免得三处各写一遍措辞 */
 export function goalText(goal: LevelGoal): string {
@@ -2378,6 +2388,24 @@ function normalizeGoals(
     return seat;
   };
 
+  /**
+   * 解析"这一条属于第几组"。缺省 = 第 1 组（旧关卡都走这条，行为不变）。
+   * 越界要报错而不是静默夹住：作者写了 0 或 12 却不知道被改成了什么，最难查。
+   */
+  const groupOf = (
+    value: unknown,
+    label: string,
+    errs: string[],
+  ): { group?: number } => {
+    if (value === undefined || value === null || value === '') return {};
+    const n = Math.round(Number(value));
+    if (!Number.isFinite(n) || n < 1 || n > 9) {
+      errs.push(`胜利条件「${label}」的分组要在 1~9（现在是 ${String(value)}）`);
+      return {};
+    }
+    return n === 1 ? {} : { group: n };
+  };
+
   const out: LevelGoal[] = [];
   for (const item of raw) {
     const g = (item ?? {}) as Record<string, unknown>;
@@ -2391,7 +2419,7 @@ function normalizeGoals(
         errors.push(`胜利条件「守到第 N 次行动」的时限要在 1~999（现在 ${String(g.untilTurn)}）`);
         continue;
       }
-      out.push({ kind: 'survive', seat, untilTurn });
+      out.push({ kind: 'survive', seat, untilTurn, ...groupOf(g.group, '守到第 N 次行动', errors) });
       continue;
     }
 
@@ -2408,6 +2436,7 @@ function normalizeGoals(
         zone,
         ...(unitType ? { unitType } : {}),
         ...(label ? { label } : {}),
+        ...groupOf(g.group, '护送', errors),
       });
       continue;
     }
@@ -2422,7 +2451,14 @@ function normalizeGoals(
       }
       const unitType = typeof g.unitType === 'string' && g.unitType.trim() ? g.unitType.trim() : undefined;
       const label = typeof g.label === 'string' && g.label.trim() ? g.label.trim() : undefined;
-      out.push({ kind: 'assassinate', winner, loser, ...(unitType ? { unitType } : {}), ...(label ? { label } : {}) });
+      out.push({
+        kind: 'assassinate',
+        winner,
+        loser,
+        ...(unitType ? { unitType } : {}),
+        ...(label ? { label } : {}),
+        ...groupOf(g.group, '斩首', errors),
+      });
       continue;
     }
 
@@ -2434,7 +2470,7 @@ function normalizeGoals(
         errors.push(`胜利条件「攒钱」的金额要在 1~99999（现在 ${String(g.amount)}）`);
         continue;
       }
-      out.push({ kind: 'gold', seat, amount });
+      out.push({ kind: 'gold', seat, amount, ...groupOf(g.group, '攒钱', errors) });
       continue;
     }
 

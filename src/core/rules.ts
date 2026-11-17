@@ -3773,7 +3773,7 @@ function fireKilled(s: GameState, victim: Unit, killer: Unit | undefined): void 
  * 只回答"谁赢"，不回答"谁输"——失败照旧走原来的出局判定（城丢光、没兵又造不起）。
  * 这是批次 4 敢动这块地基的原因：**只加"提前宣布赢"，不改任何原有判定**。
  */
-function levelGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): PlayerId | null {
+function singleGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): PlayerId | null {
   if (goal.kind === 'survive') {
     // 还没到点
     if (s.turn < goal.untilTurn) return null;
@@ -3833,9 +3833,36 @@ function checkWinner(s: GameState): PlayerId | null {
    */
   const goals = s.config.level?.goals;
   if (goals && goals.length > 0) {
+    /*
+     * 分组判定（2026-11-17）：**组内 and，组间 or**。
+     *
+     * 同一组里的每一条都必须成立，而且必须指向**同一个人**——不然"甲攒到钱 &&
+     * 乙被斩首"这种组会同时成立两家，谁赢说不清。
+     * 组按下标顺序试，先成立的那组说了算（作者把最想让人达成的写在前面）。
+     *
+     * 不写 `group` 的条件当第 1 组：老关卡全是这种，于是它们仍然走
+     * "第一条成立即赢"的老路——除非作者自己把两条写进同一组。
+     */
+    const groups = new Map<number, import('./level.ts').LevelGoal[]>();
     for (const g of goals) {
-      const winner = levelGoalWinner(s, g);
-      if (winner) return winner;
+      const key = g.group ?? 1;
+      const list = groups.get(key);
+      if (list) list.push(g);
+      else groups.set(key, [g]);
+    }
+    for (const key of [...groups.keys()].sort((a, b) => a - b)) {
+      const list = groups.get(key)!;
+      let seat: PlayerId | null = null;
+      let allHold = true;
+      for (const g of list) {
+        const winner = singleGoalWinner(s, g);
+        if (!winner || (seat !== null && winner !== seat)) {
+          allHold = false;
+          break;
+        }
+        seat = winner;
+      }
+      if (allHold && seat) return seat;
     }
   }
 

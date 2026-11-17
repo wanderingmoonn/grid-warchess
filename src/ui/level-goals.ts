@@ -131,7 +131,12 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
     const head = `<span class="level-event-no">${i + 1}</span>
       <select class="level-mini-select" data-kind="${i}">${Object.entries(KIND_NAME)
         .map(([k, n]) => `<option value="${k}" ${g.kind === k ? 'selected' : ''}>${esc(n)}</option>`)
-        .join('')}</select>`;
+        .join('')}</select>
+      <label class="level-goal-group" title="同一组的条件要**全部**满足才算赢；不同组之间是或">
+        第 <input type="number" class="level-mini-num" min="1" max="9" data-group="${i}" value="${
+          g.group ?? 1
+        }"> 组
+      </label>`;
 
     let body = '';
     if (g.kind === 'survive') {
@@ -190,7 +195,8 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
         extra = `　· 这个兵种玩家造得出来，对面会一直补人——除非你能一口气清空。`;
       }
     }
-    return `${goalText(g)}${who}${extra}`;
+    const grp = (g.group ?? 1) > 1 ? `　· 第 ${g.group} 组（与同组条件同时满足）` : '';
+    return `${goalText(g)}${who}${extra}${grp}`;
   }
 
   function zoneText(z: LevelZone): string {
@@ -207,7 +213,23 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
       goals.length === 0
         ? '<div class="editor-empty">还没有额外胜负条件。这一关就按普通规则打（把对手打光）。</div>'
         : goals.map(card).join('');
-    countEl.textContent = goals.length === 0 ? '按普通规则判胜负' : `${goals.length} 条，按顺序判`;
+    /*
+     * 计数文案要说清"怎么连"（2026-11-17）。
+     *
+     * 原来只写"N 条，按顺序判"——那是纯 or 的说法。加了分组之后，
+     * 同一组内部是 and，作者必须一眼看出"我这几条是不是被并成一条了"，
+     * 否则写了两条以为"任一成立"，结果一直不判赢。
+     */
+    if (goals.length === 0) {
+      countEl.textContent = '按普通规则判胜负';
+    } else {
+      const groups = new Map<number, number>();
+      for (const g of goals) groups.set(g.group ?? 1, (groups.get(g.group ?? 1) ?? 0) + 1);
+      const parts = [...groups.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([k, n]) => (n > 1 ? `第${k}组 ${n} 条全满足` : `第${k}组 1 条`));
+      countEl.textContent = `${goals.length} 条 · ${parts.join('，')}`;
+    }
   }
 
   function renderMap(): void {
@@ -261,6 +283,19 @@ export function openLevelGoals(opts: LevelGoalsOptions): void {
   /* ---- 表单 ---- */
   mask.addEventListener('input', (ev) => {
     const el = ev.target as HTMLElement;
+    const groupAttr = el.getAttribute('data-group');
+    if (groupAttr !== null) {
+      const g = goals[Number(groupAttr)];
+      if (g) {
+        const n = Math.round(Number((el as HTMLInputElement).value) || 1);
+        // 1 是默认值，不写进数据；越界夹到 1~9
+        const clamped = Math.max(1, Math.min(9, n));
+        if (clamped === 1) delete (g as { group?: number }).group;
+        else g.group = clamped;
+      }
+      renderList();
+      return;
+    }
     const until = el.getAttribute('data-until');
     if (until !== null) {
       const g = goals[Number(until)];

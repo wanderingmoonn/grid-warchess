@@ -10420,3 +10420,20 @@ a.btn {
   align-items: center;
   gap: 8px;
 }
+
+/* 关卡编辑器：胜负条件的分组芯片 */
+.level-goal-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eee9dd;
+  color: #554f45;
+  font-size: 12px;
+}
+
+.level-goal-group input {
+  width: 44px;
+}
