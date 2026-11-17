@@ -9,7 +9,7 @@ import './style.css';
 import * as tutorial from './ui/tutorial.ts';
 import { openAdminPanel } from './ui/admin-panel.ts';
 import { openBattleCard } from './ui/battle-card.ts';
-import { shouldExpandLog } from './ui/log-fold.ts';
+import { logEventSays } from './ui/log-fold.ts';
 import { buildBattleCard } from './core/battle-card.ts';
 import { createTutorialMatch } from './core/tutorial.ts';
 
@@ -1128,15 +1128,13 @@ function myTurn(): boolean {
 let opsOpen = false;
 let logOpen = false;
 /**
- * 上一次渲染时，这一局已经触发过多少个关卡事件。
+ * 上一次渲染时，这一局已经触发过哪些关卡事件（id）。
  *
- * 用来判断"**刚刚**发生了新事件"——计数变大就展开战报。用负数开局表示"还没建立基线"：
- * 读档/换局进来时 fired 里可能已经有内容，那不是"刚发生"，不该把战报弹开。
- *
- * 为什么按 `fired` 计数而不是按 log 条数：事件的 `do` 里可能只有 `terrain` / `reveal`
- * 这种不写战报的动作，作者也可能把 `say` 写成两句。计数是"事件发生了"这件事本身。
+ * 只用来判断"**刚刚**触发了哪几条"，进而在它们带 `say` 时把战报展开。
+ * 用集合而不是计数：`fired` 是 Set，重复触发同一 id 不会让长度变化，
+ * 而我们要的正是"这条 id 是不是新的"。
  */
-let lastFiredCount = -1;
+const lastFired = new Set<string>();
 
 /**
  * 星图上选中节点/航线时，侧栏那张卡的内容。
@@ -1234,19 +1232,26 @@ function panelInput(known?: PlayerView): PanelInput {
    *
    * 复盘里不展开：那是回放别人（或自己）的棋，翻到某一手时不该突然把面板撑开。
    */
-  const firedCount = state.levelState?.fired?.length ?? 0;
   /*
-   * 首次进对局（`lastFiredCount` 还是 -1）也算一次：开局那一两条事件
-   * （"任务开始，往东走""北面的天裂了"）本来就该被看见，而它们在建局时
-   * 就已经触发完了，等不到"下一次变化"。
+   * 战报只在**带 `say` 的事件**触发时展开。
+   *
+   * 不带 `say` 的事件（刷兵、改地形、点亮一片）很可能是作者有意不让玩家知道的
+   * 暗手，替它写进战报等于剧透；带 `say` 的则是作者明确要说的那句话。
    */
-  /*
-   * 复盘期间连基线都不动：回放的 `state` 是另一份（跳到某一手的快照），
-   * 拿它的计数当基线，退出复盘后会凭空"多出"一批事件。
-   */
+  const fired = state.levelState?.fired ?? [];
   if (replay === null) {
-    if (shouldExpandLog(lastFiredCount, firedCount, false)) logOpen = true;
-    lastFiredCount = firedCount;
+    const events = state.config.level?.events ?? [];
+    const says = logEventSays(lastFired, fired, (id) => {
+      const ev = events.find((e) => e.id === id);
+      return ev?.do.some((a) => a.kind === 'say') ?? false;
+    });
+    if (says) logOpen = true;
+    /*
+     * 复盘期间不动基线：回放的 `state` 是另一份（跳到某一手的快照），
+     * 拿它当基线，退出复盘后会把老事件当成"刚刚发生"再展开一次。
+     */
+    lastFired.clear();
+    for (const id of fired) lastFired.add(id);
   }
 
   const view = known ?? playerView(state, me(), spectating());
