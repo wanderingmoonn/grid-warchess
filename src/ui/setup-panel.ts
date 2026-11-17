@@ -320,6 +320,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 都从它旁边经过。现在它是战役页「在哪张图上打」那一行点出来的弹层。
      */
     let mapPickOpen = false;
+    /**
+     * 「任务简报」小窗口是否打开（2026-11-17）。
+     *
+     * 简报以前是侧栏里的一页：选了关，导航上那一项就从「战役」改名成「简报」，
+     * 战役页整个被顶掉。玩家点错一关就再也找不到"人数 / 时代"，而且他也可以
+     * 一次都不看简报直接开打。现在它是个弹窗：底部「确定」打开，看要求、挑扩展，
+     * 窗口右下角才是「开始对局」。
+     */
+    let briefOpen = false;
     /* 关卡模式的「换扩展」抽屉：和兵种池一样，是盖在面板上的一层 */
     let expDrawerOpen = false;
 
@@ -1394,14 +1403,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         .join(' · ');
 
       const briefingView = `
-            <section class="field level-switch">
-              <div class="field-hint">
-                这一局按关卡来。想自己定？
-                <button class="btn btn-sm" data-act="clear-level">换成自由对局</button>
-                <button class="btn btn-sm" data-act="to-levels">换一张关</button>
-              </div>
-            </section>
-
             <section class="field level-brief">
               <div class="level-brief-name">${esc(config.level?.name ?? '')}</div>
               <div class="field-hint">${esc(config.level?.brief ?? '')}</div>
@@ -1450,7 +1451,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </button>
             </section>`;
 
-      const battleView = levelOn ? briefingView : battleViewFull;
+      /*
+       * 战役页**始终**是战役页（2026-11-17）。
+       *
+       * 以前选了关就把这一页换成"简报"：侧栏那一项改名叫「简报」，玩家点错一关
+       * 就再也找不到"人数 / 时代"在哪了。现在简报是个小窗口，战役页一直在原地。
+       */
+      const battleView = battleViewFull;
 
       /*
        * 地图页：选图与传图是同一件事的两头。
@@ -1524,8 +1531,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <span>主线 · 教学</span>
               </button>
               <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
-                <b>${levelOn ? '简报' : '战役'}</b>
-                <span>${levelOn ? '目标 · 兵力 · 扩展' : '规则 · 时代 · 兵种'}</span>
+                <b>战役</b>
+                <span>规则 · 时代 · 兵种</span>
               </button>
               <button class="start-nav-item ${tab === 'editor' ? 'active' : ''}" data-tab="editor">
                 <b>编辑器</b>
@@ -1560,7 +1567,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="start-summary">${summary}</div>
               <div class="start-actions">
                 <button class="btn" data-act="cancel">取消</button>
-                <button class="btn btn-primary" data-act="start">开始对局</button>
+                ${
+                  /*
+                   * 选了关：这里先是「确定」，点开简报窗口（看要求、挑扩展），
+                   * 真正的「开始对局」在窗口右下角。以前按钮直接就是开始，
+                   * 玩家可以一次都不看简报就开打，也可能点错了关却找不到回战役的路。
+                   */
+                  config.level
+                    ? `<button class="btn btn-primary" data-act="confirm-level">确定</button>`
+                    : `<button class="btn btn-primary" data-act="start">开始对局</button>`
+                }
               </div>
             </div>
           </div>
@@ -1590,14 +1606,35 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
              * 战役页「在哪张图上打」那一行的「换图」点开就是这里。
              */
             mapPickOpen
-              ? `<div class="map-pick-layer" data-act="map-pick-backdrop" role="dialog" aria-modal="true" aria-label="选地图">
-                   <div class="map-pick-card">
-                     <div class="map-pick-head">
+              ? `<div class="picker-layer" data-picker="map" data-act="map-pick-backdrop" role="dialog" aria-modal="true" aria-label="选地图">
+                   <div class="picker-card">
+                     <div class="picker-head">
                        <b>选一张地图</b>
                        <span class="field-hint">点一张就选中，关掉窗口回战役页</span>
                        <button class="btn btn-sm" data-act="pick-map-close">关闭</button>
                      </div>
-                     <div class="map-pick-body">${mapPickerView}</div>
+                     <div class="picker-body">${mapPickerView}</div>
+                   </div>
+                 </div>`
+              : ''
+          }
+          ${
+            /*
+             * 任务简报小窗口。和选图窗口共用 `.picker-*` 那一套——都是"盖上来看
+             * 一眼、决定完就走"的层，没必要各写一份样式。
+             */
+            briefOpen && config.level
+              ? `<div class="picker-layer" data-picker="brief" data-act="brief-backdrop" role="dialog" aria-modal="true" aria-label="任务简报">
+                   <div class="picker-card">
+                     <div class="picker-head">
+                       <b>任务简报</b>
+                       <span class="field-hint">${esc(config.level.name)} —— 看一眼要求，挑好扩展再开始</span>
+                     </div>
+                     <div class="picker-body">${briefingView}</div>
+                     <div class="picker-foot">
+                       <button class="btn" data-act="brief-cancel">取消</button>
+                       <button class="btn btn-primary" data-act="start">开始对局</button>
+                     </div>
                    </div>
                  </div>`
               : ''
@@ -1642,6 +1679,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const target = e.target as HTMLElement;
 
       // 点在小窗口的遮罩上＝关掉它（点在卡片里不算，卡片是它的子元素）
+      if ((target as HTMLElement).dataset?.act === 'brief-backdrop') {
+        briefOpen = false;
+        tab = 'levels';
+        paint();
+        return;
+      }
       if ((target as HTMLElement).dataset?.act === 'map-pick-backdrop') {
         mapPickOpen = false;
         paint();
@@ -2063,20 +2106,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         close({ config: { ...config, expansionIds: ordered }, seed: currentSeed });
       }
       /*
-       * 从简报页"跳车"：换成自由对局 / 换一张关。
-       *
-       * 这两个出口以前没有——玩家选了关又反悔时，唯一的路是左上角「关卡」页
-       * 再点一次「自由对局」，而那时候人已经站在简报页，得自己想起来还有那一页。
+       * 选了关之后，底部那颗是「确定」不是「开始对局」：它只负责把简报窗口打开。
+       * 真正的开局在窗口右下角——这一步是用户要的"先看要求再决定"。
        */
-      if (act === 'clear-level') {
-        Object.assign(config, applyLevelToConfig(config, null));
-        expDrawerOpen = false;
-        tab = 'battle';
+      if (act === 'confirm-level') {
+        briefOpen = true;
         paint();
         return;
       }
-      if (act === 'to-levels') {
-        tab = 'editor';
+      if (act === 'brief-cancel') {
+        // 取消 ≠ 关掉一切：退回「关卡」栏，让玩家换一张（或什么都不选）
+        briefOpen = false;
+        tab = 'levels';
         paint();
         return;
       }
