@@ -838,6 +838,28 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const battleViewFull = `
             <section class="field">
               <div class="field-label">
+                在哪张图上打 <span class="field-hint">${
+                  config.fixedMap ? '联机两边、复盘重开都是同一张' : '随机地形每局不同'
+                }</span>
+              </div>
+              <div class="start-map-row">
+                <span class="start-map-thumb">${
+                  config.fixedMap
+                    ? mapThumbSvg(config.fixedMap, 2, undefined)
+                    : '<span class="is-random">随机</span>'
+                }</span>
+                <span class="start-map-body">
+                  <b>${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}</b>
+                  <span>${
+                    config.fixedMap ? `${config.fixedMap.w} × ${config.fixedMap.h}` : '每局现生成'
+                  }</span>
+                </span>
+                <button class="btn btn-sm" data-act="to-maps">换图</button>
+              </div>
+            </section>
+
+            <section class="field">
+              <div class="field-label">
                 数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
               </div>
               <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
@@ -1304,6 +1326,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         .join(' · ');
 
       const briefingView = `
+            <section class="field level-switch">
+              <div class="field-hint">
+                这一局按关卡来。想自己定？
+                <button class="btn btn-sm" data-act="clear-level">换成自由对局</button>
+                <button class="btn btn-sm" data-act="to-levels">换一张关</button>
+              </div>
+            </section>
+
             <section class="field level-brief">
               <div class="level-brief-name">${esc(config.level?.name ?? '')}</div>
               <div class="field-hint">${esc(config.level?.brief ?? '')}</div>
@@ -1742,6 +1772,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         Object.assign(config, applyLevelToConfig(config, picked));
         // 换了关，抽屉里「这一关锁定哪些包」已经变了，收起来重新看
         expDrawerOpen = false;
+        /*
+         * 点「自由对局」不只是清掉关卡——它同时是"我要自己定规则"的意思，
+         * 所以顺手把页面切回战役页。以前只清数据不切页，玩家点完还站在关卡页，
+         * 得自己再点一次「战役」才知道发生了什么（2026-11-17 实机反馈：
+         * "想打自由对局要点很多次"）。
+         */
+        if (!picked) tab = 'battle';
         paint();
         return;
       }
@@ -2011,6 +2048,30 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         const ordered = EXPANSIONS.filter((e) => ids.has(e.id)).map((e) => e.id);
         close({ config: { ...config, expansionIds: ordered }, seed: currentSeed });
       }
+      /*
+       * 从简报页"跳车"：换成自由对局 / 换一张关。
+       *
+       * 这两个出口以前没有——玩家选了关又反悔时，唯一的路是左上角「关卡」页
+       * 再点一次「自由对局」，而那时候人已经站在简报页，得自己想起来还有那一页。
+       */
+      if (act === 'clear-level') {
+        Object.assign(config, applyLevelToConfig(config, null));
+        expDrawerOpen = false;
+        tab = 'battle';
+        paint();
+        return;
+      }
+      if (act === 'to-levels') {
+        tab = 'editor';
+        paint();
+        return;
+      }
+      if (act === 'to-maps') {
+        tab = 'maps';
+        paint();
+        return;
+      }
+
       if (act === 'reroll') {
         currentSeed = randomSeed();
         paint();

@@ -4227,12 +4227,19 @@ check('开局面板有"数据收集"开关，默认开', () => {
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
 });
 
-await checkAsync('数据收集排在最前面，而且会记住上次的选择', async () => {
-  // 排位：它必须是 .modal-body 里的第一块，在所有对局选项之前
-  const first = doc.querySelector('.modal-body > section');
+await checkAsync('战役页：地图条在最上面，数据收集紧随其后，而且会记住上次的选择', async () => {
+  /*
+   * 地图条（在哪张图上打）2026-11-17 提到第一块：自选图以前只能在「地图」页看，
+   * 选完回到战役页就只剩底部摘要一行小字。数据收集还是紧跟着它，仍然对局选项之前。
+   */
+  const blocks = [...doc.querySelectorAll('.modal-body > section')];
   assert.ok(
-    first?.querySelector('[data-field="record"]'),
-    '数据收集应当是面板里的第一块，实际第一块是：' + (first?.textContent ?? '').trim().slice(0, 20),
+    (blocks[0]?.textContent ?? '').includes('在哪张图上打'),
+    '第一块应当是"在哪张图上打"，实际：' + (blocks[0]?.textContent ?? '').trim().slice(0, 20),
+  );
+  assert.ok(
+    blocks[1]?.querySelector('[data-field="record"]'),
+    '数据收集应当紧随其后，实际第二块是：' + (blocks[1]?.textContent ?? '').trim().slice(0, 20),
   );
 
   // 勾上 → 取消 → 重新打开，应当还是勾着的
@@ -9421,6 +9428,44 @@ check('选「黄雀」：说清第三家要中途才登场', () => {
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('开局只有 2 家在场'), `要写清开局只有两家，实际：${body.slice(0, 260)}`);
   assert.ok(body.includes('绿方'), '要指名是哪一家晚到');
+});
+
+check('已选关卡时点「自由对局」：清掉关卡并直接落到战役页', () => {
+  /*
+   * 2026-11-17：以前点「自由对局」只清数据、不切页，玩家点完还站在关卡页，
+   * 得自己再点一次「战役」——那一步就是"想打自由对局要点很多次"的来源之一。
+   */
+  click('[data-tab="editor"]');
+  click('[data-level="level:lone-city"]');
+  click('[data-tab="levels"]');
+  click('[data-level=""]');
+  assert.ok(doc.querySelector('[data-players]'), '点完应当已经在战役页（有人数开关）');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(!body.includes('由关卡决定'), `关卡不该残留，实际：${body.slice(0, 160)}`);
+});
+
+check('简报页能一键跳车：换成自由对局', () => {
+  click('[data-tab="editor"]');
+  click('[data-level="level:lone-city"]');
+  click('[data-tab="battle"]');
+  const btn = doc.querySelector<HTMLElement>('[data-act="clear-level"]');
+  assert.ok(!!btn, '简报页顶部要有「换成自由对局」');
+  const body = doc.querySelector('.modal-body')?.textContent ?? '';
+  assert.ok(body.includes('换一张关'), '简报页顶部也要有「换一张关」');
+  btn!.click();
+  assert.ok(doc.querySelector('[data-players]'), '点完应当回到战役页');
+  const foot = doc.querySelector('.start-summary')?.textContent ?? '';
+  assert.ok(!foot.includes('关卡「'), `摘要里不该还有关卡，实际：${foot}`);
+});
+
+check('战役页能看到当前地图，并能一键去换图', () => {
+  const row = doc.querySelector('.start-map-row');
+  assert.ok(!!row, '战役页顶部要有「在哪张图上打」这一条');
+  doc.querySelector<HTMLElement>('[data-act="to-maps"]')?.click();
+  assert.ok(
+    !!doc.querySelector('[data-map]'),
+    '点「换图」应当落到地图页（有 data-map 卡片）',
+  );
 });
 
 check('切回「自由对局」：人数开关回来，关卡不残留', () => {

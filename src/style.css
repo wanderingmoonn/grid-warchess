@@ -9874,6 +9874,77 @@ a.btn {
   gap: 6px;
 }
 
+/*
+ * 简报页顶部的"跳车"条（换成自由对局 / 换一张关）。
+ *
+ * 放在简报第一屏，是因为玩家"选错关"这件事总是发生在看到简报之后——
+ * 目标、兵力、地图全在这儿，看完才觉得"不对劲"。把出口放在最上面，
+ * 比让他想起来左上角还有一页要现实。
+ */
+.level-switch .field-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/*
+ * 战役页（自由对局）顶部的"在哪张图上打"。
+ *
+ * 以前地图只能在「地图」页看，选完图回到战役页就只剩底部摘要里一行小字。
+ * 这一条把"这张图长什么样"钉在规则页最上面，配一个「换图」直达按钮。
+ */
+.start-map-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.start-map-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 42px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+  flex: none;
+}
+
+.start-map-thumb svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.start-map-thumb .is-random {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.start-map-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.start-map-body b {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.start-map-body span {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
 .level-brief-name {
   font-size: 18px;
   font-weight: 500;
