@@ -145,6 +145,26 @@ export function openAdminPanel(opts: { onPlay?: (level: LevelDef) => void } = {}
              <span class="admin-note">会在游戏里直接开一局（不影响已有存档，点「新对局」可退出）</span></div>`
           : ''
       }
+      ${
+        /*
+         * 导出按钮（2026-11-17）。
+         *
+         * 起因：开发者用关卡编辑器做了张教学关传上来，审核台只能「放行」——
+         * 放行是进"别人的关卡"，永远进不了「关卡」栏（那一栏只认仓库里的
+         * `src/levels/story/`）。这里给一个下载口：拿到 JSON 丢进那个目录、
+         * 加一行 import，下一版它就是主线关。
+         */
+        kind === 'level' || kind === 'map'
+          ? `<div class="admin-play">
+               <button class="btn btn-sm" data-act="download">下载 JSON</button>
+               <span class="admin-note">${
+                 kind === 'level'
+                   ? '放进仓库的 src/levels/story/ 并加一行 import，下一版它就是「关卡」栏里的主线关'
+                   : '导出成和上传时同一种格式，可以再传或直接当内置图'
+               }</span>
+             </div>`
+          : ''
+      }
       <div class="admin-facts">${facts.map((t) => `<span class="admin-chip">${esc(t)}</span>`).join('')}</div>
       <details class="admin-raw">
         <summary>原始 JSON（${Math.round(raw.length / 1024)}KB）</summary>
@@ -349,6 +369,40 @@ export function openAdminPanel(opts: { onPlay?: (level: LevelDef) => void } = {}
       }
       mask.remove();
       opts.onPlay(checked.level);
+    } else if (a === 'download' && detailRow) {
+      /*
+       * 关卡导 `row.data`（上传时那份 LevelDef），地图导成"上传格式"的 JSON。
+       * 文件名用 id/名字里能用的字符拼，免得出现 `/` 之类让浏览器改成 `_`。
+       */
+      const row = detailRow.row;
+      const kind = detailRow.kind;
+      const payload =
+        kind === 'level'
+          ? (row.data as unknown)
+          : kind === 'map'
+            ? {
+                name: row.name,
+                w: row.w,
+                h: row.h,
+                rows: row.rows,
+                citiesA: row.cities_a,
+                citiesB: row.cities_b,
+              }
+            : row;
+      const rawId =
+        kind === 'level'
+          ? String((row.data as { id?: string })?.id ?? row.id)
+          : String(row.name ?? row.id);
+      const safe = rawId.replace(/[^\w\u4e00-\u9fa5-]+/g, '_').slice(0, 40) || 'export';
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${safe}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      msg = `已下载 ${safe}.json`;
+      paint();
     } else if (a === 'view') {
       const kind = el.dataset.kind ?? 'level';
       void (async () => {
