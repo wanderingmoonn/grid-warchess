@@ -52,6 +52,14 @@ const WHEN_KIND_NAME: Record<string, string> = {
   turn: '第 N 次行动',
   unitDied: '某一家的兵死了',
   enter: '有单位走进区域',
+  fired: '另一件事已发生',
+};
+
+/** 组合节点的名字。下拉里和叶子并列，选它就是"把这个条件换成一个组" */
+const WHEN_GROUP_NAME: Record<string, string> = {
+  all: '全部满足（且）',
+  any: '任一满足（或）',
+  not: '取反（不）',
 };
 
 export interface LevelEventsOptions {
@@ -65,7 +73,7 @@ const esc = (t: string) =>
 
 /** 选点/选区时"正在给谁选" */
 type PickTarget =
-  | { kind: 'zone'; ev: number; slot: 'when' | 'do'; act: number }
+  | { kind: 'zone'; ev: number; slot: 'when' | 'do'; act: number; /** slot 是 when 时：条件树里的路径 */ path?: string }
   | { kind: 'spawn'; ev: number; act: number };
 
 export function openLevelEvents(opts: LevelEventsOptions): void {
@@ -205,41 +213,175 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
 
   /* ---------- 渲染：卡片 ---------- */
 
-  function whenControls(ev: LevelEvent, i: number): string {
-    /*
-     * 条件现在可以是树（多条件）。这个编辑器还没跟上（阶段 2 才做），
-     * 所以遇到树就**只读**：给一句话让作者去 JSON 里改，而不是硬按第一个叶子
-     * 渲染——那样一保存就把另外几个条件丢掉了。
-     */
-    if (!('kind' in ev.when)) {
-      return `<div class="field-hint">这条事件有多个条件（组合树）。先在下面的 JSON 里改，编辑器之后会支持。</div>`;
-    }
-    const when = ev.when;
-    const kindSel = `<select class="level-mini-select" data-when-kind="${i}">${Object.entries(WHEN_KIND_NAME)
-      .map(([k, n]) => `<option value="${k}" ${when.kind === k ? 'selected' : ''}>${esc(n)}</option>`)
-      .join('')}</select>`;
+  /*
+   * ── 条件树的路径 ──
+   *
+   * 条件是一棵树，但 DOM 里每个控件都得知道"我改的是哪一个节点"。
+   * 用一段字符串路径表示位置：
+   *
+   *   ''        根（就是 ev.when 本身）
+   *   '0'       根这个组里的第 0 个子节点（是 all 还是 any 由父节点决定）
+   *   '0.not'   上面那个节点的 not 子节点
+   *
+   * 只写**下标**，不写 `all`/`any`：父节点只有一个列表，从它身上就能判断。
+   * 控件属性统一写成 `{事件序号}:{路径}`。
+   */
+  const joinPath = (path: string, seg: string): string => (path ? `${path}.${seg}` : seg);
 
-    if (when.kind === 'turn') {
+  /** 控件属性统一写成 `事件序号:路径`，这里拆开 */
+  const parseKey = (key: string): { i: number; path: string } => {
+    const at = key.indexOf(':');
+    return at < 0 ? { i: Number(key), path: '' } : { i: Number(key.slice(0, at)), path: key.slice(at + 1) };
+  };
+
+  const whenAt = (root: LevelWhen, path: string): LevelWhen | null => {
+    let cur: LevelWhen | null = root;
+    for (const seg of path.split('.').filter(Boolean)) {
+      if (!cur) return null;
+      if (seg === 'not') {
+        cur = 'not' in cur ? cur.not : null;
+        continue;
+      }
+      const idx = Number(seg);
+      const list = 'all' in cur ? cur.all : 'any' in cur ? cur.any : null;
+      cur = list && Number.isInteger(idx) ? (list[idx] ?? null) : null;
+    }
+    return cur;
+  };
+
+  /** 把某处换成 `next`（`null` = 删掉）。根不能删 */
+  const whenReplace = (ev: LevelEvent, path: string, next: LevelWhen | null): void => {
+    if (!path) {
+      if (next) ev.when = next;
+      return;
+    }
+    const parts = path.split('.');
+    const last = parts.pop()!;
+    const parent = whenAt(ev.when, parts.join('.'));
+    if (!parent) return;
+    if (last === 'not') {
+      // `not` 必须有一个子节点：删它没有意义，换才有的说
+      if (next && 'not' in parent) parent.not = next;
+      return;
+    }
+    const idx = Number(last);
+    const list = 'all' in parent ? parent.all : 'any' in parent ? parent.any : null;
+    if (!list || !Number.isInteger(idx)) return;
+    if (next) list[idx] = next;
+    else if (list.length > 1) list.splice(idx, 1);
+  };
+
+  const whenChildren = (node: LevelWhen): { kind: 'all' | 'any' | 'not'; list: LevelWhen[] } | null => {
+    if ('all' in node) return { kind: 'all', list: node.all };
+    if ('any' in node) return { kind: 'any', list: node.any };
+    if ('not' in node) return { kind: 'not', list: [node.not] };
+    return null;
+  };
+
+  const whenAddChild = (ev: LevelEvent, path: string, what: 'leaf' | 'group'): void => {
+    const node = whenAt(ev.when, path);
+    if (!node) return;
+    const kids = whenChildren(node);
+    if (!kids || kids.kind === 'not') return;
+    if (what === 'leaf') {
+      kids.list.push({ kind: 'turn', at: 5 });
+      return;
+    }
+    // 新加一个"另一种"组：当前是且就加或，反之亦然——最常用的组合就是这两种混着写
+    const other: LevelWhen = kids.kind === 'all' ? { any: [{ kind: 'turn', at: 5 }] } : { all: [{ kind: 'turn', at: 5 }] };
+    kids.list.push(other);
+  };
+
+  /**
+   * 条件类型下拉：**叶子和组放在同一个下拉里**。
+   *
+   * 分成两个下拉的话，"把一个条件换成组"就没有入口了——而这正是写组合条件
+   * 的第一步（先换成「全部满足」，再往里加条件）。
+   */
+  const whenKindSelect = (key: string, current: string): string =>
+    `<select class="level-mini-select" data-when-kind="${key}">
+       <optgroup label="单个条件">${Object.entries(WHEN_KIND_NAME)
+         .map(([k, n]) => `<option value="${k}" ${current === k ? 'selected' : ''}>${esc(n)}</option>`)
+         .join('')}</optgroup>
+       <optgroup label="改成组合">${Object.entries(WHEN_GROUP_NAME)
+         .map(([k, n]) => `<option value="${k}" ${current === k ? 'selected' : ''}>${esc(n)}</option>`)
+         .join('')}</optgroup>
+     </select>`;
+
+  /** 叶子条件的那一行。`key` 是 `事件序号:路径` */
+  function whenLeafRow(node: LevelWhenLeaf, key: string, depth: number, canDelete: boolean): string {
+    const kindSel = whenKindSelect(key, node.kind);
+    const del = `<button class="btn btn-sm when-del" data-when-del="${key}" ${
+      canDelete ? '' : 'disabled title="条件至少要有一条"'
+    }>×</button>`;
+
+    if (node.kind === 'turn') {
       // 轮次换算是这块最容易被算错的地方：直接写出来，不让人自己除
-      const rounds = seatCount > 0 ? Math.ceil(when.at / seatCount) : when.at;
-      return `${kindSel}<span class="level-when-arg">第
-          <input type="number" min="1" max="999" class="level-mini-num" data-when-at="${i}" value="${when.at}">
-          次行动<span class="field-hint">（${seatCount} 家局 ≈ 第 ${rounds} 轮）</span></span>`;
+      const rounds = seatCount > 0 ? Math.ceil(node.at / seatCount) : node.at;
+      const op = node.op ?? '>=';
+      const opSel = `<select class="level-mini-select" data-when-op="${key}">${(
+        ['>=', '<=', '=', '>', '<'] as const
+      )
+        .map((o) => `<option value="${o}" ${op === o ? 'selected' : ''}>${o}</option>`)
+        .join('')}</select>`;
+      return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel} ${opSel}
+          <input type="number" min="1" max="999" class="level-mini-num" data-when-at="${key}" value="${node.at}">
+          <span class="field-hint">（${seatCount} 家局 ≈ 第 ${rounds} 轮）</span></span>${del}</div>`;
     }
-    if (when.kind === 'unitDied') {
-      return `${kindSel}<span class="level-when-arg">${SEAT_NAME[when.owner ?? ''] ?? '任何一家'}的
-          <select class="level-mini-select" data-when-owner="${i}">${seatOptions(when.owner, true)}</select>
-          <select class="level-mini-select" data-when-type="${i}">${unitOptionsHtml(when.type, true)}</select>
-          死了</span>`;
+    if (node.kind === 'unitDied') {
+      return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel}
+          <select class="level-mini-select" data-when-owner="${key}">${seatOptions(node.owner, true)}</select>
+          <select class="level-mini-select" data-when-type="${key}">${unitOptionsHtml(node.type, true)}</select>
+          死了</span>${del}</div>`;
     }
-    if (when.kind === 'enter') {
-      return `${kindSel}<span class="level-when-arg">
-        <select class="level-mini-select" data-when-owner="${i}">${seatOptions(when.owner, true)}</select>
-        的单位走进 <button class="btn btn-sm" data-pick-when-zone="${i}">${esc(zoneText(when.zone))}</button>
-      </span>`;
+    if (node.kind === 'enter') {
+      return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel}
+        <select class="level-mini-select" data-when-owner="${key}">${seatOptions(node.owner, true)}</select>
+        的单位走进 <button class="btn btn-sm" data-pick-when-zone="${key}">${esc(zoneText(node.zone))}</button>
+      </span>${del}</div>`;
     }
-    // fired：引用另一条事件。编辑器阶段 2 才做选择器，现在先显示 id
-    return `${kindSel}<span class="level-when-arg">事件「${esc(when.id)}」已发生</span>`;
+    // fired：从本关其它事件里挑一个
+    const others = events.filter((e) => e.id !== events[Number(key.split(':')[0])]?.id);
+    const firedSel = `<select class="level-mini-select" data-when-fired="${key}">${
+      others.length === 0
+        ? '<option value="">（这一关还没有别的事件）</option>'
+        : others
+            .map((e) => `<option value="${esc(e.id)}" ${node.id === e.id ? 'selected' : ''}>${esc(e.id)}</option>`)
+            .join('')
+    }</select>`;
+    return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel} ${firedSel} 已发生</span>${del}</div>`;
+  }
+
+  /** 递归渲染：叶子一行，组是"标题 + 缩进的子节点 + 加按钮" */
+  function whenTree(ev: LevelEvent, i: number, node: LevelWhen, path: string, depth: number): string {
+    const key = `${i}:${path}`;
+    const kids = whenChildren(node);
+    if (!kids) {
+      return whenLeafRow(node as LevelWhenLeaf, key, depth, path !== '');
+    }
+    const groupSel = whenKindSelect(key, kids.kind);
+    const del = `<button class="btn btn-sm when-del" data-when-del="${key}" ${
+      path !== '' ? '' : 'disabled title="根条件不能删，可以改成单个条件"'
+    }>×</button>`;
+    const children = kids.list
+      .map((child, idx) => whenTree(ev, i, child, joinPath(path, kids.kind === 'not' ? 'not' : String(idx)), depth + 1))
+      .join('');
+    const add =
+      kids.kind === 'not'
+        ? ''
+        : `<div class="when-add" style="--d:${depth + 1}">
+             <button class="btn btn-sm" data-when-add="${key}:leaf">+ 条件</button>
+             <button class="btn btn-sm" data-when-add="${key}:group">+ ${kids.kind === 'all' ? '或组' : '且组'}</button>
+           </div>`;
+    return `<div class="when-group" style="--d:${depth}">
+        <div class="when-row when-group-head"><span class="when-row-arg">${groupSel}</span>${del}</div>
+        <div class="when-children">${children}</div>
+        ${add}
+      </div>`;
+  }
+
+  function whenControls(ev: LevelEvent, i: number): string {
+    return `<div class="when-tree">${whenTree(ev, i, ev.when, '', 0)}</div>`;
   }
 
   function doControls(act: LevelDo, i: number, j: number): string {
@@ -507,7 +649,10 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (pick.kind === 'zone') {
       const ev = events[pick.ev];
       if (!ev) return null;
-      if (pick.slot === 'when') return 'kind' in ev.when && ev.when.kind === 'enter' ? ev.when.zone : null;
+      if (pick.slot === 'when') {
+        const node = whenAt(ev.when, pick.path ?? '');
+        return node && 'kind' in node && node.kind === 'enter' ? node.zone : null;
+      }
       const act = ev.do[pick.act];
       return act && (act.kind === 'terrain' || act.kind === 'reveal') ? act.zone : null;
     }
@@ -663,8 +808,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       if (!pick || pick.kind !== 'zone') return;
       const ev0 = events[pick.ev];
       if (ev0) {
-        if (pick.slot === 'when' && 'kind' in ev0.when && ev0.when.kind === 'enter') {
-          ev0.when = { ...ev0.when, zone };
+        if (pick.slot === 'when') {
+          const node = whenAt(ev0.when, pick.path ?? '');
+          if (node && 'kind' in node && node.kind === 'enter') node.zone = zone;
         }
         const act = ev0.do[pick.act];
         if (pick.slot === 'do' && act && (act.kind === 'terrain' || act.kind === 'reveal')) act.zone = zone;
@@ -701,9 +847,10 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
     const at = el.getAttribute('data-when-at');
     if (at) {
-      const act = events[Number(at)]?.when;
-      if (act && 'kind' in act && act.kind === 'turn') {
-        act.at = Math.max(1, Math.round(Number((el as HTMLInputElement).value) || 1));
+      const key = parseKey(at);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'turn') {
+        node.at = Math.max(1, Math.round(Number((el as HTMLInputElement).value) || 1));
       }
     }
   });
@@ -714,24 +861,61 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
 
     const whenKind = el.getAttribute('data-when-kind');
     if (whenKind !== null) {
-      const ev0 = events[Number(whenKind)];
-      if (ev0) ev0.when = defaultWhen(val as LevelWhenLeaf['kind']);
+      /*
+       * 换类型 = 把这一处**整个替换**成新节点：叶子换叶子就是换 kind，
+       * 换成组就是包一层（里面放一个默认叶子）。原来写的是 `ev0.when = ...`，
+       * 现在要精准落到树上某一处，所以走 `whenReplace`。
+       */
+      const key = parseKey(whenKind);
+      const ev0 = events[key.i];
+      if (ev0) {
+        const next: LevelWhen | null =
+          val === 'all'
+            ? { all: [{ kind: 'turn', at: 5 }] }
+            : val === 'any'
+              ? { any: [{ kind: 'turn', at: 5 }] }
+              : val === 'not'
+                ? { not: { kind: 'turn', at: 5 } }
+                : defaultWhen(val as LevelWhenLeaf['kind']);
+        if (next) whenReplace(ev0, key.path, next);
+      }
       renderAll();
       return;
     }
     const whenOwner = el.getAttribute('data-when-owner');
     if (whenOwner !== null) {
-      const when = events[Number(whenOwner)]?.when;
-      if (when && 'kind' in when && (when.kind === 'unitDied' || when.kind === 'enter')) {
-        when.owner = (val || undefined) as PlayerId | undefined;
+      const key = parseKey(whenOwner);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && (node.kind === 'unitDied' || node.kind === 'enter')) {
+        node.owner = (val || undefined) as PlayerId | undefined;
       }
       renderList();
       return;
     }
     const whenType = el.getAttribute('data-when-type');
     if (whenType !== null) {
-      const when = events[Number(whenType)]?.when;
-      if (when && 'kind' in when && when.kind === 'unitDied') when.type = val || undefined;
+      const key = parseKey(whenType);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'unitDied') node.type = val || undefined;
+      return;
+    }
+    const whenOp = el.getAttribute('data-when-op');
+    if (whenOp !== null) {
+      const key = parseKey(whenOp);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'turn') {
+        // 默认值 `>=` 不写进数据：少一个字段少一句要解释的话
+        if (val === '>=') delete node.op;
+        else node.op = val as '>=' | '<=' | '=' | '>' | '<';
+      }
+      renderList();
+      return;
+    }
+    const whenFired = el.getAttribute('data-when-fired');
+    if (whenFired !== null) {
+      const key = parseKey(whenFired);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'fired' && val) node.id = val;
       return;
     }
     const doKind = el.getAttribute('data-do-kind');
@@ -827,7 +1011,8 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     // 选区域 / 点落点：进入待选模式，提示作者去右边地图上操作
     const pickWhenZone = t.closest<HTMLElement>('[data-pick-when-zone]');
     if (pickWhenZone) {
-      pick = { kind: 'zone', ev: Number(pickWhenZone.dataset.pickWhenZone), slot: 'when', act: -1 };
+      const key = parseKey(pickWhenZone.dataset.pickWhenZone ?? '');
+      pick = { kind: 'zone', ev: key.i, slot: 'when', act: -1, path: key.path };
       pickHintEl.textContent = '在下面的地图上拖一个矩形 → 松手就定区域。';
       renderMap();
       return;
@@ -854,6 +1039,27 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       const [i, j, k] = (spawnDel.dataset.spawnDel ?? '').split(':').map(Number);
       const act = events[i!]?.do[j!];
       if (act && act.kind === 'spawn') act.units = act.units.filter((_u, idx) => idx !== k);
+      renderAll();
+      return;
+    }
+
+    const whenDel = t.closest<HTMLElement>('[data-when-del]');
+    if (whenDel) {
+      const key = parseKey(whenDel.dataset.whenDel ?? '');
+      const ev0 = events[key.i];
+      // 根不能删：删了这条事件就没有条件了。按钮那边也是 disabled 的
+      if (ev0 && key.path) whenReplace(ev0, key.path, null);
+      renderAll();
+      return;
+    }
+    const whenAdd = t.closest<HTMLElement>('[data-when-add]');
+    if (whenAdd) {
+      const raw = whenAdd.dataset.whenAdd ?? '';
+      const cut = raw.lastIndexOf(':');
+      const key = parseKey(raw.slice(0, cut));
+      const what = raw.slice(cut + 1) as 'leaf' | 'group';
+      const ev0 = events[key.i];
+      if (ev0) whenAddChild(ev0, key.path, what);
       renderAll();
       return;
     }

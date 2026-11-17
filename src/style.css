@@ -5651,6 +5651,70 @@ a.btn {
 }
 
 .level-event-when,
+/*
+ * 条件树（2026-11-17）。
+ *
+ * 缩进表达层级，不用拖拽：作者的读法是"越往右越深"，
+ * 而且缩进和数据结构一一对应（all/any 的子节点就在里面一层）。
+ * 组用一层浅色底把它兜住，嵌套两层以上也不会看串行。
+ */
+.when-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.when-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-left: calc(var(--d, 0) * 12px);
+}
+
+.when-row-arg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.when-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px 6px;
+  background: var(--panel-2);
+}
+
+.when-group-head {
+  padding-left: 0;
+}
+
+.when-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.when-add {
+  display: flex;
+  gap: 6px;
+  padding-left: calc(var(--d, 0) * 12px);
+  margin-top: 4px;
+}
+
+.when-del {
+  flex: none;
+  opacity: 0.55;
+}
+
+.when-del:hover {
+  opacity: 1;
+}
+
 .level-when-arg {
   display: inline-flex;
   align-items: center;
