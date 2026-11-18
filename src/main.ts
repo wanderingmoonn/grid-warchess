@@ -5633,7 +5633,29 @@ async function runAiTurn(
     }
   }
 
-  for (let step = 0; step < engine.AI_MAX_STEPS; step++) {
+  /*
+   * 这一回合最多走几步：**按规模算**，不是写死的 50。
+   *
+   * 为什么换：50 是按"24 个兵各走一步"估的，理论上限（24 兵走一步 + 一轮攻击
+   * + 招募/升级）确实会超过它。**但实测没撞过**——2026-11-17 跑了 18 局，
+   * 平均每回合 8 步、最多 23 步，因为 AI 在"没有值得做的事"时就自己收手。
+   * 所以这次换掉不等于修 bug，是给将来留余量：单兵 AI 上线后扩展会主动提动作，
+   * 步数才涨得起来，那时再动它会把"名额变化"和"单兵 AI 效果"混在一起。
+   *
+   * 在**回合开始时**算一次，不在循环里每一步重算：中途招募会让式子变大，
+   * 那等于"钱越多这回合越长"，不是我们想要的语义。
+   */
+  const stepCap = engine.aiStepCap(state);
+  let stepsRun = 0;
+  /*
+   * 卡死检测：防的是"成功但局面没变"的空转（切换形态、开关姿态这类）。
+   *
+   * 名额兜不住它——那种动作每一步都合法，能把这一回合剩下的步子全烧光，
+   * 表现是"boss 反复变身，仆从一个都没动"。实测里还没出现过（18 局 0 次），
+   * 但单兵 AI 一上线，动作来源就变成扩展写的，这种风险才真正开始。
+   */
+  const stall = engine.aiStallGuard();
+  for (; stepsRun < stepCap; stepsRun++) {
     if (!alive()) return;
     // 打完了就别再摆弄部队：只收手，不 return——这一回合还得正常交割，
     // 否则 state.current 会停在半路，沙盒的"轮到谁"和回合数都对不上。
@@ -5667,8 +5689,21 @@ async function runAiTurn(
     if (action.type === 'RECRUIT') budget.recruited += 1;
     if (action.type === 'UPGRADE') budget.upgraded += 1;
 
+    /*
+     * 喂一条"成功执行的动作"。判定卡死就交棒——注意**不能** `return`：
+     * 这一回合还得正常交割，否则 `state.current` 会停在半路，
+     * 和"打完了只收手"是同一个理由。
+     */
+    if (stall.note(engine.aiActionKey(action), engine.aiProgressFingerprint(state))) {
+      console.warn(
+        `[ai] ${player} 同一个动作连续成功了 ${stall.repeats + 1} 次，局面却没有任何变化，` +
+          `判定卡死，强制交棒。动作：${engine.aiActionKey(action)}`,
+      );
+      break;
+    }
+
     // 逐帧重绘是为了让人看清；极快档就不必每步都画，每几步刷一次够了
-    if (delay > 0 || step % 6 === 0) {
+    if (delay > 0 || stepsRun % 6 === 0) {
       saveMatch(state);
       render();
       // 走了两格以上就把这条路线"播完"再走下一步：
@@ -5679,9 +5714,25 @@ async function runAiTurn(
       }
     }
 
-    // 关键：即使 0ms 也要 await。同步跑完 50 步会把主线程占死，
+    // 关键：即使 0ms 也要 await。同步跑完一整回合会把主线程占死，
     // 那段时间里按钮点不动、暂停按不下去——"AI 一快，界面就死了"。
     await sleep(delay);
+  }
+
+  /*
+   * 撞到自然上限：留一句告警，别静默截断。
+   *
+   * 这个分支以前是不存在的——老代码撞 50 步就直接退出循环，谁也不知道。
+   * 现在它至少能在控制台留痕：如果以后有人看到这句，说明式子该重推了
+   * （或者有个"成功但没用"的动作在空转，那是卡死检测该管的事）。
+   */
+  if (stepsRun >= stepCap && alive() && !state.winner) {
+    const n = state.units.filter((u) => u.owner === player).length;
+    const c = state.cities.filter((x) => x.owner === player).length;
+    console.warn(
+      `[ai] ${player} 本回合用尽 ${stepCap} 步（兵 ${n} / 城 ${c}），强制交棒。` +
+        `如果这经常出现，说明 aiStepCap 的式子该重推了。`,
+    );
   }
 
   if (!alive()) return;

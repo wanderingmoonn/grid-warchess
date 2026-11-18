@@ -14,7 +14,7 @@
  * rules.ts 一行都不用改。
  */
 
-import type { BoardId, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, BoardId, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 import { seatsOf } from './types.ts';
 import type { MapStyleBuild } from './mapgen.ts';
 import type { 
@@ -539,6 +539,18 @@ export interface ExpansionHooks {
   /** 纯函数：修正"对某个具体目标"的攻击范围（高差、遮挡） */
   modifyRangeAgainst?: (c: RangeAgainstCtx) => number;
   /**
+   * 这个单位**能不能施法**。返回字符串 = 不能，字符串是给玩家的理由。
+   *
+   * 和 `canCommand` 的分工：那条管"能不能下命令"（移动/攻击/施法一起封），
+   * 这条只封**法术**——沉默就该是"手能动、嘴不能念"，而不是整个人被钉住。
+   */
+  canCastSkill?: (c: {
+    state: GameState;
+    unit: Unit;
+    skill: { id: string; effect: string };
+  }) => string | null;
+
+  /**
    * 这个单位**能不能踏进这一格**。返回 false = 当成挡住。
    *
    * 和 `blockedFor` 的关系：那条是地形/占位/城市这些**引擎自己的**规则，
@@ -849,6 +861,93 @@ export interface UnitActionOption {
   confirm?: string;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 单兵 AI：让一个兵种带一份自己的行为
+ *
+ * 为什么要这一层：全局 AI 是**按席位**算分的，所有兵共用一套评分，
+ * 而且它完全不认识扩展（修士在电脑手里只会走过去平砍，不会施法）。
+ * 兵种自带的技能它也不认——`heroSkillCandidate` 里是一串写死的 case。
+ * 所以"按特定流程行动的 boss"在这套结构里根本没有位置。
+ *
+ * 这一层只解决"什么时候问、问到的东西怎么接进去"：
+ * 核心在给每个兵算完候选之后问一句"你自己想做什么"，扩展回答。
+ * **想怎么打归扩展**，核心不解释它的理由。
+ *
+ * 接口刻意只有两项（`add` / `must`），不给"改全局估值"的口子：
+ * 口子越窄，以后越不会自己咬自己。真要改全局估值，那是另一个需求。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 扩展自己提出的一条候选动作 */
+export interface UnitAiCandidate {
+  action: Action;
+  /**
+   * 这个动作值多少分——**必须是全局量级的数**，不是"我觉得很重要"的相对值。
+   *
+   * 参照（`docs/DESIGN-UNIT-AI-2026-11-17.md` 第 5 节）：走一步 3~6、
+   * 打一下 10~40、打死普通兵 40~120、抢城 60~150。
+   * 给低了它永远选不上，给高了它抢走一切——这个数只能实测调。
+   *
+   * 生效分是 `aiAutonomy × score`，所以同一个 profile 在自主分 0.5 的兵身上
+   * 会自动打折，不用自己乘。
+   */
+  score: number;
+  /**
+   * 跳过"推演削分"（前几名会被试走一步，按对手最狠的一刀扣分）。
+   *
+   * 只给**演出型**招式用：跳进人堆放大招、以伤换伤的必杀。
+   * 普攻和走位标了它，等于让这个兵站着送——那是另一个 bug。
+   */
+  ignoreRisk?: boolean;
+}
+
+/** 扩展拿到的上下文。**没有真局**，只有雾图。 */
+export interface UnitAiCtx {
+  /**
+   * 雾图投影（`playerView` 的结果），和全局 AI 看到的完全一样多。
+   *
+   * 不是真局。这一点没有商量余地：能看全图的话，boss 就会隔墙开大，
+   * 玩家一眼看出来在作弊，联机和回放也会对不上。
+   */
+  state: GameState;
+  unit: Unit;
+  def: UnitTypeDef;
+  /** 能力层那套查询工具（站位、距离、地形）。**只查不改** */
+  api: AbilityApi;
+  /** 全局已经给这个兵算好的候选（只读）。想知道"它本来想干什么"就看这里 */
+  candidates: ReadonlyArray<{ action: Action; score: number }>;
+  /** 这一回合已经被规则拒过的动作。别重复提同样的东西 */
+  rejected: ReadonlySet<string>;
+}
+
+/** 扩展的回答。只有两项，别再扩。 */
+export interface UnitAiResult {
+  /**
+   * 这个兵"自己想做"的动作。
+   *
+   * 几条纪律（核心会校验，违反的会被丢掉并告警）：
+   *   · `action.unitId` 必须是这个兵——不能替别的兵做决定；
+   *   · 只准单兵动作（走/打/攻城/施法/装配/上下船/建造），
+   *     **不准**招募、升级、结束回合、改策略（那些是席位级的）；
+   *   · 提之前自己先查一遍合法性（距离、冷却、站位）。
+   *     被规则拒掉不会崩，但会白耗一步，一回合被拒几次就是"站着不动"。
+   */
+  add?: UnitAiCandidate[];
+  /**
+   * 这一回合**必须做**的那一手。最多一条，不受自主分打折（固定高分）。
+   *
+   * 给"剧本要求"用：第三回合变身、血量过半召唤。不加这条的话，
+   * 它会被一次普攻抢走——普攻的分常常比"看起来很重要但没伤害"的动作高。
+   */
+  must?: { action: Action; reason?: string };
+}
+
+/** 一个行为表。实现跟着扩展走，删掉扩展就跟着消失（和 abilities / marks 同构）。 */
+export interface UnitAiProfile {
+  /** 全局唯一。兵种数据里的 `aiProfile` 就是按它查的 */
+  id: string;
+  handler: (c: UnitAiCtx) => UnitAiResult;
+}
+
 export interface Expansion {
   id: string;
   name: string;
@@ -885,6 +984,17 @@ export interface Expansion {
    * "开了某个包，盾墙就换了个算法"，玩家永远查不清自己漏了什么）。
    */
   abilities?: AbilityDef[];
+  /**
+   * 这个扩展带来的**单兵行为表**（`UnitAiProfile`）。
+   *
+   * 和 `abilities` / `marks` 同一个模式：实现跟着扩展走，合并进注册表由
+   * `unit-ai.ts` 做。兵种数据里写 `aiProfile: '某个 id'` 就能用。
+   *
+   * 不看"这一局勾了哪些扩展"——和兵种能力同一条理由：行为是内容的一部分。
+   * 真要按扩展过滤是规则层的事，不进注册表（否则存档里一个 boss 关掉扩展后
+   * 就变成了"血很厚的杂兵"，而且查不出为什么）。
+   */
+  unitAi?: UnitAiProfile[];
   /**
    * 这个扩展带来的**格子上留东西**的种类（水雷、地雷、火场……）。
    *

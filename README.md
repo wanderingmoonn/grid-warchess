@@ -436,6 +436,9 @@ npm run pack-report    # 汇总成 results/packs/report.md
 做好的关怎么进「关卡」栏（上传 → 审核 → 发布）见
 **[剧情关投稿与发布](docs/GUIDE-STORY-SUBMIT.md)**。
 
+关卡里的"当…就…"（触发条件、动作、事件链、分支）单独写了一份
+**[事件系统总览](docs/GUIDE-EVENTS.md)**——开头就有能直接抄的六种剧本。
+
 想接手这块开发（现在有哪些能力、哪里有雷、下一步做什么），看
 **[关卡模式现状与交接](docs/STATUS-LEVEL-MODE-2026-11-15.md)**；
 当时为什么这么定的记录在 [更新计划](docs/PLAN-LEVEL-MODE-2026-11-14.md)。

@@ -10095,6 +10095,21 @@ check('事件面板：卡片式，有模板入口和一块地图', () => {
   assert.ok(doc.querySelector('.level-canvas'), '要有一块地图用来选区域/点落点');
 });
 
+check('事件面板有「速查」：点开一屏说明，点关闭能收起', () => {
+  // 从**最后一个**面板里找：前面几段留下过旧面板，全局 querySelector 会拿到旧的
+  const mask = [...doc.querySelectorAll('.modal-mask')].pop()!;
+  const btn = mask.querySelector<HTMLElement>('[data-act="help"]');
+  assert.ok(!!btn, '事件面板右上角要有「速查」');
+  btn!.click();
+  const layer = mask.querySelector<HTMLElement>('[data-help]');
+  assert.ok(!!layer && !layer.hidden, '点开后应当显示');
+  const text = layer!.textContent ?? '';
+  assert.ok(text.includes('直接判胜') && text.includes('走进区域'), `速查要列出条件和动作，实际：${text.slice(0, 80)}`);
+
+  mask.querySelector<HTMLElement>('[data-act="help-close"]')!.click();
+  assert.ok(mask.querySelector<HTMLElement>('[data-help]')!.hidden, '点「关闭」要收起');
+});
+
 check('从模板加一条「炸桥」：卡片里是播报 + 改地形两个动作', () => {
   const sel = doc.querySelector<HTMLSelectElement>('[data-template]')!;
   sel.value = 'bridge';

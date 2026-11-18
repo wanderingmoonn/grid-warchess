@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET } from '../src/core/ai.ts';
+import { aiMood, aiActiveMood, aiLevelOf, aiNextAction, aiActionKey, aiDebugPlan, flankSplit, foeOutput, savingAllowance, cityThreatUrgency, cityDistanceField, DEFAULT_BUDGET, aiStallGuard, aiProgressFingerprint } from '../src/core/ai.ts';
 import { tacticalMap } from '../src/core/ai-tactics.ts';
 import { combatCore, effectiveHp, raidPremium, NEUTRAL_CONTEXT } from '../src/core/unit-value.ts';
 import { applyAction, canStrike, previewAttack, siegeTargets, threatTiles, idx, refreshMemory, utype } from '../src/core/rules.ts';
@@ -660,5 +660,56 @@ test('跨代：2 代兵放到 6 代的谱下，输出和生存都会掉',()=>{
 // 「掠空」（fly-over）2026-11-07 整个删掉了，所以它那两条定价用例也一起删：
 // 「均势下应值 0.18」「必须比飞行贵」——两条都在量一个已经不存在的词。
 // 飞行本身的价格（FLIGHT_VALUE = 0.15）由 combatCore 的用例继续盯着。
+
+/* ── 卡死检测（阶段 0b）───────────────────────────────────────────────
+ *
+ * 它防的是"成功但没进展"的动作：形态切换、开关姿态、把人塞进船又拿出来。
+ * 这类动作每一步都合法，`rejected` 记不住（那张表只记被规则拒掉的），
+ * 于是 AI 会一直选、一直成功，把一回合的步子烧光，而别人一个都没动。
+ *
+ * 为什么这几条要单独测：它没有自己的"正面场景"，只有反面——
+ * 宁可漏判（靠名额兜着），也不能误判（把正常打法掐断）。
+ */
+test('卡死检测：同一个动作重复、局面不动，第三次判定卡死', () => {
+  const g = aiStallGuard();
+  const s = arena();
+  const key = '{"type":"UNIT_ACTION","unitId":"u1","actionId":"form"}';
+  const fp = aiProgressFingerprint(s);
+  assert.equal(g.note(key, fp), false);
+  assert.equal(g.note(key, fp), false);
+  assert.equal(g.note(key, fp), true, '第 3 次应该判定卡死');
+  assert.equal(g.repeats, 2);
+});
+
+test('卡死检测：局面真的变了（走了一格）就不算卡死', () => {
+  const g = aiStallGuard();
+  const s = arena();
+  const u = unit(s, 'A', 'militia', 5, 5);
+  const key = '{"type":"MOVE","unitId":"u-0","x":6,"y":5}';
+  assert.equal(g.note(key, aiProgressFingerprint(s)), false);
+  u.x = 6;
+  assert.equal(g.note(key, aiProgressFingerprint(s)), false, '局面变了，计数该清零');
+  assert.equal(g.repeats, 0);
+});
+
+test('卡死检测：换着动作做不算卡死（哪怕局面一直没变）', () => {
+  const g = aiStallGuard();
+  const s = arena();
+  const fp = aiProgressFingerprint(s);
+  for (let i = 0; i < 6; i += 1) {
+    assert.equal(g.note(i % 2 === 0 ? 'act-a' : 'act-b', fp), false, `第 ${i + 1} 次不该判死`);
+  }
+  assert.equal(g.repeats, 0);
+});
+
+test('指纹：只看玩家看得见的变化——扩展私有状态不算，坐标算', () => {
+  const s = arena();
+  const u = unit(s, 'A', 'militia', 5, 5);
+  const before = aiProgressFingerprint(s);
+  u.custom = { form: 'second', charge: 3 };
+  assert.equal(aiProgressFingerprint(s), before, 'custom 变了不算进展（否则形态切换这类空转永远抓不到）');
+  u.x = 7;
+  assert.notEqual(aiProgressFingerprint(s), before, '坐标变了必须算');
+});
 
 console.log(`${passed} AI optimization tests passed`);
