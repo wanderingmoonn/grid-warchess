@@ -43,7 +43,7 @@ import { addMark, markCountOf, marksAt } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
 import { registerStatus } from './statuses.ts';
 import { registerSkillAi, registerSkillEffect } from './skill-hooks.ts';
-import type { UnitTypeDef } from './types.ts';
+import type { GameState, UnitTypeDef } from './types.ts';
 
 /* ==========================================================================
  * 一、这个包自己的两条持续状态（中毒 / 灼烧）
@@ -2946,15 +2946,64 @@ registerSkillEffect('vanish', (c) => {
  * ========================================================================== */
 
 /**
- * 陨卵：一枚卵既是伤害，也是两回合后的一条龙，所以只要**有一个敌人**吃得到
- * 就该放——它不是终结技，是"往对面阵线里插一根钉子"。
+ * 射程内最近的一格"放得下卵的空地"。
  *
- * 30 分是原来的值，搬过来照抄；落点不指定——规则层会自动挑"砸到人最多"的那格。
+ * 判定用 `api.canStandAt(…, 'dragon-egg')`——和规则层挑落点用的是同一个判断
+ * （`eggDropCells` 里也是它），所以这里挑出的格子点下去一定成立，
+ * 不会出现"AI 提了个必被拒的落点"。
+ *
+ * 同距离时取扫描顺序靠前的那个（dy 外层、dx 内层），保证同一局面每次都选同一格。
+ */
+function nearestEggSpot(
+  c: { state: GameState; unit: { x: number; y: number }; api: { canStandAt: (s: GameState, x: number, y: number, type: string) => boolean } },
+  reach: number,
+): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  for (let dy = -reach; dy <= reach; dy += 1) {
+    for (let dx = -reach; dx <= reach; dx += 1) {
+      const cheb = Math.max(Math.abs(dx), Math.abs(dy));
+      if (cheb > reach) continue;
+      /*
+       * 不在自己脚下放。
+       *
+       * 规则层是允许的（飞行单位和地面单位可以叠在同一格），但"最近的空地"
+       * 不该是"我自己站的那一格"——王是飞行的，卵会直接落在它肚皮底下，
+       * 玩家看到的是一枚凭空出现在龙身上的蛋。
+       */
+      if (cheb === 0) continue;
+      const x = c.unit.x + dx;
+      const y = c.unit.y + dy;
+      if (!c.api.canStandAt(c.state, x, y, 'dragon-egg')) continue;
+      if (cheb < bestD) {
+        bestD = cheb;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * 陨卵：一枚卵既是伤害，也是两回合后的一条龙。
+ *
+ * 两种用法：
+ *   · **射程内有敌人**：照常放（30 分），落点交给规则层自动挑"砸到人最多"的那格；
+ *   · **射程内没有敌人**：往最近的空地放一枚（15 分），等它两回合后孵成魔龙。
+ *
+ * 第二条是 2026-11-18 补的：规则从 11-10 起就允许落在空地上了（卵本身就是
+ * 两回合后的一条龙，不只是砸那一下），但 AI 的判断一直没跟上——没有敌人时
+ * 它一次都不放，于是"隔空往阵线里插钉子"这个用法对电脑等于不存在。
+ *
+ * 分都不高是有原因的：技能候选在核心那边还有 +300 的加成，所以只要给正分，
+ * 冷却好了就会放；这两个数字只决定"和别的技能比，先放哪个"。
  */
 registerSkillAi('dragon-egg', (c) => {
   const reach = c.skill.radius ?? 6;
-  if (!c.foes.some((f) => c.api.distance(f, c.unit) <= reach)) return null;
-  return 30;
+  if (c.foes.some((f) => c.api.distance(f, c.unit) <= reach)) return 30;
+  const spot = nearestEggSpot(c, reach);
+  if (!spot) return null;
+  return { score: 15, x: spot.x, y: spot.y };
 });
 
 /**
