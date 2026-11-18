@@ -42,6 +42,7 @@ import { SPACE_WAR } from './space/space-war.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
+import { DARK_TURMOIL } from './dark-turmoil-packs.ts';
 import { CONTEMPORARY_BASE_PACK } from './contemporary-packs.ts';
 import { ARMOR_ERA7, ARMOR_ERA8 } from './armor-expansion.ts';
 // 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
@@ -1642,6 +1643,9 @@ export const EXPANSIONS: Expansion[] = [
   // 高机动性：只在既有的 move / range / vision 三个钩子上把数值放大，
   // 没有判定顺序可言，放哪都一样。
   HIGH_MOBILITY,
+  // 「黑暗动乱」：剧情扩展，依赖修真包。排在最后——它的钩子只碰自己的兵种
+  // （按 id 判断），不和任何别人的规则抢道。
+  DARK_TURMOIL,
 ];
 
 /**

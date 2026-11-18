@@ -1507,6 +1507,86 @@ export const LEVELS: LevelDef[] = [
     ],
   },
 
+  /* ── 玩家关 6：黑暗动乱（剧情 / 限时）────────────────────────── */
+  {
+    id: 'level:dark-turmoil',
+    version: LEVEL_VERSION,
+    demo: true,
+    name: '黑暗动乱',
+    brief:
+      '16×16。尸骸仙帝在沉眠地苟延残喘，寿元将尽。在它把天地吃干之前杀掉它——或者，等它自己老死。' +
+      '（数值是占位版，先看循环能不能跑。）',
+    map: {
+      id: 'levelmap:dark-turmoil',
+      name: '黑暗动乱',
+      w: 16,
+      h: 16,
+      rows: rowsOf(16, 16, [
+        [5, 5, 'f'], [6, 5, 'f'], [5, 6, 'f'], [6, 6, 'f'],
+        [10, 9, 'f'], [11, 9, 'f'], [10, 10, 'f'],
+        [7, 2, 'h'], [8, 2, 'h'], [7, 3, 'h'],
+        [3, 12, 'h'], [4, 12, 'h'],
+      ]),
+      citiesA: [{ x: 1, y: 7 }],
+      // B 席没有城（cityless），这两组都不会用到
+      citiesB: [],
+      source: 'builtin',
+    },
+    /*
+     * B 是**没有城的席位**：仙帝的军团没有产线，全靠开局摆上去的那几个。
+     * 它也因此不吃"丢城"那套出局判定——兵打光就完。
+     */
+    seats: { count: 2, ai: ['B'], cityless: ['B'] },
+    setup: { startEra: 2, firstSide: 'A' },
+    // 这一关讲的是修真包的事，两个包都必须开
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        { type: 'qi-cultivator', x: 2, y: 6 },
+        { type: 'qi-cultivator', x: 2, y: 8 },
+        { type: 'sword-cultivator', x: 3, y: 7 },
+        { type: 'body-cultivator', x: 3, y: 9 },
+        { type: 'cultivation-servant', x: 1, y: 10 },
+      ],
+      B: [
+        { type: 'corpse-emperor', x: 12, y: 5 },
+        { type: 'slumber-site', x: 12, y: 7 },
+        // 两具"应急食品"：仙帝饿起来会先吃它们，玩家能亲眼看到这一幕
+        { type: 'qi-cultivator', x: 11, y: 6 },
+        { type: 'qi-cultivator', x: 13, y: 6 },
+      ],
+    },
+    /*
+     * 两条判据顺序很关键：
+     *   1. 仙帝没了（被打死，或者老死）→ 玩家赢。**老死也算赢**，这是这一关的核心张力：
+     *      你可以不打，但你得熬得住它出山吃人。
+     *   2. 它撑到第 60 次行动 → 它赢（不能无限拖）。
+     */
+    goals: [
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'corpse-emperor', label: '尸骸仙帝' },
+      { kind: 'survive', seat: 'B', untilTurn: 60 },
+    ],
+    events: [
+      {
+        id: 'wake',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'say', text: '沉眠地的白骨又动了一下。它在数这个天地间还剩多少活物。' },
+        ],
+      },
+      {
+        id: 'devour-warning',
+        when: { kind: 'turn', at: 6 },
+        do: [{ kind: 'say', text: '仙帝的呼吸越来越重——它快饿死了，而它带来的那两个"侍从"正站在它身边。' }],
+      },
+      {
+        id: 'emperor-down',
+        when: { kind: 'unitDied', type: 'corpse-emperor' },
+        do: [{ kind: 'say', text: '尸骸散落一地。天地间忽然安静下来，只剩下风声。' }],
+      },
+    ],
+  },
+
   {
     id: 'level:probe-flat',
     version: LEVEL_VERSION,

@@ -994,13 +994,17 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
   /*
    * 2026-11-17 菜单分成两栏：
    *   · 「关卡」= 主线 / 教学关（`demo` 不写）——现在还没设计，空着是正常状态；
-   *   · 「编辑器」= 示例关（`demo: true`）——内建那五张。
+   *   · 「编辑器」= 示例关（`demo: true`）——内建的那几张。
    * 两栏加起来就是"玩家可见的关卡"，也就是 `playableLevels()`。
    */
   const demos = demoLevels();
   const stories = storyLevels();
   const menu = playableLevels();
-  check(demos.length === 5, `编辑器栏有五张示例关（${demos.map((l) => l.name).join(' / ')}）`);
+  /*
+   * 只要求"至少五张"，不钉死数字：加一张示例关不该让这条变红。
+   * （项目自己的规矩——探针不许钉死具体数量/数值，见 STATUS-LEVEL-MODE 第 7 条坑。）
+   */
+  check(demos.length >= 5, `编辑器栏至少有五张示例关（${demos.map((l) => l.name).join(' / ')}）`);
   check(
     demos.every((l) => l.demo === true),
     '示例关都标了 demo——不标的话它们会被当成主线关塞进「关卡」栏',
