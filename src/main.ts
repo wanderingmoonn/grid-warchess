@@ -5825,6 +5825,12 @@ function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
     state = createMatch(result.config, result.seed, loadCustomUnits());
+    /*
+     * 托管是**这一局**的临时授权，不该跟着开下一局（2026-11-18）。
+     * 不清的话：玩家上一局点过一次"托管"，新开一局自己那一席仍是电脑，
+     * 表现就是"点了没反应、打不了"——浮层里 `aiControl.A=true` 就是这么来的。
+     */
+    state.aiControl = undefined;
     dropHeatFlash();
     detachRoom();
     resetZoom();
@@ -5854,6 +5860,7 @@ function newGameFlow(): void {
 function playtestLevel(level: LevelDef): void {
   try {
     state = createMatch({ ...DEFAULT_CONFIG, level }, randomSeed(), loadCustomUnits());
+    state.aiControl = undefined; // 同上：试玩不该继承上一局的托管
     dropHeatFlash();
     detachRoom();
     resetZoom();
@@ -8993,6 +9000,25 @@ window.addEventListener('error', (e) => {
   if (e.error) fatalBanner(e.error, '运行时出错');
 });
 
+/*
+ * 启动自愈：单人局里"自己那一席被托管"（2026-11-18）。
+ *
+ * 几乎是误触：点一次托管跳过自己回合，之后存档里就一直是 true，
+ * 下次进来发现"怎么点都不动"，还会被误当成"联机坏了"。
+ * 房间里不碰（那边有坐席/观战的独立逻辑），观战也不碰。
+ */
+function dropStaleSelfControl(): void {
+  if (room || spectating()) return;
+  const my = state.aiControl?.[me()];
+  if (my !== true) return;
+  const next = { ...(state.aiControl ?? {}) };
+  delete next[me()];
+  state.aiControl = Object.keys(next).length > 0 ? next : undefined;
+  aiToken += 1;
+  saveMatch(state);
+  toast('已收回你的托管：这一局由你自己操作');
+}
+
 let resuming = false;
 try {
   // 先看看上次是不是在某个房间里：是的话要先把存档作用域切过去，再读草稿
@@ -9010,6 +9036,7 @@ try {
   refreshMemory(state);
   saveMatch(state);
   render();
+  dropStaleSelfControl();
   if (patched > 0) {
     toast(`存档里有 ${patched} 个本版不认识的单位，已经移除，剩下的照常打`);
   }
