@@ -1540,7 +1540,8 @@ const BONE_UNNAMED_DEF: UnitTypeDef = {
   move: 3,
   atk: 38,
   armor: 12,
-  maxHp: 140,
+  // 140 → 160（2026-11-18 作者指出）：它是骨系的头，血不该比尸骸（150）还少
+  maxHp: 160,
   range: 3,
   vision: 7,
   burst: 2,
