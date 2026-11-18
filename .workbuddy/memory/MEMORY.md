@@ -102,6 +102,13 @@ rejected 契约。**重要事实：非法候选在挑选前就被 `applyAction(v
 走同一个 `registerSkillEffect`，行为零变化。**剩余清单在 PLAN 的阶段 3 一节**：
 rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`unit-value.ts` 的能力定价表。
 
+**技能 AI 提示已开（阶段 3b，2026-11-18）**：`registerSkillAi(效果id, 提示)` 在 `skill-hooks.ts`，
+返回 `null` / 数字 / `{score,x,y}`。核心先查表、查不到走旧 case。已搬 `dragon-egg`（零变化已验：
+指纹 1769d015/588、c048213/385）。**和 unitAi 的分工**：unitAi 管一整个兵的剧本（要开自主分），
+技能提示管单个技能放不放的常识（所有会技能的兵都生效）。剩 11 个 case 照抄形状，分数必须照抄。
+顺手修了"陨卵射程内没敌人就不放"的老 bug（规则 11-10 就允许落空地了），
+用 `npm run probe:skill-ai` 验（真 applyAction 放一次看盘上多没多卵）。
+
 **顺带量出的真病灶**：20 个兵里一半以上每回合什么都不做（走位收益太低+评分门槛），
 不是名额问题。要动它得另开议题，别顺手改。
 

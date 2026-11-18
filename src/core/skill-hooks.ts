@@ -1,5 +1,5 @@
 // src/core/skill-hooks.ts
-import type { BoardId, GameState, Unit } from './types.ts';
+import type { BoardId, GameState, Unit, UnitTypeDef, SkillDef } from './types.ts';
 import type { AbilityApi } from './ability-hooks.ts';
 
 export interface SkillCtx {
@@ -38,9 +38,81 @@ export function registerSkillEffect(id: string, handler: SkillHandler): void {
 
 /** 技能就绪检查的注册表 */
 export const SKILL_READY_CHECKS: Record<string, (s: GameState, u: Unit, api?: AbilityApi) => boolean | string> = {};
-
 export function registerSkillReadyCheck(id: string, check: (s: GameState, u: Unit, api?: AbilityApi) => boolean | string): void {
   SKILL_READY_CHECKS[id] = check;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 「这个技能什么时候值得放」——技能自带的 AI 提示
+ *
+ * 为什么需要：以前 AI 判断"技能该不该放"是一串写死在 `ai.ts` 里的
+ * `case '效果名'`。那意味着**引擎认识具体内容**——每加一个英雄技能就得回
+ * 核心改一处；更糟的是扩展的技能（比如修真的法术）AI 根本不认识，
+ * 配上去等于没配。
+ *
+ * 现在换过来：技能效果在哪个包里，就由那个包顺手声明一句"什么条件下该放、
+ * 值多少分"。核心只负责问，然后照常比较分数。
+ *
+ * ── 和 `Expansion.unitAi` 的分工（别搞混） ────────────────────────
+ *
+ *   · `unitAi`：管**一整个兵这一回合的行为**，能给走位、能提别的动作、
+ *     能标"必须做"。要兵种写 `aiAutonomy > 0` 才生效。
+ *   · 这里：只管**单个技能放不放**，只能给分数（和可选落点）。
+ *     对所有会技能的兵生效，不需要开自主分。
+ *
+ * 一句话：unitAi 管剧本，这里管常识。普通英雄该走常识这条路——
+ * 给它们开自主分等于让每个兵各打各的，协同就散了。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export interface SkillAiCtx {
+  /**
+   * 施法者视角的**雾图**（`playerView` 的结果）。
+   *
+   * 和全局 AI 看到的完全一样多，不是真局。能看全图的话，
+   * 技能就会去打玩家看不见的兵——一眼看出来在作弊，回放也对不上。
+   */
+  state: GameState;
+  unit: Unit;
+  def: UnitTypeDef;
+  skill: SkillDef;
+  /** 查询用的小工具（距离、站位、生命上限……）。**只查不改** */
+  api: AbilityApi;
+  /**
+   * 核心已经筛好的"能打的敌人"：敌人席位里、还活着、且是战斗单位。
+   *
+   * 由核心给而不是让包自己筛，是为了**两处口径一致**：以前写死的那些 case
+   * 用的就是这一份名单，包自己再筛一遍很容易差一点（漏掉"己方同盟"这类）。
+   */
+  foes: Unit[];
+  /** 自己的血量比例（0~1），省得每个技能都算一遍 */
+  hpRatio: number;
+  /** 自己这边能看到的单位（含自己） */
+  allies: Unit[];
+}
+
+/**
+ * 提示的返回值。三种：
+ *   · `null`（或 `false`）＝ 现在不值得放，跳过这个技能；
+ *   · `数字` ＝ 值这么多分，落点交给规则层自动挑；
+ *   · `{ score, x, y }` ＝ 值这么多分，**并且指定落点**（要选点的技能才用得上）。
+ */
+export type SkillAiHintResult = number | { score: number; x?: number; y?: number } | null;
+
+export type SkillAiHint = (c: SkillAiCtx) => SkillAiHintResult;
+
+export const SKILL_AI_HINTS: Record<string, SkillAiHint> = {};
+
+/**
+ * 注册一个技能的 AI 提示。key 是**效果 id**（`skill.effect`），不是技能 id。
+ *
+ * 重复注册直接抛错：和技能效果、单兵行为表同一条纪律——不许"开了某个包，
+ * 同一个技能换了个脑子"，那种问题玩家永远查不清。
+ */
+export function registerSkillAi(effect: string, hint: SkillAiHint): void {
+  if (Object.prototype.hasOwnProperty.call(SKILL_AI_HINTS, effect)) {
+    throw new Error(`技能「${effect}」的 AI 提示已经注册过了`);
+  }
+  SKILL_AI_HINTS[effect] = hint;
 }
 
 export interface SkillPreviewCtx {
