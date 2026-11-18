@@ -319,9 +319,24 @@ export function openOnlinePanel(host: OnlineHost): void {
         const token = saved?.token ?? newToken();
         // 这张桌子有几个座，由房间里的 config 决定（老房间没有 playerCount = 两人局）
         const seats = seatsOf(snapshotNow.state);
-        const order: PlayerId[] = mine
+        /*
+         * **电脑席位不给真人坐**（2026-11-18）。
+         *
+         * 关卡用 `config.aiSeats` 声明"这一席是电脑"（比如 `["C"]`）。原来这里
+         * 只按"空着就坐"来抢座，于是退出再进一次的人可能坐进 AI 那一席——
+         * 一坐下 `aiControl` 就把它变成真人操作，原本该由电脑打的一方从此不动，
+         * 看上去就是"联机把关卡玩坏了"。
+         *
+         * 现在：先按原席位/席位顺序找**非电脑**的空位；一个都没有就转观战，
+         * 而不是把电脑的席位抢过来。
+         */
+        const aiSeats: PlayerId[] = Array.isArray(snapshotNow.state.config.aiSeats)
+          ? (snapshotNow.state.config.aiSeats as PlayerId[])
+          : [];
+        const order: PlayerId[] = (mine
           ? [mine.seat, ...seats.filter((x) => x !== mine!.seat)]
-          : seats;
+          : seats
+        ).filter((x) => !aiSeats.includes(x));
         let seated: PlayerId | null = null;
         for (const seat of order) {
           if ((await claimSeat(code, seat, token)) === 'ok') {
