@@ -309,6 +309,10 @@ const EROSION_BY_TYPE: Record<string, number> = {
   'blood-pool': 0,
   flesh: 5,
   'blood-core': 12,
+  // 不成系的三个（2026-11-18）：黑蝗几乎不疼、黑茧中等、诡异中等偏高
+  'black-locust': 3,
+  'black-cocoon': 8,
+  unnamable: 10,
 };
 
 function erosionOf(u: Unit): number {
@@ -1354,6 +1358,37 @@ const BLOOD_CORE_AI: UnitAiProfile = {
  * 数值全是占位。
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * 「凝结」基建：`custom.formTo` 标记的单位，**这个回合不能动**，
+ * 下一个回合结束时变成目标兵种（血量按比例换算）。
+ *
+ * 为什么从词条里提出来：寻躯、复苏、升华都是"吞下/锁定 → 等一回合 → 变形"，
+ * 但升华的目标是**别人**（黑茧吞掉自己，让旁边的暗影变影主）——
+ * 目标身上并没有那条能力，所以"锁"和"变"只能落在扩展这一层按 `custom.formTo` 认。
+ * 词条只负责**触发**（吃掉谁、记什么），怎么变由这里统一做。
+ */
+function freezeForming(state: GameState, player: PlayerId): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.hp <= 0) continue;
+    if (typeof u.custom?.formTo === 'string') u.moved = true;
+  }
+}
+
+function completeForming(state: GameState, player: PlayerId): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.hp <= 0) continue;
+    const to = u.custom?.formTo;
+    if (typeof to !== 'string') continue;
+    transform(u, to, state);
+    u.custom = { ...(u.custom ?? {}), formTo: undefined };
+    state.log.push({
+      turn: state.turn,
+      player: u.owner,
+      text: `${state.unitTypes[to]?.name ?? to}站了起来。`,
+    });
+  }
+}
+
 export const BONE_SKELETON = 'bone-skeleton';
 export const BONE_CORPSE = 'bone-corpse';
 export const BONE_UNNAMED = 'bone-unnamed';
@@ -1415,7 +1450,6 @@ function devourFormAbility(o: {
   eat: string;
   become: string;
   eatText: (name: string) => string;
-  doneText: string;
 }): AbilityDef {
   return {
     id: o.id,
@@ -1423,34 +1457,11 @@ function devourFormAbility(o: {
     summary: o.summary,
     group: 'support',
     hooks: {
-        /*
-         * 凝结期间**锁住移动**：回合开始就把 `moved` 置真。
-         *
-         * 为什么用这个办法：引擎没有"禁止移动"的开关，`canMove` 只看 `moved`。
-         * 而 `grantTurnTo`（重置 moved）跑在 `turnStartSkills` **之前**，
-         * 所以这里写下的 true 会保留整整一回合——AI 也提不出走位候选。
-         * 攻击不受影响：它只是"原地不动"，不是"不能动"。
-         */
-        onTurnStart: [
-          {
-            stage: TURN_START.self,
-            apply: (c) => {
-              if (typeof c.self.custom?.formTo === 'string') c.self.moved = true;
-            },
-          },
-        ],
       onTurnEnd: [
         {
           stage: 0,
           apply: (c) => {
-            const pending = c.self.custom?.formTo;
-            if (typeof pending === 'string') {
-              // 这一回合被锁住了移动，直接完成变形
-              transform(c.self, pending, c.state);
-              c.self.custom = { ...(c.self.custom ?? {}), formTo: undefined };
-              c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: o.doneText });
-              return;
-            }
+            if (typeof c.self.custom?.formTo === 'string') return; // 已经在凝结，别重复吃
             const prey = adjacentOf(c.state, c.self, o.eat);
             if (!prey) return;
             const preyName = c.state.unitTypes[prey.type]?.name ?? prey.type;
@@ -1476,7 +1487,6 @@ const BONE_SEEK = devourFormAbility({
   eat: FLESH,
   become: BONE_CORPSE,
   eatText: () => `血肉被骸骨吞下`,
-  doneText: '骸骨撑开骨架，拼成了一具尸骸。',
 });
 
 /** 「复苏」：尸骸吞暗影 → 凝结一回合 → 不详 */
@@ -1487,7 +1497,6 @@ const BONE_REVIVE = devourFormAbility({
   eat: SHADE,
   become: BONE_UNNAMED,
   eatText: () => `暗影被尸骸吞下`,
-  doneText: '尸骸重新拼合，站了起来——"不详"。',
 });
 
 /**
@@ -1662,6 +1671,352 @@ const BONE_UNNAMED_DEF: UnitTypeDef = {
   skills: [SHADOW_STEP_SKILL],
 };
 
+/* ══════════════════════════════════════════════════════════════════
+ * 八、三个不成系的（2026-11-18）
+ *
+ * 黑蝗、黑茧、诡异：它们不属于影/血/骨任何一支，但都是同一个源头漏出来的东西。
+ * 三者之间有一条链：**黑蝗聚成团 → 结茧 → 升华成影主或血核**。
+ * 也就是说这三只是"给另外三支供料"的。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const BLACK_LOCUST = 'black-locust';
+export const BLACK_COCOON = 'black-cocoon';
+export const UNNAMABLE = 'unnamable';
+
+/** 一个单位周围（8 邻域）有几只黑蝗 */
+function locustsAround(state: GameState, x: number, y: number): number {
+  let n = 0;
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dy === 0) continue;
+      if (state.units.some((o) => o.hp > 0 && o.type === BLACK_LOCUST && o.x === x + dx && o.y === y + dy)) n += 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * 「繁殖」：相邻的某一格满足条件，就在那一格生出一只黑蝗。
+ *
+ * 条件（作者原话）：那一格的 8 邻域里黑蝗正好 2 只、它的相邻格**全在暗影里**、
+ * 且没有别的飞行单位占着。
+ *
+ * 为什么这么苛刻：黑蝗自己的暗影半径是 0（只有脚下），所以一条"全在暗影里"的
+ * 相邻带意味着**必须是它们自己叠出来的影子**——它只能在同类聚成的黑团里繁殖，
+ * 铺到亮处就断了。
+ */
+const LOCUST_BREED: AbilityDef = {
+  id: 'locust-breed',
+  name: '繁殖',
+  summary: '回合结束时，若相邻某格的周围恰有 2 只黑蝗、且那一带全在暗影里，就在那里再生一只。',
+  group: 'support',
+  hooks: {
+    onTurnEnd: [
+      {
+        stage: 0,
+        apply: (c) => {
+          const { state, self, api } = c;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+            const x = self.x + dx;
+            const y = self.y + dy;
+            if (x < 0 || y < 0 || x >= state.w || y >= state.h) continue;
+            if (locustsAround(state, x, y) !== 2) continue;
+            // 那一格的周围必须全在暗影里
+            let allShadow = true;
+            for (let oy = -1; oy <= 1 && allShadow; oy += 1) {
+              for (let ox = -1; ox <= 1; ox += 1) {
+                if (ox === 0 && oy === 0) continue;
+                const nx = x + ox;
+                const ny = y + oy;
+                if (nx < 0 || ny < 0 || nx >= state.w || ny >= state.h) continue;
+                if (!inShadowCell(state, nx, ny, self.board)) {
+                  allShadow = false;
+                  break;
+                }
+              }
+            }
+            if (!allShadow) continue;
+            // 那一格不能有别的（飞行）单位
+            if (state.units.some((o) => o.hp > 0 && o.x === x && o.y === y)) continue;
+            if (!api.canStandAt(state, x, y, BLACK_LOCUST)) continue;
+            api.spawn(state, self.owner, BLACK_LOCUST, x, y);
+            state.log.push({ turn: state.turn, player: self.owner, text: '黑暗里又爬出一只黑蝗。' });
+            return; // 一回合最多一只
+          }
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「结茧」：四周都是同类、脚下又是空地，就吞掉它们结成黑茧。
+ *
+ * "脚下是空地"这条是给玩家的破绽：它飞着，只要底下站着人就没法落地结茧。
+ */
+const LOCUST_COCOON: AbilityDef = {
+  id: 'locust-cocoon',
+  name: '结茧',
+  summary: '回合结束时，若四周都是黑蝗且脚下没有地面单位，吞掉四周的黑蝗，自己结成黑茧。',
+  group: 'support',
+  hooks: {
+    onTurnEnd: [
+      {
+        stage: 0,
+        apply: (c) => {
+          const { state, self } = c;
+          const around = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+          let eaten: Unit[] = [];
+          let allLocust = true;
+          for (const [dx, dy] of around) {
+            const x = self.x + dx;
+            const y = self.y + dy;
+            if (x < 0 || y < 0 || x >= state.w || y >= state.h) continue; // 地图外不算
+            const other = state.units.find((o) => o.hp > 0 && o.x === x && o.y === y && o.type === BLACK_LOCUST);
+            if (!other) {
+              allLocust = false;
+              break;
+            }
+            eaten.push(other);
+          }
+          if (!allLocust || eaten.length < 2) return; // 至少两只，不然一只也能结茧
+          // 脚下必须没有地面单位
+          const grounded = state.units.some(
+            (o) => o.id !== self.id && o.hp > 0 && o.x === self.x && o.y === self.y && o.layer !== 'air',
+          );
+          if (grounded) return;
+          for (const o of eaten) c.api.killUnit(state, o, undefined, '黑蝗被同类吞下');
+          self.layer = undefined; // 落地成茧，不再飞
+          transform(self, BLACK_COCOON, state);
+          state.log.push({ turn: state.turn, player: self.owner, text: '黑蝗挤成一团，结成了黑茧。' });
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「升华」：黑茧吞掉自己，把附近的一只暗影或血肉催成它们的头。
+ *
+ * 和寻躯/复苏同一套节奏——目标会被冻住一个回合，再按血量比例变成新兵种。
+ * 所以这里只负责"选谁、记什么"，真正的锁与变在 `freezeForming` / `completeForming`。
+ */
+const COCOON_ASCEND: AbilityDef = {
+  id: 'cocoon-ascend',
+  name: '升华',
+  summary: '回合结束时，若两格内有暗影或血肉，自己消散，把它催成影主或血核（它要原地停一回合）。',
+  group: 'support',
+  hooks: {
+    onTurnEnd: [
+      {
+        stage: 0,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const pick = state.units
+            .filter(
+              (o) =>
+                o.hp > 0 &&
+                o.owner === self.owner &&
+                (o.type === SHADE || o.type === FLESH) &&
+                Math.abs(o.x - self.x) + Math.abs(o.y - self.y) <= 2 &&
+                typeof o.custom?.formTo !== 'string',
+            )
+            .sort(
+              (a, b) => Math.abs(a.x - self.x) + Math.abs(a.y - self.y) - (Math.abs(b.x - self.x) + Math.abs(b.y - self.y)),
+            )[0];
+          if (!pick) return;
+          const to = pick.type === SHADE ? SHADOW_LORD : BLOOD_CORE;
+          pick.custom = { ...(pick.custom ?? {}), formTo: to };
+          api.killUnit(state, self, undefined, '黑茧化开了');
+          state.log.push({
+            turn: state.turn,
+            player: self.owner,
+            text: `黑茧化开，把${state.unitTypes[pick.type]?.name ?? ''}整个吞了进去。`,
+          });
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「无形」：不可言说之物，**相邻也看不见**；攻击之后才现形。
+ *
+ * ⚠️ 作者原案还有后半条——"破隐后只有被命中的目标打得中它"。
+ * 这一半**没做**：引擎里没有"谁能打谁"的钩子（`AbilityHooks` 里只有
+ * `hidden` 决定"看不看得见"，没有"打不打得到"）。要做的话得给核心加一条
+ * `canBeAttackedBy(ctx)`，在 `doAttack` 的合法性检查里问一次。
+ * 先把看得见的那半做出来，那一半等定了方案再说。
+ */
+const UNNAMABLE_FORM: AbilityDef = {
+  id: 'unnamable-formless',
+  name: '无形',
+  summary: '看不见，也无法被相邻发现；出手攻击之后才现形。',
+  group: 'move',
+  hooks: { hidden: (c) => !c.self.acted },
+};
+
+/* ── 三个兵 ─────────────────────────────────────────────────────── */
+
+/** 黑蝗：黑暗里爬出来的蝗虫。单个几乎打不死人，成团就繁殖。 */
+const BLACK_LOCUST_DEF: UnitTypeDef = {
+  id: BLACK_LOCUST,
+  name: '黑蝗',
+  short: '蝗',
+  era: 6,
+  category: 'combat',
+  cost: 60,
+  move: 5,
+  atk: 1,
+  armor: 4,
+  maxHp: 20,
+  range: 1,
+  vision: 4,
+  burst: 3,
+  // 飞着：结茧要求"脚下是空地"，所以它必须能在空中层
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  // 半径 0 = 只有脚下那一格算暗影领域
+  shadowRadius: 0,
+  aiAutonomy: 1,
+  aiProfile: 'locust-swarm',
+  abilities: ['shadow-erosion', 'blood-siphon', 'locust-breed', 'locust-cocoon'],
+};
+
+/** 黑茧：黑暗结晶，不会动的炮台。血厚甲高，等着升华。 */
+const BLACK_COCOON_DEF: UnitTypeDef = {
+  id: BLACK_COCOON,
+  name: '黑茧',
+  short: '茧',
+  era: 6,
+  category: 'building',
+  cost: 300,
+  move: 0,
+  atk: 1,
+  armor: 14,
+  maxHp: 200,
+  range: 5,
+  vision: 6,
+  burst: 3,
+  summonedOnly: true,
+  shadowRadius: 6,
+  aiAutonomy: 1,
+  aiProfile: 'cocoon-nearest',
+  abilities: ['shadow-erosion', 'blood-siphon', 'cocoon-ascend'],
+};
+
+/** 诡异：不可言说之物。看不见、跳得远、打完就跑。 */
+const UNNAMABLE_DEF: UnitTypeDef = {
+  id: UNNAMABLE,
+  name: '诡异',
+  short: '诡',
+  era: 6,
+  category: 'combat',
+  cost: 350,
+  move: 5,
+  atk: 12,
+  armor: 6,
+  maxHp: 60,
+  range: 3,
+  vision: 7,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 6,
+  aiAutonomy: 1,
+  aiProfile: 'unnamable-stalk',
+  abilities: ['shadow-erosion', 'unnamable-formless'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/* ── 三个 profile ───────────────────────────────────────────────── */
+
+/**
+ * 黑蝗：**往暗影里钻、离硬手远一点**，专咬甲厚的。
+ *
+ * 甲厚的单位通常慢、近战——对一只 5 速的飞虫来说是最安全的猎物；
+ * 反过来"离攻击力强的远一点"是它唯一的保命本能。
+ */
+const LOCUST_AI: UnitAiProfile = {
+  id: 'locust-swarm',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+
+    const hard = c.foes
+      .filter((f) => dist(f, c.unit) <= range)
+      .sort((a, b) => (c.state.unitTypes[b.type]?.armor ?? 0) - (c.state.unitTypes[a.type]?.armor ?? 0))[0];
+    if (hard) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: hard.id }, score: 150 });
+
+    // 走位：偏好暗影格，同时离"打人疼的"远一点
+    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
+    for (const p of tiles) {
+      const inShadow = inShadowCell(c.state, p.x, p.y, c.unit.board) ? 6 : 0;
+      const strong = c.foes.filter((f) => (c.state.unitTypes[f.type]?.atk ?? 0) >= 30);
+      const safe = Math.min(...strong.map((f) => dist(f, p)), 8);
+      const score = inShadow + safe * 0.8;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 110 });
+    return add.length ? { add } : {};
+  },
+};
+
+/** 黑茧：不会动，打射程内**最近**的。 */
+const COCOON_AI: UnitAiProfile = {
+  id: 'cocoon-nearest',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const range = c.def.range ?? 5;
+    const near = c.foes
+      .filter((f) => dist(f, c.unit) <= range)
+      .sort((a, b) => dist(a, c.unit) - dist(b, c.unit))[0];
+    if (!near) return {};
+    return { add: [{ action: { type: 'ATTACK', unitId: c.unit.id, targetId: near.id }, score: 170 }] };
+  },
+};
+
+/**
+ * 诡异：**补刀最虚的，然后沉回暗影里**。
+ *
+ * 作者没给它的倾向，这里是补的：它是"打完就消失"的东西，
+ * 所以挑血最少的收人头，没有目标就回暗影最深处等着。
+ */
+const UNNAMABLE_AI: UnitAiProfile = {
+  id: 'unnamable-stalk',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 3;
+
+    const prey = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 175 });
+
+    const deep = deepestShadow(c.state, c.unit);
+    if (deep && (deep.x !== c.unit.x || deep.y !== c.unit.y)) {
+      const gap = dist(c.unit, deep);
+      if (canStep(c) && gap > Math.max(1, c.def.move) + 2) {
+        add.push({
+          action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: deep.x, targetY: deep.y },
+          score: 140,
+        });
+      } else {
+        const walk = steps(c, Math.max(1, c.def.move))
+          .filter((p) => p.d > 0)
+          .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
+        if (walk && dist(walk, deep) < gap) {
+          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
+        }
+      }
+    }
+    return add.length ? { add } : {};
+  },
+};
+
 /* ── 骨系行为 ───────────────────────────────────────────────────── */
 
 /**
@@ -1792,6 +2147,10 @@ for (const a of [
   BONE_ASSEMBLE,
   BONE_TRANSMUTE,
   BONE_DISSOLVE,
+  LOCUST_BREED,
+  LOCUST_COCOON,
+  COCOON_ASCEND,
+  UNNAMABLE_FORM,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -1831,6 +2190,12 @@ export const DARK_TURMOIL: Expansion = {
     '**不详**：朝**尸骸仙帝**走，但到 4 格就停下不再靠近；看不见仙帝时沉进暗影最深处。',
     '## 尸骸仙帝',
     '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
+    '## 不成系的三个',
+    '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人；咬**护甲最厚**的。它自己的暗影只有脚下那一格，' +
+      '所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
+    '**黑茧**：不会动，打**射程内最近**的。两格内出现暗影或血肉，它会化开把自己烧掉，' +
+      '把那只催成影主或血核。',
+    '**诡异**：看不见、也发现不了，只在出手之后现形；射程内**补刀血最少**的，没有目标就沉进暗影最深处。',
   ],
   blurb: '一位会老死的仙帝，和它为了续命掀起的浩劫。',
   summary:
@@ -1850,6 +2215,9 @@ export const DARK_TURMOIL: Expansion = {
     BONE_SKELETON_DEF,
     BONE_CORPSE_DEF,
     BONE_UNNAMED_DEF,
+    BLACK_LOCUST_DEF,
+    BLACK_COCOON_DEF,
+    UNNAMABLE_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -1865,6 +2233,10 @@ export const DARK_TURMOIL: Expansion = {
     BONE_ASSEMBLE,
     BONE_TRANSMUTE,
     BONE_DISSOLVE,
+    LOCUST_BREED,
+    LOCUST_COCOON,
+    COCOON_ASCEND,
+    UNNAMABLE_FORM,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -1878,10 +2250,14 @@ export const DARK_TURMOIL: Expansion = {
     BONE_SKELETON_AI,
     BONE_CORPSE_AI,
     BONE_UNNAMED_AI,
+    LOCUST_AI,
+    COCOON_AI,
+    UNNAMABLE_AI,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
+      freezeForming(state, player);
     },
     /*
      * 暗影：站在里面视野和射程减半。
@@ -1898,16 +2274,23 @@ export const DARK_TURMOIL: Expansion = {
      * 等于自己把自己废了。语义上也说得通：影子是它们的介质，不是它们的雾。
      */
     modifyVision: ({ state, unit, base }) =>
-      unit && (state.unitTypes[unit.type]?.shadowRadius ?? 0) <= 0 && inShadow(state, unit, base)
+      unit && state.unitTypes[unit.type]?.shadowRadius === undefined && inShadow(state, unit, base)
         ? Math.max(1, Math.ceil(base / 2))
         : base,
     modifyRange: ({ state, unit, range }) =>
-      (state.unitTypes[unit.type]?.shadowRadius ?? 0) <= 0 && inShadow(state, unit, range)
+      state.unitTypes[unit.type]?.shadowRadius === undefined && inShadow(state, unit, range)
         ? Math.max(1, Math.ceil(range / 2))
         : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
-    onTurnEnd: ({ state }) => {
+    onTurnEnd: ({ state, player }) => {
+      /*
+       * 先完成上一回合的凝结，再重铺暗影。
+       *
+       * 顺序有讲究：这一步跑在**能力**的 onTurnEnd 之前（见 doEndTurn），
+       * 所以"这一回合刚标记的 formTo"不会被当场完成——它得等下一回合。
+       */
+      completeForming(state, player);
       refreshShadow(state);
     },
     /**
@@ -2059,8 +2442,13 @@ export function refreshShadow(state: GameState): void {
   const cells = new Set<number>();
   for (const u of state.units) {
     if (u.hp <= 0) continue;
-    const r = state.unitTypes[u.type]?.shadowRadius ?? 0;
-    if (r <= 0) continue;
+    /*
+     * `undefined` = 不投下暗影；**0 = 只有脚下那一格**（黑蝗）。
+     * 这两种必须分开：以前一律 `?? 0` 然后 `<= 0 continue`，
+     * 于是"半径 0"和"没有暗影"变成了同一件事。
+     */
+    const r = state.unitTypes[u.type]?.shadowRadius;
+    if (r === undefined) continue;
     if (u.board && u.board !== 'earth') continue;
     for (let dy = -r; dy <= r; dy += 1) {
       const span = r - Math.abs(dy);
