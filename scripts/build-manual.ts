@@ -1020,6 +1020,12 @@ const MANUAL_CSS = `
     border-left: 2px solid transparent;
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
+  .pack-diagram {
+    margin: 10px 0 18px; padding: 10px 6px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    overflow-x: auto;
+  }
+  .pack-diagram svg { display: block; max-width: 100%; height: auto; }
   nav a.sub { padding-left: 22px; font-size: 12px; }
   nav a.sub2 { padding-left: 34px; font-size: 12px; opacity: .8; }
   /* 「特殊规则」的小节收进可折叠分组：全摊开会把后面的项挤出屏幕 */
@@ -3832,8 +3838,13 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
           return `${head}${list}`;
         })
         .join('');
+      // 扩展自己带的图：印在这个包的最前面（图比十行字好使）
+      const diagram = p.manualDiagram
+        ? `<figure class="pack-diagram">${p.manualDiagram}</figure>`
+        : '';
       return `
       <h3 id="mn-${esc(p.id)}">${esc(p.name)}：补充规则</h3>
+      ${diagram}
       ${rendered}`;
     })
     .join('');
