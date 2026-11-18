@@ -244,13 +244,15 @@ console.log('\n[5] 影主的召唤');
     void lord;
     return cur.units.filter((u) => u.type === SHADE).length;
   };
+  // 化影一次分裂**两团**（2026-11-18：暗影太脆，一个一个铺不开）
   check(
-    `不攻击：第 ${SUMMON_EVERY} 个回合才召唤出第一只`,
-    summon(SUMMON_EVERY - 1, false) === 0 && summon(SUMMON_EVERY, false) === 1,
+    `不攻击：第 ${SUMMON_EVERY} 个回合一次分出两团`,
+    summon(SUMMON_EVERY - 1, false) === 0 && summon(SUMMON_EVERY, false) === 2,
+    `${summon(SUMMON_EVERY, false)} 只`,
   );
   check(
-    '每回合都攻击：提前两回合召唤出来（计时器走得更快）',
-    summon(SUMMON_EVERY - 2, true) === 1,
+    '每回合都攻击：提前两回合分出来',
+    summon(SUMMON_EVERY - 2, true) === 2,
     `${summon(SUMMON_EVERY - 2, true)} 只`,
   );
 }
@@ -276,9 +278,13 @@ console.log('\n[6] 暗影的击杀后果');
       `${born[0]?.x},${born[0]?.y}`,
     );
   }
-  // 非暗影击杀 → 不长
+  /*
+   * 没有「暗影侵蚀」的兵击杀就不长蚀影。
+   * 2026-11-18 之后**蚀影自己也有这条**了，所以拿一团血肉当凶手
+   * （它挂的是「侵染」，只长血肉）。
+   */
   const other = arena();
-  const beast = other.mk('beast', SHADOW_BEAST, 'B', 5, 5);
+  const beast = other.mk('beast', 'flesh', 'B', 5, 5);
   const prey2 = other.mk('prey2', 'probe-tank-0', 'A', 5, 6);
   prey2.hp = 5;
   const r2 = applyAction(other.s, { type: 'ATTACK', unitId: beast.id, targetId: prey2.id });
@@ -404,6 +410,33 @@ console.log('\n[9] 影主藏身');
       `走到 ${tx},${ty}`,
     );
   }
+  /*
+   * 影主之间"不过分靠近"（2026-11-18 作者定的手感：平均 2 格）。
+   * 两个影主叠在相邻格时，其中一个要让开。
+   */
+  {
+    const { s: s3, mk: mk3 } = arena();
+    const a = mk3('lord-a', SHADOW_LORD, 'B', 9, 10);
+    const b = mk3('lord-b', SHADOW_LORD, 'B', 10, 10); // 相邻
+    refreshShadow(s3);
+    const out = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s3, a));
+    const move = out.add?.find((x) => x.action.type === 'MOVE')?.action;
+    check(
+      '两个影主贴在一起时会散开',
+      move?.type === 'MOVE' && dist({ x: move.x, y: move.y }, b) > dist(a, b),
+      JSON.stringify(move),
+    );
+
+    // 已经隔开 2 格：不再为了散开而挪
+    const { s: s4, mk: mk4 } = arena();
+    const c = mk4('lord-c', SHADOW_LORD, 'B', 9, 10);
+    mk4('lord-d', SHADOW_LORD, 'B', 11, 10); // 距离 2
+    refreshShadow(s4);
+    const quiet = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s4, c));
+    const moved = quiet.add?.some((x) => x.action.type === 'MOVE') ?? false;
+    check('已经隔开 2 格就不再挤', !moved, JSON.stringify(quiet.add));
+  }
+
   // 已经是最深处就别再动
   const { s: s2, mk: mk2 } = arena();
   const lord2 = mk2('lord', SHADOW_LORD, 'B', 10, 10);
@@ -526,7 +559,12 @@ console.log('\n[12] 面板上写清楚');
   };
   const beast = lines(SHADOW_BEAST).join(' | ');
   check('蚀影：写了暗蚀的具体数值', beast.includes('暗蚀：8 点'), beast);
-  check('蚀影：写了暗影半径', /半径\s*3\s*格/.test(beast), beast);
+  const beastRadius = arena().s.unitTypes[SHADOW_BEAST]!.shadowRadius;
+  check(
+    '蚀影：写了暗影半径（读兵种表，别写死）',
+    beast.includes(`半径 ${beastRadius} 格`),
+    beast,
+  );
 
   const shade = lines(SHADE).join(' | ');
   check('暗影：挂了「暗影侵蚀」词条（击杀变蚀影）', shade.includes('暗影侵蚀'), shade);
