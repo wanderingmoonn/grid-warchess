@@ -255,15 +255,16 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
 
 export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
   /*
-   * **走 RPC 而不是 GET**（2026-11-17）。
+   * **房间读取走 RPC，不走 GET**（2026-11-18 恢复并保留）。
    *
-   * 症状：房主那边正常（云端 `turn` 一直在涨），观战端每 4 秒拉一次却总拿到
-   * 同一份旧局面，停在"轮到电脑"那一帧。库里查过：云端 turn=16、观战端拿到 12。
-   * 也就是**读取被缓存**了——GET 请求经过 CDN/网关时可能命中缓存，POST 不会。
+   * 观战端停在某一帧的原因，两次独立观测都指向"读到了旧响应"：
+   *   · 11-17：库里 turn=16，观战端拿到 12；
+   *   · 11-18：房主侧 turn=14 且已推送 8 次，观战端 0 秒前刚拉取，拿到的仍是 6。
+   * 后者尤其干净——"刚拉过"和"拿到旧数据"同时成立，只可能是响应被缓存了。
    *
-   * 所以房间读取改走 `warchess_room_get(code)` 这个 SECURITY DEFINER 函数：
-   * 它是 POST，天然不缓存；顺带比 `select *` 少一层 RLS 往返。
-   * 失败（函数还没建）再退回老路，别让老房间打不开。
+   * GET 会经过网关/CDN 缓存；RPC 是 POST，天然不缓存，因此读取改走
+   * `warchess_room_get(code)`（SECURITY DEFINER，已授权 anon）。
+   * 函数不存在或报错时退回下面的老路径，老房间不会因此打不开。
    */
   try {
     const rpcDb = (await cloudDatabase()) as unknown as {
