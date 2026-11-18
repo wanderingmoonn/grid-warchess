@@ -27,7 +27,7 @@
  */
 
 import type { Expansion } from './expansions.ts';
-import { DAMAGE_STAGE } from './ability-hooks.ts';
+import { DAMAGE_STAGE, STRIKE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { AbilityApi } from './ability-hooks.ts';
 import type { AbilityDef } from './abilities.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
@@ -285,11 +285,22 @@ function tickEmperor(state: GameState, player: PlayerId, api: AbilityApi): void 
  * 调的时候改下面这张表，别去改逻辑。
  * ══════════════════════════════════════════════════════════════════ */
 
+/**
+ * 化影：几个自己的回合召唤出一个暗影。
+ *
+ * 2026-11-18 两次调整：4 → 5（跑批发现滚雪球）→ **调回 4**（作者判断：
+ * AI 能打赢的局对玩家来说太简单了，以后只要 AI 输得不太难看就没必要削弱）。
+ */
+export const SUMMON_EVERY = 4;
+
 export const SHADOW_BEAST = 'shadow-beast';
 export const SHADE = 'shade';
 export const SHADOW_LORD = 'shadow-lord';
 
 /** 暗蚀：每次攻击附带的、无视护甲的伤害。占位值 */
+/** 本包注册的能力，按 id 索引（面板印词条时查它，不依赖全局注册表） */
+const PACK_ABILITIES = new Map<string, AbilityDef>();
+
 const EROSION_BY_TYPE: Record<string, number> = {
   [SHADOW_BEAST]: 8,
   [SHADE]: 4,
@@ -314,6 +325,7 @@ const EROSION_ABILITY: AbilityDef = {
   id: 'shadow-erosion',
   name: '暗蚀',
   summary: '每次攻击附带一段无视护甲的暗蚀伤害。',
+  valueLabel: (def) => `${EROSION_BY_TYPE[def.id] ?? 0} 点`,
   group: 'attack',
   hooks: {
     damage: [
@@ -323,6 +335,78 @@ const EROSION_ABILITY: AbilityDef = {
           if (c.side !== 'attacker') return;
           const amt = erosionOf(c.self);
           if (amt > 0) c.damage += amt;
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「暗影侵蚀」：击杀的单位原地变成蚀影。
+ *
+ * 从"暗影专属的钩子"改成**词条**（2026-11-18）：以前这条挂在扩展的
+ * `onUnitKilled` 里、按兵种 id 判断，别的兵想拥有它只能改代码。
+ * 现在谁挂这条能力，谁就带这个后果——贴到新单位上不用动一行逻辑。
+ */
+const SHADOW_POSSESS: AbilityDef = {
+  id: 'shadow-possess',
+  name: '暗影侵蚀',
+  summary: '击杀单位时，在被击杀的位置生成一个蚀影。',
+  group: 'attack',
+  hooks: {
+    onKill: (c) => {
+      if (c.victim.owner === c.self.owner) return;
+      const spot = c.api.canStandAt(c.state, c.victim.x, c.victim.y, SHADOW_BEAST)
+        ? { x: c.victim.x, y: c.victim.y }
+        : freeNear(c.state, c.victim, SHADOW_BEAST, c.api);
+      if (!spot) return;
+      c.api.spawn(c.state, c.self.owner, SHADOW_BEAST, spot.x, spot.y);
+      c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '被暗影吞噬的尸体爬了起来——蚀影。' });
+    },
+  },
+};
+
+/**
+ * 「化影」：每若干回合分裂出一个暗影，**这一回合攻击过则更快**。
+ *
+ * "攻击过"用一个自定义标记 `custom.hit` 记：攻击时由 `onStrike` 置 1，
+ * 回合开始时读一次再清零。为什么不看 `unit.acted`——能力钩子跑在回合开始时，
+ * 那一刻 `acted` 已经被重置成 false 了，读不到上一回合打没打。
+ */
+const SHADOW_SPAWN: AbilityDef = {
+  id: 'shadow-spawn',
+  name: '化影',
+  summary: `每 ${SUMMON_EVERY} 个自己的回合分裂出一个暗影；这一回合攻击过的话，来得更快。`,
+  group: 'support',
+  valueLabel: () => `每 ${SUMMON_EVERY} 回合一个`,
+  hooks: {
+    onStrike: [
+      {
+        stage: STRIKE_STAGE.afterDamage,
+        apply: (c) => {
+          c.self.custom = { ...(c.self.custom ?? {}), hit: 1 };
+        },
+      },
+    ],
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          let left = Number(c.self.custom?.summonIn ?? SUMMON_EVERY);
+          const fast = Number(c.self.custom?.hit ?? 0) === 1;
+          left -= fast ? 2 : 1;
+          c.self.custom = { ...(c.self.custom ?? {}), hit: 0 };
+          if (left <= 0) {
+            const spot = freeNear(c.state, c.self, SHADE, c.api);
+            if (spot) {
+              c.api.spawn(c.state, c.self.owner, SHADE, spot.x, spot.y);
+              left = SUMMON_EVERY;
+              c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '影主分裂出一团暗影。' });
+            } else {
+              left = 1; // 没地方站，下回合再试
+            }
+          }
+          c.self.custom = { ...(c.self.custom ?? {}), summonIn: left };
         },
       },
     ],
@@ -446,7 +530,7 @@ const SHADE_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'shade-spread',
-  abilities: ['shadow-erosion'],
+  abilities: ['shadow-erosion', 'shadow-possess'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -477,7 +561,7 @@ const SHADOW_LORD_DEF: UnitTypeDef = {
   shadowRadius: 7,
   aiAutonomy: 1,
   aiProfile: 'shadow-lord-kite',
-  abilities: ['shadow-erosion'],
+  abilities: ['shadow-erosion', 'shadow-spawn'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -808,13 +892,7 @@ const SHADOW_LORD_AI: UnitAiProfile = {
 
 /* ── 影主的召唤计时器 ───────────────────────────────────────────── */
 
-/**
- * 正常情况下几个自己的回合召唤一个暗影。
- *
- * 4 → 5（2026-11-18 跑批后调）：三张对称关里，4 回合一个的节奏让影系在
- * 30 个行动内从 8 个涨到 19 个，玩家被压着打。这不是"难"，是"滚雪球"。
- */
-export const SUMMON_EVERY = 5;
+
 
 /** 找到附近一格能站的位置（八邻域，先近后远） */
 function freeNear(state: GameState, u: Unit, type: string, api: AbilityApi): { x: number; y: number } | null {
@@ -829,46 +907,6 @@ function freeNear(state: GameState, u: Unit, type: string, api: AbilityApi): { x
     }
   }
   return null;
-}
-
-/**
- * 影主的召唤计时器。**在它自己的回合开始时走一格**，攻击过则多走一格。
- *
- * 为什么不用"本回合攻击过就当场加速"：回合开始的钩子跑在它出手之前，
- * 那时还不知道这回合会不会打。所以拆成两步——
- *   · 回合末（`markShadowLordAttack`）记下"这回合打没打"；
- *   · 下回合开始（这里）按这个标记走计时器。
- * 说人话：它越凶，暗影来得越勤，但节奏差半拍——玩家有机会在它召唤前打断。
- */
-function tickShadowLords(state: GameState, player: PlayerId, api: AbilityApi): void {
-  for (const u of state.units) {
-    if (u.owner !== player || u.type !== SHADOW_LORD || u.hp <= 0) continue;
-    let left = Number(u.custom?.summonIn ?? SUMMON_EVERY);
-    left -= Number(u.custom?.hitLastTurn ?? 0) === 1 ? 2 : 1;
-    if (left <= 0) {
-      const spot = freeNear(state, u, SHADE, api);
-      if (spot) {
-        api.spawn(state, u.owner, SHADE, spot.x, spot.y);
-        left = SUMMON_EVERY;
-        state.log.push({
-          turn: state.turn,
-          player: u.owner,
-          text: '影主分裂出一团暗影。',
-        });
-      } else {
-        left = 1; // 没地方站，下回合再试
-      }
-    }
-    u.custom = { ...(u.custom ?? {}), summonIn: left };
-  }
-}
-
-/** 回合末记下"这回合打没打"（回合开始时要读，那时 acted 已经被重置了） */
-function markShadowLordAttack(state: GameState, player: PlayerId): void {
-  for (const u of state.units) {
-    if (u.owner !== player || u.type !== SHADOW_LORD || u.hp <= 0) continue;
-    u.custom = { ...(u.custom ?? {}), hitLastTurn: u.acted ? 1 : 0 };
-  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -894,37 +932,40 @@ export const BLOOD_CORE = 'blood-core';
 /**
  * 造成多少伤害攒够一滩淤血。
  *
- * 60 → 100（同上）：淤血一回合 3 段 ×14 攻 ≈ 42 点，三滩一起打就是 1.5 回合
- * 长一滩，滚得比玩家清得还快。
+ * 60 → 100 → **80**（作者定的终值）：淤血一回合 3 段 ×14 攻 ≈ 42 点，
+ * 60 时三滩一起打 1.5 回合就长一滩，滚得比玩家清得还快；80 是折中。
  *
  * 导出给探针：断言"攒够阈值就长"，而不是"攒够 60 就长"——数值一调探针就红，
  * 那是探针在替数值背锅（项目自己的规矩）。
  */
-export const CLOT_DAMAGE = 100;
+export const CLOT_DAMAGE = 80;
 /** 一回合最多长几滩（不封顶会雪崩：一次溅射打五个兵就长五滩） */
 const CLOT_PER_TURN = 2;
 /** 血核满血多少回合长一团血肉（导出给探针） */
 export const GROW_TURNS = 3;
 /** 血核每回合回多少血（增生） */
 const GROW_HEAL = 12;
-/** 是不是血系（淤血 / 血肉 / 血核） */
-const isBlood = (type: string): boolean => type === BLOOD_POOL || type === FLESH || type === BLOOD_CORE;
-
-/** 这几个兵汲取（按伤害回血） */
-const SIPHON_TYPES = new Set([FLESH, BLOOD_CORE]);
+/**
+ * 血系的四条词条（2026-11-18 改成能力）。
+ *
+ * 改之前它们写死在扩展钩子里、按兵种 id 判断（`isBlood(type)`），
+ * 结果是"想给新兵加个化血"必须改代码，而且**面板和规则书各写一份说明**
+ * （血肉/血核的暗蚀只出现在面板上，就是这么漏的）。
+ * 现在谁挂这条能力，谁就带这个后果，数值由 `valueLabel` 统一给面板和规则书。
+ */
 
 /**
- * 化血 / 汲取 / 增生的记账口。
+ * 「化血」：造成的伤害累计成"血"，攒够就在旁边长出一滩淤血。
  *
- * 挂在 `DAMAGE_STAGE.trueDamage`（护甲结算之后），拿到的 `c.damage` 就是这一下
- * 真正打出去的量。为什么不另开一条"伤害后"钩子：这条已经在那儿了，
- * 真元、天气真伤都挂它；再开一条只会让"谁先算"变成一团。
+ * 两件事合在一条词条里：伤害记账（damage 钩子）+ 结算（回合开始的召唤段）。
+ * 上限 `CLOT_PER_TURN` 是防雪崩的——一次溅射打五个兵就长五滩，两回合滚成十几滩。
  */
-const BLOOD_ECHO: AbilityDef = {
-  id: 'blood-echo',
+const BLOOD_CLOT: AbilityDef = {
+  id: 'blood-clot',
   name: '化血',
-  summary: '造成的伤害累计成「血」，攒够在旁边长出一滩淤血。血肉与血核还会按伤害回血。',
+  summary: `造成的伤害累计成「血」：每 ${CLOT_DAMAGE} 点就在旁边长出一滩淤血（一回合最多两滩）。`,
   group: 'attack',
+  valueLabel: () => `每 ${CLOT_DAMAGE} 点伤害长一滩`,
   hooks: {
     damage: [
       {
@@ -933,12 +974,114 @@ const BLOOD_ECHO: AbilityDef = {
           if (c.side !== 'attacker') return;
           const dmg = Math.max(0, Math.round(c.damage));
           if (dmg <= 0) return;
-          if (SIPHON_TYPES.has(c.self.type)) {
-            const max = c.api.maxHpOf(c.state, c.self);
-            if (c.self.hp < max) c.self.hp = Math.min(max, c.self.hp + dmg);
-          }
           const blood = Number(c.self.custom?.blood ?? 0) + dmg;
           c.self.custom = { ...(c.self.custom ?? {}), blood };
+        },
+      },
+    ],
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          let blood = Number(c.self.custom?.blood ?? 0);
+          if (blood < CLOT_DAMAGE) return;
+          const rounds = Math.min(CLOT_PER_TURN, Math.floor(blood / CLOT_DAMAGE));
+          let born = 0;
+          for (let i = 0; i < rounds; i += 1) {
+            const spot = freeNear(c.state, c.self, BLOOD_POOL, c.api);
+            if (!spot) break;
+            c.api.spawn(c.state, c.self.owner, BLOOD_POOL, spot.x, spot.y);
+            born += 1;
+          }
+          if (born > 0) {
+            blood -= born * CLOT_DAMAGE;
+            c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '血又厚了一层——新的淤血聚了起来。' });
+          }
+          c.self.custom = { ...(c.self.custom ?? {}), blood };
+        },
+      },
+    ],
+  },
+};
+
+/** 「汲取」：按造成的伤害等量回血（上限不超过生命上限）。 */
+const BLOOD_SIPHON: AbilityDef = {
+  id: 'blood-siphon',
+  name: '汲取',
+  summary: '按造成的伤害等量回复自己的生命，上限不超过生命上限。',
+  group: 'attack',
+  hooks: {
+    onStrike: [
+      {
+        stage: STRIKE_STAGE.afterDamage,
+        apply: (c) => {
+          if (c.damage <= 0 || c.self.hp <= 0) return;
+          const max = c.api.maxHpOf(c.state, c.self);
+          const healed = Math.min(max - c.self.hp, Math.round(c.damage));
+          if (healed > 0) {
+            c.self.hp += healed;
+            c.result.healed = healed;
+          }
+        },
+      },
+    ],
+  },
+};
+
+/** 「侵染」：击杀的单位变成血肉（和「暗影侵蚀」同一类后果，产物不同）。 */
+const BLOOD_INFECT: AbilityDef = {
+  id: 'blood-infect',
+  name: '侵染',
+  summary: '击杀单位时，在被击杀的位置生成一团血肉。',
+  group: 'attack',
+  hooks: {
+    onKill: (c) => {
+      if (c.victim.owner === c.self.owner) return;
+      const spot = c.api.canStandAt(c.state, c.victim.x, c.victim.y, FLESH)
+        ? { x: c.victim.x, y: c.victim.y }
+        : freeNear(c.state, c.victim, FLESH, c.api);
+      if (!spot) return;
+      c.api.spawn(c.state, c.self.owner, FLESH, spot.x, spot.y);
+      c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '尸体鼓胀变形，重新站了起来——血肉。' });
+    },
+  },
+};
+
+/**
+ * 「增生」：每回合回一点血；**满血**时攒计数，攒够剥出一团血肉。
+ *
+ * "满血才攒"是这条的题眼：逼玩家在它满血的时候动手，而不是先削一半再放着。
+ */
+const BLOOD_GROW: AbilityDef = {
+  id: 'blood-grow',
+  name: '增生',
+  summary: `每回合回复 ${GROW_HEAL} 点生命；生命已满时累计 1 层，攒够 ${GROW_TURNS} 层剥出一团血肉。`,
+  group: 'support',
+  valueLabel: () => `满血 ${GROW_TURNS} 回合长一团血肉`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const max = c.api.maxHpOf(c.state, c.self);
+          if (c.self.hp < max) c.self.hp = Math.min(max, c.self.hp + GROW_HEAL);
+          if (c.self.hp < max) {
+            c.self.custom = { ...(c.self.custom ?? {}), grow: 0 };
+            return;
+          }
+          const grow = Number(c.self.custom?.grow ?? 0) + 1;
+          if (grow < GROW_TURNS) {
+            c.self.custom = { ...(c.self.custom ?? {}), grow };
+            return;
+          }
+          const spot = freeNear(c.state, c.self, FLESH, c.api);
+          if (!spot) {
+            c.self.custom = { ...(c.self.custom ?? {}), grow: GROW_TURNS - 1 };
+            return;
+          }
+          c.api.spawn(c.state, c.self.owner, FLESH, spot.x, spot.y);
+          c.self.custom = { ...(c.self.custom ?? {}), grow: 0 };
+          c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '血核鼓起一块——血肉从它身上剥了下来。' });
         },
       },
     ],
@@ -966,7 +1109,7 @@ const BLOOD_POOL_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'blood-pool-seek',
-  abilities: ['blood-echo'],
+  abilities: ['blood-clot', 'blood-infect'],
 };
 
 /** 血肉：一团活着的死肉。慢、近战、血厚甲高，会吸血。 */
@@ -989,7 +1132,7 @@ const FLESH_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'flesh-away-core',
-  abilities: ['blood-echo'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-erosion'],
 };
 
 /** 血核：血肉结晶。慢、中近程、溅射大、会增生。 */
@@ -1012,68 +1155,10 @@ const BLOOD_CORE_DEF: UnitTypeDef = {
   shadowRadius: 4,
   aiAutonomy: 1,
   aiProfile: 'blood-core-deep',
-  abilities: ['blood-echo'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'blood-grow', 'shadow-erosion'],
 };
 
 /* ── 结算：化血长出淤血、血核增生 ───────────────────────────────── */
-
-/**
- * 自己回合**开始**时结算（走的是上一回合攒下的血）。
- *
- * 为什么不放在伤害发生的当刻：这一下可能同时打死三个人、触发三次生成，
- * 插在伤害结算中间会让"谁先被算死"变得难以预料。放到回合边界上，
- * 场上状态先稳定下来，再长出新的东西——玩家看到的是"打完这一轮，血又厚了一层"。
- *
- * 为什么是"开始"而不是"结束"：`TurnEndCtx` 里没有 `api`（不能 spawn），
- * 而 `TurnStartCtx` 有。两个时机对这一条没区别——中间没有别的结算会改动血量。
- */
-function tickBlood(state: GameState, player: PlayerId, api: AbilityApi): void {
-  for (const u of state.units) {
-    if (u.owner !== player || u.hp <= 0) continue;
-    if (!u.type.startsWith('blood-') && u.type !== FLESH) continue;
-
-    // 化血：攒够就长淤血
-    let blood = Number(u.custom?.blood ?? 0);
-    if (blood >= CLOT_DAMAGE) {
-      const rounds = Math.min(CLOT_PER_TURN, Math.floor(blood / CLOT_DAMAGE));
-      let born = 0;
-      for (let i = 0; i < rounds; i += 1) {
-        const spot = freeNear(state, u, BLOOD_POOL, api);
-        if (!spot) break;
-        api.spawn(state, u.owner, BLOOD_POOL, spot.x, spot.y);
-        born += 1;
-      }
-      if (born > 0) {
-        blood -= born * CLOT_DAMAGE;
-        state.log.push({ turn: state.turn, player: u.owner, text: '血又厚了一层——新的淤血聚了起来。' });
-      }
-    }
-    u.custom = { ...(u.custom ?? {}), blood };
-
-    // 增生：只有血核
-    if (u.type === BLOOD_CORE) {
-      const max = api.maxHpOf(state, u);
-      if (u.hp < max) u.hp = Math.min(max, u.hp + GROW_HEAL);
-      if (u.hp >= max) {
-        const grow = Number(u.custom?.grow ?? 0) + 1;
-        if (grow >= GROW_TURNS) {
-          const spot = freeNear(state, u, FLESH, api);
-          if (spot) {
-            api.spawn(state, u.owner, FLESH, spot.x, spot.y);
-            u.custom = { ...u.custom, grow: 0 };
-            state.log.push({ turn: state.turn, player: u.owner, text: '血核鼓起一块——血肉从它身上剥了下来。' });
-          } else {
-            u.custom = { ...u.custom, grow: GROW_TURNS - 1 };
-          }
-        } else {
-          u.custom = { ...u.custom, grow };
-        }
-      } else {
-        u.custom = { ...u.custom, grow: 0 };
-      }
-    }
-  }
-}
 
 /* ── 行为：三个 profile ─────────────────────────────────────────── */
 
@@ -1139,15 +1224,26 @@ const FLESH_AI: UnitAiProfile = {
       .sort((a, b) => (c.state.unitTypes[a.type]?.armor ?? 0) - (c.state.unitTypes[b.type]?.armor ?? 0))[0];
     if (soft) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: soft.id }, score: 170 });
 
+    /*
+     * 散开：离血核远一点，**也离别的血肉远一点**。
+     *
+     * 2026-11-18 修：原来的写法只挑"离血核最远的那一格"，对每一团血肉都是同一个
+     * 全局最优点——于是它们全往同一个角上走，看起来就是"喜欢聚集"。
+     * 现在打分同时算"离血核"和"离最近同伴"，两者都远才是好位置。
+     */
     const core = c.allies.find((a) => a.type === BLOOD_CORE && a.hp > 0);
-    if (core && dist(core, c.unit) <= 3) {
+    const kin = c.allies.filter((a) => a.type === FLESH && a.id !== c.unit.id && a.hp > 0);
+    const tooClose = (core ? dist(core, c.unit) <= 3 : false) || kin.some((k) => dist(k, c.unit) <= 2);
+    if (tooClose) {
       const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
       let best: { x: number; y: number } | null = null;
-      let bestD = dist(core, c.unit);
+      let bestScore = -Infinity;
       for (const p of tiles) {
-        const d = dist(core, p);
-        if (d > bestD) {
-          bestD = d;
+        const awayCore = core ? dist(core, p) : 0;
+        const awayKin = Math.min(...kin.map((k) => dist(k, p)), 6);
+        const score = awayCore + awayKin * 1.2;
+        if (score > bestScore) {
+          bestScore = score;
           best = p;
         }
       }
@@ -1193,6 +1289,25 @@ const BLOOD_CORE_AI: UnitAiProfile = {
  * 五、扩展本体
  * ══════════════════════════════════════════════════════════════════ */
 
+/*
+ * 把本包的词条登记进本地表。
+ *
+ * 为什么不查全局注册表（`abilityById`）：那是 `ability-registry.ts`，它在初始化时
+ * 要遍历 EXPANSIONS，而 EXPANSIONS 正在导入这个文件——同一个循环依赖坑（见 unit-ai）。
+ * 本包的面板只印自己的词条，本地表够用。
+ */
+for (const a of [
+  EROSION_ABILITY,
+  SHADOW_POSSESS,
+  SHADOW_SPAWN,
+  BLOOD_CLOT,
+  BLOOD_SIPHON,
+  BLOOD_INFECT,
+  BLOOD_GROW,
+]) {
+  PACK_ABILITIES.set(a.id, a);
+}
+
 export const DARK_TURMOIL: Expansion = {
   id: 'dark-turmoil',
   name: '黑暗动乱',
@@ -1215,15 +1330,21 @@ export const DARK_TURMOIL: Expansion = {
     FLESH_DEF,
     BLOOD_CORE_DEF,
   ],
-  abilities: [EROSION_ABILITY, BLOOD_ECHO],
+  abilities: [
+    EROSION_ABILITY,
+    SHADOW_POSSESS,
+    SHADOW_SPAWN,
+    BLOOD_CLOT,
+    BLOOD_SIPHON,
+    BLOOD_INFECT,
+    BLOOD_GROW,
+  ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
   unitAi: [SHADOW_BEAST_AI, SHADE_AI, SHADOW_LORD_AI, BLOOD_POOL_AI, FLESH_AI, BLOOD_CORE_AI],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
-      tickShadowLords(state, player, api);
-      tickBlood(state, player, api);
     },
     /*
      * 暗影：站在里面视野和射程减半。
@@ -1249,35 +1370,8 @@ export const DARK_TURMOIL: Expansion = {
         : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
-    onTurnEnd: ({ state, player }) => {
-      markShadowLordAttack(state, player);
+    onTurnEnd: ({ state }) => {
       refreshShadow(state);
-    },
-    /**
-     * 尸体归谁：**暗影**杀掉的变成蚀影，**血系**杀掉的变成血肉。
-     *
-     * 这是两个系列"越打越多"的来源，也是玩家必须改清场顺序的原因——
-     * 不清掉这些会复活的兵，每杀一个杂兵就多一个敌人。
-     * 建筑也算（2026-11-18 作者改）：拆掉一座城，废墟里也会站起来东西。
-     */
-    onUnitKilled: ({ state, victim, killer, api }) => {
-      if (!killer) return;
-      if (victim.owner === killer.owner) return;
-      const born = killer.type === SHADE ? SHADOW_BEAST : isBlood(killer.type) ? FLESH : null;
-      if (!born) return;
-      const spot = api.canStandAt(state, victim.x, victim.y, born)
-        ? { x: victim.x, y: victim.y }
-        : freeNear(state, victim, born, api);
-      if (!spot) return;
-      api.spawn(state, killer.owner, born, spot.x, spot.y);
-      state.log.push({
-        turn: state.turn,
-        player: killer.owner,
-        text:
-          born === SHADOW_BEAST
-            ? '被暗影吞噬的尸体爬了起来——蚀影。'
-            : '尸体鼓胀变形，重新站了起来——血肉。',
-      });
     },
     /**
      * 棋盘上的「暗影」视图。
@@ -1320,23 +1414,23 @@ export const DARK_TURMOIL: Expansion = {
       const radius = def?.shadowRadius ?? 0;
       if (radius > 0) lines.push(`暗影领域：半径 ${radius} 格（里面的单位视野与射程减半）`);
 
-      const erosion = erosionOf(unit);
-      if (erosion > 0) lines.push(`暗蚀 ${erosion} 点（每次攻击额外结算，无视护甲）`);
-
-      if (unit.type === SHADE) lines.push('击杀单位后，原地生出一个蚀影');
-      if (unit.type === SHADOW_LORD) {
-        lines.push(`每 ${SUMMON_EVERY} 个自己的回合分裂出一个暗影（本回合攻击过则更快）`);
+      /*
+       * 能力行：**遍历这个兵挂的词条**，数值问词条自己（`valueLabel`）。
+       *
+       * 以前这里是按兵种手写的一串 if：加一个能力要改两处（面板 + 规则书），
+       * 改漏一处就是血肉/血核的暗蚀"只在面板上有"。现在只有一个来源——
+       * 能力挂在谁身上，面板和规则书就都印谁，数值也从同一个函数来。
+       */
+      for (const id of [...(def?.abilities ?? []), ...(unit.extraAbilities ?? [])]) {
+        const a = PACK_ABILITIES.get(id);
+        if (!a) continue; // 不是本包的能力，交给别人印
+        const value = def ? a.valueLabel?.(def) : null;
+        lines.push(value ? `${a.name}：${value}` : a.name);
       }
 
-      if (isBlood(unit.type)) {
-        const blood = Number(unit.custom?.blood ?? 0);
-        lines.push(`化血：每造成 ${CLOT_DAMAGE} 点伤害，在旁边长出一滩淤血（当前 ${Math.round(blood)}/${CLOT_DAMAGE}）`);
-        lines.push('侵染：击杀的单位会变成一团血肉');
-        if (SIPHON_TYPES.has(unit.type)) lines.push('汲取：按造成的伤害等量回血');
-      }
-      if (unit.type === BLOOD_CORE) {
-        lines.push(`增生：每回合回 ${GROW_HEAL} 点血；满血攒够 ${GROW_TURNS} 回合，剥出一团血肉`);
-      }
+      // 化血当前攒了多少（只在真的攒过时印，免得每行都挂个 0/80）
+      const blood = Number(unit.custom?.blood ?? 0);
+      if (blood > 0) lines.push(`已累计的血：${Math.round(blood)} / ${CLOT_DAMAGE}`);
 
       if (isEmperor(unit)) {
         lines.push(`寿元：${lifespanWords(yearsLeft(unit))}`);

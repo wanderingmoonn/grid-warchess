@@ -215,22 +215,34 @@ console.log('\n[4] 暗影的本能：散开');
  * ══════════════════════════════════════════════════════════════════ */
 console.log('\n[5] 影主的召唤');
 {
-  /** 跑 n 个"自己的回合开始"，返回召唤出的暗影数 */
+  /**
+   * 跑 n 个"自己的回合开始"，返回召唤出的暗影数。
+   *
+   * 能力化之后（2026-11-18）召唤挂在「化影」的 onTurnStart 上，
+   * 只有在真的交棒时才会跑——直接调扩展钩子已经调不到它了。
+   * "攻击过"也不能再靠 `unit.acted`：钩子跑在回合开始，那时它已经被重置。
+   * 所以模拟攻击的方式是**真的打一下**（写入 `custom.hit`）。
+   */
   const summon = (n: number, attackEachTurn: boolean): number => {
     const { s, mk } = arena();
-    mk('lord', SHADOW_LORD, 'B', 10, 10);
+    const lord = mk('lord', SHADOW_LORD, 'B', 10, 10);
+    const foe = mk('foe', 'militia', 'A', 10, 11);
+    foe.hp = 9999;
+    mk('keep', 'militia', 'A', 0, 19);
+    let cur = s;
     for (let i = 0; i < n; i += 1) {
-      const lord = s.units.find((u) => u.id === 'lord')!;
-      lord.acted = attackEachTurn; // 模拟"这回合攻击过"
-      DARK_TURMOIL.hooks.onTurnEnd!({
-        state: s,
-        player: 'B',
-        hurt: () => {},
-        log: () => {},
-      } as never);
-      DARK_TURMOIL.hooks.onTurnStart!({ state: s, player: 'B', api: abilityApi });
+      if (attackEachTurn) {
+        cur.current = 'B';
+        const hit = applyAction(cur, { type: 'ATTACK', unitId: 'lord', targetId: 'foe' });
+        if (hit.ok) cur = hit.state;
+      }
+      cur.current = 'A';
+      const e = applyAction(cur, { type: 'END_TURN' });
+      if (!e.ok) break;
+      cur = e.state;
     }
-    return s.units.filter((u) => u.type === SHADE).length;
+    void lord;
+    return cur.units.filter((u) => u.type === SHADE).length;
   };
   check(
     `不攻击：第 ${SUMMON_EVERY} 个回合才召唤出第一只`,
@@ -513,16 +525,16 @@ console.log('\n[12] 面板上写清楚');
     return DARK_TURMOIL.hooks.getUnitPanelLines!({ state: s, unit: u });
   };
   const beast = lines(SHADOW_BEAST).join(' | ');
-  check('蚀影：写了暗蚀的具体数值', /暗蚀\s*8\s*点/.test(beast), beast);
+  check('蚀影：写了暗蚀的具体数值', beast.includes('暗蚀：8 点'), beast);
   check('蚀影：写了暗影半径', /半径\s*3\s*格/.test(beast), beast);
 
   const shade = lines(SHADE).join(' | ');
-  check('暗影：写了"击杀后原地生出蚀影"', shade.includes('击杀') && shade.includes('蚀影'), shade);
-  check('暗影：写了暗蚀数值', /暗蚀\s*4\s*点/.test(shade), shade);
+  check('暗影：挂了「暗影侵蚀」词条（击杀变蚀影）', shade.includes('暗影侵蚀'), shade);
+  check('暗影：写了暗蚀数值', shade.includes('暗蚀：4 点'), shade);
 
   const lord = lines(SHADOW_LORD).join(' | ');
-  check('影主：写了召唤节奏', lord.includes('分裂出一个暗影'), lord);
-  check('影主：写了暗蚀数值', /暗蚀\s*15\s*点/.test(lord), lord);
+  check('影主：挂了「化影」词条，并写明节奏', lord.includes('化影') && lord.includes(`每 ${SUMMON_EVERY} 回合`), lord);
+  check('影主：写了暗蚀数值', lord.includes('暗蚀：15 点'), lord);
 
   const emperor = lines(EMPEROR).join(' | ');
   check('尸骸仙帝：仍然只写模糊寿元', emperor.includes('寿元：') && !/\d+\s*年/.test(emperor), emperor);
