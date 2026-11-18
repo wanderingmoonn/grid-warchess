@@ -6419,4 +6419,14 @@ export function aiNextAction(
   return { type: 'END_TURN' };
 }
 
-export { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiLevelLabel, isAiSide, anyAiSide } from './ai-meta.ts';
+export {
+  AI_MAX_STEPS,
+  DEFAULT_BUDGET,
+  aiLevelOf,
+  aiLevelLabel,
+  isAiSide,
+  anyAiSide,
+  aiStepCap,
+  aiStallGuard,
+  aiProgressFingerprint,
+} from './ai-meta.ts';

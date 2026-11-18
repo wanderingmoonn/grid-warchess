@@ -48,8 +48,123 @@ export const DEFAULT_BUDGET: AiBudget = {
   upgraded: 0,
 };
 
-/** 这一回合 AI 大致的行动次数上限，防止它无限循环 */
+/**
+ * 这一回合 AI 大致走几步——**历史值，不要再用它当新代码的上限**。
+ *
+ * @deprecated 用 `aiStepCap(s)`。这个数按"24 个兵各走一步"估的，
+ * 但一个兵一回合能既走又打，24 个兵就是 48 步，再加招募/升级/建造，
+ * 后期满编局必然被截断（被砍掉的是分最低的那几步，等于 AI 后期悄悄少打几下）。
+ * 留着它只是因为 `scripts/baselines/*` 和四十多个脚本 import 它，
+ * 删了会把冻结基线和历史对比一起打断。
+ */
 export const AI_MAX_STEPS = 50;
+
+/**
+ * 这一回合的自然步数上限（替代写死的 50）。
+ *
+ * 为什么按规模算而不是给个常数：一回合的动作数**本来就是规模的函数**——
+ * 10 个兵和 24 个兵不该用同一个名额。常数在小局里浪费、在满编局里截断。
+ *
+ * 式子怎么来的（每一项都是"最多能做几次"）：
+ *   · 每个兵 6 步：走一步（1）+ 多次攻击（`burst` 最高 4）+ 技能（1）；
+ *   · 每座城 6 步：招募（默认最多 2）+ 升级（1）+ 建造/换血/修城等余量；
+ *   · 底数 8：开局一两个兵时也要够走完"招募 → 升级 → 布阵"。
+ * 24 兵 + 3 城 = 170，满编局绝对够；3 兵 1 城 = 32，也比原来宽。
+ *
+ * **实测（2026-11-17，18 局）**：AI 实际每回合只走 8 步左右、最多 23 步——
+ * 它在"没有值得做的事"时就自己收手（`best.v <= 0`）。所以这个式子现在
+ * 基本不会生效，改它等于给将来留余量（单兵 AI 上线后扩展会主动提动作）。
+ *
+ * **这不是保险丝**。真正防死循环的是调用方的"无进展检测"（见 main.ts）：
+ * 一个"成功但局面没变"的动作（形如"切换形态"）会让这个式子形同虚设——
+ * 它会一直被选、一直成功。这个数只保证"再怎么也不该超过这么多"。
+ */
+export function aiStepCap(s: GameState): number {
+  let units = 0;
+  for (const u of s.units) if (u.owner === s.current) units += 1;
+  let cities = 0;
+  for (const c of s.cities) if (c.owner === s.current) cities += 1;
+  return 8 + 6 * units + 6 * cities;
+}
+
+/**
+ * 局面指纹：判断"这一步到底有没有改变什么"。
+ *
+ * 为什么不用 `s.version` 那种每步都加一的计数器：它**永远在变**，问不出
+ * "变了多少"。这里要的是"变化了没有"，而且只认**玩家看得见的变化**——
+ * 站位、血量、本回合还能不能动、金币、城、地上的留痕。
+ *
+ * 刻意**不包含** `unit.custom`：那里是扩展的自留地（形态、姿态、层数）。
+ * 把它算进来的话，"切换形态"这种动作会一直显示"有变化"，卡死检测就永远
+ * 抓不到它——而它恰好是最典型的空转。同理，`custom` 变了不算进展。
+ */
+export function aiProgressFingerprint(s: GameState): string {
+  let h = 2166136261 >>> 0;
+  const mix = (n: number) => {
+    h = Math.imul(h ^ (n | 0), 16777619) >>> 0;
+  };
+  mix(s.units.length);
+  for (const u of s.units) {
+    mix(u.x * 131 + u.y * 17);
+    mix(u.hp * 7);
+    mix((u.moved ? 1 : 0) | ((u.acted ? 1 : 0) << 1));
+    mix(u.owner.charCodeAt(0));
+  }
+  mix(s.cities.length);
+  for (const c of s.cities) {
+    mix(c.x * 31 + c.y * 7 + (c.ruined ? 1 : 0) + c.owner.charCodeAt(0));
+  }
+  for (const p of Object.values(s.players)) mix(p.gold);
+  mix(s.marks?.length ?? 0);
+  mix(s.winner ? 1 : 0);
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * 卡死检测：同一个动作连续成功、局面却一动不动，就判定它在空转。
+ *
+ * 为什么必须有它（而不是靠名额）：`aiStepCap` 只是"再怎么样也不该超过这么多"。
+ * 真正的死循环是"成功但没进展"——形态切换、开关姿态、把单位塞进船又拿出来。
+ * 这类动作每一步都返回 ok，`rejected` 记不住它们（那个表只记被规则拒掉的），
+ * 于是 AI 会一直选、一直成功，直到名额烧光。**名额能兜住"不卡死电脑"，
+ * 但兜不住"这一回合剩下的人全都不动"**。
+ *
+ * 判据故意写得保守：**同一个动作 key 重复**才算，不是"连续三步都没变化"。
+ * 后者会误伤一类正常打法——三个兵依次进入某种只改 `custom` 的架势。
+ * 那不是死循环，是三个人各做了一次不同的事。
+ *
+ * `limit` 是"重复几次才判死"：默认 2，也就是同一个动作第 **3** 次成功
+ * 且局面还是没变的时候收手。
+ */
+export interface AiStallGuard {
+  /**
+   * 喂一条**已经成功执行**的动作。返回 true = 判定空转，调用方该交棒。
+   *
+   * 注意只能喂成功的动作：被规则拒掉的那些由 `rejected` 表管，
+   * 喂进来会把"AI 在换方案"误判成"AI 卡住了"。
+   */
+  note(actionKey: string, fingerprint: string): boolean;
+  /** 当前已重复的次数（0 = 上一步换了动作或局面变了）。给告警文案用 */
+  readonly repeats: number;
+}
+
+export function aiStallGuard(limit = 2): AiStallGuard {
+  let lastKey = '';
+  let lastFp = '';
+  let repeats = 0;
+  return {
+    note(actionKey: string, fingerprint: string): boolean {
+      if (lastKey !== '' && actionKey === lastKey && fingerprint === lastFp) repeats += 1;
+      else repeats = 0;
+      lastKey = actionKey;
+      lastFp = fingerprint;
+      return repeats >= limit;
+    },
+    get repeats(): number {
+      return repeats;
+    },
+  };
+}
 
 export function aiLevelOf(s: GameState): AiLevel {
   const lv = s.config.aiLevel;
