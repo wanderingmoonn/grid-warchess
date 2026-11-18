@@ -1283,6 +1283,148 @@ line('26. 关卡刷兵：落点被占时会就近找位，不该有"站不住"')
 /* ── 汇总 ─────────────────────────────────────────────────────── */
 console.log('');
 /* ------------------------------------------------------------------ */
+/* 计数型条件：fired + times（2026-11-17）                              */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const say = (text: string) => [{ kind: 'say', text }];
+  const counted = validateLevel({
+    ...structuredClone(base),
+    id: 'level:tmp-count',
+    name: '计数探针',
+    events: [
+      /*
+       * `tick` 每手都触发（`repeat` + `turn >= 1` 恒真），`gold +1` 让它在战报里
+       * 不吵；`twice` 在 tick 第 2 次之后成立。
+       */
+      { id: 'tick', when: { kind: 'turn', at: 1 }, repeat: true, do: [{ kind: 'gold', seat: 'A', amount: 1 }] },
+      { id: 'twice', when: { kind: 'fired', id: 'tick', times: 2 }, do: say('已经两次了') },
+    ],
+  });
+  check(counted.ok, '计数条件能通过校验', counted.ok ? '' : counted.errors[0]);
+  if (counted.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: counted.level }, 3);
+    const seenAt: number[] = [];
+    for (let i = 0; i < 6 && !st.winner; i += 1) {
+      const r = applyAction(st, { type: 'END_TURN' } as Action);
+      if (!r.ok) break;
+      st = r.state;
+      if (st.log.some((l) => l.text === '已经两次了')) seenAt.push(st.turn);
+    }
+    check(seenAt.length > 0, '「第 2 次才成立」的条件最终会触发', seenAt.join(','));
+    check(
+      seenAt.length === 0 || seenAt[0]! >= 2,
+      '它不会在第 1 次就触发',
+      `实际第 ${seenAt[0] ?? '-'} 次`,
+    );
+    check(
+      (st.levelState?.counts?.tick ?? 0) >= 2,
+      '次数记在 levelState.counts 里',
+      `tick=${String(st.levelState?.counts?.tick)}`,
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 局势条件 + 事件里直接判胜利（2026-11-17）                            */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const mk = (events: unknown[]) =>
+    validateLevel({ ...structuredClone(base), id: 'level:tmp-state', name: '局势条件探针', events });
+
+  // 金币条件 + 直接判胜
+  const winLevel = mk([
+    { id: 'e1', when: { kind: 'gold', seat: 'A', value: 1 }, do: [{ kind: 'win', seat: 'A' }] },
+  ]);
+  check(winLevel.ok, '「金币 + 直接判胜」能通过校验', winLevel.ok ? '' : winLevel.errors[0]);
+  if (winLevel.ok) {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: winLevel.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    check(r.ok && r.state.winner === 'A', '事件判胜会结算（gold>=1 开局就成立）', String(r.ok ? r.state.winner : 'no'));
+  }
+
+  // 城血条件：开局城有血，`<= 0` 不该触发
+  const hpLevel = mk([
+    { id: 'gone', when: { kind: 'cityHp', seat: 'A', op: '<=', value: 0 }, do: [{ kind: 'say', text: '城没了' }] },
+  ]);
+  if (hpLevel.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: hpLevel.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    if (r.ok) st = r.state;
+    check(
+      !st.log.some((l) => l.text === '城没了'),
+      '城血条件在开局不误触发',
+      `城血 ${st.cities.find((c) => c.owner === 'A')?.hp ?? '?'}`,
+    );
+  }
+
+  // 时代条件：开局城是 1 级
+  const eraLevel = mk([
+    { id: 'era', when: { kind: 'cityEra', seat: 'A', value: 1 }, do: [{ kind: 'say', text: '已经是 1 级' }] },
+  ]);
+  if (eraLevel.ok) {
+    let st = createMatch({ ...DEFAULT_CONFIG, level: eraLevel.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    if (r.ok) st = r.state;
+    check(st.log.some((l) => l.text === '已经是 1 级'), '城时代条件成立时触发');
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 动作分支：if / else（2026-11-18）                                    */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const say = (text: string) => [{ kind: 'say', text }];
+  /*
+   * 先扣光钱再判断：验证「分支条件读的是执行到这一步时的局面」。
+   * 如果读的是事件触发那一刻的局面，这里就会走 then（开局有钱）。
+   */
+  const level = validateLevel({
+    ...structuredClone(base),
+    id: 'level:tmp-branch',
+    name: '分支探针',
+    events: [
+      {
+        id: 'e1',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'gold', seat: 'A', amount: -9999 },
+          {
+            kind: 'branch',
+            when: { kind: 'gold', seat: 'A', op: '>=', value: 100 },
+            then: say('有钱'),
+            else: say('没钱'),
+          },
+        ],
+      },
+    ],
+  });
+  check(level.ok, '带分支的事件能通过校验', level.ok ? '' : level.errors[0]);
+  if (level.ok) {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: level.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    const after = r.ok ? r.state : st;
+    const said = after.log.filter((l) => l.system === true).map((l) => l.text);
+    check(said.includes('没钱'), '分支走 else（先扣钱、再判断，说明条件读的是当下）', said.join(' / '));
+    check(!said.includes('有钱'), 'else 成立时 then 不该执行');
+  }
+
+  // 空分支要拦：一块空白没人知道该填什么
+  const empty = validateLevel({
+    ...structuredClone(base),
+    id: 'level:tmp-branch2',
+    name: '空分支',
+    events: [{ id: 'e1', when: { kind: 'turn', at: 1 }, do: [{ kind: 'branch', when: { kind: 'turn', at: 1 }, then: [] }] }],
+  });
+  check(!empty.ok, '空分支被校验拦下', empty.ok ? '' : (empty.errors[0]?.slice(0, 40) ?? ''));
+}
+
+/* ------------------------------------------------------------------ */
 /* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
 
@@ -1316,6 +1458,15 @@ console.log('');
   check(
     repeatRef.some((i) => i.severity === 'warn' && i.text.includes('重复触发')),
     '引用 repeat 事件：给一条提醒（不算错）',
+  );
+
+  const needRepeat = lintOf([
+    { id: 'a', when: { kind: 'turn', at: 2 }, do: say('x') },
+    { id: 'b', when: { kind: 'fired', id: 'a', times: 2 }, do: say('y') },
+  ]);
+  check(
+    needRepeat.some((i) => i.severity === 'error' && i.text.includes('不是 repeat')),
+    '要它发生 2 次但它不是 repeat：报错（永远不成立）',
   );
 }
 

@@ -3822,6 +3822,15 @@ function checkWinner(s: GameState): PlayerId | null {
   if (s.config.godMode === true) return null;
 
   /*
+   * 事件里 `{ kind: 'win' }` 判出的胜者（2026-11-17）。
+   *
+   * 必须排在所有常规判定前面：那个动作是作者**明确说"这一局到此为止"**，
+   * 用 `decided` 记一笔而不是直接写 `s.winner`，是因为 `applyAction` 结尾会
+   * 用 `checkWinner` 重新赋 winner——直接写会被下一次判定覆盖。
+   */
+  if (s.levelState?.decided) return s.levelState.decided;
+
+  /*
    * 关卡目标：**提前**宣布赢。
    *
    * 排在扩展的特殊胜利之前：扩展那条是"通用规则的一个例外"（比如占了月球就赢），
@@ -4206,7 +4215,7 @@ function buildingVolley(s: GameState, b: Unit, focus?: Unit): number {
    */
   const byVictim = new Map<PlayerId, { names: Set<string>; dmg: number }>();
   const noteVictim = (u: Unit, dmg: number): void => {
-    if (u.owner === b.owner) return;
+    if (sameTeam(s, u.owner, b.owner)) return;
     const box = byVictim.get(u.owner) ?? { names: new Set<string>(), dmg: 0 };
     box.names.add(utype(s, u.type).name);
     box.dmg += dmg;
@@ -4220,7 +4229,14 @@ function buildingVolley(s: GameState, b: Unit, focus?: Unit): number {
    */
   const canHit = (u: Unit): boolean =>
     u.hp > 0 &&
-    u.owner !== b.owner &&
+    /*
+     * **同盟不算敌人**（2026-11-17 修）。
+     *
+     * 这里原来写的是 `u.owner !== b.owner`：只排除"同一个主人"，不排除同盟。
+     * 关卡可以用 `seats.teams` 把两席编成一边，那种局里塔会把盟军当靶子打。
+     * 溅射那边一直用的是 `sameTeam()`，两条路口径不一致——现在统一。
+     */
+    !sameTeam(s, u.owner, b.owner) &&
     s.units.includes(u) &&
     boardIdOf(u) === boardIdOf(b) &&
     distance(b, u) > 0 &&
@@ -4680,6 +4696,12 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
    */
   const fired = new Set(cur.levelState?.fired ?? []);
   if (events.every((e) => e.repeat !== true && fired.has(e.id))) return;
+  /*
+   * 触发次数。老存档没有 `counts`：按 `fired` 兜底成 1——"发生过"至少算一次，
+   * 不能因为加了字段就让老存档里的事件变成"没发生过"。
+   */
+  const counts: Record<string, number> = { ...(cur.levelState?.counts ?? {}) };
+  for (const id of fired) if (counts[id] === undefined) counts[id] = 1;
 
   /*
    * 差量用 id 建表来算，不写 `filter + some`。
@@ -4717,6 +4739,8 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
   let truncated = false;
   for (let pass = 0; pass < MAX_EVENT_PASSES; pass += 1) {
     const snapshot = new Set(fired);
+    // 次数也取"这一遍开头"的：同一遍里 A 触发两次不会串成 2，和 fired 一个道理
+    const snapshotCounts = { ...counts };
     let ranThisPass = 0;
     for (const ev of events) {
       if (total >= MAX_EVENTS_PER_ACTION) {
@@ -4725,13 +4749,14 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
       }
       if (executed.has(ev.id)) continue;
       if (ev.repeat !== true && snapshot.has(ev.id)) continue;
-      if (!eventMatches(ev.when, cur, died, moved, snapshot)) continue;
+      if (!eventMatches(ev.when, cur, died, moved, snapshot, snapshotCounts)) continue;
 
       fired.add(ev.id);
+      counts[ev.id] = (counts[ev.id] ?? 0) + 1;
       executed.add(ev.id);
       ranThisPass += 1;
       total += 1;
-      for (const act of ev.do) runEventAction(cur, act);
+      for (const act of ev.do) runEventAction(cur, act, { died, moved, fired: snapshot, counts: snapshotCounts });
     }
     if (ranThisPass === 0) break;
   }
@@ -4751,8 +4776,17 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
      * 表现是"事件一触发，未登场的席位就被当成已登场"，而它既没城也没兵，
      * 立刻被判出局。
      */
-    cur.levelState = { ...cur.levelState, fired: [...fired] };
+    cur.levelState = { ...cur.levelState, fired: [...fired], counts };
   }
+}
+
+/** 数字和比较符的比较。`turn` 和「已经发生过几次」共用这一份 */
+function cmpNum(a: number, op: '>=' | '<=' | '=' | '>' | '<' | undefined, b: number): boolean {
+  if (op === '<=') return a <= b;
+  if (op === '=') return a === b;
+  if (op === '>') return a > b;
+  if (op === '<') return a < b;
+  return a >= b;
 }
 
 function eventMatches(
@@ -4761,16 +4795,22 @@ function eventMatches(
   died: Unit[],
   moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>,
   fired: ReadonlySet<string>,
+  counts: Readonly<Record<string, number>>,
 ): boolean {
   /*
    * 组合节点先展开。短路是有意的：`all` 里前面一条不成立就不再看后面——
    * 每一个叶子都是纯读，没有副作用，短路安全。
    */
-  if ('all' in when) return when.all.every((w) => eventMatches(w, cur, died, moved, fired));
-  if ('any' in when) return when.any.some((w) => eventMatches(w, cur, died, moved, fired));
-  if ('not' in when) return !eventMatches(when.not, cur, died, moved, fired);
+  if ('all' in when) return when.all.every((w) => eventMatches(w, cur, died, moved, fired, counts));
+  if ('any' in when) return when.any.some((w) => eventMatches(w, cur, died, moved, fired, counts));
+  if ('not' in when) return !eventMatches(when.not, cur, died, moved, fired, counts);
 
-  if (when.kind === 'fired') return fired.has(when.id);
+  if (when.kind === 'fired') {
+    const n = counts[when.id] ?? 0;
+    // 不写 times ＝ "发生过就行"（老语义）
+    if (when.times === undefined) return n > 0;
+    return cmpNum(n, when.op, when.times);
+  }
 
   if (when.kind === 'turn') {
     /*
@@ -4780,28 +4820,81 @@ function eventMatches(
      * 用等号的话，一旦某次结算没有跑事件（比如动作被拒、或者扩展里某条路径
      * 直接改了局面），这一刻就永远错过了，而且不报错——作者只会觉得"事件没生效"。
      */
-    const op = when.op ?? '>=';
-    if (op === '<=') return cur.turn <= when.at;
-    if (op === '=') return cur.turn === when.at;
-    if (op === '>') return cur.turn > when.at;
-    if (op === '<') return cur.turn < when.at;
-    return cur.turn >= when.at;
+    return cmpNum(cur.turn, when.op, when.at);
   }
   if (when.kind === 'unitDied') {
     return died.some(
       (u) => (!when.owner || u.owner === when.owner) && (!when.type || u.type === when.type),
     );
   }
+  /*
+   * 局势条件（2026-11-17）：读的是**当前局面**，和边沿无关。
+   * 城全没了按 0 算：`cityHp <= 0` 就是"城被打光了"，作者不用另写一条。
+   */
+  if (when.kind === 'cityEra' || when.kind === 'cityHp' || when.kind === 'gold') {
+    let actual: number;
+    if (when.kind === 'gold') {
+      actual = cur.players[when.seat]?.gold ?? 0;
+    } else {
+      const own = cur.cities.filter((c) => c.owner === when.seat && !c.ruined);
+      actual =
+        own.length === 0
+          ? 0
+          : when.kind === 'cityEra'
+            ? Math.max(...own.map((c) => c.era))
+            : Math.min(...own.map((c) => c.hp));
+    }
+    return cmpNum(actual, when.op, when.value);
+  }
+
   // enter：从区域外走进区域内（原本就在里面、只是挪了一格的不算"进入"）
   return moved.some((m) => {
-    if (when.owner && m.owner !== when.owner) return false;
-    const z = when.zone;
+    if (when.kind === 'enter' && when.owner && m.owner !== when.owner) return false;
+    const z = when.kind === 'enter' ? when.zone : null;
+    if (!z) return false;
     const inside = (x: number, y: number): boolean => x >= z.x0 && x <= z.x1 && y >= z.y0 && y <= z.y1;
     return !inside(m.fromX, m.fromY) && inside(m.x, m.y);
   });
 }
 
-function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
+/** 分支条件要用的"这一手"上下文：和事件触发时是同一份 */
+interface EventCtx {
+  died: Unit[];
+  moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>;
+  fired: ReadonlySet<string>;
+  counts: Readonly<Record<string, number>>;
+}
+
+function runEventAction(s: GameState, act: import('./level.ts').LevelDo, ctx: EventCtx): void {
+  if (act.kind === 'branch') {
+    /*
+     * 条件读**执行到这一步时**的 `s`（不是事件触发那一刻）：所以"先加钱再判断
+     * 有没有钱"能工作。边沿条件用的是同一次动作的差量（`ctx`）。
+     */
+    const hit = eventMatches(act.when, s, ctx.died, ctx.moved, ctx.fired, ctx.counts);
+    const list = hit ? act.then : (act.else ?? []);
+    for (const sub of list) runEventAction(s, sub, ctx);
+    return;
+  }
+
+  if (act.kind === 'win') {
+    /*
+     * 记在 `levelState.decided` 而不是直接写 `s.winner`：`applyAction` 结尾会用
+     * `checkWinner` 重新赋一次 winner，直接写会被下一次判定覆盖掉。
+     * 一局只认第一次（先判先赢）。
+     */
+    if (!s.levelState?.decided) {
+      s.levelState = { ...s.levelState, fired: s.levelState?.fired ?? [], decided: act.seat };
+      s.log.push({
+        turn: s.turn,
+        player: act.seat,
+        text: `${s.players[act.seat]?.name ?? act.seat} 达成条件，这一局结束了。`,
+        open: true,
+        system: true,
+      });
+    }
+    return;
+  }
   if (act.kind === 'say') {
     /*
      * 旁白写进战报，**公开**（`open`）——这一关发生的事双方都该看到。
@@ -4853,14 +4946,16 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
     }
     return;
   }
-  // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
-  s.orderDirectives = {
-    ...(s.orderDirectives ?? {}),
-    [act.seat]: {
-      strategy: act.strategy,
-      ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
-    },
-  };
+  if (act.kind === 'doctrine') {
+    // 给这一席电脑换一句"怎么打"。下一手 AI 就按它来
+    s.orderDirectives = {
+      ...(s.orderDirectives ?? {}),
+      [act.seat]: {
+        strategy: act.strategy,
+        ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
+      },
+    };
+  }
 }
 
 /**

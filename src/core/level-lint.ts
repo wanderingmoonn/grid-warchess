@@ -14,7 +14,7 @@ import { CONFIG, UNIT_TYPES, navigable, passable } from './config.ts';
 import { EXPANSIONS } from './expansions.ts';
 import { loadCustomUnits } from './customUnits.ts';
 import { terrainFromChar } from './mapgen.ts';
-import { LEVEL_TERRAINS, type DeployUnit, type LevelDef, type LevelDo, type LevelWhen } from './level.ts';
+import { LEVEL_TERRAINS, flattenDo, type DeployUnit, type LevelDef, type LevelDo, type LevelWhen } from './level.ts';
 import type { PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
 export interface LevelIssue {
@@ -210,7 +210,7 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
    * 而且"还剩几家"也不算它——玩家那边看到的是"这关说有三家，我只见到两家"。
    */
   for (const seat of level.seats?.hidden ?? []) {
-    const called = (level.events ?? []).some((ev) => ev.do.some((a) => a.kind === 'deploy' && a.seat === seat));
+    const called = (level.events ?? []).some((ev) => flattenDo(ev.do).some((a) => a.kind === 'deploy' && a.seat === seat));
     if (!called) {
       out.push({
         severity: 'error',
@@ -229,29 +229,52 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
    * `fired` 就恒为真，引用它的条件不会"每次跟着再来一次"。
    */
   const eventIds = new Set((level.events ?? []).map((e) => e.id));
-  const firedRefs = (when: LevelWhen): string[] => {
-    if ('all' in when) return when.all.flatMap(firedRefs);
-    if ('any' in when) return when.any.flatMap(firedRefs);
-    if ('not' in when) return firedRefs(when.not);
-    return when.kind === 'fired' ? [when.id] : [];
+  /** 条件里所有 `fired` 叶子（带次数） */
+  const firedLeaves = (when: LevelWhen): Array<{ id: string; times?: number; op?: string }> => {
+    if ('all' in when) return when.all.flatMap(firedLeaves);
+    if ('any' in when) return when.any.flatMap(firedLeaves);
+    if ('not' in when) return firedLeaves(when.not);
+    return when.kind === 'fired' ? [when] : [];
+  };
+  /** 这个条件至少需要目标事件发生几次 */
+  const needTimes = (leaf: { times?: number; op?: string }): number => {
+    if (leaf.times === undefined) return 1;
+    if (leaf.op === '>') return leaf.times + 1;
+    if (leaf.op === '<' || leaf.op === '<=') return 1;
+    return leaf.times;
   };
   const refGraph = new Map<string, string[]>();
   for (const ev of level.events ?? []) {
-    const refs = firedRefs(ev.when);
-    refGraph.set(ev.id, refs);
-    for (const ref of refs) {
-      if (!eventIds.has(ref)) {
+    const leaves = firedLeaves(ev.when);
+    refGraph.set(
+      ev.id,
+      leaves.map((l) => l.id),
+    );
+    for (const leaf of leaves) {
+      if (!eventIds.has(leaf.id)) {
         out.push({
           severity: 'error',
-          text: `事件「${ev.id}」的条件引用了不存在的「${ref}」：这个条件永远不会成立。`,
+          text: `事件「${ev.id}」的条件引用了不存在的「${leaf.id}」：这个条件永远不会成立。`,
         });
         continue;
       }
-      const target = (level.events ?? []).find((e) => e.id === ref);
+      const target = (level.events ?? []).find((e) => e.id === leaf.id);
       if (target?.repeat === true) {
+        /*
+         * 引用了会重复触发的事件：
+         *   · 写了次数 → 正是它的用途（"第 3 次走进来"），不提醒；
+         *   · 没写次数 → 第一次之后条件恒为真，作者可能想要"每次跟着来"。
+         */
+        if (leaf.times === undefined) {
+          out.push({
+            severity: 'warn',
+            text: `事件「${ev.id}」引用了会重复触发的「${leaf.id}」：它第一次触发之后这个条件就恒为真，「${ev.id}」不会跟着再来一次。要"第几次"就填次数。`,
+          });
+        }
+      } else if (needTimes(leaf) >= 2) {
         out.push({
-          severity: 'warn',
-          text: `事件「${ev.id}」引用了会重复触发的「${ref}」：它第一次触发之后这个条件就恒为真，「${ev.id}」不会跟着再来一次。`,
+          severity: 'error',
+          text: `事件「${ev.id}」要「${leaf.id}」发生 ${needTimes(leaf)} 次，但它不是 repeat 事件：普通事件只触发一次，这个条件永远不会成立。`,
         });
       }
     }
@@ -285,10 +308,32 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
     }
   }
 
+  /*
+   * 局势条件看的是"这一家的城"。没有城的席位（`cityless`）这两条恒为 0，
+   * 写了就是永远不会成立的那一半——提醒一句，作者大多是想写给有城的那家。
+   */
+  const stateLeaves = (when: LevelWhen): Array<{ kind: string; seat: string }> => {
+    if ('all' in when) return when.all.flatMap(stateLeaves);
+    if ('any' in when) return when.any.flatMap(stateLeaves);
+    if ('not' in when) return stateLeaves(when.not);
+    return when.kind === 'cityEra' || when.kind === 'cityHp' ? [when] : [];
+  };
+  for (const ev of level.events ?? []) {
+    for (const leaf of stateLeaves(ev.when)) {
+      if ((level.seats?.cityless ?? []).includes(leaf.seat as never)) {
+        out.push({
+          severity: 'warn',
+          text: `事件「${ev.id}」的条件看的是第 ${leaf.seat} 家的城，但这一席没有城：这一条恒为 0。`,
+        });
+      }
+    }
+  }
+
   /* ---- 事件 ---- */
   for (const ev of level.events ?? []) {
-    const hasSay = ev.do.some((a) => a.kind === 'say');
-    for (const act of ev.do) {
+    const acts = flattenDo(ev.do);
+    const hasSay = acts.some((a) => a.kind === 'say');
+    for (const act of acts) {
       if (act.kind === 'spawn') {
         const label = `事件「${ev.id}」刷兵`;
         checkUnits(act.units, label, known, out);
@@ -334,7 +379,7 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
     if (goal.kind === 'escort') {
       const z = goal.zone;
       for (const e of level.events ?? []) {
-        for (const act of e.do) {
+        for (const act of flattenDo(e.do)) {
           if (act.kind !== 'reveal') continue;
           const r = act.zone;
           const same = r.x0 === z.x0 && r.y0 === z.y0 && r.x1 === z.x1 && r.y1 === z.y1;
