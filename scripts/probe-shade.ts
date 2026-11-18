@@ -16,9 +16,11 @@ import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { abilityApi, applyAction } from '../src/core/rules.ts';
 import {
   DARK_TURMOIL,
+  EMPEROR,
   SHADE,
   SHADOW_BEAST,
   SHADOW_LORD,
+  SLUMBER,
   refreshShadow,
   SHADOW_KEY,
 } from '../src/core/dark-turmoil-packs.ts';
@@ -491,6 +493,51 @@ console.log('\n[11] 自己会用跳跃');
       );
     }
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 12. 玩家看不看得见这些机制
+ *
+ * 实机反馈：只写了"有暗蚀这个能力"，看不到数值；影主的召唤、暗影的击杀转换
+ * 也完全没写。玩家算不出伤害、也不知道它为什么越打越多。
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[12] 面板上写清楚');
+{
+  const lines = (type: string): string[] => {
+    const { s, mk } = arena();
+    const u = mk('u', type, 'B', 5, 5);
+    return DARK_TURMOIL.hooks.getUnitPanelLines!({ state: s, unit: u });
+  };
+  const beast = lines(SHADOW_BEAST).join(' | ');
+  check('蚀影：写了暗蚀的具体数值', /暗蚀\s*8\s*点/.test(beast), beast);
+  check('蚀影：写了暗影半径', /半径\s*3\s*格/.test(beast), beast);
+
+  const shade = lines(SHADE).join(' | ');
+  check('暗影：写了"击杀后原地生出蚀影"', shade.includes('击杀') && shade.includes('蚀影'), shade);
+  check('暗影：写了暗蚀数值', /暗蚀\s*4\s*点/.test(shade), shade);
+
+  const lord = lines(SHADOW_LORD).join(' | ');
+  check('影主：写了召唤节奏', lord.includes('分裂出一个暗影'), lord);
+  check('影主：写了暗蚀数值', /暗蚀\s*15\s*点/.test(lord), lord);
+
+  const emperor = lines(EMPEROR).join(' | ');
+  check('尸骸仙帝：仍然只写模糊寿元', emperor.includes('寿元：') && !/\d+\s*年/.test(emperor), emperor);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 13. 这几个兵不带属性（属性是奇想包的规则，本包不借）
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[13] 不带属性');
+{
+  const { s } = arena();
+  const withElement = [EMPEROR, SLUMBER, SHADOW_BEAST, SHADE, SHADOW_LORD].filter(
+    (id) => !!s.unitTypes[id]?.element,
+  );
+  check('本包的兵种都不写 element（属性是奇想包的规则，不该出现在这里）', withElement.length === 0, withElement.join(','));
+  const withResist = [EMPEROR, SLUMBER, SHADOW_BEAST, SHADE, SHADOW_LORD].filter(
+    (id) => !!s.unitTypes[id]?.weak || !!s.unitTypes[id]?.resist,
+  );
+  check('也不写 weak / resist', withResist.length === 0, withResist.join(','));
 }
 
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`);

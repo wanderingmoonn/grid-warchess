@@ -10501,3 +10501,36 @@ a.btn {
 .level-goal-group input {
   width: 44px;
 }
+
+/* ── 关卡栏：可折叠分组（2026-11-18） ─────────────────────────────
+ *
+ * 主线会一直长，支线还要按卷分组，平铺下去一屏放不完。
+ * 做成"整行可点的标题条"而不是小三角：手机上更好点。
+ */
+.lvl-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 6px;
+  margin-bottom: 8px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line, #e3e0da);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lvl-fold:hover { background: rgba(0, 0, 0, 0.03); }
+.lvl-fold-arrow {
+  width: 14px;
+  color: var(--muted, #8a8578);
+  font-size: 12px;
+}
+.lvl-fold b { font-size: 13px; }
+.lvl-fold .field-hint { margin-left: auto; }
+
+/* 支线里的一卷：标题 + 这一卷的关卡 */
+.side-chapter { margin: 10px 0 14px; }
+.side-chapter .field-label { margin-bottom: 6px; }
