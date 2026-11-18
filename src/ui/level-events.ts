@@ -47,6 +47,8 @@ const DO_KIND_NAME: Record<string, string> = {
   terrain: '改一片地形',
   reveal: '点亮一片区域',
   gold: '给某一家金币',
+  win: '直接判某一家胜利',
+  branch: '如果…就…（分支）',
 };
 const WHEN_KIND_NAME: Record<string, string> = {
   turn: '第 N 次行动',
@@ -73,8 +75,15 @@ const esc = (t: string) =>
 
 /** 选点/选区时"正在给谁选" */
 type PickTarget =
-  | { kind: 'zone'; ev: number; slot: 'when' | 'do'; act: number; /** slot 是 when 时：条件树里的路径 */ path?: string }
-  | { kind: 'spawn'; ev: number; act: number };
+  | {
+      kind: 'zone';
+      ev: number;
+      slot: 'when' | 'do';
+      /** 动作树里的节点 key（`doIndex` 的键）；slot 是 when 时用 path */
+      actKey?: string;
+      path?: string;
+    }
+  | { kind: 'spawn'; ev: number; actKey: string };
 
 export function openLevelEvents(opts: LevelEventsOptions): void {
   const level = opts.level;
@@ -112,9 +121,12 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   mask.className = 'modal-mask';
   mask.innerHTML = `
     <div class="modal wide">
-      <div class="modal-head">
-        <h2>关卡事件</h2>
-        <p>一条事件就是「当…就…」，动作按顺序执行。区域和落点在右边地图上点。</p>
+      <div class="modal-head level-events-head">
+        <div class="level-events-head-text">
+          <h2>关卡事件</h2>
+          <p>一条事件就是「当…就…」，动作按顺序执行。区域和落点在右边地图上点。</p>
+        </div>
+        <button class="btn btn-sm" data-act="help" title="条件 / 动作 / 规则一页看完">速查</button>
       </div>
       <div class="modal-body">
         <div class="level-events-wrap">
@@ -140,6 +152,42 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       <div class="modal-foot">
         <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
+      </div>
+    </div>
+    <div class="level-help-layer" data-help hidden>
+      <div class="level-help-card">
+        <div class="level-help-head">
+          <b>事件系统速查</b>
+          <button class="btn btn-sm" data-act="help-close">关闭</button>
+        </div>
+        <div class="level-help-body">
+          <h3>条件（什么时候）</h3>
+          <ul class="level-help-list">
+            <li><b>第 N 次行动</b> —— 可配 ≥ ≤ = &gt; &lt;（默认 ≥）</li>
+            <li><b>某一家的兵死了</b> —— 可限定兵种</li>
+            <li><b>有单位走进区域</b> —— 从区域外走进来才算</li>
+            <li><b>另一件事已发生</b> —— 可填次数；只有勾了「每次走进都触发」的事件次数会超过 1</li>
+            <li><b>最高城的时代 / 最低城的血 / 手上的金币</b> —— 读当前局面，没城按 0 算</li>
+            <li><b>全部满足 / 任一满足 / 取反</b> —— 可以套娃，最多 3 层；空组会报错</li>
+          </ul>
+          <h3>动作（做什么）</h3>
+          <ul class="level-help-list">
+            <li><b>播报</b> —— 战报里写一句；带它的事件会把战报自动展开</li>
+            <li><b>刷兵</b> —— 不看钱、不看产线，只看格子站不站得住</li>
+            <li><b>改 AI 打法 / 让席位登场 / 改地形 / 点亮 / 加扣金币</b></li>
+            <li><b>直接判胜</b> —— 不用等胜利条件，一局只认第一次</li>
+            <li><b>如果…就…（分支）</b> —— 按当下局势二选一，可再嵌分支</li>
+          </ul>
+          <h3>三条规则</h3>
+          <ol class="level-help-list">
+            <li>每条事件默认<b>只触发一次</b>；要反复触发就勾「每次走进都触发」。</li>
+            <li>每手检查一次。<b>兵死了 / 走进区域</b> 只在这一手成立——两个这类条件写在一起，
+                意思是"<b>同一个动作里</b>同时发生"，不是"之前发生过"。</li>
+            <li>事件的条件读<b>当下</b>；分支里的条件读的是"<b>执行到那一步</b>"，
+                所以"先加钱、再判断有没有钱"是能工作的。</li>
+          </ol>
+          <p class="field-hint">完整说明（含六种常见剧本）见仓库里的 docs/GUIDE-EVENTS.md。</p>
+        </div>
       </div>
     </div>`;
 
@@ -198,6 +246,10 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (kind === 'terrain') return { kind: 'terrain', zone: centerZone(2), to: 'deep' };
     if (kind === 'reveal') return { kind: 'reveal', zone: centerZone(2) };
     if (kind === 'gold') return { kind: 'gold', seat: seats[0] ?? 'A', amount: 100 };
+    if (kind === 'win') return { kind: 'win', seat: seats[0] ?? 'A' };
+    if (kind === 'branch') {
+      return { kind: 'branch', when: { kind: 'turn', at: 5 }, then: [{ kind: 'say', text: '满足时' }] };
+    }
     return { kind: 'say', text: '这一关发生了点事。' };
   };
 
@@ -340,7 +392,24 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         的单位走进 <button class="btn btn-sm" data-pick-when-zone="${key}">${esc(zoneText(node.zone))}</button>
       </span>${del}</div>`;
     }
-    // fired：从本关其它事件里挑一个
+    if (node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold') {
+      const label =
+        node.kind === 'cityEra' ? '最高的城的时代' : node.kind === 'cityHp' ? '最低的城的血量' : '手上的金币';
+      const opSel = `<select class="level-mini-select" data-when-op="${key}" title="怎么比">${(
+        ['>=', '<=', '=', '>', '<'] as const
+      )
+        .map((o) => `<option value="${o}" ${(node.op ?? '>=') === o ? 'selected' : ''}>${o}</option>`)
+        .join('')}</select>`;
+      return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel}
+          <select class="level-mini-select" data-when-seat="${key}">${seatOptions(node.seat)}</select>
+          的 ${label} ${opSel}
+          <input type="number" min="0" max="99999" class="level-mini-num" data-when-value="${key}" value="${node.value}">
+        </span>${del}</div>`;
+    }
+
+    if (node.kind !== 'fired') return `${kindSel}${del}`;
+
+    // fired：从本关其它事件里挑一个，可选"已经发生过几次"
     const others = events.filter((e) => e.id !== events[Number(key.split(':')[0])]?.id);
     const firedSel = `<select class="level-mini-select" data-when-fired="${key}">${
       others.length === 0
@@ -349,7 +418,19 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
             .map((e) => `<option value="${esc(e.id)}" ${node.id === e.id ? 'selected' : ''}>${esc(e.id)}</option>`)
             .join('')
     }</select>`;
-    return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel} ${firedSel} 已发生</span>${del}</div>`;
+    /*
+     * 次数：留空＝"发生过就行"（老语义）。填了才按比较符比。
+     * 比较符只在填了次数时才有意义，所以下拉放在输入框前面、默认 >=。
+     */
+    const opSel = `<select class="level-mini-select" data-when-times-op="${key}" title="次数怎么比">${(
+      ['>=', '=', '>', '<=', '<'] as const
+    )
+      .map((o) => `<option value="${o}" ${(node.op ?? '>=') === o ? 'selected' : ''}>${o}</option>`)
+      .join('')}</select>`;
+    const timesInput = `<input type="number" min="1" max="999" class="level-mini-num" data-when-times="${key}"
+        value="${node.times ?? ''}" placeholder="—" title="留空＝只要发生过就算">`;
+    return `<div class="when-row" style="--d:${depth}"><span class="when-row-arg">${kindSel} ${firedSel} 已发生
+        ${opSel}${timesInput} 次<span class="field-hint">（不填次数＝发生过就行）</span></span>${del}</div>`;
   }
 
   /** 递归渲染：叶子一行，组是"标题 + 缩进的子节点 + 加按钮" */
@@ -384,13 +465,30 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     return `<div class="when-tree">${whenTree(ev, i, ev.when, '', 0)}</div>`;
   }
 
-  function doControls(act: LevelDo, i: number, j: number): string {
-    const kindSel = `<select class="level-mini-select" data-do-kind="${i}:${j}">${Object.entries(DO_KIND_NAME)
+  /*
+   * 动作现在也是树（分支）。控件同样用 `事件序号:路径` 那套不合适——
+   * 动作的父容器是"某个列表"，不是固定的 ev。所以渲染时给每个动作分配一个
+   * 短 key，同时记下"它在哪个数组的第几位"，交互时按 key 查。
+   */
+  let doSeq = 0;
+  const doIndex = new Map<string, { list: LevelDo[]; idx: number }>();
+  const nextDoKey = (list: LevelDo[], idx: number): string => {
+    const k = `d${doSeq++}`;
+    doIndex.set(k, { list, idx });
+    return k;
+  };
+  const doNode = (key: string): LevelDo | undefined => {
+    const slot = doIndex.get(key);
+    return slot ? slot.list[slot.idx] : undefined;
+  };
+
+  function doControls(act: LevelDo, key: string): string {
+    const kindSel = `<select class="level-mini-select" data-do-kind="${key}">${Object.entries(DO_KIND_NAME)
       .map(([k, n]) => `<option value="${k}" ${act.kind === k ? 'selected' : ''}>${esc(n)}</option>`)
       .join('')}</select>`;
 
     if (act.kind === 'say') {
-      return `${kindSel}<input class="level-say-input" data-say="${i}:${j}" value="${esc(act.text)}" placeholder="战报里会写这一句（双方都看得到）">`;
+      return `${kindSel}<input class="level-say-input" data-say="${key}" value="${esc(act.text)}" placeholder="战报里会写这一句（双方都看得到）">`;
     }
     if (act.kind === 'spawn') {
       const chips =
@@ -400,25 +498,25 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
               .map(
                 (u, k) =>
                   `<span class="level-spawn-chip">${esc(catalog[u.type]?.short ?? '?')} (${u.x},${u.y})
-                     <button data-spawn-del="${i}:${j}:${k}" title="删掉这个落点">×</button></span>`,
+                     <button data-spawn-del="${key}:${k}" title="删掉这个落点">×</button></span>`,
               )
               .join('');
       return `${kindSel}
         <span class="level-when-arg">
-          <select class="level-mini-select" data-spawn-owner="${i}:${j}">${seatOptions(act.owner)}</select>
+          <select class="level-mini-select" data-spawn-owner="${key}">${seatOptions(act.owner)}</select>
           派
-          <select class="level-mini-select" data-spawn-type="${i}:${j}">${unitOptionsHtml(
+          <select class="level-mini-select" data-spawn-type="${key}">${unitOptionsHtml(
             (act as { lastType?: string }).lastType ?? firstCombat,
           )}</select>
-          <button class="btn btn-sm" data-pick-spawn="${i}:${j}">在地图上点位置</button>
+          <button class="btn btn-sm" data-pick-spawn="${key}">在地图上点位置</button>
         </span>
         <div class="level-spawn-chips">${chips}</div>`;
     }
     if (act.kind === 'doctrine') {
       return `${kindSel}<span class="level-when-arg">
-          <select class="level-mini-select" data-doc-seat="${i}:${j}">${seatOptions(act.seat)}</select>
+          <select class="level-mini-select" data-doc-seat="${key}">${seatOptions(act.seat)}</select>
           改成
-          <select class="level-mini-select" data-doc-strategy="${i}:${j}">${Object.entries(STRATEGY_NAME)
+          <select class="level-mini-select" data-doc-strategy="${key}">${Object.entries(STRATEGY_NAME)
             .map(([k, n]) => `<option value="${k}" ${act.strategy === k ? 'selected' : ''}>${esc(n)}</option>`)
             .join('')}</select>
         </span>`;
@@ -429,7 +527,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         return `${kindSel}<span class="level-spawn-empty">这一关没有「中途登场」的席位（在「席位」面板里设）。</span>`;
       }
       return `${kindSel}<span class="level-when-arg">
-          <select class="level-mini-select" data-deploy-seat="${i}:${j}">${opts
+          <select class="level-mini-select" data-deploy-seat="${key}">${opts
             .map((s) => `<option value="${s}" ${act.seat === s ? 'selected' : ''}>${SEAT_NAME[s] ?? s}</option>`)
             .join('')}</select>
           上场（用这一关「摆兵」里给它写好的兵力）
@@ -438,12 +536,12 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (act.kind === 'reveal') {
       const forever = (act.turns ?? 1) < 0;
       return `${kindSel}<span class="level-when-arg">
-          点亮 <button class="btn btn-sm" data-pick-do-zone="${i}:${j}">${esc(zoneText(act.zone))}</button>
-          持续 <input type="number" min="1" max="99" class="level-mini-num" data-reveal-turns="${i}:${j}" value="${
+          点亮 <button class="btn btn-sm" data-pick-do-zone="${key}">${esc(zoneText(act.zone))}</button>
+          持续 <input type="number" min="1" max="99" class="level-mini-num" data-reveal-turns="${key}" value="${
             forever ? 1 : act.turns ?? 1
           }" ${forever ? 'disabled' : ''}>
           次行动
-          <label class="editor-check"><input type="checkbox" data-reveal-forever="${i}:${j}" ${
+          <label class="editor-check"><input type="checkbox" data-reveal-forever="${key}" ${
             forever ? 'checked' : ''
           }> 一直亮</label>
           <span class="field-hint">（到期重新没入迷雾；1 次 ≈ 亮到下一手）</span>
@@ -451,20 +549,63 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
     if (act.kind === 'gold') {
       return `${kindSel}<span class="level-when-arg">
-          <select class="level-mini-select" data-gold-seat="${i}:${j}">${seatOptions(act.seat)}</select>
-          <input type="number" class="level-mini-num" min="-9999" max="9999" data-gold-amount="${i}:${j}" value="${act.amount}">
+          <select class="level-mini-select" data-gold-seat="${key}">${seatOptions(act.seat)}</select>
+          <input type="number" class="level-mini-num" min="-9999" max="9999" data-gold-amount="${key}" value="${act.amount}">
           金币
           <span class="field-hint">（正数给钱，负数扣钱；扣到 0 为止，不会变负）</span>
         </span>`;
     }
+    if (act.kind === 'win') {
+      return `${kindSel}<span class="level-when-arg">
+          <select class="level-mini-select" data-win-seat="${key}">${seatOptions(act.seat)}</select>
+          赢
+          <span class="field-hint">（事件一触发就结算，不用等胜利条件；一局只认第一次）</span>
+        </span>`;
+    }
+    if (act.kind === 'branch') {
+      return `${kindSel}<span class="field-hint">满足条件时做一组动作，否则做另一组</span>`;
+    }
     return `${kindSel}<span class="level-when-arg">
-        把 <button class="btn btn-sm" data-pick-do-zone="${i}:${j}">${esc(zoneText(act.zone))}</button>
+        把 <button class="btn btn-sm" data-pick-do-zone="${key}">${esc(zoneText(act.zone))}</button>
         改成
-        <select class="level-mini-select" data-terr-to="${i}:${j}">${LEVEL_TERRAINS.map(
+        <select class="level-mini-select" data-terr-to="${key}">${LEVEL_TERRAINS.map(
           (t) => `<option value="${t}" ${act.to === t ? 'selected' : ''}>${esc(CONFIG.terrainName[t] ?? t)}</option>`,
         ).join('')}</select>
         <span class="field-hint">（城和桥改不了；改成<b>深水</b>会把桥冲垮）</span>
       </span>`;
+  }
+
+  /**
+   * 渲染一组动作。分支的 `then` / `else` 各自递归一层，缩进就是层级。
+   *
+   * 每行左边那个序号是"这一组里的第几个"，不是全局序号——分支里重新从 1 数，
+   * 否则作者会以为"第 7 个动作"是整个事件里的第 7 个。
+   */
+  function doListHtml(list: LevelDo[], depth: number): string {
+    return list
+      .map((act, idx) => {
+        const key = nextDoKey(list, idx);
+        const row = `<div class="level-do-row" style="--d:${depth}">
+            ${doControls(act, key)}
+            <button class="btn btn-sm" data-do-del="${key}" title="删掉这个动作">×</button>
+          </div>`;
+        if (act.kind !== 'branch') return row;
+        return `${row}
+          <div class="level-do-branch">
+            <div class="level-do-sub-label">满足时</div>
+            ${doListHtml(act.then, depth + 1)}
+            ${
+              act.else
+                ? `<div class="level-do-sub-label">否则</div>${doListHtml(act.else, depth + 1)}`
+                : ''
+            }
+            <div class="level-do-sub-add">
+              <button class="btn btn-sm" data-do-add-sub="${key}:then">+ 动作</button>
+              ${act.else ? '' : `<button class="btn btn-sm" data-do-add-else="${key}">+ 否则</button>`}
+            </div>
+          </div>`;
+      })
+      .join('');
   }
 
   /** 把一件事压成一行摘要，供时间轴用 */
@@ -580,6 +721,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   }
 
   function renderList(): void {
+    // 每次重画都重建"key → 在哪个数组第几位"的映射：动作树可能已经变了
+    doIndex.clear();
+    doSeq = 0;
     if (view === 'timeline') {
       renderTimeline();
       return;
@@ -605,17 +749,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
               }> 每次走进都触发（不勾＝只触发一次）</label>`
             : ''
         }
-        <div class="level-event-dos">
-          ${ev.do
-            .map(
-              (act, j) => `<div class="level-do-row">
-                <span class="level-do-no">${j + 1}</span>
-                ${doControls(act, i, j)}
-                <button class="btn btn-sm" data-do-del="${i}:${j}" title="删掉这个动作">×</button>
-              </div>`,
-            )
-            .join('')}
-        </div>
+        <div class="level-event-dos">${doListHtml(ev.do, 0)}</div>
         <div class="level-event-foot">
           <select class="level-mini-select" data-do-add-kind="${i}">${Object.entries(DO_KIND_NAME)
             .map(([k, n]) => `<option value="${k}">${esc(n)}</option>`)
@@ -647,14 +781,15 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (previewZone) return previewZone;
     if (!pick) return null;
     if (pick.kind === 'zone') {
+      // 动作分支的选区只认 key，`pick.ev` 在那一支里是 -1
+      if (pick.slot === 'do') {
+        const act = pick.actKey ? doNode(pick.actKey) : undefined;
+        return act && (act.kind === 'terrain' || act.kind === 'reveal') ? act.zone : null;
+      }
       const ev = events[pick.ev];
       if (!ev) return null;
-      if (pick.slot === 'when') {
-        const node = whenAt(ev.when, pick.path ?? '');
-        return node && 'kind' in node && node.kind === 'enter' ? node.zone : null;
-      }
-      const act = ev.do[pick.act];
-      return act && (act.kind === 'terrain' || act.kind === 'reveal') ? act.zone : null;
+      const node = whenAt(ev.when, pick.path ?? '');
+      return node && 'kind' in node && node.kind === 'enter' ? node.zone : null;
     }
     return null;
   };
@@ -793,8 +928,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     const cell = cellFromEvent(ev, canvasEl);
     if (!cell) return;
     ev.preventDefault();
-    const ev0 = events[pick.ev];
-    const act = ev0?.do[pick.act];
+    const act = doNode(pick.actKey);
     if (!act || act.kind !== 'spawn') return;
     const def = catalog[(act as { lastType?: string }).lastType ?? firstCombat];
     if (!def) return;
@@ -816,14 +950,13 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     },
     onCommit: (zone) => {
       if (!pick || pick.kind !== 'zone') return;
-      const ev0 = events[pick.ev];
-      if (ev0) {
-        if (pick.slot === 'when') {
-          const node = whenAt(ev0.when, pick.path ?? '');
-          if (node && 'kind' in node && node.kind === 'enter') node.zone = zone;
-        }
-        const act = ev0.do[pick.act];
-        if (pick.slot === 'do' && act && (act.kind === 'terrain' || act.kind === 'reveal')) act.zone = zone;
+      if (pick.slot === 'do') {
+        const act = pick.actKey ? doNode(pick.actKey) : undefined;
+        if (act && (act.kind === 'terrain' || act.kind === 'reveal')) act.zone = zone;
+      } else {
+        const ev0 = events[pick.ev];
+        const node = ev0 ? whenAt(ev0.when, pick.path ?? '') : null;
+        if (node && 'kind' in node && node.kind === 'enter') node.zone = zone;
       }
       previewZone = null;
       pick = null;
@@ -838,20 +971,43 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     const el = ev.target as HTMLElement;
     const say = el.getAttribute('data-say');
     if (say) {
-      const [i, j] = say.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(say.split(':')[0]!);
       if (act && act.kind === 'say') act.text = (el as HTMLInputElement).value;
       return;
     }
     const rvTurns = el.getAttribute('data-reveal-turns');
     if (rvTurns) {
-      const [i, j] = rvTurns.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(rvTurns.split(':')[0]!);
       if (act && act.kind === 'reveal') {
         const n = Math.max(1, Math.min(99, Math.round(Number((el as HTMLInputElement).value) || 1)));
         // 1 是默认值，不写进 JSON（少一个字段少一句要解释的话）
         if (n === 1) delete act.turns;
         else act.turns = n;
+      }
+      return;
+    }
+    const whenValue = el.getAttribute('data-when-value');
+    if (whenValue) {
+      const key = parseKey(whenValue);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && (node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold')) {
+        node.value = Math.max(0, Math.min(99999, Math.round(Number((el as HTMLInputElement).value) || 0)));
+      }
+      return;
+    }
+    const times = el.getAttribute('data-when-times');
+    if (times) {
+      const key = parseKey(times);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'fired') {
+        const raw = (el as HTMLInputElement).value.trim();
+        if (!raw) {
+          // 清空＝回到"发生过就行"，顺手把比较符也删掉（留着是死字段）
+          delete node.times;
+          delete node.op;
+        } else {
+          node.times = Math.max(1, Math.min(999, Math.round(Number(raw) || 1)));
+        }
       }
       return;
     }
@@ -902,6 +1058,16 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       renderList();
       return;
     }
+    const whenSeat = el.getAttribute('data-when-seat');
+    if (whenSeat !== null) {
+      const key = parseKey(whenSeat);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && (node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold')) {
+        node.seat = val as PlayerId;
+      }
+      renderList();
+      return;
+    }
     const whenType = el.getAttribute('data-when-type');
     if (whenType !== null) {
       const key = parseKey(whenType);
@@ -913,7 +1079,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (whenOp !== null) {
       const key = parseKey(whenOp);
       const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
-      if (node && 'kind' in node && node.kind === 'turn') {
+      if (node && 'kind' in node && (node.kind === 'turn' || node.kind === 'cityEra' || node.kind === 'cityHp' || node.kind === 'gold')) {
         // 默认值 `>=` 不写进数据：少一个字段少一句要解释的话
         if (val === '>=') delete node.op;
         else node.op = val as '>=' | '<=' | '=' | '>' | '<';
@@ -928,40 +1094,52 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       if (node && 'kind' in node && node.kind === 'fired' && val) node.id = val;
       return;
     }
+    const timesOp = el.getAttribute('data-when-times-op');
+    if (timesOp !== null) {
+      const key = parseKey(timesOp);
+      const node = events[key.i] ? whenAt(events[key.i]!.when, key.path) : null;
+      if (node && 'kind' in node && node.kind === 'fired' && node.times !== undefined) {
+        if (val === '>=') delete node.op;
+        else node.op = val as '>=' | '<=' | '=' | '>' | '<';
+      }
+      renderList();
+      return;
+    }
+    const winSeat = el.getAttribute('data-win-seat');
+    if (winSeat) {
+      const act = doNode(winSeat.split(':')[0]!);
+      if (act && act.kind === 'win') act.seat = val as PlayerId;
+      return;
+    }
     const doKind = el.getAttribute('data-do-kind');
     if (doKind) {
-      const [i, j] = doKind.split(':').map(Number);
-      const target = events[i!]?.do[j!];
-      if (target) events[i!]!.do[j!] = defaultDo(val as LevelDo['kind']);
+      const slot = doIndex.get(doKind);
+      if (slot) slot.list[slot.idx] = defaultDo(val as LevelDo['kind']);
       renderAll();
       return;
     }
     const spawnOwner = el.getAttribute('data-spawn-owner');
     if (spawnOwner) {
-      const [i, j] = spawnOwner.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(spawnOwner.split(':')[0]!);
       if (act && act.kind === 'spawn') act.owner = val as PlayerId;
       return;
     }
     const spawnType = el.getAttribute('data-spawn-type');
     if (spawnType) {
-      const [i, j] = spawnType.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(spawnType.split(':')[0]!);
       // 记在动作上，但不写进 JSON：这是"下一个点要放什么"的界面状态
       if (act && act.kind === 'spawn') (act as { lastType?: string }).lastType = val;
       return;
     }
     const goldSeat = el.getAttribute('data-gold-seat');
     if (goldSeat) {
-      const [i, j] = goldSeat.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(goldSeat.split(':')[0]!);
       if (act && act.kind === 'gold') act.seat = val as PlayerId;
       return;
     }
     const goldAmount = el.getAttribute('data-gold-amount');
     if (goldAmount) {
-      const [i, j] = goldAmount.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(goldAmount.split(':')[0]!);
       if (act && act.kind === 'gold') {
         // 0 没有意义（等于什么都没做），退到 ±1
         const n = Math.round(Number(val) || 0);
@@ -971,36 +1149,31 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
     const docSeat = el.getAttribute('data-doc-seat');
     if (docSeat) {
-      const [i, j] = docSeat.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(docSeat.split(':')[0]!);
       if (act && act.kind === 'doctrine') act.seat = val as PlayerId;
       return;
     }
     const docStrategy = el.getAttribute('data-doc-strategy');
     if (docStrategy) {
-      const [i, j] = docStrategy.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(docStrategy.split(':')[0]!);
       if (act && act.kind === 'doctrine') act.strategy = val as 'auto' | 'rush' | 'boom' | 'hold';
       return;
     }
     const deploySeat = el.getAttribute('data-deploy-seat');
     if (deploySeat) {
-      const [i, j] = deploySeat.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(deploySeat.split(':')[0]!);
       if (act && act.kind === 'deploy') act.seat = val as PlayerId;
       return;
     }
     const terrTo = el.getAttribute('data-terr-to');
     if (terrTo) {
-      const [i, j] = terrTo.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(terrTo.split(':')[0]!);
       if (act && act.kind === 'terrain') act.to = val as LevelTerrain;
       return;
     }
     const forever = el.getAttribute('data-reveal-forever');
     if (forever) {
-      const [i, j] = forever.split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const act = doNode(forever.split(':')[0]!);
       if (act && act.kind === 'reveal') {
         if ((el as HTMLInputElement).checked) act.turns = -1;
         else delete act.turns;
@@ -1018,27 +1191,32 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   mask.addEventListener('click', (ev) => {
     const t = ev.target as HTMLElement;
 
+    // 速查：只有点在遮罩空白处才关（点在卡片里、或者点卡片上的按钮，都不拦）
+    const helpLayer = t.closest<HTMLElement>('[data-help]');
+    if (helpLayer && t === helpLayer) {
+      helpLayer.hidden = true;
+      return;
+    }
+
     // 选区域 / 点落点：进入待选模式，提示作者去右边地图上操作
     const pickWhenZone = t.closest<HTMLElement>('[data-pick-when-zone]');
     if (pickWhenZone) {
       const key = parseKey(pickWhenZone.dataset.pickWhenZone ?? '');
-      pick = { kind: 'zone', ev: key.i, slot: 'when', act: -1, path: key.path };
+      pick = { kind: 'zone', ev: key.i, slot: 'when', path: key.path };
       pickHintEl.textContent = '在下面的地图上拖一个矩形 → 松手就定区域。';
       renderMap();
       return;
     }
     const pickDoZone = t.closest<HTMLElement>('[data-pick-do-zone]');
     if (pickDoZone) {
-      const [i, j] = (pickDoZone.dataset.pickDoZone ?? '').split(':').map(Number);
-      pick = { kind: 'zone', ev: i!, slot: 'do', act: j! };
+      pick = { kind: 'zone', ev: -1, slot: 'do', actKey: pickDoZone.dataset.pickDoZone ?? '' };
       pickHintEl.textContent = '在下面的地图上拖一个矩形 → 松手就定区域。';
       renderMap();
       return;
     }
     const pickSpawn = t.closest<HTMLElement>('[data-pick-spawn]');
     if (pickSpawn) {
-      const [i, j] = (pickSpawn.dataset.pickSpawn ?? '').split(':').map(Number);
-      pick = { kind: 'spawn', ev: i!, act: j! };
+      pick = { kind: 'spawn', ev: -1, actKey: pickSpawn.dataset.pickSpawn ?? '' };
       pickHintEl.textContent = '在地图上点位置，点一次加一个兵；再点一次这个按钮结束。';
       renderMap();
       return;
@@ -1046,8 +1224,9 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
 
     const spawnDel = t.closest<HTMLElement>('[data-spawn-del]');
     if (spawnDel) {
-      const [i, j, k] = (spawnDel.dataset.spawnDel ?? '').split(':').map(Number);
-      const act = events[i!]?.do[j!];
+      const raw = (spawnDel.dataset.spawnDel ?? '').split(':');
+      const act = doNode(raw[0] ?? '');
+      const k = Number(raw[1]);
       if (act && act.kind === 'spawn') act.units = act.units.filter((_u, idx) => idx !== k);
       renderAll();
       return;
@@ -1083,9 +1262,30 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
     const doDel = t.closest<HTMLElement>('[data-do-del]');
     if (doDel) {
-      const [i, j] = (doDel.dataset.doDel ?? '').split(':').map(Number);
-      const ev0 = events[i!];
-      if (ev0) ev0.do = ev0.do.filter((_a, idx) => idx !== j);
+      const slot = doIndex.get(doDel.dataset.doDel ?? '');
+      // 删到空是允许的：校验会提示"事件没有任何动作"，比禁止删更好解释
+      if (slot) slot.list.splice(slot.idx, 1);
+      renderAll();
+      return;
+    }
+    const doAddSub = t.closest<HTMLElement>('[data-do-add-sub]');
+    if (doAddSub) {
+      const raw = doAddSub.dataset.doAddSub ?? '';
+      const cut = raw.indexOf(':');
+      const slot = doIndex.get(raw.slice(0, cut));
+      const node = slot ? slot.list[slot.idx] : undefined;
+      if (node && node.kind === 'branch') {
+        const list = raw.slice(cut + 1) === 'else' ? (node.else ??= []) : node.then;
+        list.push({ kind: 'say', text: '' });
+      }
+      renderAll();
+      return;
+    }
+    const doAddElse = t.closest<HTMLElement>('[data-do-add-else]');
+    if (doAddElse) {
+      const slot = doIndex.get(doAddElse.dataset.doAddElse ?? '');
+      const node = slot ? slot.list[slot.idx] : undefined;
+      if (node && node.kind === 'branch' && !node.else) node.else = [{ kind: 'say', text: '' }];
       renderAll();
       return;
     }
@@ -1120,6 +1320,19 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
 
     const act = t.closest<HTMLElement>('[data-act]')?.dataset.act;
+
+    // 速查层：打开 / 关闭。它不参与保存，纯阅读
+    if (act === 'help') {
+      const layer = mask.querySelector<HTMLElement>('[data-help]');
+      if (layer) layer.hidden = false;
+      return;
+    }
+    if (act === 'help-close') {
+      const layer = mask.querySelector<HTMLElement>('[data-help]');
+      if (layer) layer.hidden = true;
+      return;
+    }
+
     if (act === 'add-event') {
       events = [...events, { id: nextId(), when: defaultWhen('turn'), do: [defaultDo('say')] }];
       renderAll();

@@ -96,12 +96,30 @@ export type LevelWhenLeaf =
    * 这是"把事件串起来"的最小手段：事件 A 里说"伏兵已出动"，事件 B 的条件里
    * 写 `fired(A)`，就得到"伏兵出动之后再做 B"。
    *
-   * 两个要知道的语义：
-   *   · **一次就是永远**。`repeat` 事件第一次触发之后这条就恒为真，
-   *     没法表达"每次 A 都触发 B"（将来要"计数"才做得到）；
-   *   · 同一批里能传播：这一批先执行的 A，后面的 B 在同一批的第二遍扫描里能看到。
+   * `times` 是"发生过几次"（2026-11-17 加的计数）：
+   *   · 不写 `times` ＝ 发生过就行（老的语义）；
+   *   · 写 `times` 就按 `op`（默认 `>=`）比次数。**只有 `repeat: true` 的事件**
+   *     次数才会涨过 1——普通事件触发一次就再也不进 pending 了。
+   *
+   * 同一批里能传播：这一批先执行的 A，后面的 B 在同一批的第二遍扫描里能看到
+   * （看到的是**这一遍开头**的次数，所以同一批里 A 触发两次不会串成 2）。
    */
-  | { kind: 'fired'; id: string };
+  | { kind: 'fired'; id: string; times?: number; op?: TurnOp }
+  /**
+   * 这一席**最高的**城的时代等级（没有城＝0）。`op` 默认 `>=`。
+   *
+   * 用"最高"而不是"某一座"：作者想说的是"这一家已经升到铁器了"，
+   * 而不是"它第 2 座城升到铁器了"。
+   */
+  | { kind: 'cityEra'; seat: PlayerId; op?: TurnOp; value: number }
+  /**
+   * 这一席**最低的**城的血量（没有城＝0）。`op` 默认 `>=`。
+   *
+   * 用"最低"：想说的是"它有一座城快破了"，用 `<=` 配一个低值来写。
+   */
+  | { kind: 'cityHp'; seat: PlayerId; op?: TurnOp; value: number }
+  /** 这一席手上的金币。`op` 默认 `>=` */
+  | { kind: 'gold'; seat: PlayerId; op?: TurnOp; value: number };
 
 /**
  * 事件条件：叶子，或者一棵组合树。
@@ -126,6 +144,21 @@ export type LevelWhen =
 
 /** 事件触发后做什么。一批动作按数组顺序执行。 */
 export type LevelDo =
+  /**
+   * **按条件分两支**（2026-11-18）。
+   *
+   * `when` 用的是和事件触发同一套条件树（`all` / `any` / `not` 全都能用）。
+   * 真正不可替代的场景是 **`repeat` 事件 + 分支**：两条"相反条件"的事件各自
+   * 只会触发一次，第二次就不响了；分支则每次都按当时的局势选一支。
+   *
+   * 三条语义要知道：
+   *   · **条件读的是"执行到这一步时"的局面**，不是事件触发那一刻——所以
+   *     "先给自己加钱、再判断有没有钱"是能工作的；
+   *   · 边沿条件（`enter` / `unitDied`）在这里仍然指"**这一手**"，即使事件本身
+   *     是 `turn` 触发的；
+   *   · `then` / `else` 里的动作按顺序执行，可以再嵌分支（最多 3 层）。
+   */
+  | { kind: 'branch'; when: LevelWhen; then: LevelDo[]; else?: LevelDo[] }
   /** 刷兵：不看钱、不看产线，只看"这一格站不站得住"*/
   | { kind: 'spawn'; owner: PlayerId; units: DeployUnit[] }
   /** 播报一句。写进战报，双方都能看到（`open`） */
@@ -171,7 +204,17 @@ export type LevelDo =
    * 而作者想说的话往往是"援军带着军费到了"或"补给线被劫了"——那是钱包的事，
    * 不是兵的事。扣款封底 0，避免把一个负资产丢进 AI 的估值里。
    */
-  | { kind: 'gold'; seat: PlayerId; amount: number };
+  | { kind: 'gold'; seat: PlayerId; amount: number }
+  /**
+   * **直接判定这一席胜利**（2026-11-17）。
+   *
+   * 给"胜利条件写不出来的那种赢"用：护送某人到某地之后触发一段剧情，剧情走完
+   * 才算赢；或者"撑到援军抵达"——援军是事件刷出来的，胜利也由那一条事件说了算。
+   *
+   * 判定记在 `levelState.decided`：`checkWinner` 会**先认它**，所以不会被后面
+   * 的常规判定覆盖。一局只认第一次（先判先赢）。
+   */
+  | { kind: 'win'; seat: PlayerId };
 
 /**
  * 一件事：什么时候、做什么。
@@ -2281,6 +2324,27 @@ function normalizeWhen(
     return rawOp === '>=' ? { kind: 'turn', at } : { kind: 'turn', at, op: rawOp as TurnOp };
   }
 
+  if (kind === 'cityEra' || kind === 'cityHp' || kind === 'gold') {
+    const seat = ownerOf(w.seat);
+    if (!seat) {
+      errors.push(`事件「${id}」的「${kind}」条件要写是哪一家（seat）`);
+      return undefined;
+    }
+    const value = Math.round(Number(w.value));
+    if (!Number.isFinite(value) || value < 0 || value > 99999) {
+      errors.push(`事件「${id}」的「${kind}」阈值要在 0~99999（现在 ${String(w.value)}）`);
+      return undefined;
+    }
+    const rawOp = w.op === undefined ? '>=' : String(w.op);
+    if (!['>=', '<=', '=', '>', '<'].includes(rawOp)) {
+      errors.push(`事件「${id}」的比较符「${rawOp}」不认识（只能是 >= / <= / = / > / <）`);
+      return undefined;
+    }
+    const out = { kind, seat, value } as { kind: typeof kind; seat: PlayerId; value: number; op?: TurnOp };
+    if (rawOp !== '>=') out.op = rawOp as TurnOp;
+    return out;
+  }
+
   if (kind === 'fired') {
     const ref = typeof w.id === 'string' ? w.id.trim() : '';
     if (!ref) {
@@ -2291,7 +2355,21 @@ function normalizeWhen(
       errors.push(`事件「${id}」的条件引用了它自己：永远不会触发`);
       return undefined;
     }
-    return { kind: 'fired', id: ref };
+    let times: number | undefined;
+    if (w.times !== undefined) {
+      times = Math.round(Number(w.times));
+      if (!Number.isFinite(times) || times < 1 || times > 999) {
+        errors.push(`事件「${id}」的「已经发生过几次」要在 1~999（现在 ${String(w.times)}）`);
+        return undefined;
+      }
+    }
+    const rawOp = w.op === undefined ? '>=' : String(w.op);
+    if (!['>=', '<=', '=', '>', '<'].includes(rawOp)) {
+      errors.push(`事件「${id}」的比较符「${rawOp}」不认识（只能是 >= / <= / = / > / <）`);
+      return undefined;
+    }
+    if (times === undefined) return { kind: 'fired', id: ref };
+    return { kind: 'fired', id: ref, times, ...(rawOp === '>=' ? {} : { op: rawOp as TurnOp }) };
   }
 
   if (kind === 'unitDied') {
@@ -2591,15 +2669,61 @@ function normalizeGoals(
   return out.length > 0 ? out : undefined;
 }
 
+/** 分支里的一组动作。空数组算错（渲染出来是一块空白，作者会以为保存坏了） */
+function normalizeDoList(
+  raw: unknown,
+  id: string,
+  map: FixedMap,
+  seated: readonly PlayerId[],
+  errors: string[],
+  depth: number,
+  label: string,
+): LevelDo[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    errors.push(`事件「${id}」的分支里「${label}」没有动作`);
+    return undefined;
+  }
+  const out: LevelDo[] = [];
+  for (const item of raw) {
+    const act = normalizeDo(item, id, map, seated, errors, depth);
+    if (act) out.push(act);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function normalizeDo(
   raw: unknown,
   id: string,
   map: FixedMap,
   seated: readonly PlayerId[],
   errors: string[],
+  depth = 0,
 ): LevelDo | undefined {
   const a = (raw ?? {}) as Record<string, unknown>;
   const kind = String(a.kind ?? '');
+
+  if (depth > 3) {
+    errors.push(`事件「${id}」的动作嵌套超过 3 层，收拢一下`);
+    return undefined;
+  }
+
+  /*
+   * 分支：`when` 和事件触发用同一套条件树；`then` / `else` 递归成动作列表。
+   * `then` 至少要有一个动作（空分支等于写错，而且渲染出来是一块空白）。
+   */
+  if (kind === 'branch') {
+    if (!a.when) {
+      errors.push(`事件「${id}」的分支没写条件`);
+      return undefined;
+    }
+    const when = normalizeWhen(a.when, id, map, seated, errors);
+    if (!when) return undefined;
+    const then = normalizeDoList(a.then, id, map, seated, errors, depth + 1, '满足时');
+    if (!then) return undefined;
+    const els = a.else === undefined ? undefined : normalizeDoList(a.else, id, map, seated, errors, depth + 1, '否则');
+    if (a.else !== undefined && !els) return undefined;
+    return { kind: 'branch', when, then, ...(els ? { else: els } : {}) };
+  }
 
   if (kind === 'spawn') {
     const owner = String(a.owner ?? '').toUpperCase() as PlayerId;
@@ -2715,10 +2839,34 @@ function normalizeDo(
     return { kind: 'gold', seat, amount };
   }
 
+  if (kind === 'win') {
+    const seat = String(a.seat ?? '').toUpperCase() as PlayerId;
+    if (!seated.includes(seat)) {
+      errors.push(`事件「${id}」判胜利的那一方是「${String(a.seat)}」，但这一关只坐 ${seated.join(' / ')}`);
+      return undefined;
+    }
+    return { kind: 'win', seat };
+  }
+
   errors.push(
-    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold）`,
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold / win / branch）`,
   );
   return undefined;
+}
+
+/**
+ * 把动作树拍平（分支递归展开）。
+ *
+ * 校验和界面里有十来处"这一关有没有某类动作"的检查，它们不关心层级，
+ * 只想知道"有没有"。树化之后这些地方统一走这个函数，别各写一份递归。
+ */
+export function flattenDo(list: LevelDo[]): LevelDo[] {
+  const out: LevelDo[] = [];
+  for (const act of list) {
+    out.push(act);
+    if (act.kind === 'branch') out.push(...flattenDo(act.then), ...flattenDo(act.else ?? []));
+  }
+  return out;
 }
 
 /**
