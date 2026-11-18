@@ -1656,14 +1656,43 @@ export function availableExpansions(): Expansion[] {
  */
 let lastIdsKey: string | null = null;
 let lastActive: Expansion[] = [];
+/**
+ * 上一次命中时的那份**规范 id**（已过别名表）。
+ *
+ * 上面那条"按内容记"的缓存已经存在，但它每次都要先 `normalizeExpansionIds`
+ * （建一个数组）再 `join('|')`（建一个字符串）才能比对——命中率 100% 的路径上，
+ * 两笔分配照样要付。实测 32×32、一百个兵的一次 AI 决策里这个函数被调几万次，
+ * 光这两笔临时分配就占掉决策耗时的六分之一。
+ *
+ * 所以先做一次**逐位比对**：没变就直接返回，一个对象都不建。
+ * 不能只比数组引用——扩展列表是允许原地 push 的（开局面板、测试里都这么干），
+ * 只认引用会把"刚 push 进来的那个包"永远关在门外。
+ */
+let lastCanon: string[] = [];
 
 /** 按配置里勾选的顺序取出启用的扩展（顺序固定，保证确定性） */
 export function activeExpansions(state: GameState): Expansion[] {
+  const raw = state.config.expansionIds;
+  if (raw.length === lastCanon.length) {
+    let same = true;
+    for (let i = 0; i < raw.length; i += 1) {
+      const id = raw[i]!;
+      if ((MERGED_INTO[id] ?? id) !== lastCanon[i]) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return lastActive;
+  }
   // 先过别名表：老存档里写的是合并前的 id，不迁移的话这里会一个包都取不到，
   // 表现就是"读档之后所有扩展规则突然都不生效了"
-  const ids = normalizeExpansionIds(state.config.expansionIds);
+  const ids = normalizeExpansionIds(raw);
   const key = ids.join('|');
-  if (key === lastIdsKey) return lastActive;
+  if (key === lastIdsKey) {
+    lastCanon = ids;
+    return lastActive;
+  }
+  lastCanon = ids;
   const out: Expansion[] = [];
   const on = enabledExpansionIds(ids);
   for (const id of ids) {
