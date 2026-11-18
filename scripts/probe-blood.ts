@@ -269,15 +269,25 @@ console.log('\n[4] 侵染');
     check('长在尸体那一格', born[0]?.x === 5 && born[0]?.y === 6, `${born[0]?.x},${born[0]?.y}`);
   }
 
-  // 影系杀掉的仍然是蚀影（不会串味）
+  /*
+   * 谁生蚀影，看的是**有没有「暗影侵蚀」这条词条**，不是"是不是暗影"。
+   * 2026-11-18 之后影主也挂了这条，所以影主杀人同样生；蚀影没挂，就不生。
+   */
   const { s: s2, mk: mk2 } = arena();
-  const shade = mk2('shade', 'shadow-lord', 'B', 5, 5); // 影主也算影系，但不触发（只有暗影触发）
+  const lord = mk2('lord', 'shadow-lord', 'B', 5, 5);
   const prey2 = mk2('prey2', 'probe-tank-0', 'A', 5, 6);
   prey2.hp = 3;
-  const r2 = applyAction(s2, { type: 'ATTACK', unitId: shade.id, targetId: prey2.id });
+  const r2 = applyAction(s2, { type: 'ATTACK', unitId: lord.id, targetId: prey2.id });
+  check('影主也带「暗影侵蚀」：它杀人同样生蚀影', r2.ok && r2.state.units.some((u) => u.type === 'shadow-beast'));
+
+  const { s: s3, mk: mk3 } = arena();
+  const beast = mk3('beast', 'shadow-beast', 'B', 5, 5);
+  const prey3 = mk3('prey3', 'probe-tank-0', 'A', 5, 6);
+  prey3.hp = 3;
+  const r3 = applyAction(s3, { type: 'ATTACK', unitId: beast.id, targetId: prey3.id });
   check(
-    '只有"暗影"杀人才生蚀影（影主杀人不生）',
-    r2.ok && !r2.state.units.some((u) => u.type === 'shadow-beast'),
+    '蚀影没挂这条：它杀人不生蚀影',
+    r3.ok && !r3.state.units.some((u) => u.type === 'shadow-beast' && u.id !== beast.id),
   );
 }
 
