@@ -69,7 +69,7 @@ function arena(): Arena {
     return u;
   };
   // 靶子：甲可以调，用来验"汲取按伤害回血""血肉挑薄甲"
-  for (const a of [0, 2, 20]) {
+  for (const a of [0, 2, 20, 999]) {
     s.unitTypes[`probe-tank-${a}`] = {
       ...s.unitTypes['militia']!,
       id: `probe-tank-${a}`,
@@ -201,6 +201,24 @@ console.log('\n[2] 化血');
     after3.units.filter((u) => u.type === BLOOD_POOL).length === 3,
     `${after3.units.filter((u) => u.type === BLOOD_POOL).length} 滩`,
   );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 2b. 血肉 / 血核的暗蚀真的打得出去（不是面板上写着好看）
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[2b] 血肉与血核的暗蚀');
+{
+  const wall = (attacker: string, expect: number): void => {
+    const { s, mk } = arena();
+    const a = mk('a', attacker, 'B', 5, 5);
+    const t = mk('t', 'probe-tank-999', 'A', 5, 6); // 999 甲：物理被吃光，只剩暗蚀
+    t.hp = 999;
+    const r = applyAction(s, { type: 'ATTACK', unitId: a.id, targetId: t.id });
+    const after = r.ok ? r.state.units.find((u) => u.id === 't')!.hp : 999;
+    check(`${attacker} 打 999 甲：只剩暗蚀 ${expect} 点`, r.ok && 999 - after === expect, `${999 - after} 点`);
+  };
+  wall(FLESH, 5);
+  wall(BLOOD_CORE, 12);
 }
 
 /* ══════════════════════════════════════════════════════════════════
