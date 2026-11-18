@@ -294,6 +294,10 @@ const EROSION_BY_TYPE: Record<string, number> = {
   [SHADOW_BEAST]: 8,
   [SHADE]: 4,
   [SHADOW_LORD]: 15,
+  // 血系（2026-11-18）：淤血没有暗蚀，血肉弱，血核强
+  'blood-pool': 0,
+  flesh: 5,
+  'blood-core': 12,
 };
 
 function erosionOf(u: Unit): number {
@@ -863,6 +867,314 @@ function markShadowLordAttack(state: GameState, player: PlayerId): void {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 六、血系（2026-11-18）
+ *
+ * 诡异的第二支。三个兵共用四条机制：
+ *
+ *   化血  造成的伤害累计成"血"，攒够了在旁边长出一滩**淤血**（一回合最多两滩）
+ *   侵染  击杀的单位**变成血肉**（不是死，是换了个兵种站起来）
+ *   汲取  按造成的伤害等量回血（血肉 / 血核，淤血没有）
+ *   增生  血核专属：每回合回一点血；**满血**时攒计数，攒够长出一团血肉
+ *
+ * 为什么"化血/侵染/增生"都做成副作用而不是技能：它们不需要玩家（或者 AI）
+ * 去点按钮——这本来就是它们活着的方式。做成技能只会多出"忘记点"这种失败状态。
+ *
+ * 数值全是占位：先让"越打越多"这条曲线看得出来。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const BLOOD_POOL = 'blood-pool';
+export const FLESH = 'flesh';
+export const BLOOD_CORE = 'blood-core';
+
+/** 造成多少伤害攒够一滩淤血 */
+const CLOT_DAMAGE = 60;
+/** 一回合最多长几滩（不封顶会雪崩：一次溅射打五个兵就长五滩） */
+const CLOT_PER_TURN = 2;
+/** 血核满血多少回合长一团血肉 */
+const GROW_TURNS = 3;
+/** 血核每回合回多少血（增生） */
+const GROW_HEAL = 12;
+/** 是不是血系（淤血 / 血肉 / 血核） */
+const isBlood = (type: string): boolean => type === BLOOD_POOL || type === FLESH || type === BLOOD_CORE;
+
+/** 这几个兵汲取（按伤害回血） */
+const SIPHON_TYPES = new Set([FLESH, BLOOD_CORE]);
+
+/**
+ * 化血 / 汲取 / 增生的记账口。
+ *
+ * 挂在 `DAMAGE_STAGE.trueDamage`（护甲结算之后），拿到的 `c.damage` 就是这一下
+ * 真正打出去的量。为什么不另开一条"伤害后"钩子：这条已经在那儿了，
+ * 真元、天气真伤都挂它；再开一条只会让"谁先算"变成一团。
+ */
+const BLOOD_ECHO: AbilityDef = {
+  id: 'blood-echo',
+  name: '化血',
+  summary: '造成的伤害累计成「血」，攒够在旁边长出一滩淤血。血肉与血核还会按伤害回血。',
+  group: 'attack',
+  hooks: {
+    damage: [
+      {
+        stage: DAMAGE_STAGE.trueDamage,
+        apply: (c) => {
+          if (c.side !== 'attacker') return;
+          const dmg = Math.max(0, Math.round(c.damage));
+          if (dmg <= 0) return;
+          if (SIPHON_TYPES.has(c.self.type)) {
+            const max = c.api.maxHpOf(c.state, c.self);
+            if (c.self.hp < max) c.self.hp = Math.min(max, c.self.hp + dmg);
+          }
+          const blood = Number(c.self.custom?.blood ?? 0) + dmg;
+          c.self.custom = { ...(c.self.custom ?? {}), blood };
+        },
+      },
+    ],
+  },
+};
+
+/* ── 三个兵 ─────────────────────────────────────────────────────── */
+
+/** 淤血：一滩活着的脓血。中速、中近程、多段、脆但甲高。 */
+const BLOOD_POOL_DEF: UnitTypeDef = {
+  id: BLOOD_POOL,
+  name: '淤血',
+  short: '淤',
+  era: 6,
+  category: 'combat',
+  cost: 100,
+  move: 3,
+  atk: 14,
+  armor: 10,
+  maxHp: 45,
+  range: 2,
+  vision: 5,
+  burst: 3,
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 1,
+  aiProfile: 'blood-pool-seek',
+  abilities: ['blood-echo'],
+};
+
+/** 血肉：一团活着的死肉。慢、近战、血厚甲高，会吸血。 */
+const FLESH_DEF: UnitTypeDef = {
+  id: FLESH,
+  name: '血肉',
+  short: '肉',
+  era: 6,
+  category: 'combat',
+  cost: 150,
+  move: 2,
+  atk: 26,
+  armor: 12,
+  maxHp: 160,
+  range: 1,
+  vision: 4,
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 1,
+  aiProfile: 'flesh-away-core',
+  abilities: ['blood-echo'],
+};
+
+/** 血核：血肉结晶。慢、中近程、溅射大、会增生。 */
+const BLOOD_CORE_DEF: UnitTypeDef = {
+  id: BLOOD_CORE,
+  name: '血核',
+  short: '核',
+  era: 6,
+  category: 'combat',
+  cost: 380,
+  move: 2,
+  atk: 45,
+  armor: 10,
+  maxHp: 200,
+  range: 3,
+  vision: 6,
+  // 溅射：它是"结晶炸开"，不是"精准点射"
+  splash: 2,
+  summonedOnly: true,
+  shadowRadius: 4,
+  aiAutonomy: 1,
+  aiProfile: 'blood-core-deep',
+  abilities: ['blood-echo'],
+};
+
+/* ── 结算：化血长出淤血、血核增生 ───────────────────────────────── */
+
+/**
+ * 自己回合**开始**时结算（走的是上一回合攒下的血）。
+ *
+ * 为什么不放在伤害发生的当刻：这一下可能同时打死三个人、触发三次生成，
+ * 插在伤害结算中间会让"谁先被算死"变得难以预料。放到回合边界上，
+ * 场上状态先稳定下来，再长出新的东西——玩家看到的是"打完这一轮，血又厚了一层"。
+ *
+ * 为什么是"开始"而不是"结束"：`TurnEndCtx` 里没有 `api`（不能 spawn），
+ * 而 `TurnStartCtx` 有。两个时机对这一条没区别——中间没有别的结算会改动血量。
+ */
+function tickBlood(state: GameState, player: PlayerId, api: AbilityApi): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.hp <= 0) continue;
+    if (!u.type.startsWith('blood-') && u.type !== FLESH) continue;
+
+    // 化血：攒够就长淤血
+    let blood = Number(u.custom?.blood ?? 0);
+    if (blood >= CLOT_DAMAGE) {
+      const rounds = Math.min(CLOT_PER_TURN, Math.floor(blood / CLOT_DAMAGE));
+      let born = 0;
+      for (let i = 0; i < rounds; i += 1) {
+        const spot = freeNear(state, u, BLOOD_POOL, api);
+        if (!spot) break;
+        api.spawn(state, u.owner, BLOOD_POOL, spot.x, spot.y);
+        born += 1;
+      }
+      if (born > 0) {
+        blood -= born * CLOT_DAMAGE;
+        state.log.push({ turn: state.turn, player: u.owner, text: '血又厚了一层——新的淤血聚了起来。' });
+      }
+    }
+    u.custom = { ...(u.custom ?? {}), blood };
+
+    // 增生：只有血核
+    if (u.type === BLOOD_CORE) {
+      const max = api.maxHpOf(state, u);
+      if (u.hp < max) u.hp = Math.min(max, u.hp + GROW_HEAL);
+      if (u.hp >= max) {
+        const grow = Number(u.custom?.grow ?? 0) + 1;
+        if (grow >= GROW_TURNS) {
+          const spot = freeNear(state, u, FLESH, api);
+          if (spot) {
+            api.spawn(state, u.owner, FLESH, spot.x, spot.y);
+            u.custom = { ...u.custom, grow: 0 };
+            state.log.push({ turn: state.turn, player: u.owner, text: '血核鼓起一块——血肉从它身上剥了下来。' });
+          } else {
+            u.custom = { ...u.custom, grow: GROW_TURNS - 1 };
+          }
+        } else {
+          u.custom = { ...u.custom, grow };
+        }
+      } else {
+        u.custom = { ...u.custom, grow: 0 };
+      }
+    }
+  }
+}
+
+/* ── 行为：三个 profile ─────────────────────────────────────────── */
+
+/** 这个单位是不是敌方经济单位（产线的、挖矿的、盖房的） */
+const isEconomy = (c: UnitAiCtx, u: Unit): boolean => c.state.unitTypes[u.type]?.category === 'economy';
+
+/**
+ * 淤血：**贴着血肉走，去咬敌人的饭碗**。
+ *
+ * 为什么盯经济单位：它一滩一滩地爬，正面打不过任何正规军；但钻到矿区里，
+ * 对面就得回头清场——这正是"血系拖住你发育"的方式。
+ * 优先靠近血量：它和血肉是一摊东西，聚在一起才挡得住清场。
+ */
+const BLOOD_POOL_AI: UnitAiProfile = {
+  id: 'blood-pool-seek',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 2;
+
+    // 1）够得着的经济单位优先打
+    const eco = c.foes
+      .filter((f) => dist(f, c.unit) <= range && isEconomy(c, f))
+      .sort((a, b) => a.hp - b.hp)[0];
+    const any = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
+    const prey = eco ?? any;
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: eco ? 175 : 120 });
+
+    // 2）往"血肉 / 经济单位"那边凑
+    const kin = c.allies.filter((a) => a.type === FLESH && a.hp > 0);
+    const targets = [...kin, ...c.foes.filter((f) => isEconomy(c, f))];
+    if (targets.length > 0) {
+      const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+      let best: { x: number; y: number } | null = null;
+      let bestD = Math.min(...targets.map((t) => dist(t, c.unit)));
+      for (const p of tiles) {
+        const d = Math.min(...targets.map((t) => dist(t, p)));
+        if (d < bestD) {
+          bestD = d;
+          best = p;
+        }
+      }
+      if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 110 });
+    }
+    return add.length ? { add } : {};
+  },
+};
+
+/**
+ * 血肉：**离血核远一点**，优先啃护甲薄的。
+ *
+ * 为什么要离血核远：血核是这一片的根，血肉挤在根上等于把鸡蛋放在一个篮子里；
+ * 散开之后玩家得同时处理好几摊，清场成本翻倍。
+ * 打护甲薄的则是它的本能——26 攻打在高甲上几乎是 0。
+ */
+const FLESH_AI: UnitAiProfile = {
+  id: 'flesh-away-core',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+
+    const soft = c.foes
+      .filter((f) => dist(f, c.unit) <= range)
+      .sort((a, b) => (c.state.unitTypes[a.type]?.armor ?? 0) - (c.state.unitTypes[b.type]?.armor ?? 0))[0];
+    if (soft) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: soft.id }, score: 170 });
+
+    const core = c.allies.find((a) => a.type === BLOOD_CORE && a.hp > 0);
+    if (core && dist(core, c.unit) <= 3) {
+      const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+      let best: { x: number; y: number } | null = null;
+      let bestD = dist(core, c.unit);
+      for (const p of tiles) {
+        const d = dist(core, p);
+        if (d > bestD) {
+          bestD = d;
+          best = p;
+        }
+      }
+      if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 });
+    }
+    return add.length ? { add } : {};
+  },
+};
+
+/**
+ * 血核：**待在暗影最深处**，打威胁最大的。
+ *
+ * 它自己铺的暗影半径 4，躲进去之后玩家的兵要走过来、还要顶着半视野半射程——
+ * 和影主是同一条逻辑，只是血核不会跳，只能一步步挪。
+ */
+const BLOOD_CORE_AI: UnitAiProfile = {
+  id: 'blood-core-deep',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 3;
+
+    const scary = [...c.foes.filter((f) => dist(f, c.unit) <= range)].sort(
+      (a, b) => threatOf(c, b) - threatOf(c, a) || a.hp - b.hp,
+    )[0];
+    if (scary) {
+      add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: scary.id }, score: 190 });
+      return { add };
+    }
+
+    const deep = deepestShadow(c.state, c.unit);
+    if (!deep || (deep.x === c.unit.x && deep.y === c.unit.y)) return {};
+    const walk = steps(c, Math.max(1, c.def.move))
+      .filter((p) => p.d > 0)
+      .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
+    if (walk && dist(walk, deep) < dist(c.unit, deep)) {
+      add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
+    }
+    return add.length ? { add } : {};
+  },
+};
+
+/* ══════════════════════════════════════════════════════════════════
  * 五、扩展本体
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -878,15 +1190,25 @@ export const DARK_TURMOIL: Expansion = {
     '寿元将尽而周围无物可食时，它会吞下自己人。全部兵种只能由关卡生成，不进货架。',
   // 它借的是修真那套"境界 / 寿元"的语义，单独开没有意义
   requires: ['cultivation'],
-  units: [EMPEROR_DEF, SLUMBER_DEF, SHADOW_BEAST_DEF, SHADE_DEF, SHADOW_LORD_DEF],
-  abilities: [EROSION_ABILITY],
+  units: [
+    EMPEROR_DEF,
+    SLUMBER_DEF,
+    SHADOW_BEAST_DEF,
+    SHADE_DEF,
+    SHADOW_LORD_DEF,
+    BLOOD_POOL_DEF,
+    FLESH_DEF,
+    BLOOD_CORE_DEF,
+  ],
+  abilities: [EROSION_ABILITY, BLOOD_ECHO],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
-  unitAi: [SHADOW_BEAST_AI, SHADE_AI, SHADOW_LORD_AI],
+  unitAi: [SHADOW_BEAST_AI, SHADE_AI, SHADOW_LORD_AI, BLOOD_POOL_AI, FLESH_AI, BLOOD_CORE_AI],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
       tickShadowLords(state, player, api);
+      tickBlood(state, player, api);
     },
     /*
      * 暗影：站在里面视野和射程减半。
@@ -917,26 +1239,29 @@ export const DARK_TURMOIL: Expansion = {
       refreshShadow(state);
     },
     /**
-     * 暗影杀人：在被杀的位置原地长出一个蚀影。
+     * 尸体归谁：**暗影**杀掉的变成蚀影，**血系**杀掉的变成血肉。
      *
-     * 这是影系"越打越多"的来源，也是玩家必须改清场顺序的原因——
-     * 先清暗影，不然每杀一个杂兵就多一具会走路的尸体。
-     *
-     * 只对**非建筑**生效：影子从石头里长出来太出戏了。
+     * 这是两个系列"越打越多"的来源，也是玩家必须改清场顺序的原因——
+     * 不清掉这些会复活的兵，每杀一个杂兵就多一个敌人。
+     * 建筑也算（2026-11-18 作者改）：拆掉一座城，废墟里也会站起来东西。
      */
     onUnitKilled: ({ state, victim, killer, api }) => {
-      if (!killer || killer.type !== SHADE) return;
+      if (!killer) return;
       if (victim.owner === killer.owner) return;
-      if (api.utype(state, victim.type)?.category === 'building') return;
-      const spot = api.canStandAt(state, victim.x, victim.y, SHADOW_BEAST)
+      const born = killer.type === SHADE ? SHADOW_BEAST : isBlood(killer.type) ? FLESH : null;
+      if (!born) return;
+      const spot = api.canStandAt(state, victim.x, victim.y, born)
         ? { x: victim.x, y: victim.y }
-        : freeNear(state, victim, SHADOW_BEAST, api);
+        : freeNear(state, victim, born, api);
       if (!spot) return;
-      api.spawn(state, killer.owner, SHADOW_BEAST, spot.x, spot.y);
+      api.spawn(state, killer.owner, born, spot.x, spot.y);
       state.log.push({
         turn: state.turn,
         player: killer.owner,
-        text: '被暗影吞噬的尸体爬了起来——蚀影。',
+        text:
+          born === SHADOW_BEAST
+            ? '被暗影吞噬的尸体爬了起来——蚀影。'
+            : '尸体鼓胀变形，重新站了起来——血肉。',
       });
     },
     /**
@@ -986,6 +1311,16 @@ export const DARK_TURMOIL: Expansion = {
       if (unit.type === SHADE) lines.push('击杀单位后，原地生出一个蚀影');
       if (unit.type === SHADOW_LORD) {
         lines.push(`每 ${SUMMON_EVERY} 个自己的回合分裂出一个暗影（本回合攻击过则更快）`);
+      }
+
+      if (isBlood(unit.type)) {
+        const blood = Number(unit.custom?.blood ?? 0);
+        lines.push(`化血：每造成 ${CLOT_DAMAGE} 点伤害，在旁边长出一滩淤血（当前 ${Math.round(blood)}/${CLOT_DAMAGE}）`);
+        lines.push('侵染：击杀的单位会变成一团血肉');
+        if (SIPHON_TYPES.has(unit.type)) lines.push('汲取：按造成的伤害等量回血');
+      }
+      if (unit.type === BLOOD_CORE) {
+        lines.push(`增生：每回合回 ${GROW_HEAL} 点血；满血攒够 ${GROW_TURNS} 回合，剥出一团血肉`);
       }
 
       if (isEmperor(unit)) {

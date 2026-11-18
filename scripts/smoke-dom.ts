@@ -9272,17 +9272,18 @@ console.log('\n关卡模式');
 openSetup();
 await wait(40);
 
-check('左侧四页：关卡 / 支线 / 战役 / 编辑器', () => {
+check('左侧三页：关卡 / 战役 / 编辑器', () => {
   /*
    * 2026-11-17：地图从导航里撤掉了。只有自由对局会选图，它变成战役页里的一个小窗口；
    * 上传和管理并进「编辑器」——和上传关卡是同一种事。
-   * 2026-11-18：「支线」加在关卡后面——它和主线共用世界观，但不占主线的位置。
+   * 2026-11-18：一度加过独立的「支线」页，后来并回「关卡」栏做成可折叠分组
+   * （支线不是"另一类玩法"，而是同一页里的一组关）——导航不许再长出第四项。
    */
   const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
   assert.deepEqual(
     tabs,
-    ['levels', 'side', 'battle', 'editor'],
-    `四页的顺序应该是 关卡 / 支线 / 战役 / 编辑器，实际 ${tabs.join(',')}`,
+    ['levels', 'battle', 'editor'],
+    `三页的顺序应该是 关卡 / 战役 / 编辑器，实际 ${tabs.join(',')}`,
   );
 });
 
@@ -9313,15 +9314,6 @@ check('折起「支线」：那一组关消失，再点一次回来', () => {
   assert.ok(before > 0 && folded === 0, `点一下应该收起支线，实际 ${before} → ${folded}`);
   click('[data-fold="side"]');
   assert.ok(doc.querySelectorAll('[data-fold="side"] ~ .side-chapter').length > 0, '再点一次应该展开');
-});
-
-check('支线栏列出剧情关：黑暗动乱 / 影潮', () => {
-  click('[data-tab="side"]');
-  const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
-  assert.ok(!ids.includes(''), '支线栏不该有「自由对局」——它属于关卡栏');
-  assert.ok(ids.includes('level:dark-turmoil'), `支线栏缺「黑暗动乱」，实际 ${ids.join(',') || '空'}`);
-  assert.ok(ids.includes('level:shadow-tide'), `支线栏缺「影潮」，实际 ${ids.join(',') || '空'}`);
-  assert.ok(!ids.includes('level:lone-city'), '示例关不该混进支线栏');
 });
 
 check('编辑器栏列出五张示例关，测试夹具不出现', () => {
