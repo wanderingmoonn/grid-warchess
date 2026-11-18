@@ -8316,7 +8316,13 @@ function doEndTurn(s: GameState): ActionResult {
    * 所以"本回合攻击过就起飞"这类判断才成立。跑在这里也意味着它能看到
    * 这一回合打出来的所有结果（谁死了、谁站在旁边），但改不了"这一回合还能做什么"。
    */
-  for (const u of s.units) {
+  /*
+   * **先取快照**：回合末钩子会生成新单位（黑蝗繁殖、骸骨拼装……），
+   * 直接遍历活数组的话，新生的那一批会在**同一个回合**里继续跑自己的回合末钩子
+   * ——黑蝗因此能在一回合内连锁翻倍（实测 41 个行动长到 96 只）。
+   * `sweepDead` 用的是同一个写法，理由一样。
+   */
+  for (const u of [...s.units]) {
     if (u.owner !== prevPlayer || u.hp <= 0) continue;
     const hooks = stagedOfUnit<TurnEndCtx>(s, u, 'onTurnEnd');
     if (hooks.length === 0) continue;
