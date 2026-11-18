@@ -272,5 +272,226 @@ console.log('\n[4] 兵种清单');
   check('悬空的 aiProfile 能被查出来（检测本身有效）', dangling.length === 1, `查出 ${dangling.length} 个`);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 第 5 段：三道门（阶段 2 的核心）
+ *
+ * 这一段的场地是**手工搭的一个小局面**，不是真对局：
+ * 一个自己的兵、一个贴身的敌人、一片平地、没有城。
+ * 目的是把"must 会不会被普攻抢走 / 被拒后会不会反复提 / 会不会被随机吃掉"
+ * 这三件事分别单独试一次——真对局里它们会缠在一起，分不清是谁的问题。
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[5] 三道门（手工小局面）');
+
+/** 这一段要喂给 profile 的"剧本"。handler 是纯函数，只能读它 */
+let scriptMust: Action | null = null;
+let scriptAdds: Array<{ action: Action; score: number }> = [];
+let scriptCalls = 0;
+
+registerUnitAiProfile({
+  id: 'probe-stage2',
+  handler: () => {
+    scriptCalls += 1;
+    return {
+      ...(scriptAdds.length > 0 ? { add: scriptAdds } : {}),
+      ...(scriptMust ? { must: { action: scriptMust } } : {}),
+    };
+  },
+});
+
+interface Arena {
+  s: GameState;
+  boss: Unit;
+  foe: Unit;
+}
+
+/** 12×12 全平地、无城、轮到 B。B 方那个兵就是探针 boss */
+function arena(seed = 4242, autonomy = 1): Arena {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, aiLevel: 'tactic' }, seed);
+  s.fog = false;
+  s.units = [];
+  s.cities = [];
+  s.marks = [];
+  s.current = 'B';
+  s.turn = 7;
+  s.players.A.gold = 0;
+  s.players.B.gold = 0;
+  for (let y = 0; y < s.h; y += 1) {
+    for (let x = 0; x < s.w; x += 1) s.tiles[y * s.w + x] = { terrain: 'plain', cityId: null };
+  }
+  const base = s.unitTypes['militia']!;
+  s.unitTypes['probe-boss'] = {
+    ...base,
+    id: 'probe-boss',
+    name: '探针 boss',
+    move: 3,
+    range: 1,
+    atk: 24,
+    armor: 4,
+    maxHp: 200,
+    vision: 6,
+    aiAutonomy: autonomy,
+    aiProfile: 'probe-stage2',
+  };
+  const mk = (type: string, owner: 'A' | 'B', x: number, y: number): Unit => {
+    const u: Unit = {
+      id: `${type}-${s.units.length}`,
+      type,
+      owner,
+      x,
+      y,
+      hp: s.unitTypes[type]!.maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+    };
+    s.units.push(u);
+    return u;
+  };
+  const boss = mk('probe-boss', 'B', 5, 5);
+  const foe = mk('militia', 'A', 6, 5); // 贴身，保证"普攻"这条候选真的存在
+  return { s, boss, foe };
+}
+
+const keyOf = (a: Action): string => JSON.stringify(a);
+
+/**
+ * 第一道门：**must 会不会被一次普攻抢走**。
+ *
+ * 贴身的敌人随时可以打，那一手的分是实打实的战果；must 只是"往下面走两格"，
+ * 本身没有任何收益。如果 must 输了，说明 1000 这个量级不够，或者它被别的
+ * 机制（推演削分 / 随机带宽）吃掉了。
+ */
+{
+  const { s, boss } = arena();
+  scriptMust = { type: 'MOVE', unitId: boss.id, x: 5, y: 7 };
+  scriptAdds = [];
+  const picked = aiNextAction(s, { ...DEFAULT_BUDGET }, new Set());
+  check(
+    'must 压得住贴脸普攻（不会被"这一刀更划算"抢走）',
+    picked !== null && keyOf(picked) === keyOf(scriptMust),
+    picked ? keyOf(picked) : 'null',
+  );
+}
+
+/**
+ * 第二道门：**非法动作会不会白耗一步**。
+ *
+ * 原本以为要测"被规则拒了会不会反复提"，搭出来发现引擎比这更严：
+ * 候选在**进入挑选之前**就被筛掉了（`applyAction(view, …)` 不通过的直接跳过），
+ * 所以一个走不到的目的地根本不会变成动作，也就没有"白耗一步"这回事。
+ *
+ * 这条值得测，因为它是个**好消息但要钉住**的性质：如果哪天有人把这一步优化掉
+ * （"反正调用方会拒"），扩展写错坐标就会变成每回合空转。
+ *
+ * 另外补一条契约：已经进了 `rejected` 的动作，扩展再提也必须被丢掉。
+ */
+{
+  const { s, boss } = arena();
+  scriptMust = { type: 'MOVE', unitId: boss.id, x: 5, y: 11 };
+  scriptAdds = [];
+  const first = aiNextAction(s, { ...DEFAULT_BUDGET }, new Set());
+  check(
+    '走不到的动作不会被提出来（候选阶段就筛掉了，不白耗一步）',
+    first !== null && keyOf(first) !== keyOf(scriptMust),
+    first ? keyOf(first) : 'null',
+  );
+  check('它转而去做别的（贴脸普攻），不是干脆不动', first?.type === 'ATTACK', first ? keyOf(first) : 'null');
+
+  // 契约：rejected 里的动作，扩展提了也不会进候选表
+  const again = arena();
+  scriptMust = { type: 'MOVE', unitId: again.boss.id, x: 5, y: 7 };
+  const rejected = new Set([keyOf(scriptMust)]);
+  const picked = aiNextAction(again.s, { ...DEFAULT_BUDGET }, rejected);
+  check(
+    '已进 rejected 的动作不会再被提（我们的候选也认这张表）',
+    picked === null || keyOf(picked) !== keyOf(scriptMust),
+    picked ? keyOf(picked) : 'null',
+  );
+}
+
+/**
+ * 第三道门：**会不会被"分差 1.5% 内随机挑"吃掉**。
+ *
+ * 随机值来自 (种子, 回合, 已走步数)。换 8 个种子各挑一次，
+ * 如果 must 有两次以上没选中，就说明它的分不够高——那种"时灵时不灵"
+ * 在实机里会被当成"AI 抽风"，很难查。
+ */
+{
+  const outcomes: string[] = [];
+  for (let i = 0; i < 8; i += 1) {
+    const { s, boss } = arena(4242 + i * 137);
+    scriptMust = { type: 'MOVE', unitId: boss.id, x: 5, y: 7 };
+    scriptAdds = [];
+    const picked = aiNextAction(s, { ...DEFAULT_BUDGET }, new Set());
+    outcomes.push(picked && keyOf(picked) === keyOf(scriptMust) ? 'ok' : 'lost');
+  }
+  const lost = outcomes.filter((x) => x === 'lost').length;
+  check('换 8 个种子，must 每次都选中（不被随机吃掉）', lost === 0, `${lost} 次没选中`);
+}
+
+/**
+ * 第四道（顺带验的）：**自主分是真在打折**。
+ *
+ * 同一个 `add`（分 200）：自主分 1 时压得过普攻，自主分 0.01 时只剩 2 分，
+ * 就该输给普攻。这条不测"能不能用"，测的是"权重到底有没有生效"——
+ * 没有它，自主分就只是个摆设字段。
+ */
+{
+  const hi = arena();
+  scriptMust = null;
+  scriptAdds = [{ action: { type: 'MOVE', unitId: hi.boss.id, x: 5, y: 7 }, score: 200 }];
+  const pickedHi = aiNextAction(hi.s, { ...DEFAULT_BUDGET }, new Set());
+  check(
+    '自主分 1：add 分 200 压得过普攻',
+    pickedHi !== null && pickedHi.type === 'MOVE',
+    pickedHi ? keyOf(pickedHi) : 'null',
+  );
+
+  const lo = arena(4242, 0.01);
+  scriptMust = null;
+  scriptAdds = [{ action: { type: 'MOVE', unitId: lo.boss.id, x: 5, y: 7 }, score: 200 }];
+  const pickedLo = aiNextAction(lo.s, { ...DEFAULT_BUDGET }, new Set());
+  check(
+    '自主分 0.01：同一个 add 只剩 2 分，就该输给普攻（权重真在起作用）',
+    pickedLo === null || pickedLo.type !== 'MOVE' || keyOf(pickedLo) !== keyOf(scriptAdds[0]!.action),
+    pickedLo ? keyOf(pickedLo) : 'null',
+  );
+}
+
+console.log(`  · 这一段 handler 被调用 ${scriptCalls} 次`);
+
+/*
+ * 顺带量一个数：**这个场地里"贴脸普攻"到底值多少分**。
+ *
+ * 为什么要量：DESIGN 第 5 节那张换算表是拍的（走一步 3~6、打一下 10~40……），
+ * 以后写 boss 招式的人要靠它给分。二分找出"add 的分数高到多少才抢得过普攻"，
+ * 就等于量出了那一刀的分。
+ *
+ * 只打印不断言：这是个**诊断值**，场地一变它就变（换兵种、换甲、换地形都影响），
+ * 钉死它会变成一条"改数值就红"的测试。
+ */
+{
+  let lo = 2;
+  let hi = 200;
+  while (lo < hi) {
+    // 必须向下取整：`Math.round` 在 lo=2/hi=3 时会给出 mid=3，
+    // 而"赢了"的分支是 hi=mid，减不下去就死循环（真踩过一次，进程被系统杀掉）
+    const mid = Math.floor((lo + hi) / 2);
+    const a = arena();
+    scriptMust = null;
+    scriptAdds = [{ action: { type: 'MOVE', unitId: a.boss.id, x: 5, y: 7 }, score: mid }];
+    const picked = aiNextAction(a.s, { ...DEFAULT_BUDGET }, new Set());
+    const won = picked !== null && keyOf(picked) === keyOf(scriptAdds[0]!.action);
+    if (won) hi = mid;
+    else lo = mid + 1;
+  }
+  console.log(
+    `  · 参考值：这个场地（24 攻 / 射程 1 打 100 血 2 甲）里，贴脸普攻约值 ${hi} 分` +
+      `——扩展给"替代普攻"的招式定分时可以拿它当 1 倍基准。`,
+  );
+}
+scriptMust = null;
+scriptAdds = [];
+
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`);
 if (failed > 0) process.exit(1);
