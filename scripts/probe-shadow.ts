@@ -259,5 +259,23 @@ console.log('\n[8] 没开这个包');
   check('视野没有被任何东西改（= 兵种表的值）', !!u && visionOf(s, u) === s.unitTypes[u.type]!.vision);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 9. 投下暗影的单位自己不受影响
+ *
+ * 不修这条的话：影主站在自己半径 7 的黑雾正中间，视野 8→4、射程 4→2，
+ * 等于自己把自己废掉。语义上也对——影子是它们的介质，不是它们的雾。
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[9] 诡异免疫自己的暗影');
+{
+  const { s } = arena();
+  // 把"影探针"放在自己暗影的正中间
+  const shade = s.units.find((u) => u.id === 'shade')!;
+  refreshShadow(s);
+  const cov = shadowCoverage(s, shade, 5)!;
+  check('它确实站在暗影里（场景成立）', cov.covered * 2 > cov.total, `${cov.covered}/${cov.total}`);
+  check('视野不因暗影减半（5 → 仍是 5）', visionOf(s, shade) === 5, String(visionOf(s, shade)));
+  check('射程不因暗影减半（1 → 仍是 1）', effectiveRange(s, shade) === 1, String(effectiveRange(s, shade)));
+}
+
 console.log(failed === 0 ? '\n全部通过' : `\n${failed} 项失败`);
 if (failed > 0) process.exit(1);

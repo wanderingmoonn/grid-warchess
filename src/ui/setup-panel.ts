@@ -49,6 +49,7 @@ import {
   levelById,
   demoLevels,
   storyLevels,
+  sideLevels,
   type LevelDef,
 } from '../core/level.ts';
 import { cloneAsUserLevel, deleteUserLevel, isUserLevelId, userLevelList } from '../core/userLevels.ts';
@@ -354,7 +355,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 关卡单独一页，而不是塞在战役页顶上：它会一直长（每加一张关卡就多一张卡），
      * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
      */
-    let tab: 'battle' | 'levels' | 'editor' = 'battle';
+    let tab: 'battle' | 'levels' | 'side' | 'editor' = 'battle';
     /**
      * 这套面板是不是已经自动拉过一次云端关卡（2026-11-16）。
      *
@@ -1142,6 +1143,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const demoPresets = demoLevels().filter((l) => !isUserLevelId(l.id));
       const storyPresets = storyLevels().filter((l) => !isUserLevelId(l.id));
+      const sidePresets = sideLevels().filter((l) => !isUserLevelId(l.id));
       const editingMine = !!config.level && isUserLevelId(config.level.id);
       /*
        * 编辑器页的「地图」区：传图 + 看地图库。
@@ -1208,12 +1210,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
       `;
 
-      const levelsViewWith = (presets: typeof demoPresets, kind: 'story' | 'demo'): string => `
+      const levelsViewWith = (presets: typeof demoPresets, kind: 'story' | 'demo' | 'side'): string => `
             <section class="field">
               <div class="field-label">
-                ${kind === 'story' ? '主线 / 教学关' : '示例关'}
+                ${kind === 'story' ? '主线 / 教学关' : kind === 'side' ? '支线' : '示例关'}
                 <span class="field-hint">${
-                  kind === 'story' ? '有教学节奏的关卡，目前还在设计' : '每张演示一两个编辑器能力'
+                  kind === 'story'
+                    ? '有教学节奏的关卡，目前还在设计'
+                    : kind === 'side'
+                      ? '和主线共用世界观，但可以单独打、不要求顺序'
+                      : '每张演示一两个编辑器能力'
                 }</span>
               </div>
               <div class="map-gallery">
@@ -1233,7 +1239,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   ? presets.length === 0
                     ? '主线 / 教学关还在设计，这一栏暂时是空的。想看关卡编辑器能做什么，点左边「编辑器」——那五张关都是用它搭出来的。'
                     : '选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
-                  : '示例关是只读的。想改就选中它，点「复制成我的关卡」——那一步之后它就归你了。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
+                  : kind === 'side'
+                    ? '支线不影响主线进度，随时可以进来打。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
+                    : '示例关是只读的。想改就选中它，点「复制成我的关卡」——那一步之后它就归你了。选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
               }</div>
             </section>
 
@@ -1362,6 +1370,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        *   · 「编辑器」= 内建示例关 + 我的关卡。
        */
       const storyView = levelsViewWith(storyPresets, 'story');
+      const sideView = levelsViewWith(sidePresets, 'side');
       const levelsView = levelsViewWith(demoPresets, 'demo');
 
       /*
@@ -1530,6 +1539,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <b>关卡</b>
                 <span>主线 · 教学</span>
               </button>
+              <button class="start-nav-item ${tab === 'side' ? 'active' : ''}" data-tab="side">
+                <b>支线</b>
+                <span>不占主线 · 单独打</span>
+              </button>
               <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
                 <b>战役</b>
                 <span>规则 · 时代 · 兵种</span>
@@ -1554,13 +1567,22 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
                        <p>主线与教学关：一关一关往下走。现在还在设计，选「自由对局」先自己开一局。</p>`
-                    : `<h2>编辑器</h2>
+                    : tab === 'side'
+                      ? `<h2>支线</h2>
+                         <p>和主线共用世界观，但不占主线的位置——顺序、进度都不受影响，想打就打。</p>`
+                      : `<h2>编辑器</h2>
                        <p>关卡和地图都能从这里做：下面几关是用编辑器搭出来的示例（各演示一两个能力），再往下可以新建自己的关、上传自己画的地图。</p>`
               }
             </div>
 
             <div class="modal-body">${
-              tab === 'battle' ? battleView : tab === 'editor' ? levelsView : storyView
+              tab === 'battle'
+                ? battleView
+                : tab === 'editor'
+                  ? levelsView
+                  : tab === 'side'
+                    ? sideView
+                    : storyView
             }</div>
 
             <div class="modal-foot start-foot">
@@ -1707,7 +1729,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       if (tabBtn?.dataset.tab) {
         const t = tabBtn.dataset.tab;
         // 白名单要跟着导航一起长：新加的页漏在这里，点了会掉回「战役」
-        const next = t === 'levels' ? 'levels' : t === 'editor' ? 'editor' : 'battle';
+        const next =
+          t === 'levels' ? 'levels' : t === 'side' ? 'side' : t === 'editor' ? 'editor' : 'battle';
         if (next === tab) return;
         tab = next;
         resetScroll = true;

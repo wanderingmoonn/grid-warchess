@@ -432,7 +432,9 @@ const SHADE_DEF: UnitTypeDef = {
   cost: 120,
   move: 5,
   atk: 10,
-  armor: 18,
+  // 18 → 12（2026-11-18 实跑后调）：18 甲配 40 血，第 5 代的兵打上去只有个位数，
+  // "高甲模拟无实体"变成了"打不死"。12 仍然明显高于同血量的兵。
+  armor: 12,
   maxHp: 40,
   range: 2,
   vision: 6,
@@ -463,7 +465,8 @@ const SHADOW_LORD_DEF: UnitTypeDef = {
   cost: 400,
   move: 2,
   atk: 40,
-  armor: 15,
+  // 15 → 10（同上）：两个影主在前线时，15 甲让玩家整局打不掉一只。
+  armor: 10,
   maxHp: 220,
   range: 4,
   vision: 8,
@@ -896,11 +899,19 @@ export const DARK_TURMOIL: Expansion = {
     /*
      * `unit` 可能为空（那次问的是"这一方的整体视野"，没有具体单位），
      * 没有具体位置就没有"站在暗影里"这回事，原样返回。
+     *
+     * **投下暗影的单位自己不受影响**（`shadowRadius > 0` 就跳过）：
+     * 否则影主站在自己那片半径 7 的黑雾正中间，视野 8 → 4、射程 4 → 2，
+     * 等于自己把自己废了。语义上也说得通：影子是它们的介质，不是它们的雾。
      */
     modifyVision: ({ state, unit, base }) =>
-      unit && inShadow(state, unit, base) ? Math.max(1, Math.ceil(base / 2)) : base,
+      unit && (state.unitTypes[unit.type]?.shadowRadius ?? 0) <= 0 && inShadow(state, unit, base)
+        ? Math.max(1, Math.ceil(base / 2))
+        : base,
     modifyRange: ({ state, unit, range }) =>
-      inShadow(state, unit, range) ? Math.max(1, Math.ceil(range / 2)) : range,
+      (state.unitTypes[unit.type]?.shadowRadius ?? 0) <= 0 && inShadow(state, unit, range)
+        ? Math.max(1, Math.ceil(range / 2))
+        : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
     onTurnEnd: ({ state, player }) => {

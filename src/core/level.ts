@@ -508,6 +508,20 @@ export interface LevelDef {
    */
   demo?: boolean;
   /**
+   * **支线关**（2026-11-18）：进菜单的「支线」栏。
+   *
+   * 为什么要有第三栏：「关卡」栏是主线 / 教学关，那条线有专人按顺序填，
+   * 别人往里塞一张剧情关会打乱节奏（而且顺序、前后依赖都不在自己手里）。
+   * 支线是"和主线共用世界观、但可以单独打"的关——**不占主线位置、不要求顺序**。
+   *
+   * 三栏的关系：
+   *   · 不写任何标记 = 主线（进「关卡」）；
+   *   · `demo: true`   = 编辑器示例关（进「编辑器」）；
+   *   · `side: true`   = 支线（进「支线」）。
+   * 优先级：`demo` > `side` > 主线。两个都写时按 `demo` 算（示例关优先，别偷偷进支线）。
+   */
+  side?: boolean;
+  /**
    * **本地标记成"剧情关"**（2026-11-17）。
    *
    * 给开发者的自测口子：在编辑器里勾一下，这张关立刻出现在「关卡」栏，
@@ -977,9 +991,15 @@ export const LEVELS: LevelDef[] = [
      * 这样就得到了"限时击杀"，**不需要给胜负判定加任何新东西**——
      * 用的是已有的 assassinate + survive。
      */
+    /*
+     * `group` 必须分开：不写 group 的几条会被引擎当成**同一组**，而组内是"且"。
+     * 这两条一个是"玩家杀掉守将"、一个是"守方撑满 18 次行动"，永远不可能同时成立
+     * ——不分组的话，两条都等于不存在，这一关只能靠把对面打光才结束
+     * （2026-11-18 实测：把守将删掉之后交棒，胜者仍是"未决"）。
+     */
     goals: [
-      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'warden', label: '守将' },
-      { kind: 'survive', seat: 'B', untilTurn: 18 },
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'warden', label: '守将', group: 1 },
+      { kind: 'survive', seat: 'B', untilTurn: 18, group: 2 },
     ],
     events: [
       {
@@ -1511,7 +1531,8 @@ export const LEVELS: LevelDef[] = [
   {
     id: 'level:dark-turmoil',
     version: LEVEL_VERSION,
-    demo: true,
+    // 2026-11-18：从「编辑器」栏挪到「支线」——它是剧情关，不是编辑器示例
+    side: true,
     name: '黑暗动乱',
     brief:
       '16×16。尸骸仙帝在沉眠地苟延残喘，寿元将尽。在它把天地吃干之前杀掉它——或者，等它自己老死。' +
@@ -1563,8 +1584,8 @@ export const LEVELS: LevelDef[] = [
      *   2. 它撑到第 60 次行动 → 它赢（不能无限拖）。
      */
     goals: [
-      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'corpse-emperor', label: '尸骸仙帝' },
-      { kind: 'survive', seat: 'B', untilTurn: 60 },
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'corpse-emperor', label: '尸骸仙帝', group: 1 },
+      { kind: 'survive', seat: 'B', untilTurn: 60, group: 2 },
     ],
     events: [
       {
@@ -1583,6 +1604,99 @@ export const LEVELS: LevelDef[] = [
         id: 'emperor-down',
         when: { kind: 'unitDied', type: 'corpse-emperor' },
         do: [{ kind: 'say', text: '尸骸散落一地。天地间忽然安静下来，只剩下风声。' }],
+      },
+    ],
+  },
+
+  /* ── 支线 1：影潮（防守 / 增殖压力）──────────────────────────── */
+  {
+    id: 'level:shadow-tide',
+    version: LEVEL_VERSION,
+    /*
+     * 支线关（`side`）：进菜单的「支线」栏，不占主线的位置。
+     * 主线那条线有别人按顺序填，这张塞进去会打乱节奏。
+     */
+    side: true,
+    name: '影潮',
+    brief:
+      '18×18。两团影主在远处的黑暗里醒来，它们会自己长大：影主定期分裂出暗影，' +
+      '暗影杀掉的每一个兵都会变成蚀影。**守住 34 次行动**——或者，把两个影主都杀掉。' +
+      '（数值是占位版，先看这一关的节奏对不对。）',
+    map: {
+      id: 'levelmap:shadow-tide',
+      name: '影潮',
+      w: 18,
+      h: 18,
+      rows: rowsOf(18, 18, [
+        // 中间一片林子，把两边隔开一点，也给玩家一段可以撤退的路
+        [7, 4, 'f'], [8, 4, 'f'], [7, 5, 'f'], [8, 5, 'f'], [9, 5, 'f'],
+        [8, 12, 'f'], [9, 12, 'f'], [9, 13, 'f'],
+        [4, 9, 'h'], [5, 9, 'h'], [12, 9, 'h'], [13, 9, 'h'],
+      ]),
+      citiesA: [{ x: 1, y: 8 }],
+      // B 席没有城（cityless），这两组都不会用到
+      citiesB: [],
+      source: 'builtin',
+    },
+    /*
+     * B 是没有城的席位：影潮不造兵，只靠"影主分裂"和"暗影杀人"长大。
+     * 它也因此不吃"丢城"那套出局判定——兵打光才完。
+     */
+    seats: { count: 2, ai: ['B'], cityless: ['B'] },
+    // 第 5 代：玩家得拿得出打得穿 15 甲的东西，不然这关只有挨打的份
+    setup: { startEra: 5, firstSide: 'A' },
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        { type: 'tank', x: 4, y: 7 },
+        { type: 'tank', x: 4, y: 10 },
+        { type: 'squad', x: 3, y: 7 },
+        { type: 'squad', x: 3, y: 10 },
+        { type: 'hmg', x: 2, y: 11 },
+        { type: 'crew', x: 2, y: 6 },
+      ],
+      B: [
+        // 两个影主分在右上、右下：它们各自的半径 7 会连成一片
+        { type: 'shadow-lord', x: 15, y: 2 },
+        { type: 'shadow-lord', x: 15, y: 15 },
+        { type: 'shade', x: 14, y: 3 },
+        { type: 'shade', x: 16, y: 4 },
+        { type: 'shade', x: 14, y: 14 },
+        { type: 'shadow-beast', x: 13, y: 2 },
+        { type: 'shadow-beast', x: 13, y: 16 },
+      ],
+    },
+    /*
+     * 两条判据，都是"玩家赢"——这关不该逼玩家去杀两个甲厚血长、还会风筝的影主：
+     *   1. **守住 34 次行动**（`survive` 挂在 A 身上）：这是主玩法，"影潮"就是这个意思；
+     *   2. 顺手把两个影主都剁了，也可以（`assassinate`）——给硬实力足够的玩家一条捷径。
+     *
+     * 一开始写的是"B 撑到 26 → B 赢"，实跑发现玩家整局一个影主都杀不掉：
+     * 影主在射程 4 上边打边退，玩家要顶着半视野半射程走进黑雾。那是设计，不是 bug；
+     * 错的是**目标**——把「杀光」当胜利条件，等于让玩家必须打一场打不赢的仗。
+     *
+     * **`group` 必须分开写**：不写 group 的几条会被当成同一组（组内是"且"），
+     * 而这两条永远不可能同时成立——写了 group 1/2 之后才是"先看能不能斩杀，不行再看守没守住"。
+     */
+    goals: [
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'shadow-lord', label: '影主', group: 1 },
+      { kind: 'survive', seat: 'A', untilTurn: 34, group: 2 },
+    ],
+    events: [
+      {
+        id: 'tide-comes',
+        when: { kind: 'turn', at: 1 },
+        do: [{ kind: 'say', text: '远处的黑先动了。那不是夜——那是影潮。' }],
+      },
+      {
+        id: 'tide-grows',
+        when: { kind: 'turn', at: 10 },
+        do: [{ kind: 'say', text: '它们比开战时更多了。你打死的每一个，都会站起来。' }],
+      },
+      {
+        id: 'one-lord-down',
+        when: { kind: 'unitDied', type: 'shadow-lord' },
+        do: [{ kind: 'say', text: '一团影主散开了。剩下的那片黑，收得更紧了。' }],
       },
     ],
   },
@@ -1951,7 +2065,8 @@ export function storyLevels(): LevelDef[] {
    */
   return [
     ...storyList(),
-    ...LEVELS.filter((l) => l.dev !== true && l.demo !== true),
+    // `side` 的关走支线栏，不进主线（见 LevelDef.side）
+    ...LEVELS.filter((l) => l.dev !== true && l.demo !== true && l.side !== true),
     // 本机自己做的、在编辑器里勾了「这一关是剧情关」的（给开发者自测用）
     ...extraLevels().filter((l) => l.story === true && l.dev !== true),
   ];
@@ -1961,6 +2076,17 @@ export function storyLevels(): LevelDef[] {
 export function demoLevels(): LevelDef[] {
   // 同上：内建示例关。玩家复制出来的那份没有 demo 标记，会出现在"我的关卡"里
   return LEVELS.filter((l) => l.dev !== true && l.demo === true);
+}
+
+/**
+ * **支线**（菜单的「支线」栏，2026-11-18）。
+ *
+ * 和主线的区别只有一条：**不要求顺序、不占主线的位置**。
+ * 所以它不读 `storyList()`（那是主线的 JSON 目录），只看内建关里的 `side` 标记。
+ * 玩家自制关想进这一栏，得先有"支线"这个概念在关卡 JSON 里——现在还没有，先不做。
+ */
+export function sideLevels(): LevelDef[] {
+  return LEVELS.filter((l) => l.dev !== true && l.side === true && l.demo !== true);
 }
 
 /**
