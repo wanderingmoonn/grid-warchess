@@ -1021,6 +1021,22 @@ const MANUAL_CSS = `
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
   nav a.sub { padding-left: 22px; font-size: 12px; }
+  nav a.sub2 { padding-left: 34px; font-size: 12px; opacity: .8; }
+  /* 「特殊规则」的小节收进可折叠分组：全摊开会把后面的项挤出屏幕 */
+  nav details.nav-group { margin: 2px 0; }
+  nav details.nav-group > summary {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; list-style: none; padding: 2px 0;
+  }
+  nav details.nav-group > summary::-webkit-details-marker { display: none; }
+  nav details.nav-group > summary::before {
+    content: '▸'; font-size: 10px; color: var(--faint); width: 10px;
+  }
+  nav details.nav-group[open] > summary::before { content: '▾'; }
+  nav details.nav-group > summary i {
+    font-style: normal; font-size: 11px; color: var(--faint);
+  }
+  nav details.nav-group > a { display: block; padding-top: 1px; padding-bottom: 1px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -2600,6 +2616,15 @@ function fantasyRules(): string {
 
 /** 大包各自的补充说明：这包和别的包玩法上差在哪儿。key 是扩展 id */
 const PACK_NOTES: Record<string, string> = {
+  'dark-turmoil': `<p>剧情向扩展，依赖<b>修真</b>。它讲一位<b>会老死</b>的仙帝，
+        和它为了续命掀起的浩劫：平时缩在沉眠地延缓衰老，寿元将尽时出山清洗天地，
+        缺"食物"时连自己人一起吃。</p>
+      <p>手下分三支<b>诡异</b>：<b>影</b>（暗影领域、视野压制）、<b>血</b>（越打越多）、
+        <b>骨</b>（能拼出前两支）。所有诡异都不听指挥、按固定倾向行动——
+        具体倾向见本册「特殊规则」。</p>
+      <p>三条要记住的规则：<b>暗影领域</b>每回合末重铺一次，站在里面的单位视野与射程减半；
+        被<b>暗影侵蚀</b>杀死的单位会变成蚀影，被<b>侵染</b>的会变成血肉；
+        <b>寻躯/复苏</b>吞下目标后要<b>原地一回合</b>才会变形，那一回合是玩家的机会窗口。</p>`,
   'fantasy-core': `<p>这本册子讲的是<b>机制</b>：它自己不带兵，是另外四包的前置。下面的"新规则"
         在你开任何一个奇想子包时都会生效。</p>`,
   'fantasy-heroes': `<p>英雄是<b>全场唯一</b>的：同一方在盘上只能有一个同名英雄。第一次招募要在造价之外
@@ -3762,6 +3787,30 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       .join('');
 
   /**
+   * 把一条扩展的 `manualNotes` 拆成小节。
+   *
+   * 约定：**以 `## ` 开头的一条是"小节标题"**，其余是它下面的条目。
+   * 为什么用这个土办法而不是改数据结构：`manualNotes` 是 `string[]`，
+   * 好几个包已经在用了；换成 `{title, lines}[]` 等于让所有包陪跑一次重构。
+   * 而"一行里以 ## 开头"在渲染层只有一个分支，读起来也不难。
+   *
+   * 为什么要小节：黑暗动乱那种包有十来条（每个单位一条倾向），
+   * 一坨 `<ul>` 摊在页面上根本查不到"不详到底往哪走"。
+   */
+  const noteSectionsOf = (notes: readonly string[]): Array<{ title: string | null; lines: string[] }> => {
+    const out: Array<{ title: string | null; lines: string[] }> = [];
+    for (const n of notes) {
+      const m = /^##\s+(.+)$/.exec(n.trim());
+      if (m) out.push({ title: m[1]!, lines: [] });
+      else {
+        if (out.length === 0) out.push({ title: null, lines: [] });
+        out[out.length - 1]!.lines.push(n);
+      }
+    }
+    return out;
+  };
+
+  /**
    * 各包自己登记的「补充规则」（Expansion.manualNotes）。
    *
    * 这些规则只活在钩子里——"灵矿相邻高山多产灵石"写在 modifyYield 里、
@@ -3771,17 +3820,58 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
    */
   const notesFromPacks = packs
     .filter((p) => (p.manualNotes ?? []).length > 0)
-    .map(
-      (p) => `
+    .map((p) => {
+      const sections = noteSectionsOf(p.manualNotes ?? []);
+      const rendered = sections
+        .map((sec, i) => {
+          const id = `mn-${p.id}-${i + 1}`;
+          const head = sec.title ? `<h4 id="${esc(id)}">${esc(sec.title)}</h4>` : '';
+          const list = sec.lines.length
+            ? `<ul>${sec.lines.map((n) => `<li>${rich(n)}</li>`).join('')}</ul>`
+            : '';
+          return `${head}${list}`;
+        })
+        .join('');
+      return `
       <h3 id="mn-${esc(p.id)}">${esc(p.name)}：补充规则</h3>
-      <ul>
-        ${(p.manualNotes ?? []).map((n) => `<li>${rich(n)}</li>`).join('\n        ')}
-      </ul>`,
-    )
+      ${rendered}`;
+    })
     .join('');
 
   /** 有没有「特殊规则」这一节：正文或补充规则，有一样就算 */
   const hasRules = Boolean(g.rulesHtml) || notesFromPacks.length > 0;
+
+  /**
+   * 给「特殊规则」里所有 h3 / h4 **自动补锚点**，同时产出目录。
+   *
+   * 为什么要这么做：以前只有我们自己写的补充规则带 id，修真那半边的
+   * `<h3>修士流派</h3>`、`<h3>境界与修为</h3>` 全是裸标题——页面上明明有
+   * 小标题，导航里却一条都没有，读者只能滚着找（2026-11-18 作者反馈）。
+   * 现在统一在这里补，**任何包只要写 h3/h4 就自动可跳转**，不用各自记得加 id。
+   */
+  const tagHeadings = (
+    html: string,
+  ): { html: string; toc: Array<{ id: string; label: string; level: number }> } => {
+    const toc: Array<{ id: string; label: string; level: number }> = [];
+    let n = 0;
+    const out = html.replace(
+      /<h([34])([^>]*)>([\s\S]*?)<\/h\1>/g,
+      (all, lvl: string, attrs: string, inner: string) => {
+        const own = /id="([^"]+)"/.exec(attrs);
+        const id = own ? own[1]! : `r-${(n += 1)}`;
+        // 标题里可能有 <code> 之类的标签，目录里只要纯文字
+        const label = inner.replace(/<[^>]+>/g, '').trim();
+        if (label) toc.push({ id, label, level: Number(lvl) });
+        return own ? all : `<h${lvl} id="${id}"${attrs}>${inner}</h${lvl}>`;
+      },
+    );
+    return { html: out, toc };
+  };
+
+  const rulesRaw = `${
+    typeof g.rulesHtml === 'function' ? g.rulesHtml() : (g.rulesHtml ?? '')
+  }${notesFromPacks}`;
+  const rules = tagHeadings(rulesRaw);
 
   const nav = `
     <a href="#g-intro">1. 基础信息</a>
@@ -3790,7 +3880,19 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       .filter((p) => liveUnits(p).length > 0)
       .map((p) => `<a class="sub" href="#p-${esc(p.id)}">${esc(shortPackName(p))}</a>`)
       .join('\n    ')}
-    <a href="#g-notes">3. 各包要点</a>${hasRules ? '\n    <a href="#g-rules">4. 特殊规则</a>' : ''}
+    <a href="#g-notes">3. 各包要点</a>
+    ${
+      hasRules
+        ? rules.toc.length > 0
+          ? `<details class="nav-group">
+      <summary><a href="#g-rules">4. 特殊规则</a><i>${rules.toc.length}</i></summary>
+      ${rules.toc
+        .map((a) => `<a class="${a.level === 3 ? 'sub' : 'sub2'}" href="#${esc(a.id)}">${esc(a.label)}</a>`)
+        .join('\n      ')}
+    </details>`
+          : '<a href="#g-rules">4. 特殊规则</a>'
+        : ''
+    }
     <a href="#g-terms">${hasRules ? '5' : '4'}. 机制词条</a>
   `;
 
@@ -3820,11 +3922,10 @@ function groupBook(g: BookGroup, packs: readonly Exp[]): Book {
       ${notesHtml() || '<p class="era-meta">这几个包没有额外的玩法说明，看总表即可。</p>'}
     </section>
     ${
-      g.rulesHtml || notesFromPacks
+      hasRules
         ? `<section id="g-rules">
       <h2><span class="sec-num">04</span>特殊规则</h2>
-      ${typeof g.rulesHtml === 'function' ? g.rulesHtml() : (g.rulesHtml ?? '')}
-      ${notesFromPacks}
+      ${rules.html}
     </section>`
         : ''
     }

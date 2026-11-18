@@ -376,7 +376,7 @@ const SHADOW_POSSESS: AbilityDef = {
 const SHADOW_SPAWN: AbilityDef = {
   id: 'shadow-spawn',
   name: '化影',
-  summary: `每 ${SUMMON_EVERY} 个自己的回合分裂出一个暗影；这一回合攻击过的话，来得更快。`,
+  summary: `每 ${SUMMON_EVERY} 个自己的回合分裂出**两团**暗影；这一回合攻击过的话，来得更快。`,
   group: 'support',
   hooks: {
     onStrike: [
@@ -396,13 +396,27 @@ const SHADOW_SPAWN: AbilityDef = {
           left -= fast ? 2 : 1;
           c.self.custom = { ...(c.self.custom ?? {}), hit: 0 };
           if (left <= 0) {
-            const spot = freeNear(c.state, c.self, SHADE, c.api);
-            if (spot) {
+            /*
+             * 一次分裂**两团**（2026-11-18）：暗影太脆，一个一个来根本铺不开。
+             * 两团分开找位置，第二团找不到也照样算这一次召唤完成——
+             * 不能因为场上挤就永远卡在"差一格"。
+             */
+            let born = 0;
+            for (let i = 0; i < 2; i += 1) {
+              const spot = freeNear(c.state, c.self, SHADE, c.api);
+              if (!spot) break;
               c.api.spawn(c.state, c.self.owner, SHADE, spot.x, spot.y);
+              born += 1;
+            }
+            if (born > 0) {
               left = SUMMON_EVERY;
-              c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '影主分裂出一团暗影。' });
+              c.state.log.push({
+                turn: c.state.turn,
+                player: c.self.owner,
+                text: born > 1 ? '影主分裂出两团暗影。' : '影主分裂出一团暗影。',
+              });
             } else {
-              left = 1; // 没地方站，下回合再试
+              left = 1; // 一格都没有，下回合再试
             }
           }
           c.self.custom = { ...(c.self.custom ?? {}), summonIn: left };
@@ -496,8 +510,12 @@ const SHADOW_BEAST_DEF: UnitTypeDef = {
   shadowRadius: 4,
   aiAutonomy: 1,
   aiProfile: 'shadow-beast-edge',
-  // 影系偏弱（2026-11-18）：蚀影也分得一份「化影」
-  abilities: ['shadow-erosion', 'shadow-spawn'],
+  /*
+   * 2026-11-18 作者调整：蚀影不再有「化影」（那是影主的特权），改挂「暗影侵蚀」。
+   * 现在影系三兵人人都有侵蚀，但**只有影主能生出暗影**——
+   * 之前"暗影生蚀影、蚀影又生暗影"把血系"自己繁殖"的特点抢走了。
+   */
+  abilities: ['shadow-erosion', 'shadow-possess'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -517,10 +535,13 @@ const SHADE_DEF: UnitTypeDef = {
   cost: 120,
   move: 5,
   atk: 10,
-  // 18 → 12（2026-11-18 实跑后调）：18 甲配 40 血，第 5 代的兵打上去只有个位数，
-  // "高甲模拟无实体"变成了"打不死"。12 仍然明显高于同血量的兵。
-  armor: 12,
-  maxHp: 40,
+  /*
+   * 血量 40 → 30、护甲 12 → 16（2026-11-18 作者）。
+   * 更薄、更"没有实体"——它是靠数量和不占地面的飞行层活着的，
+   * 不该硬到能站住对拼。
+   */
+  armor: 16,
+  maxHp: 30,
   range: 2,
   vision: 6,
   burst: 3,
@@ -1778,6 +1799,36 @@ export const DARK_TURMOIL: Expansion = {
   // 规则书归册：进「修真」那本合册，不塞进"小型扩展合订本"
   // （它一个兵种表 + 一个暗影领域 + 吞噬/召唤/衰老，塞合订本里会被淹掉）
   scale: 'large',
+  /*
+   * 规则书「特殊规则」里的补充条目。
+   *
+   * 为什么需要它：诡异**不听指挥**（自主分 1），它们的走位和选目标是各自的 profile
+   * 决定的。玩家在战场上只能看到"它往那边走了"，看不到"它为什么往那边走"——
+   * 不给一份书面说明，这套东西就是不可学习的。
+   */
+  manualNotes: [
+    /*
+     * 以 `## ` 开关的一条是**小节标题**（规则书会拿它做锚点和导航），
+     * 其余是这一节下面的条目。这么写是因为它有一二十条，
+     * 一坨列表摊在页面上没法查"不详到底往哪走"。
+     */
+    '## 总则',
+    '这个包里所有诡异都**不听玩家指挥**：走位与选目标是写死的倾向（见下），同族之间还会互相配合。',
+    '## 影系',
+    '**蚀影**：扑向**落单**的敌人（两格内没有同伴的），平时守在暗影领域的边界上；够不到就跳进影子扑过去。',
+    '**暗影**：射程内**补刀血最少**的目标；和同类会自动散开，不挤在一格。',
+    '**影主**：打射程内**威胁最大**（攻击力最高）的目标；被贴到 3 格内就后撤；没有敌人时躲进**暗影最深处**，同类之间保持约 2 格。',
+    '## 血系',
+    '**淤血**：优先咬**经济单位**，没得咬就往血肉和敌人的产线方向凑。',
+    '**血肉**：挑**护甲最薄**的打；会主动离血核远一点，也和同类散开。',
+    '**血核**：打**威胁最大**的目标；没有敌人时待在暗影最深处，同类之间保持约 2 格。',
+    '## 骨系',
+    '**骸骨**：一心找**血肉**（吞了能变成尸骸）；没有血肉就朝血最少的敌人爬。',
+    '**尸骸**：朝**暗影**走（吞了能变成不详）；周围没有暗影就原地不动。',
+    '**不详**：朝**尸骸仙帝**走，但到 4 格就停下不再靠近；看不见仙帝时沉进暗影最深处。',
+    '## 尸骸仙帝',
+    '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
+  ],
   blurb: '一位会老死的仙帝，和它为了续命掀起的浩劫。',
   summary:
     '剧情向扩展：尸骸仙帝（远超九级修士，但**有寿元**）会定期出山清洗天地换取寿元，' +

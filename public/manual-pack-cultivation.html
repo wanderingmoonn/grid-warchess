@@ -62,6 +62,22 @@
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
   nav a.sub { padding-left: 22px; font-size: 12px; }
+  nav a.sub2 { padding-left: 34px; font-size: 12px; opacity: .8; }
+  /* 「特殊规则」的小节收进可折叠分组：全摊开会把后面的项挤出屏幕 */
+  nav details.nav-group { margin: 2px 0; }
+  nav details.nav-group > summary {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; list-style: none; padding: 2px 0;
+  }
+  nav details.nav-group > summary::-webkit-details-marker { display: none; }
+  nav details.nav-group > summary::before {
+    content: '▸'; font-size: 10px; color: var(--faint); width: 10px;
+  }
+  nav details.nav-group[open] > summary::before { content: '▾'; }
+  nav details.nav-group > summary i {
+    font-style: normal; font-size: 11px; color: var(--faint);
+  }
+  nav details.nav-group > a { display: block; padding-top: 1px; padding-bottom: 1px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -361,7 +377,45 @@
     <a class="sub" href="#p-cultivation">修真</a>
     <a class="sub" href="#p-dark-turmoil">黑暗动乱</a>
     <a href="#g-notes">3. 各包要点</a>
-    <a href="#g-rules">4. 特殊规则</a>
+    <details class="nav-group">
+      <summary><a href="#g-rules">4. 特殊规则</a><i>36</i></summary>
+      <a class="sub" href="#r-1">修士流派</a>
+      <a class="sub" href="#r-2">境界与修为</a>
+      <a class="sub2" href="#r-3">如何获取修为（经验）</a>
+      <a class="sub2" href="#r-4">战斗历练明细</a>
+      <a class="sub" href="#r-5">各境界一览表</a>
+      <a class="sub" href="#r-6">异象</a>
+      <a class="sub" href="#r-7">御空</a>
+      <a class="sub" href="#r-8">剑气纵横</a>
+      <a class="sub" href="#r-9">血祭</a>
+      <a class="sub" href="#r-10">阵法</a>
+      <a class="sub" href="#r-11">宗门大殿</a>
+      <a class="sub" href="#r-12">藏经阁与法术</a>
+      <a class="sub" href="#r-13">法术一览</a>
+      <a class="sub" href="#r-14">灵气浓度</a>
+      <a class="sub" href="#r-15">灵泉</a>
+      <a class="sub" href="#r-16">炼丹与丹药</a>
+      <a class="sub" href="#r-17">炼器</a>
+      <a class="sub" href="#r-18">法器的两条公共规则</a>
+      <a class="sub" href="#r-19">青木剑</a>
+      <a class="sub" href="#r-20">玄石印</a>
+      <a class="sub" href="#r-21">寒水镜</a>
+      <a class="sub" href="#r-22">赤炎珠</a>
+      <a class="sub" href="#r-23">突破与生命值</a>
+      <a class="sub" href="#r-24">真元（真实伤害）</a>
+      <a class="sub" href="#r-25">寿元与衰老</a>
+      <a class="sub" href="#r-26">灵体道果与重生</a>
+      <a class="sub2" href="#r-27">灵体形态</a>
+      <a class="sub2" href="#r-28">例外：魂修</a>
+      <a class="sub2" href="#r-29">主动重生</a>
+      <a class="sub" href="#mn-cultivation">修真：补充规则</a>
+      <a class="sub" href="#mn-dark-turmoil">黑暗动乱：补充规则</a>
+      <a class="sub2" href="#mn-dark-turmoil-1">总则</a>
+      <a class="sub2" href="#mn-dark-turmoil-2">影系</a>
+      <a class="sub2" href="#mn-dark-turmoil-3">血系</a>
+      <a class="sub2" href="#mn-dark-turmoil-4">骨系</a>
+      <a class="sub2" href="#mn-dark-turmoil-5">尸骸仙帝</a>
+    </details>
     <a href="#g-terms">5. 机制词条</a>
   
   </nav>
@@ -400,7 +454,7 @@
     <div class="scroll-x tall">
       <table class="wide">
         <thead><tr><th>名称</th><th>图标</th><th>来源</th><th>时代</th><th>造价</th><th>攻</th><th>甲</th><th>血</th><th>移</th><th>射</th><th>视</th><th>特性</th></tr></thead>
-        <tbody><tr class="grp" id="p-cultivation"><td colspan="12">修真 · 35 个</td></tr><tr data-unit="cultivation-clone"><td class="name">化身</td><td class="glyph">化</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">10</td><td class="num">3</td><td class="num">30</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="cultivation-hun-deng"><td class="name">魂灯</td><td class="glyph">灯</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">2</td><td class="num">40</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivator-spirit"><td class="name">灵体</td><td class="glyph">魂</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-cultivator-spirit-重生">重生 CD0</a></td></tr><tr data-unit="cultivation-ling-shen"><td class="name">替劫灵身</td><td class="glyph">劫</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">50</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-miao-men"><td class="name">众妙之门</td><td class="glyph">门</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="qi-cultivator"><td class="name">炼气士</td><td class="glyph">炼</td><td class="src">修真</td><td class="num">1</td><td class="num">110</td><td class="num">10</td><td class="num">0</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr><tr data-unit="cultivation-spirit-tower"><td class="name">散灵台</td><td class="glyph">灵</td><td class="src">修真</td><td class="num">2</td><td class="num">60</td><td class="num">12</td><td class="num">2</td><td class="num">28</td><td class="num">—</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-sk-cultivation-spirit-tower-释放灵气">释放灵气 CD0</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-servant"><td class="name">仆役</td><td class="glyph">仆</td><td class="src">修真</td><td class="num">2</td><td class="num">75</td><td class="num">4</td><td class="num">2</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-servant">可建 3 种建筑</a></td></tr><tr data-unit="cultivation-spirit-field"><td class="name">灵田</td><td class="glyph">田</td><td class="src">修真</td><td class="num">2</td><td class="num">90</td><td class="num">2</td><td class="num">2</td><td class="num">30</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-spirit-aura">灵气滋养</a> · <a class="ref" href="#t-income">产出 +6 金 +1 灵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-forge-1"><td class="name">炼器炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">2</td><td class="num">140</td><td class="num">0</td><td class="num">4</td><td class="num">90</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-artifact-wood"><td class="name">青木剑</td><td class="glyph">木</td><td class="src">修真</td><td class="num">2</td><td class="num">150</td><td class="num">18</td><td class="num">3</td><td class="num">36</td><td class="num">4</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-sword-qi">剑气环</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-near-cultivation-artifact-wood">产地 森林，或 2 个灵田</a></td></tr><tr data-unit="sword-cultivator"><td class="name">剑修</td><td class="glyph">剑</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">8</td><td class="num">1</td><td class="num">20</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-sword-cultivator-剑气纵横">剑气纵横 CD0</a></td></tr><tr data-unit="body-cultivator"><td class="name">体修</td><td class="glyph">体</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">8</td><td class="num">2</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-ab-body-ward">金刚不坏</a></td></tr><tr data-unit="cultivation-artifact-stone"><td class="name">玄石印</td><td class="glyph">石</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">12</td><td class="num">9</td><td class="num">52</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-stone-ward">磐石</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-near-cultivation-artifact-stone">产地 高山或丘陵，或 2 个灵矿</a></td></tr><tr data-unit="cultivation-kill-formation"><td class="name">杀伐阵</td><td class="glyph">杀</td><td class="src">修真</td><td class="num">3</td><td class="num">80</td><td class="num">0</td><td class="num">4</td><td class="num">30</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-kill">杀伐</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-alchemy-furnace"><td class="name">炼丹炉</td><td class="glyph">丹</td><td class="src">修真</td><td class="num">3</td><td class="num">110</td><td class="num">0</td><td class="num">2</td><td class="num">50</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-deacon"><td class="name">执事</td><td class="glyph">执</td><td class="src">修真</td><td class="num">3</td><td class="num">110</td><td class="num">6</td><td class="num">3</td><td class="num">25</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-deacon">可建 9 种建筑</a></td></tr><tr data-unit="cultivation-scripture-pavilion"><td class="name">藏经阁</td><td class="glyph">经</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-silent-pavilion"><td class="name">静心阁</td><td class="glyph">静</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-spirit-mine"><td class="name">灵矿</td><td class="glyph">矿</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">3</td><td class="num">4</td><td class="num">45</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +5 金 +1 灵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master"><td class="name">阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">6</td><td class="num">2</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master">可建 1 种建筑</a></td></tr><tr data-unit="cultivation-artifact-water"><td class="name">寒水镜</td><td class="glyph">水</td><td class="src">修真</td><td class="num">3</td><td class="num">190</td><td class="num">16</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-chill">寒霜</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-near-cultivation-artifact-water">产地 水域或浅流，或 灵泉</a></td></tr><tr data-unit="cultivation-forge-2"><td class="name">地火炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">3</td><td class="num">200</td><td class="num">0</td><td class="num">5</td><td class="num">120</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-sect"><td class="name">宗门大殿</td><td class="glyph">宗</td><td class="src">修真</td><td class="num">3</td><td class="num">200</td><td class="num">0</td><td class="num">5</td><td class="num">120</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="soul-cultivator"><td class="name">魂修</td><td class="glyph">魄</td><td class="src">修真</td><td class="num">3</td><td class="num">270</td><td class="num">8</td><td class="num">1</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr><tr data-unit="blood-cultivator"><td class="name">魔修</td><td class="glyph">魔</td><td class="src">修真</td><td class="num">3</td><td class="num">270</td><td class="num">6</td><td class="num">1</td><td class="num">22</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-blood-cultivator-血祭">血祭 CD0</a></td></tr><tr data-unit="cultivation-seal-formation"><td class="name">封印阵</td><td class="glyph">封</td><td class="src">修真</td><td class="num">4</td><td class="num">100</td><td class="num">0</td><td class="num">5</td><td class="num">34</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-seal">封印</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-guard-formation"><td class="name">守御阵</td><td class="glyph">守</td><td class="src">修真</td><td class="num">4</td><td class="num">110</td><td class="num">0</td><td class="num">6</td><td class="num">80</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-guardian">守御</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-steward"><td class="name">管事</td><td class="glyph">管</td><td class="src">修真</td><td class="num">4</td><td class="num">150</td><td class="num">8</td><td class="num">3</td><td class="num">28</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-steward">可建 11 种建筑</a></td></tr><tr data-unit="cultivation-spirit-spring"><td class="name">灵泉</td><td class="glyph">泉</td><td class="src">修真</td><td class="num">4</td><td class="num">150</td><td class="num">0</td><td class="num">5</td><td class="num">70</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-sk-cultivation-spirit-spring-泉涌">泉涌 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master-2"><td class="name">大阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">4</td><td class="num">170</td><td class="num">8</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master-2">可建 3 种建筑</a></td></tr><tr data-unit="cultivation-artifact-fire"><td class="name">赤炎珠</td><td class="glyph">炎</td><td class="src">修真</td><td class="num">4</td><td class="num">260</td><td class="num">30</td><td class="num">3</td><td class="num">34</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-sunder">熔甲</a> · <a class="ref" href="#t-ab-artifact-fire-qi">真火</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-near-cultivation-artifact-fire">产地 灵矿</a></td></tr><tr data-unit="cultivation-forge-3"><td class="name">天工炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">4</td><td class="num">280</td><td class="num">0</td><td class="num">6</td><td class="num">150</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-teleport-formation"><td class="name">传送阵</td><td class="glyph">传</td><td class="src">修真</td><td class="num">5</td><td class="num">140</td><td class="num">0</td><td class="num">4</td><td class="num">32</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-sk-cultivation-teleport-formation-挪移">挪移 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master-3"><td class="name">天阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">5</td><td class="num">220</td><td class="num">10</td><td class="num">4</td><td class="num">36</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master-3">可建 4 种建筑</a></td></tr><tr class="grp" id="p-dark-turmoil"><td colspan="12">黑暗动乱 · 11 个</td></tr><tr data-unit="shadow-beast"><td class="name">蚀影</td><td class="glyph">蚀</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">90</td><td class="num">22</td><td class="num">6</td><td class="num">55</td><td class="num">2</td><td class="num">1</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（8 点） · <a class="ref" href="#t-sk-shadow-beast-暗影跳跃">暗影跳跃 CD1</a></td></tr><tr data-unit="blood-pool"><td class="name">淤血</td><td class="glyph">淤</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">100</td><td class="num">14×3</td><td class="num">10</td><td class="num">45</td><td class="num">3</td><td class="num">2</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a></td></tr><tr data-unit="bone-skeleton"><td class="name">骸骨</td><td class="glyph">骸</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">110</td><td class="num">20</td><td class="num">8</td><td class="num">70</td><td class="num">3</td><td class="num">1</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-ab-shadow-spawn">化影</a> · <a class="ref" href="#t-ab-bone-seek-body">寻躯</a></td></tr><tr data-unit="shade"><td class="name">暗影</td><td class="glyph">影</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">120</td><td class="num">10×3</td><td class="num">12</td><td class="num">40</td><td class="num">5</td><td class="num">2</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（4 点） · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-sk-shade-暗影跳跃">暗影跳跃 CD1</a></td></tr><tr data-unit="flesh"><td class="name">血肉</td><td class="glyph">肉</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">150</td><td class="num">26</td><td class="num">8</td><td class="num">160</td><td class="num">2</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（5 点）</td></tr><tr data-unit="bone-corpse"><td class="name">尸骸</td><td class="glyph">尸</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">260</td><td class="num">32</td><td class="num">10</td><td class="num">150</td><td class="num">3</td><td class="num">3</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-ab-bone-airborne">腾空</a> · <a class="ref" href="#t-ab-bone-assemble">拼装</a> · <a class="ref" href="#t-ab-bone-revive">复苏</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="blood-core"><td class="name">血核</td><td class="glyph">核</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">380</td><td class="num">45</td><td class="num">10</td><td class="num">200</td><td class="num">2</td><td class="num">3</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-blood-grow">增生</a> · <a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（12 点） · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="slumber-site"><td class="name">沉眠地</td><td class="glyph">眠</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">400</td><td class="num">0</td><td class="num">40</td><td class="num">300</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="shadow-lord"><td class="name">影主</td><td class="glyph">主</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">400</td><td class="num">40×2</td><td class="num">10</td><td class="num">220</td><td class="num">2</td><td class="num">4</td><td class="num">8</td><td class="traits"><a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（15 点） · <a class="ref" href="#t-ab-shadow-spawn">化影</a> · <a class="ref" href="#t-sk-shadow-lord-暗影跳跃">暗影跳跃 CD1</a></td></tr><tr data-unit="bone-unnamed"><td class="name">不详</td><td class="glyph">忌</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">420</td><td class="num">38×2</td><td class="num">12</td><td class="num">160</td><td class="num">3</td><td class="num">3</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-shadow-spawn">化影</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-bone-airborne">腾空</a> · <a class="ref" href="#t-ab-bone-transmute">点化</a> · <a class="ref" href="#t-ab-bone-dissolve">解离</a> · <a class="ref" href="#t-sk-bone-unnamed-暗影跳跃">暗影跳跃 CD1</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="corpse-emperor"><td class="name">尸骸仙帝</td><td class="glyph">帝</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">2400</td><td class="num">300</td><td class="num">130</td><td class="num">1600</td><td class="num">3</td><td class="num">5</td><td class="num">9</td><td class="traits"><a class="ref" href="#t-sk-corpse-emperor-吞噬">吞噬 CDundefined</a></td></tr></tbody>
+        <tbody><tr class="grp" id="p-cultivation"><td colspan="12">修真 · 35 个</td></tr><tr data-unit="cultivation-clone"><td class="name">化身</td><td class="glyph">化</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">10</td><td class="num">3</td><td class="num">30</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits">—</td></tr><tr data-unit="cultivation-hun-deng"><td class="name">魂灯</td><td class="glyph">灯</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">2</td><td class="num">40</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivator-spirit"><td class="name">灵体</td><td class="glyph">魂</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-cultivator-spirit-重生">重生 CD0</a></td></tr><tr data-unit="cultivation-ling-shen"><td class="name">替劫灵身</td><td class="glyph">劫</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">3</td><td class="num">50</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-miao-men"><td class="name">众妙之门</td><td class="glyph">门</td><td class="src">修真</td><td class="num">1</td><td class="num">0</td><td class="num">0</td><td class="num">4</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="qi-cultivator"><td class="name">炼气士</td><td class="glyph">炼</td><td class="src">修真</td><td class="num">1</td><td class="num">110</td><td class="num">10</td><td class="num">0</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr><tr data-unit="cultivation-spirit-tower"><td class="name">散灵台</td><td class="glyph">灵</td><td class="src">修真</td><td class="num">2</td><td class="num">60</td><td class="num">12</td><td class="num">2</td><td class="num">28</td><td class="num">—</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-sk-cultivation-spirit-tower-释放灵气">释放灵气 CD0</a> · <a class="ref" href="#t-auto">反应射击</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-servant"><td class="name">仆役</td><td class="glyph">仆</td><td class="src">修真</td><td class="num">2</td><td class="num">75</td><td class="num">4</td><td class="num">2</td><td class="num">20</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-servant">可建 3 种建筑</a></td></tr><tr data-unit="cultivation-spirit-field"><td class="name">灵田</td><td class="glyph">田</td><td class="src">修真</td><td class="num">2</td><td class="num">90</td><td class="num">2</td><td class="num">2</td><td class="num">30</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-spirit-aura">灵气滋养</a> · <a class="ref" href="#t-income">产出 +6 金 +1 灵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-forge-1"><td class="name">炼器炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">2</td><td class="num">140</td><td class="num">0</td><td class="num">4</td><td class="num">90</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-artifact-wood"><td class="name">青木剑</td><td class="glyph">木</td><td class="src">修真</td><td class="num">2</td><td class="num">150</td><td class="num">18</td><td class="num">3</td><td class="num">36</td><td class="num">4</td><td class="num">3</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-sword-qi">剑气环</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-near-cultivation-artifact-wood">产地 森林，或 2 个灵田</a></td></tr><tr data-unit="sword-cultivator"><td class="name">剑修</td><td class="glyph">剑</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">8</td><td class="num">1</td><td class="num">20</td><td class="num">3</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-sword-cultivator-剑气纵横">剑气纵横 CD0</a></td></tr><tr data-unit="body-cultivator"><td class="name">体修</td><td class="glyph">体</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">8</td><td class="num">2</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-ab-body-ward">金刚不坏</a></td></tr><tr data-unit="cultivation-artifact-stone"><td class="name">玄石印</td><td class="glyph">石</td><td class="src">修真</td><td class="num">2</td><td class="num">180</td><td class="num">12</td><td class="num">9</td><td class="num">52</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-stone-ward">磐石</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 1</a> · <a class="ref" href="#t-near-cultivation-artifact-stone">产地 高山或丘陵，或 2 个灵矿</a></td></tr><tr data-unit="cultivation-kill-formation"><td class="name">杀伐阵</td><td class="glyph">杀</td><td class="src">修真</td><td class="num">3</td><td class="num">80</td><td class="num">0</td><td class="num">4</td><td class="num">30</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-kill">杀伐</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-alchemy-furnace"><td class="name">炼丹炉</td><td class="glyph">丹</td><td class="src">修真</td><td class="num">3</td><td class="num">110</td><td class="num">0</td><td class="num">2</td><td class="num">50</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-deacon"><td class="name">执事</td><td class="glyph">执</td><td class="src">修真</td><td class="num">3</td><td class="num">110</td><td class="num">6</td><td class="num">3</td><td class="num">25</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-deacon">可建 9 种建筑</a></td></tr><tr data-unit="cultivation-scripture-pavilion"><td class="name">藏经阁</td><td class="glyph">经</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-silent-pavilion"><td class="name">静心阁</td><td class="glyph">静</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">0</td><td class="num">3</td><td class="num">60</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-spirit-mine"><td class="name">灵矿</td><td class="glyph">矿</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">3</td><td class="num">4</td><td class="num">45</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-income">产出 +5 金 +1 灵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master"><td class="name">阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">3</td><td class="num">120</td><td class="num">6</td><td class="num">2</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master">可建 1 种建筑</a></td></tr><tr data-unit="cultivation-artifact-water"><td class="name">寒水镜</td><td class="glyph">水</td><td class="src">修真</td><td class="num">3</td><td class="num">190</td><td class="num">16</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">4</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-chill">寒霜</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-near-cultivation-artifact-water">产地 水域或浅流，或 灵泉</a></td></tr><tr data-unit="cultivation-forge-2"><td class="name">地火炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">3</td><td class="num">200</td><td class="num">0</td><td class="num">5</td><td class="num">120</td><td class="num">—</td><td class="num">0</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-sect"><td class="name">宗门大殿</td><td class="glyph">宗</td><td class="src">修真</td><td class="num">3</td><td class="num">200</td><td class="num">0</td><td class="num">5</td><td class="num">120</td><td class="num">—</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="soul-cultivator"><td class="name">魂修</td><td class="glyph">魄</td><td class="src">修真</td><td class="num">3</td><td class="num">270</td><td class="num">8</td><td class="num">1</td><td class="num">24</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a></td></tr><tr data-unit="blood-cultivator"><td class="name">魔修</td><td class="glyph">魔</td><td class="src">修真</td><td class="num">3</td><td class="num">270</td><td class="num">6</td><td class="num">1</td><td class="num">22</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-ab-qi-true-damage">真元</a> · <a class="ref" href="#t-sk-blood-cultivator-血祭">血祭 CD0</a></td></tr><tr data-unit="cultivation-seal-formation"><td class="name">封印阵</td><td class="glyph">封</td><td class="src">修真</td><td class="num">4</td><td class="num">100</td><td class="num">0</td><td class="num">5</td><td class="num">34</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-seal">封印</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-guard-formation"><td class="name">守御阵</td><td class="glyph">守</td><td class="src">修真</td><td class="num">4</td><td class="num">110</td><td class="num">0</td><td class="num">6</td><td class="num">80</td><td class="num">—</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-ab-formation-guardian">守御</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-steward"><td class="name">管事</td><td class="glyph">管</td><td class="src">修真</td><td class="num">4</td><td class="num">150</td><td class="num">8</td><td class="num">3</td><td class="num">28</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="traits"><a class="ref" href="#t-builds-cultivation-steward">可建 11 种建筑</a></td></tr><tr data-unit="cultivation-spirit-spring"><td class="name">灵泉</td><td class="glyph">泉</td><td class="src">修真</td><td class="num">4</td><td class="num">150</td><td class="num">0</td><td class="num">5</td><td class="num">70</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-sk-cultivation-spirit-spring-泉涌">泉涌 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master-2"><td class="name">大阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">4</td><td class="num">170</td><td class="num">8</td><td class="num">3</td><td class="num">30</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master-2">可建 3 种建筑</a></td></tr><tr data-unit="cultivation-artifact-fire"><td class="name">赤炎珠</td><td class="glyph">炎</td><td class="src">修真</td><td class="num">4</td><td class="num">260</td><td class="num">30</td><td class="num">3</td><td class="num">34</td><td class="num">2</td><td class="num">3</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-artifact-spirit">器灵</a> · <a class="ref" href="#t-ab-warm-nourish">温养</a> · <a class="ref" href="#t-ab-artifact-sunder">熔甲</a> · <a class="ref" href="#t-ab-artifact-fire-qi">真火</a> · <a class="ref" href="#t-ab-fly-over">飞行</a> · <a class="ref" href="#t-splash">溅射 2</a> · <a class="ref" href="#t-near-cultivation-artifact-fire">产地 灵矿</a></td></tr><tr data-unit="cultivation-forge-3"><td class="name">天工炉</td><td class="glyph">炉</td><td class="src">修真</td><td class="num">4</td><td class="num">280</td><td class="num">0</td><td class="num">6</td><td class="num">150</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-produce">产兵</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-teleport-formation"><td class="name">传送阵</td><td class="glyph">传</td><td class="src">修真</td><td class="num">5</td><td class="num">140</td><td class="num">0</td><td class="num">4</td><td class="num">32</td><td class="num">—</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-sk-cultivation-teleport-formation-挪移">挪移 CD0</a> · <a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="cultivation-formation-master-3"><td class="name">天阵师</td><td class="glyph">阵</td><td class="src">修真</td><td class="num">5</td><td class="num">220</td><td class="num">10</td><td class="num">4</td><td class="num">36</td><td class="num">2</td><td class="num">1</td><td class="num">3</td><td class="traits"><a class="ref" href="#t-builds-cultivation-formation-master-3">可建 4 种建筑</a></td></tr><tr class="grp" id="p-dark-turmoil"><td colspan="12">黑暗动乱 · 11 个</td></tr><tr data-unit="shadow-beast"><td class="name">蚀影</td><td class="glyph">蚀</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">90</td><td class="num">22</td><td class="num">6</td><td class="num">55</td><td class="num">2</td><td class="num">1</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（8 点） · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-sk-shadow-beast-暗影跳跃">暗影跳跃 CD1</a></td></tr><tr data-unit="blood-pool"><td class="name">淤血</td><td class="glyph">淤</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">100</td><td class="num">14×3</td><td class="num">10</td><td class="num">45</td><td class="num">3</td><td class="num">2</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a></td></tr><tr data-unit="bone-skeleton"><td class="name">骸骨</td><td class="glyph">骸</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">110</td><td class="num">20</td><td class="num">8</td><td class="num">70</td><td class="num">3</td><td class="num">1</td><td class="num">5</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-ab-shadow-spawn">化影</a> · <a class="ref" href="#t-ab-bone-seek-body">寻躯</a></td></tr><tr data-unit="shade"><td class="name">暗影</td><td class="glyph">影</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">120</td><td class="num">10×3</td><td class="num">16</td><td class="num">30</td><td class="num">5</td><td class="num">2</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（4 点） · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-sk-shade-暗影跳跃">暗影跳跃 CD1</a></td></tr><tr data-unit="flesh"><td class="name">血肉</td><td class="glyph">肉</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">150</td><td class="num">26</td><td class="num">8</td><td class="num">130</td><td class="num">2</td><td class="num">1</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（5 点）</td></tr><tr data-unit="bone-corpse"><td class="name">尸骸</td><td class="glyph">尸</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">260</td><td class="num">32</td><td class="num">10</td><td class="num">150</td><td class="num">3</td><td class="num">3</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-ab-bone-airborne">腾空</a> · <a class="ref" href="#t-ab-bone-assemble">拼装</a> · <a class="ref" href="#t-ab-bone-revive">复苏</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="blood-core"><td class="name">血核</td><td class="glyph">核</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">380</td><td class="num">45</td><td class="num">10</td><td class="num">200</td><td class="num">2</td><td class="num">3</td><td class="num">6</td><td class="traits"><a class="ref" href="#t-ab-blood-clot">化血</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-blood-grow">增生</a> · <a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（12 点） · <a class="ref" href="#t-splash">溅射 2</a></td></tr><tr data-unit="slumber-site"><td class="name">沉眠地</td><td class="glyph">眠</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">400</td><td class="num">0</td><td class="num">40</td><td class="num">300</td><td class="num">—</td><td class="num">0</td><td class="num">4</td><td class="traits"><a class="ref" href="#t-immobile">不可移动</a></td></tr><tr data-unit="shadow-lord"><td class="name">影主</td><td class="glyph">主</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">400</td><td class="num">40×2</td><td class="num">10</td><td class="num">220</td><td class="num">2</td><td class="num">4</td><td class="num">8</td><td class="traits"><a class="ref" href="#t-ab-shadow-erosion">暗蚀</a>（15 点） · <a class="ref" href="#t-ab-shadow-spawn">化影</a> · <a class="ref" href="#t-ab-shadow-possess">暗影侵蚀</a> · <a class="ref" href="#t-sk-shadow-lord-暗影跳跃">暗影跳跃 CD1</a></td></tr><tr data-unit="bone-unnamed"><td class="name">不详</td><td class="glyph">忌</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">420</td><td class="num">38×2</td><td class="num">12</td><td class="num">160</td><td class="num">3</td><td class="num">3</td><td class="num">7</td><td class="traits"><a class="ref" href="#t-ab-shadow-spawn">化影</a> · <a class="ref" href="#t-ab-blood-infect">侵染</a> · <a class="ref" href="#t-ab-blood-siphon">汲取</a> · <a class="ref" href="#t-ab-bone-airborne">腾空</a> · <a class="ref" href="#t-ab-bone-transmute">点化</a> · <a class="ref" href="#t-ab-bone-dissolve">解离</a> · <a class="ref" href="#t-sk-bone-unnamed-暗影跳跃">暗影跳跃 CD1</a> · <a class="ref" href="#t-splash">溅射 1</a></td></tr><tr data-unit="corpse-emperor"><td class="name">尸骸仙帝</td><td class="glyph">帝</td><td class="src">黑暗动乱</td><td class="num">6</td><td class="num">2400</td><td class="num">300</td><td class="num">130</td><td class="num">1600</td><td class="num">3</td><td class="num">5</td><td class="num">9</td><td class="traits"><a class="ref" href="#t-sk-corpse-emperor-吞噬">吞噬 CDundefined</a></td></tr></tbody>
       </table>
     </div>
     </section>
@@ -410,12 +464,20 @@
       <h3 id="n-cultivation">修真</h3><p>这个包引入了全新的<b>修士</b>体系。
         修士不按传统兵种升级，而是通过战斗和打坐积累修为，不断突破境界。
         作为系列的首个包，目前开放了<b>炼气士</b>（远古体系的探索者）与<b>剑修</b>（时代2解锁的新流派）。
-        未来将有更多拥有独特机制的流派加入。</p>
+        未来将有更多拥有独特机制的流派加入。</p><h3 id="n-dark-turmoil">黑暗动乱</h3><p>剧情向扩展，依赖<b>修真</b>。它讲一位<b>会老死</b>的仙帝，
+        和它为了续命掀起的浩劫：平时缩在沉眠地延缓衰老，寿元将尽时出山清洗天地，
+        缺"食物"时连自己人一起吃。</p>
+      <p>手下分三支<b>诡异</b>：<b>影</b>（暗影领域、视野压制）、<b>血</b>（越打越多）、
+        <b>骨</b>（能拼出前两支）。所有诡异都不听指挥、按固定倾向行动——
+        具体倾向见本册「特殊规则」。</p>
+      <p>三条要记住的规则：<b>暗影领域</b>每回合末重铺一次，站在里面的单位视野与射程减半；
+        被<b>暗影侵蚀</b>杀死的单位会变成蚀影，被<b>侵染</b>的会变成血肉；
+        <b>寻躯/复苏</b>吞下目标后要<b>原地一回合</b>才会变形，那一回合是玩家的机会窗口。</p>
     </section>
     <section id="g-rules">
       <h2><span class="sec-num">04</span>特殊规则</h2>
       
-      <h3>修士流派</h3>
+      <h3 id="r-1">修士流派</h3>
       <p>修士是一类特殊的单位，他们不依赖时代的科技，而是靠自身修为的提升获得力量。所有修士都共享<b>境界加成</b>、<b>真元</b>与<b>寿元限制</b>，但不同的流派在获取修为和战斗方式上大相径庭。</p>
       <ul>
         <li><b>炼气士（时代 1）</b>：古老修炼体系的探索者。他们没有花哨的招式，获取修为缓慢，是修真体系的基础模板。</li>
@@ -431,10 +493,10 @@
           1 年寿元，而且境界越高，同样的伤害折出的修为越少。</li>
       </ul>
 
-      <h3>境界与修为</h3>
+      <h3 id="r-2">境界与修为</h3>
       <p>修士的属性不固定，总修为达标即可自动晋升境界。境界从 0 级（凡人）一路升到 9 级（渡劫）。境界越高，全属性同步增加。</p>
 
-      <h4>如何获取修为（经验）</h4>
+      <h4 id="r-3">如何获取修为（经验）</h4>
       <p>不同流派获取修为的途径不同：</p>
       <ul>
         <li><b>自然打坐</b>：每回合开始时自动获得。<br/>
@@ -452,7 +514,7 @@
         </li>
       </ul>
 
-      <h4>战斗历练明细</h4>
+      <h4 id="r-4">战斗历练明细</h4>
       <p>修士的成长主要靠打坐，出去历练是<b>另一条路</b>——它更快，但极其凶险，而且是唯一能摸到高境界的路。</p>
       <ul>
         <li><b>看攻击力，不看造价</b>：目标的基础攻击力必须<b>高于</b>表里的门槛。召唤物没有造价，所以不能按价钱算；更难打的召唤物攻击力自然更高，一样能算出历练。</li>
@@ -541,7 +603,7 @@
         <b>境界顿悟：</b>境界提升不仅是数值的暴涨，更是对天地法则的明悟。修士达到特定境界时会自动领悟新的技能、获得新的能力——具体几级解锁什么，见下一张表的最后一列。
       </div>
 
-      <h3>各境界一览表</h3>
+      <h3 id="r-5">各境界一览表</h3>
       <p>表里只有两个<b>累计值</b>：「修为」是升到这一境所需的总修为，「生命」是从 0 级一路突破上来的总和。
         其余除「次数」外都是<b>境界带来的增量</b>：兵种自己还有基础值（射程、移动、视野各自的基础见兵种总表），实际值 = 基础 + 增量。
         剑修的增量还要再乘 0.8（施展剑气纵横时 1.2）；灵体另有折算，见后面「灵体形态」。
@@ -694,7 +756,7 @@
       <p class="era-meta">注：「次数」写的是总数，已含基础的 1 次。「真元」「溅射」见下方各自的段落。
         0 级（凡人）没有列出：那一行几乎全是 0，只有「次数」是 1。</p>
 
-      <h3>异象</h3>
+      <h3 id="r-6">异象</h3>
       <p>修士突破时天象外泄，藏不住。带「异象」的修士（<b>1 级</b>起自动获得，也就是获得它的下一次突破起）
         每突破一次，<b>下一个敌方回合</b>它的位置会在地图上被点亮一格：</p>
       <ul>
@@ -707,7 +769,7 @@
           你每突破一次，就等于向全场报一次坐标。</li>
       </ul>
 
-      <h3>御空</h3>
+      <h3 id="r-7">御空</h3>
       <p>当修士到达 <b>2 级（筑基期）</b> 时，即可初步掌控灵力，实现低空悬浮。</p>
       <ul>
         <li><b>释放方式</b>：主动切换，不占用本回合的攻击次数。</li>
@@ -715,7 +777,7 @@
         <li><b>技能效果</b>：在空中与地面切换。</li>
       </ul>
 
-      <h3>剑气纵横</h3>
+      <h3 id="r-8">剑气纵横</h3>
       <p>向正方向释放一道剑气。</p>
       <ul>
         <li><b>释放方式</b>：点击一个方向，挥出一道直线剑气（四方向吸附，斜着点也会自动归到最近的正方向）。</li>
@@ -725,7 +787,7 @@
         <li><b>修为获取</b>：挥剑本身 +1 修为（落空也给），每命中一个目标（人或城）再 +5。</li>
       </ul>
 
-      <h3>血祭</h3>
+      <h3 id="r-9">血祭</h3>
       <p>魔修的立身之本：以自己为圆心，抽取周围一圈所有活物的精血。</p>
       <ul>
         <li><b>释放方式</b>：按一下立刻结算，不需要选点——<b>站哪儿</b>才是要算的事。</li>
@@ -747,7 +809,7 @@
           升级节奏会直接翻倍。</li>
       </ul>
 
-      <h3>阵法</h3>
+      <h3 id="r-10">阵法</h3>
       <p>阵法是<b>建筑</b>：不能移动、会被摧毁、会挡路。攻击力一律为 0，靠光环改数值、
         或者干脆替友军挨打来发挥作用。建造阵法要专门的阵师，阵师自己也要耗灵石。</p>
       <ul>
@@ -787,7 +849,7 @@
         传送阵自己也在「阵周围」的范围里，所以它<b>会跟着一起挪到落点</b>；两片区域重叠时，
         同时挨着两边的单位只算在源侧（加矢量，不减矢量）。</p>
 
-      <h3>宗门大殿</h3>
+      <h3 id="r-11">宗门大殿</h3>
       <p>宗门大殿是<b>时代 3</b> 的 <b>2×2</b> 大建筑（120 血 / 5 甲），由执事修建。
         它自己不打架、不产资源，两个功能全挂在<b>贴着它站的修士</b>身上——所以它该修在修士堆里。</p>
       <ul>
@@ -812,7 +874,7 @@
           建造距离按"整块地到工匠最近的一格"算，不必拿左上角去凑。</li>
       </ul>
 
-      <h3>藏经阁与法术</h3>
+      <h3 id="r-12">藏经阁与法术</h3>
       <p>法器和灵泉是"外物"，法术则是修士<b>自己身上</b>的东西。它和流派技能、境界技能长得一样
         （都在技能栏里），但有三条不同：<b>只能学、要花灵力、占法术位</b>。</p>
       <ul>
@@ -878,7 +940,7 @@
         文案直接用 SkillDef.summary：它本来就是"印在按钮上、玩家点之前要能
         看懂"的那句话，和界面说的是同一份，不会两处对不上。
       -->
-      <h3>法术一览</h3>
+      <h3 id="r-13">法术一览</h3>
       <table>
         <thead><tr><th>法术</th><th>说明</th><th>灵力</th><th>研发</th><th>门槛</th></tr></thead>
         <tbody>
@@ -886,7 +948,7 @@
         </tbody>
       </table>
 
-      <h3>灵气浓度</h3>
+      <h3 id="r-14">灵气浓度</h3>
       <p>每个格子有一个 <b>0～100</b> 的灵气浓度。它不是贴在地形上的固定标签，
         而是<b>每回合都在流动</b>的场：源头持续注入，浓处往稀处渗，越远越淡。
         修士就站在这个场里吸灵力。</p>
@@ -922,7 +984,7 @@
         选中修士，灵力下面多一行「脚下灵气 62 / 100（每回合吸 7）」。
         雾里的格子不报这行——浓度是活数据，报出来就等于替你点了对面的灵田。</p>
 
-      <h3>灵泉</h3>
+      <h3 id="r-15">灵泉</h3>
       <p>灵泉是<b>时代 4</b> 的支援建筑（70 血 /
         5 甲），由<b>管事</b>修建。它不产资源、不能攻击，
         唯一的作用是主动技能「泉涌」——回血在这套规则里是<b>要付钱的选择</b>，不是"站在旁边就有"的白给。</p>
@@ -943,7 +1005,7 @@
           这是有意的时代门槛。</li>
       </ul>
 
-      <h3>炼丹与丹药</h3>
+      <h3 id="r-16">炼丹与丹药</h3>
       <p>炼器和丹药是一对：<b>法器是摆在外面的实力</b>，<b>丹药是藏在兜里的底牌</b>。
         两者都不是兵，但走的路完全不同——法器是单位（会动、会挨打、对面看得见），
         丹药是消耗品（跟着人走、人死药灭、对面只能猜）。</p>
@@ -986,7 +1048,7 @@
           所以不该混在属性明细里。</li>
       </ul>
 
-      <h3>炼器</h3>
+      <h3 id="r-17">炼器</h3>
       <p>炼器炉不是新机制：它就是一座<b>产兵建筑</b>，和军营共用同一套白名单，
         只是名单里全是法器。所以"炉子能造什么"完全写在兵种数据里。</p>
       <ul>
@@ -1005,7 +1067,7 @@
         <li><b>一回合一件</b>：没有生产间隔，但一座炉子同时只出一件；想量产就多盖几座。</li>
       </ul>
 
-      <h3>法器的两条公共规则</h3>
+      <h3 id="r-18">法器的两条公共规则</h3>
       <p>法器不是活人：它不修炼、不吃灵气滋养、也不会自己找路。所以每一件都带着这两条：</p>
       <ul>
         <li><a class="ref" href="#t-ab-artifact-spirit">器灵</a>——<b>得有人在看着</b>。
@@ -1023,7 +1085,7 @@
         除非挤到同一格压着打。飞行只解决"怎么到"，不解决"到了能干什么"——
         每一件的性格完全不同。</p>
 
-      <h3>青木剑</h3>
+      <h3 id="r-19">青木剑</h3>
       <p>一件飞剑。射程 <b>3</b> 格，比同代的任何近战都远——
         所以它能站在对方的攻击范围之外开火，<b>对方够不着，就还不了手</b>。
         代价是血薄甲薄（36 血 / 3 甲），
@@ -1036,7 +1098,7 @@
           比同代骑兵贵一半左右——贵的是射程和光环，不是面板上的攻甲血。</li>
       </ul>
 
-      <h3>玄石印</h3>
+      <h3 id="r-20">玄石印</h3>
       <p>一块砸下去的印：攻低、甲厚、血多、慢、射程只有 1 格，
         但<b>能溅</b>。它是四件里唯一不靠机动吃饭的一件，所以飞行对它只是"能过河"。</p>
       <ul>
@@ -1049,7 +1111,7 @@
           造价 180 金 + 10 灵石。</li>
       </ul>
 
-      <h3>寒水镜</h3>
+      <h3 id="r-21">寒水镜</h3>
       <p>远程控制。攻击力刻意不如同代火枪兵，换来的是<b>射程 4、视野 5</b>
         和 <b>2 格溅射</b>——它不负责杀伤，负责让你的阵型走不动。</p>
       <ul>
@@ -1059,7 +1121,7 @@
         <li>重复命中不叠加回合数，只把回合数刷新回 2。</li>
       </ul>
 
-      <h3>赤炎珠</h3>
+      <h3 id="r-22">赤炎珠</h3>
       <p>远程 AOE，四件里伤害最高：30 攻、2 格溅射，
         射程比寒水镜短一格。它是"开团的那一下"，不是持续输出。</p>
       <ul>
@@ -1074,28 +1136,28 @@
         盖房子也要看工匠的档位：二代的仆役只能起炼器炉，想立天工炉，
         得先把时代推到四代、造出管事。</p>
 
-      <h3>突破与生命值</h3>
+      <h3 id="r-23">突破与生命值</h3>
       <p>每次境界突破，生命上限增加一次，并按当前血量比例回血。增加量就是上表「生命」列相邻两行的差——
         初期增长平缓，踏入化神以上会爆发式地涨，成为真正的战场巨兽。</p>
 
-      <h3>真元（真实伤害）</h3>
+      <h3 id="r-24">真元（真实伤害）</h3>
       <p>每次攻击额外附带一段<b>无视护甲</b>的真实伤害，数值见上表的「真元」列。它是修士打重甲单位的唯一手段，境界越高越明显。</p>
 
-      <h3>寿元与衰老</h3>
+      <h3 id="r-25">寿元与衰老</h3>
       <p>凡人只有 10 年寿元，境界每高一级多 9 年；到 9 级（渡劫）寿元不再是限制。</p>
       <div class="callout">
         <b>注意坐化倒计时：</b>年龄超过寿元后，每多活一年<b>攻击力 −2、护甲 −1、神识 −1</b>。
         超出寿元 <b>3 年</b>就会血量归零，此时任何风吹草动或者回合结束就会正式死亡。
       </div>
 
-      <h3>灵体道果与重生</h3>
+      <h3 id="r-26">灵体道果与重生</h3>
       <p>当修士的境界达到 <b>4 级（元婴期）</b> 时，他们将初步参悟“灵体道果”。此时若他们在战场上被击杀（非寿元耗尽坐化），强大的元神会强行挣脱肉体的束缚，化作<b>灵体</b>存活下来，等待重塑肉身的机会。</p>
 
       <div class="callout">
         <b>注意：</b>若是由于寿元耗尽（坐化）而死亡，修士的元神同样会枯竭，无法化作灵体。
       </div>
 
-      <h4>灵体形态</h4>
+      <h4 id="r-27">灵体形态</h4>
       <p>化作灵体后，修士失去肉身，处于极度脆弱但又极难被物理手段杀伤的状态（下面说的"加成"都指<b>境界带来的那部分</b>）：</p>
       <ul>
         <li><b>生命与防御</b>：基础生命值降为 <b>1 点</b>（原境界带来的生命上限加成只保留 30%）。但由于失去实体，境界提供的护甲加成将 <b>放大 10 倍</b>（几乎免疫物理伤害）。</li>
@@ -1104,7 +1166,7 @@
         <li><b>记忆封存</b>：化作灵体时，后天习得的普通技能会被暂时封存，只有特殊的<b>“魂法”</b>能保留。同时会暂时失去「灵体道果」特性——若灵体再次阵亡，将彻底消散。</li>
       </ul>
 
-      <h4>例外：魂修</h4>
+      <h4 id="r-28">例外：魂修</h4>
       <p>魂修（火器时代）是唯一一支
         <b>化灵之后不掉战斗力</b>的修士。上面那一整串削弱，它<b>一条都不吃</b>：</p>
       <ul>
@@ -1120,7 +1182,7 @@
         数值也就和别的修士打平。所以正确的用法是"<b>把它当耗材使</b>"——
         它死得起，别的修士死不起。</p>
 
-      <h4>主动重生</h4>
+      <h4 id="r-29">主动重生</h4>
       <p>灵体形态下，单位将获得主动技能<b>「重生」</b>，消耗行动机会重塑肉身：</p>
       <ul>
         <li><b>代价</b>：重塑肉身会透支本源，修为按"降至那一境升回来的门槛 ÷ 2"重算，且<b>强制跌落 1 个境界</b>（若因此跌破 4 级，将彻底失去「灵体道果」）。</li>
@@ -1133,20 +1195,18 @@
         重生后修为经验 = <b>(降至那一境升回原等级所需的总修为) ÷ 2</b>（向下取整）
       </div>
     
-      
       <h3 id="mn-cultivation">修真：补充规则</h3>
-      <ul>
-        <li>灵矿每相邻一座高山，额外产出 2 灵石（四方向，不含斜角）。</li>
-        <li>散灵台基础攻击次数为 0：必须先花 10 灵石「释放灵气」，才有 5 次开火机会，而且那几发是在<b>对手回合开始、建筑自动开火</b>时打出去的，不是在自己回合里点。</li>
-      </ul>
+      <ul><li>灵矿每相邻一座高山，额外产出 2 灵石（四方向，不含斜角）。</li><li>散灵台基础攻击次数为 0：必须先花 10 灵石「释放灵气」，才有 5 次开火机会，而且那几发是在<b>对手回合开始、建筑自动开火</b>时打出去的，不是在自己回合里点。</li></ul>
+      <h3 id="mn-dark-turmoil">黑暗动乱：补充规则</h3>
+      <h4 id="mn-dark-turmoil-1">总则</h4><ul><li>这个包里所有诡异都<b>不听玩家指挥</b>：走位与选目标是写死的倾向（见下），同族之间还会互相配合。</li></ul><h4 id="mn-dark-turmoil-2">影系</h4><ul><li><b>蚀影</b>：扑向<b>落单</b>的敌人（两格内没有同伴的），平时守在暗影领域的边界上；够不到就跳进影子扑过去。</li><li><b>暗影</b>：射程内<b>补刀血最少</b>的目标；和同类会自动散开，不挤在一格。</li><li><b>影主</b>：打射程内<b>威胁最大</b>（攻击力最高）的目标；被贴到 3 格内就后撤；没有敌人时躲进<b>暗影最深处</b>，同类之间保持约 2 格。</li></ul><h4 id="mn-dark-turmoil-3">血系</h4><ul><li><b>淤血</b>：优先咬<b>经济单位</b>，没得咬就往血肉和敌人的产线方向凑。</li><li><b>血肉</b>：挑<b>护甲最薄</b>的打；会主动离血核远一点，也和同类散开。</li><li><b>血核</b>：打<b>威胁最大</b>的目标；没有敌人时待在暗影最深处，同类之间保持约 2 格。</li></ul><h4 id="mn-dark-turmoil-4">骨系</h4><ul><li><b>骸骨</b>：一心找<b>血肉</b>（吞了能变成尸骸）；没有血肉就朝血最少的敌人爬。</li><li><b>尸骸</b>：朝<b>暗影</b>走（吞了能变成不详）；周围没有暗影就原地不动。</li><li><b>不详</b>：朝<b>尸骸仙帝</b>走，但到 4 格就停下不再靠近；看不见仙帝时沉进暗影最深处。</li></ul><h4 id="mn-dark-turmoil-5">尸骸仙帝</h4><ul><li><b>尸骸仙帝</b>：寿元将尽才会出山；缺&quot;食物&quot;时先吞自己人续命。</li></ul>
     </section>
 
     <section id="g-terms">
       <h2><span class="sec-num">05</span>机制词条</h2>
       <p>只收<b>这一册兵种真的用到</b>的那几条。想查全部能力，见核心规则书第 13 章。</p>
-      <dl class="terms"><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-ab-qi-true-damage">真元</dt><dd>每次攻击附带随境界提升的、无视护甲的真实伤害。</dd><dt id="t-sk-cultivator-spirit-重生">重生</dt><dd>重塑肉身：修为按 1/2 重算并强制降 1 境，恢复 10% 最大生命。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-cultivation-spirit-tower-释放灵气">释放灵气</dt><dd>充能：本回合获得 5 次攻击次数，消耗 10 灵石 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-auto">反应射击</dt><dd>敌人踏进射程那一刻就打，用掉的是这一回合的攻击次数。 <span class="more">和手动开火<b>共用同一份次数</b>：一回合总共还是那么几发，变的只是时机——
+      <dl class="terms"><dt id="t-ab-artifact-spirit">器灵</dt><dd>离开己方修士的神识范围，移动力减半（至少留 1 格）；在神识范围内，护甲 + 范围内护甲最高的那位修士的护甲 ÷ 2。</dd><dt id="t-ab-warm-nourish">温养</dt><dd>回合开始时，若半径 2 格内有己方修士，恢复 1 + ⌊最高境界 ÷ 2⌋ 点生命（多个修士只按最高的那位算）。</dd><dt id="t-ab-fly-over">飞行</dt><dd>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</dd><dt id="t-immobile">不可移动</dt><dd>移动力 0：能开火、能产出，但永远不换位置。</dd><dt id="t-ab-qi-true-damage">真元</dt><dd>每次攻击附带随境界提升的、无视护甲的真实伤害。</dd><dt id="t-sk-cultivator-spirit-重生">重生</dt><dd>重塑肉身：修为按 1/2 重算并强制降 1 境，恢复 10% 最大生命。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-sk-cultivation-spirit-tower-释放灵气">释放灵气</dt><dd>充能：本回合获得 5 次攻击次数，消耗 10 灵石 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-auto">反应射击</dt><dd>敌人踏进射程那一刻就打，用掉的是这一回合的攻击次数。 <span class="more">和手动开火<b>共用同一份次数</b>：一回合总共还是那么几发，变的只是时机——
       从&quot;挨完打才还手&quot;变成&quot;进门就打&quot;。先打刚踏进射程的那个，它倒了还有余弹就按最近、血最少转火。
-      对方站在射程里不动时（比如贴上来的兵原地砍塔），你的回合开始会补一轮，那一轮也算在这份次数里。</span></dd><dt id="t-builds-cultivation-servant">可建造 · 仆役</dt><dd>可建造：灵田、散灵台、炼器炉（共 3 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-spirit-aura">灵气滋养</dt><dd>回合开始时，半径 1 格内的修士获得 1 点修为经验（不分阵营，可叠加）。</dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-produce">产兵</dt><dd>这是一座产兵点：兵从营门四邻的空地出来，按它自己的档位决定能造哪些。 <span class="more">括号里是这座营和&quot;默认产能&quot;不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。它不靠后方城市供货：城全丢了也照样出兵，但档位也不会跟着城市涨。</span></dd><dt id="t-ab-artifact-spirit">器灵</dt><dd>离开己方修士的神识范围，移动力减半（至少留 1 格）；在神识范围内，护甲 + 范围内护甲最高的那位修士的护甲 ÷ 2。</dd><dt id="t-ab-warm-nourish">温养</dt><dd>回合开始时，若半径 2 格内有己方修士，恢复 1 + ⌊最高境界 ÷ 2⌋ 点生命（多个修士只按最高的那位算）。</dd><dt id="t-ab-artifact-sword-qi">剑气环</dt><dd>半径 2 格内的友军攻击力 +15%（多条同类光环取最强的一条，不叠乘）。</dd><dt id="t-ab-fly-over">飞行</dt><dd>真正飞在天上：可以和地面单位站在同一格（它在你头顶，不在你身边），地形一概不挡，只被敌方城市拦住——水面、深水、高山都能停。</dd><dt id="t-near-cultivation-artifact-wood">产地 森林，或 2 个灵田</dt><dd>造它的时候，产兵点的占地和四邻里必须有森林，或 2 个灵田。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-sk-sword-cultivator-剑气纵横">剑气纵横</dt><dd>向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-ab-body-ward">金刚不坏</dt><dd>受到的伤害减免 30%，血量越低减免越高（剩四分之一血时 50%）。真元与持续伤害不受影响。</dd><dt id="t-ab-artifact-stone-ward">磐石</dt><dd>半径 2 格内的友军护甲 +10%（不足 1 点按 1 点算；多条同类光环取最强的一条）。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，只打敌人——友军站在炸点上不会掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-near-cultivation-artifact-stone">产地 高山或丘陵，或 2 个灵矿</dt><dd>造它的时候，产兵点的占地和四邻里必须有高山或丘陵，或 2 个灵矿。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-ab-formation-kill">杀伐</dt><dd>半径 2 内友军攻击 ×1.10；有修士相邻时改为半径 4，加成随守阵修士的境界提高。</dd><dt id="t-builds-cultivation-deacon">可建造 · 执事</dt><dd>可建造：灵田、散灵台、灵矿、炼器炉、地火炉、宗门大殿、藏经阁、静心阁、炼丹炉（共 9 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-builds-cultivation-formation-master">可建造 · 阵师</dt><dd>可建造：杀伐阵（共 1 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-artifact-chill">寒霜</dt><dd>命中让目标「迟缓」2 回合：移动力减半，至少留 1 格。被溅射波及的敌人同样生效。</dd><dt id="t-near-cultivation-artifact-water">产地 水域或浅流，或 灵泉</dt><dd>造它的时候，产兵点的占地和四邻里必须有水域或浅流，或 灵泉。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-sk-blood-cultivator-血祭">血祭</dt><dd>以寿元为引，抽取周围一圈所有单位（含友军）的精血，按伤害折算修为——境界越高折算越低。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-ab-formation-seal">封印</dt><dd>半径 3 内敌军移动力减半（向下取整），再由守阵修士的境界扣掉同样多的格数；被压到 0 的单位这一回合完全无法行动。</dd><dt id="t-ab-formation-guardian">守御</dt><dd>半径 2 内的友军（含建筑）受到伤害时，改由本阵承受；阵受损后自动吸取相邻修士的生命：每 1 点修士生命回 1 × 境界 点，每回合最多吸「境界」点，且不会把修士吸死。移走修士即可弃守。</dd><dt id="t-builds-cultivation-steward">可建造 · 管事</dt><dd>可建造：灵田、散灵台、灵矿、炼器炉、地火炉、天工炉、灵泉、宗门大殿、藏经阁、静心阁、炼丹炉（共 11 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-sk-cultivation-spirit-spring-泉涌">泉涌</dt><dd>恢复四邻内每个友军 10% 生命上限（至少 1 点），按实际回血量收灵石：每 5 点 1 块，不足时每人只回 1 点。每回合一次。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-builds-cultivation-formation-master-2">可建造 · 大阵师</dt><dd>可建造：杀伐阵、封印阵、守御阵（共 3 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-artifact-sunder">熔甲</dt><dd>命中让目标「熔甲」2 回合：护甲减半（按<b>当前</b>护甲算，含光环与地形）。被溅射波及的敌人同样生效。</dd><dt id="t-ab-artifact-fire-qi">真火</dt><dd>半径 2 格内的友军真元 +10%（不足 1 点按 1 点算；真元只有修士有，所以受益的也是修士）。</dd><dt id="t-near-cultivation-artifact-fire">产地 灵矿</dt><dd>造它的时候，产兵点的占地和四邻里必须有灵矿。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-sk-cultivation-teleport-formation-挪移">挪移</dt><dd>把阵周围 2 格内的单位，与落点周围 2 格内的单位整体对调。全图选点，耗 10 灵石，每回合一次；失败也照扣，而且撤不回来。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-builds-cultivation-formation-master-3">可建造 · 天阵师</dt><dd>可建造：杀伐阵、封印阵、守御阵、传送阵（共 4 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-shadow-erosion">暗蚀</dt><dd>每次攻击附带一段无视护甲的暗蚀伤害。</dd><dt id="t-sk-shadow-beast-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-ab-blood-clot">化血</dt><dd>造成的伤害累计成「血」：每 80 点就在旁边长出一滩淤血（一回合最多两滩）。</dd><dt id="t-ab-blood-infect">侵染</dt><dd>击杀单位时，在被击杀的位置生成一团血肉。</dd><dt id="t-ab-shadow-possess">暗影侵蚀</dt><dd>击杀单位时，在被击杀的位置生成一个蚀影。</dd><dt id="t-ab-shadow-spawn">化影</dt><dd>每 4 个自己的回合分裂出一个暗影；这一回合攻击过的话，来得更快。</dd><dt id="t-ab-bone-seek-body">寻躯</dt><dd>回合结束时，若相邻有血肉，吞掉它并变成尸骸。</dd><dt id="t-sk-shade-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-ab-blood-siphon">汲取</dt><dd>按造成的伤害等量回复自己的生命，上限不超过生命上限。</dd><dt id="t-ab-bone-airborne">腾空</dt><dd>本回合攻击过就升到空中层；没攻击过则尝试降落，落点被占则再等一回合。</dd><dt id="t-ab-bone-assemble">拼装</dt><dd>死亡时在原地留下一个半血的骸骨，并在周围长出两滩淤血。</dd><dt id="t-ab-bone-revive">复苏</dt><dd>回合结束时，若相邻有暗影，吞掉它并变成不详。</dd><dt id="t-ab-blood-grow">增生</dt><dd>每回合回复 12 点生命；生命已满时累计 1 层，攒够 3 层剥出一团血肉。</dd><dt id="t-sk-shadow-lord-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-ab-bone-transmute">点化</dt><dd>击杀单位时，在被击杀处生成一个骸骨、一滩淤血、一团暗影（放不下就落在相邻格）。</dd><dt id="t-ab-bone-dissolve">解离</dt><dd>被击杀时散成两滩淤血、一个骸骨、一团暗影。</dd><dt id="t-sk-bone-unnamed-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-sk-corpse-emperor-吞噬">吞噬</dt><dd>吞下一个<b>自己人</b>，用它的生机换自己的寿元。不耗灵力、没有冷却，因为这是它续命的本能，不是战术选择。 <span class="more">冷却 undefined 回合；不占移动与攻击。</span></dd></dl>
+      对方站在射程里不动时（比如贴上来的兵原地砍塔），你的回合开始会补一轮，那一轮也算在这份次数里。</span></dd><dt id="t-builds-cultivation-servant">可建造 · 仆役</dt><dd>可建造：灵田、散灵台、炼器炉（共 3 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-spirit-aura">灵气滋养</dt><dd>回合开始时，半径 1 格内的修士获得 1 点修为经验（不分阵营，可叠加）。</dd><dt id="t-income">产出</dt><dd>回合结束时结算金币；写「地形+数」的，站对地形拿全额，站错只拿保底。 <span class="more">地形不对不是&quot;打零折&quot;，是拿该兵种的保底收入——所以经济单位也值得带出门。</span></dd><dt id="t-produce">产兵</dt><dd>这是一座产兵点：兵从营门四邻的空地出来，按它自己的档位决定能造哪些。 <span class="more">括号里是这座营和&quot;默认产能&quot;不一样的地方：几回合一批（默认当回合成型）、造价打几折（默认原价）、自己占几格编制（默认不占）。这三条都写在兵种数据的 `produce` 上，所以两座营可以完全不同——比如前进基地在它这儿产兵便宜一成。它不靠后方城市供货：城全丢了也照样出兵，但档位也不会跟着城市涨。</span></dd><dt id="t-ab-artifact-sword-qi">剑气环</dt><dd>半径 2 格内的友军攻击力 +15%（多条同类光环取最强的一条，不叠乘）。</dd><dt id="t-near-cultivation-artifact-wood">产地 森林，或 2 个灵田</dt><dd>造它的时候，产兵点的占地和四邻里必须有森林，或 2 个灵田。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-sk-sword-cultivator-剑气纵横">剑气纵横</dt><dd>向指定方向挥出剑气，穿透路径上的敌人，释放与命中均可增加修为。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-ab-body-ward">金刚不坏</dt><dd>受到的伤害减免 30%，血量越低减免越高（剩四分之一血时 50%）。真元与持续伤害不受影响。</dd><dt id="t-ab-artifact-stone-ward">磐石</dt><dd>半径 2 格内的友军护甲 +10%（不足 1 点按 1 点算；多条同类光环取最强的一条）。</dd><dt id="t-splash">溅射</dt><dd>打中目标时，周围若干格内的敌人各吃一份按比例折算的伤害。 <span class="more">默认比例 50%，只打敌人——友军站在炸点上不会掉血。半径和比例都能被扩展改（修真按境界撑大），单位自己带了比例就按自己的算，界面上显示的是当前值。</span></dd><dt id="t-near-cultivation-artifact-stone">产地 高山或丘陵，或 2 个灵矿</dt><dd>造它的时候，产兵点的占地和四邻里必须有高山或丘陵，或 2 个灵矿。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-ab-formation-kill">杀伐</dt><dd>半径 2 内友军攻击 ×1.10；有修士相邻时改为半径 4，加成随守阵修士的境界提高。</dd><dt id="t-builds-cultivation-deacon">可建造 · 执事</dt><dd>可建造：灵田、散灵台、灵矿、炼器炉、地火炉、宗门大殿、藏经阁、静心阁、炼丹炉（共 9 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-builds-cultivation-formation-master">可建造 · 阵师</dt><dd>可建造：杀伐阵（共 1 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-artifact-chill">寒霜</dt><dd>命中让目标「迟缓」2 回合：移动力减半，至少留 1 格。被溅射波及的敌人同样生效。</dd><dt id="t-near-cultivation-artifact-water">产地 水域或浅流，或 灵泉</dt><dd>造它的时候，产兵点的占地和四邻里必须有水域或浅流，或 灵泉。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-sk-blood-cultivator-血祭">血祭</dt><dd>以寿元为引，抽取周围一圈所有单位（含友军）的精血，按伤害折算修为——境界越高折算越低。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-ab-formation-seal">封印</dt><dd>半径 3 内敌军移动力减半（向下取整），再由守阵修士的境界扣掉同样多的格数；被压到 0 的单位这一回合完全无法行动。</dd><dt id="t-ab-formation-guardian">守御</dt><dd>半径 2 内的友军（含建筑）受到伤害时，改由本阵承受；阵受损后自动吸取相邻修士的生命：每 1 点修士生命回 1 × 境界 点，每回合最多吸「境界」点，且不会把修士吸死。移走修士即可弃守。</dd><dt id="t-builds-cultivation-steward">可建造 · 管事</dt><dd>可建造：灵田、散灵台、灵矿、炼器炉、地火炉、天工炉、灵泉、宗门大殿、藏经阁、静心阁、炼丹炉（共 11 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-sk-cultivation-spirit-spring-泉涌">泉涌</dt><dd>恢复四邻内每个友军 10% 生命上限（至少 1 点），按实际回血量收灵石：每 5 点 1 块，不足时每人只回 1 点。每回合一次。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-builds-cultivation-formation-master-2">可建造 · 大阵师</dt><dd>可建造：杀伐阵、封印阵、守御阵（共 3 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-artifact-sunder">熔甲</dt><dd>命中让目标「熔甲」2 回合：护甲减半（按<b>当前</b>护甲算，含光环与地形）。被溅射波及的敌人同样生效。</dd><dt id="t-ab-artifact-fire-qi">真火</dt><dd>半径 2 格内的友军真元 +10%（不足 1 点按 1 点算；真元只有修士有，所以受益的也是修士）。</dd><dt id="t-near-cultivation-artifact-fire">产地 灵矿</dt><dd>造它的时候，产兵点的占地和四邻里必须有灵矿。 <span class="more">它是法器：只能由产兵建筑（炼器炉）造出来，城市产线不供。条件不满足时，产兵面板会把它灰着列出来并写明缺什么。</span></dd><dt id="t-sk-cultivation-teleport-formation-挪移">挪移</dt><dd>把阵周围 2 格内的单位，与落点周围 2 格内的单位整体对调。全图选点，耗 10 灵石，每回合一次；失败也照扣，而且撤不回来。 <span class="more">冷却 0 回合；不占移动与攻击。</span></dd><dt id="t-builds-cultivation-formation-master-3">可建造 · 天阵师</dt><dd>可建造：杀伐阵、封印阵、守御阵、传送阵（共 4 种）。建造占掉整个回合，范围 2 格。</dd><dt id="t-ab-shadow-erosion">暗蚀</dt><dd>每次攻击附带一段无视护甲的暗蚀伤害。</dd><dt id="t-ab-shadow-possess">暗影侵蚀</dt><dd>击杀单位时，在被击杀的位置生成一个蚀影。</dd><dt id="t-sk-shadow-beast-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-ab-blood-clot">化血</dt><dd>造成的伤害累计成「血」：每 80 点就在旁边长出一滩淤血（一回合最多两滩）。</dd><dt id="t-ab-blood-infect">侵染</dt><dd>击杀单位时，在被击杀的位置生成一团血肉。</dd><dt id="t-ab-shadow-spawn">化影</dt><dd>每 4 个自己的回合分裂出<b>两团</b>暗影；这一回合攻击过的话，来得更快。</dd><dt id="t-ab-bone-seek-body">寻躯</dt><dd>回合结束若相邻有血肉，吞掉它；下一个回合原地不动，就会变成尸骸。</dd><dt id="t-sk-shade-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-ab-blood-siphon">汲取</dt><dd>按造成的伤害等量回复自己的生命，上限不超过生命上限。</dd><dt id="t-ab-bone-airborne">腾空</dt><dd>本回合攻击过就升到空中层；没攻击过则尝试降落，落点被占则再等一回合。</dd><dt id="t-ab-bone-assemble">拼装</dt><dd>死亡时在原地留下一个半血的骸骨，并在周围长出两滩淤血。</dd><dt id="t-ab-bone-revive">复苏</dt><dd>回合结束若相邻有暗影，吞掉它；下一个回合原地不动，就会变成不详。</dd><dt id="t-ab-blood-grow">增生</dt><dd>每回合回复 12 点生命；生命已满时累计 1 层，攒够 3 层剥出一团血肉。</dd><dt id="t-sk-shadow-lord-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-ab-bone-transmute">点化</dt><dd>击杀单位时，在被击杀处生成一个骸骨、一滩淤血、一团暗影（放不下就落在相邻格）。</dd><dt id="t-ab-bone-dissolve">解离</dt><dd>被击杀时散成两滩淤血、一个骸骨、一团暗影。</dd><dt id="t-sk-bone-unnamed-暗影跳跃">暗影跳跃</dt><dd>瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。 <span class="more">冷却 1 回合；不占移动与攻击。</span></dd><dt id="t-sk-corpse-emperor-吞噬">吞噬</dt><dd>吞下一个<b>自己人</b>，用它的生机换自己的寿元。不耗灵力、没有冷却，因为这是它续命的本能，不是战术选择。 <span class="more">冷却 undefined 回合；不占移动与攻击。</span></dd></dl>
     </section>
   
     <footer>
