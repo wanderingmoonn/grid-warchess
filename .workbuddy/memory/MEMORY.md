@@ -131,6 +131,11 @@ rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`u
 **实测**：关体 40 动作内仙帝吃 1 次（200→210 寿元），但把玩家清场——占位数值必然如此，
 这关现在只是"循环跑得通"的证据，不是难度关。
 
+**暗影领域已实现（2026-11-18）**：`UnitTypeDef.shadowRadius` + `GameState.overlays.shadow`。
+每回合末整份重铺（不跟随移动），站在里面视野/射程减半向上取整；严格超过一半才触发。
+**`modifyVision` 里绝不能再调 `visionOf`/`playerView`（死循环）**，只能用 `base`。
+探针 `npm run probe:shadow`（8 段）。
+
 ## 协作约定
 
 - 判断类结论要有实测支撑（真跑 `applyAction`，别只看配置表）。

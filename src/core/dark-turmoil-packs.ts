@@ -284,6 +284,45 @@ export const DARK_TURMOIL: Expansion = {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
     },
+    /*
+     * 暗影：站在里面视野和射程减半。
+     *
+     * **这里绝对不能回头调 `visionOf` / `playerView`**：`playerView` 算迷雾时
+     * 正在逐个单位调 `visionOf`，回头一查就是死循环。只能用钩子给的 `base`。
+     */
+    /*
+     * `unit` 可能为空（那次问的是"这一方的整体视野"，没有具体单位），
+     * 没有具体位置就没有"站在暗影里"这回事，原样返回。
+     */
+    modifyVision: ({ state, unit, base }) =>
+      unit && inShadow(state, unit, base) ? Math.max(1, Math.ceil(base / 2)) : base,
+    modifyRange: ({ state, unit, range }) =>
+      inShadow(state, unit, range) ? Math.max(1, Math.ceil(range / 2)) : range,
+    // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
+    onMatchStart: ({ state }) => refreshShadow(state),
+    onTurnEnd: ({ state }) => refreshShadow(state),
+    /**
+     * 棋盘上的「暗影」视图。
+     *
+     * 核心会按迷雾过滤（`onlyVisibleCells`），所以雾里的黑斑画不出来——
+     * 玩家只能看见自己视野内那片黑，不会借此反推出雾里站着几个诡异。
+     */
+    boardViews: () => [
+      {
+        id: SHADOW_KEY,
+        label: '暗影',
+        hint: '诡异笼罩的格子。站在里面的单位视野与射程减半。',
+        cells: ({ state, board }) => {
+          if (board && board !== 'earth') return [];
+          const cells = state.overlays?.[SHADOW_KEY] ?? [];
+          return cells.map((i) => ({
+            x: i % state.w,
+            y: Math.floor(i / state.w),
+            color: 'rgba(78, 26, 96, 0.38)',
+          }));
+        },
+      },
+    ],
     /**
      * 面板：只说模糊的话。
      *
@@ -300,3 +339,100 @@ export const DARK_TURMOIL: Expansion = {
     },
   },
 };
+
+/* ══════════════════════════════════════════════════════════════════
+ * 六、暗影领域（2026-11-18）
+ *
+ * 诡异投下的黑雾。规则只有两条，但两条都得说清楚：
+ *
+ *   1. **每回合末重铺一次**，不跟着走。
+ *      为什么：诡异一边动一边刷，一次移动就要重铺整片菱形；而 `visionOf` /
+ *      `effectiveRange` 是每个兵、每个候选、每一帧都要问的热路径。
+ *      代价是"当回合它走了，黑雾还留在原地"——这是**故意的**，玩家因此能
+ *      看见"它挪开之后哪里露出来了"，比实时跟着走更好读。
+ *
+ *   2. **按客观存在算**，不看谁看得见谁。
+ *      三方（规则、AI、界面）读的是局面里同一份 `overlays.shadow`，所以不会出现
+ *      "高亮显示能打、点下去说射程不够"。界面上那层染色由 `boardViews` 提供，
+ *      核心会按迷雾过滤，雾里的黑斑画不出来，也不泄露位置。
+ *
+ * 判定口径（写死在这里，别改着玩）：
+ *   · 范围是**曼哈顿距离**的菱形（和视野、射程同一套度量）；
+ *   · 分母只数**地图内**的格子（贴着地图边缘时不把界外算成"没被覆盖"）；
+ *   · 严格**超过一半**才触发（正好一半不触发）；
+ *   · 视野 / 射程减半后**向上取整**，且不低于 1；
+ *   · 多个诡异不叠乘——只判"是/否"一次。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const SHADOW_KEY = 'shadow';
+
+/** 把数组转成集合，按数组对象缓存（同一回合里数组不会变） */
+const shadowSetCache = new WeakMap<number[], Set<number>>();
+
+function shadowSetOf(state: GameState): Set<number> | null {
+  const cells = state.overlays?.[SHADOW_KEY];
+  if (!cells || cells.length === 0) return null;
+  let set = shadowSetCache.get(cells);
+  if (!set) {
+    set = new Set(cells);
+    shadowSetCache.set(cells, set);
+  }
+  return set;
+}
+
+/**
+ * 这个单位脚下这一圈里，暗影占了多大比例。
+ *
+ * 返回 `{ covered, total }`，`total` 只数地图内的格子。没开这个包、
+ * 场上没有诡异时 `overlays.shadow` 是空的，这里直接返回 null——
+ * **没人用的局一次乘法都不做**。
+ */
+export function shadowCoverage(
+  state: GameState,
+  u: { x: number; y: number; board?: string },
+  radius: number,
+): { covered: number; total: number } | null {
+  const set = shadowSetOf(state);
+  if (!set) return null;
+  if (u.board && u.board !== 'earth') return null; // 最小版只处理地球
+  let covered = 0;
+  let total = 0;
+  for (let dy = -radius; dy <= radius; dy += 1) {
+    const span = radius - Math.abs(dy);
+    for (let dx = -span; dx <= span; dx += 1) {
+      const x = u.x + dx;
+      const y = u.y + dy;
+      if (x < 0 || y < 0 || x >= state.w || y >= state.h) continue;
+      total += 1;
+      if (set.has(y * state.w + x)) covered += 1;
+    }
+  }
+  return { covered, total };
+}
+
+/** 站在暗影里吗（覆盖超过一半） */
+export function inShadow(state: GameState, u: Unit, radius: number): boolean {
+  const cov = shadowCoverage(state, u, radius);
+  return !!cov && cov.total > 0 && cov.covered * 2 > cov.total;
+}
+
+/** 重铺暗影：场上所有带 `shadowRadius` 的单位，各铺一片菱形 */
+export function refreshShadow(state: GameState): void {
+  const cells = new Set<number>();
+  for (const u of state.units) {
+    if (u.hp <= 0) continue;
+    const r = state.unitTypes[u.type]?.shadowRadius ?? 0;
+    if (r <= 0) continue;
+    if (u.board && u.board !== 'earth') continue;
+    for (let dy = -r; dy <= r; dy += 1) {
+      const span = r - Math.abs(dy);
+      for (let dx = -span; dx <= span; dx += 1) {
+        const x = u.x + dx;
+        const y = u.y + dy;
+        if (x < 0 || y < 0 || x >= state.w || y >= state.h) continue;
+        cells.add(y * state.w + x);
+      }
+    }
+  }
+  state.overlays = { ...(state.overlays ?? {}), [SHADOW_KEY]: [...cells].sort((a, b) => a - b) };
+}
