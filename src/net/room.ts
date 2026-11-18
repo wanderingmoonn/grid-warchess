@@ -254,33 +254,6 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
 }
 
 export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
-  /*
-   * **走 RPC 而不是 GET**（2026-11-17）。
-   *
-   * 症状：房主那边正常（云端 `turn` 一直在涨），观战端每 4 秒拉一次却总拿到
-   * 同一份旧局面，停在"轮到电脑"那一帧。库里查过：云端 turn=16、观战端拿到 12。
-   * 也就是**读取被缓存**了——GET 请求经过 CDN/网关时可能命中缓存，POST 不会。
-   *
-   * 所以房间读取改走 `warchess_room_get(code)` 这个 SECURITY DEFINER 函数：
-   * 它是 POST，天然不缓存；顺带比 `select *` 少一层 RLS 往返。
-   * 失败（函数还没建）再退回老路，别让老房间打不开。
-   */
-  try {
-    const rpcDb = (await cloudDatabase()) as unknown as {
-      rpc(
-        name: string,
-        args?: Record<string, unknown>,
-      ): PromiseLike<{ data?: unknown; error?: unknown }>;
-    };
-    const rpc = await rpcDb.rpc('warchess_room_get', { code: code.toUpperCase() });
-    if (!rpc.error && rpc.data) {
-      const row = rpc.data as Row;
-      const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
-      return toSnapshot({ ...row, state });
-    }
-  } catch {
-    /* 函数不存在 / 网络不通：落到下面的老路径 */
-  }
   const { data, error } = await (await table()).q.select('*').eq('code', code).maybeSingle();
   if (error) throw new Error(readableError(error));
   // 服务端是 jsonb 列，SDK 会直接反序列化成对象；个别环境会退回字符串
