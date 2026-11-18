@@ -244,13 +244,15 @@ console.log('\n[5] 影主的召唤');
     void lord;
     return cur.units.filter((u) => u.type === SHADE).length;
   };
+  // 化影一次分裂**两团**（2026-11-18：暗影太脆，一个一个铺不开）
   check(
-    `不攻击：第 ${SUMMON_EVERY} 个回合才召唤出第一只`,
-    summon(SUMMON_EVERY - 1, false) === 0 && summon(SUMMON_EVERY, false) === 1,
+    `不攻击：第 ${SUMMON_EVERY} 个回合一次分出两团`,
+    summon(SUMMON_EVERY - 1, false) === 0 && summon(SUMMON_EVERY, false) === 2,
+    `${summon(SUMMON_EVERY, false)} 只`,
   );
   check(
-    '每回合都攻击：提前两回合召唤出来（计时器走得更快）',
-    summon(SUMMON_EVERY - 2, true) === 1,
+    '每回合都攻击：提前两回合分出来',
+    summon(SUMMON_EVERY - 2, true) === 2,
     `${summon(SUMMON_EVERY - 2, true)} 只`,
   );
 }
@@ -276,9 +278,13 @@ console.log('\n[6] 暗影的击杀后果');
       `${born[0]?.x},${born[0]?.y}`,
     );
   }
-  // 非暗影击杀 → 不长
+  /*
+   * 没有「暗影侵蚀」的兵击杀就不长蚀影。
+   * 2026-11-18 之后**蚀影自己也有这条**了，所以拿一团血肉当凶手
+   * （它挂的是「侵染」，只长血肉）。
+   */
   const other = arena();
-  const beast = other.mk('beast', SHADOW_BEAST, 'B', 5, 5);
+  const beast = other.mk('beast', 'flesh', 'B', 5, 5);
   const prey2 = other.mk('prey2', 'probe-tank-0', 'A', 5, 6);
   prey2.hp = 5;
   const r2 = applyAction(other.s, { type: 'ATTACK', unitId: beast.id, targetId: prey2.id });

@@ -280,14 +280,18 @@ console.log('\n[4] 侵染');
   const r2 = applyAction(s2, { type: 'ATTACK', unitId: lord.id, targetId: prey2.id });
   check('影主也带「暗影侵蚀」：它杀人同样生蚀影', r2.ok && r2.state.units.some((u) => u.type === 'shadow-beast'));
 
+  /*
+   * 没挂「暗影侵蚀」的兵杀人不生蚀影。
+   * 2026-11-18 之后连蚀影都有这条了，所以拿一团血肉当凶手（它挂的是「侵染」）。
+   */
   const { s: s3, mk: mk3 } = arena();
-  const beast = mk3('beast', 'shadow-beast', 'B', 5, 5);
+  const beast = mk3('beast', FLESH, 'B', 5, 5);
   const prey3 = mk3('prey3', 'probe-tank-0', 'A', 5, 6);
   prey3.hp = 3;
   const r3 = applyAction(s3, { type: 'ATTACK', unitId: beast.id, targetId: prey3.id });
   check(
-    '蚀影没挂这条：它杀人不生蚀影',
-    r3.ok && !r3.state.units.some((u) => u.type === 'shadow-beast' && u.id !== beast.id),
+    '没挂「暗影侵蚀」的兵杀人不生蚀影（血肉只长血肉）',
+    r3.ok && !r3.state.units.some((u) => u.type === 'shadow-beast'),
   );
 }
 
