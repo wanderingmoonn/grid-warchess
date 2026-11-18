@@ -267,7 +267,6 @@ export function describeUnit(
             : '每回合可用';
       lines.push(`技能「${k.name}」（${cd}）：${k.summary}`);
     }
-    lines.push('技能不占行动，由你主动施放——英雄的强度有一半在"什么时候开"上。');
   }
   if (def.hero) {
     lines.push(
@@ -288,12 +287,6 @@ export function describeUnit(
             (unit ? splashRatioOf(unit) : CONFIG.splashRatio) * 100,
           )}% 伤害（不打自己人）`
         : '溅射：这个单位眼下没有溅射范围（扩展按境界/状态给的半径是 0）',
-    );
-  }
-  if (def.burst) {
-    lines.push(
-      `攻击次数：一回合能攻击 ${def.burst} 次，每次都是完整的一击，可以换目标——` +
-        `次数用完才算行动结束。反击同样按次数算，所以它会一轮换一轮地被围攻`,
     );
   }
   // 载具：说清"装什么、几个、装进去之后怎么存"，全部来自兵种数据的 carry。

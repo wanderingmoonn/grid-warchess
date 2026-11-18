@@ -584,7 +584,16 @@ function traitsOf(u: UnitTypeDef): string {
   const parts: string[] = [];
   for (const id of u.abilities ?? []) {
     const a = abilityById(id);
-    parts.push(a ? ref(`ab-${id}`) : `<b>${esc(id)}</b>`);
+    if (!a) {
+      parts.push(`<b>${esc(id)}</b>`);
+      continue;
+    }
+    /*
+     * 能力名 + **这个兵身上的具体数值**。数值由能力自己算（`valueOf`），
+     * 面板走的是同一个函数——所以"面板有、规则书没有"这种不同步不会再出现。
+     */
+    const value = a.valueLabel?.(u);
+    parts.push(value ? `${ref(`ab-${id}`)}（${rich(value)}）` : ref(`ab-${id}`));
   }
   // 自带技能也要印：魔修、剑修、散灵台的本体价值全在这条上，
   // 光看攻/血那一行会以为它们只是"弱一点的兵"。
@@ -3593,7 +3602,7 @@ const BOOK_GROUPS: BookGroup[] = [
     file: 'public/manual-pack-cultivation.html',
     title: '时代与回旋镖 · 修真扩展',
     subtitle: '修真系列合册',
-    ids: ['cultivation'],
+    ids: ['cultivation', 'dark-turmoil'],
     kind: 'era',  
     intro: `<p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>`,
     rulesHtml: () => cultivationRules(),

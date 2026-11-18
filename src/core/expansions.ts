@@ -42,6 +42,7 @@ import { SPACE_WAR } from './space/space-war.ts';
 import { HEIGHT_TERRAIN } from './height-terrain.ts';
 //修真扩展包
 import { CULTIVATION_PACK } from './cultivation-packs.ts';
+import { DARK_TURMOIL } from './dark-turmoil-packs.ts';
 import { CONTEMPORARY_BASE_PACK } from './contemporary-packs.ts';
 import { ARMOR_ERA7, ARMOR_ERA8 } from './armor-expansion.ts';
 // 海军两包（海战 / 现代海军）。舰船数值与两条海权规则都在 naval-packs.ts，
@@ -917,6 +918,15 @@ export interface UnitAiCtx {
   candidates: ReadonlyArray<{ action: Action; score: number }>;
   /** 这一回合已经被规则拒过的动作。别重复提同样的东西 */
   rejected: ReadonlySet<string>;
+  /**
+   * 核心筛好的敌人 / 自己人（都只含活着的、按席位和同盟算）。
+   *
+   * 由核心给而不是让扩展自己 `filter`：一次 AI 决策要给每个兵问一遍，
+   * 每个 profile 自己扫一遍全图，代价是 O(兵 × 兵)。而且"谁是敌人"要认同盟，
+   * 各写一遍迟早有人漏。
+   */
+  foes: Unit[];
+  allies: Unit[];
 }
 
 /** 扩展的回答。只有两项，别再扩。 */
@@ -1642,6 +1652,9 @@ export const EXPANSIONS: Expansion[] = [
   // 高机动性：只在既有的 move / range / vision 三个钩子上把数值放大，
   // 没有判定顺序可言，放哪都一样。
   HIGH_MOBILITY,
+  // 「黑暗动乱」：剧情扩展，依赖修真包。排在最后——它的钩子只碰自己的兵种
+  // （按 id 判断），不和任何别人的规则抢道。
+  DARK_TURMOIL,
 ];
 
 /**

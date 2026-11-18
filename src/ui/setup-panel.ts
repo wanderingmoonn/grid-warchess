@@ -49,6 +49,7 @@ import {
   levelById,
   demoLevels,
   storyLevels,
+  sideLevels,
   type LevelDef,
 } from '../core/level.ts';
 import { cloneAsUserLevel, deleteUserLevel, isUserLevelId, userLevelList } from '../core/userLevels.ts';
@@ -355,6 +356,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
      */
     let tab: 'battle' | 'levels' | 'editor' = 'battle';
+    /**
+     * 关卡栏里两个可折叠分组（2026-11-18）：`true` = 展开。
+     *
+     * 为什么放在这里而不是用原生 `<details>`：面板每次点一下都会整块重绘，
+     * `<details>` 的展开状态在重绘时会被重置（玩家点一张关，分组就自己收起来）。
+     * 所以状态得和 `tab` 一样活在这个渲染闭包里。
+     */
+    const folded: Record<'main' | 'side', boolean> = { main: true, side: true };
     /**
      * 这套面板是不是已经自动拉过一次云端关卡（2026-11-16）。
      *
@@ -1142,6 +1151,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        */
       const demoPresets = demoLevels().filter((l) => !isUserLevelId(l.id));
       const storyPresets = storyLevels().filter((l) => !isUserLevelId(l.id));
+      const sidePresets = sideLevels().filter((l) => !isUserLevelId(l.id));
       const editingMine = !!config.level && isUserLevelId(config.level.id);
       /*
        * 编辑器页的「地图」区：传图 + 看地图库。
@@ -1361,7 +1371,77 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        *   · 「关卡」= 主线 / 教学关（现在空着，有专门的空状态）；
        *   · 「编辑器」= 内建示例关 + 我的关卡。
        */
-      const storyView = levelsViewWith(storyPresets, 'story');
+      /*
+       * 关卡栏（2026-11-18 改版）：**自由对局和主线一组、支线一组**，两组都能收起。
+       *
+       * 为什么不再用 `levelsViewWith(...,'story')`：那个是"一栏平铺"的结构。
+       * 主线会一直长（每加一关多一张卡），支线还会按卷分组，平铺下去一屏放不完，
+       * 玩家每次进来都要滚半天才找得到"自由对局"。
+       */
+      const foldHead = (key: 'main' | 'side', title: string, hint: string, count: number): string => `
+        <button type="button" class="lvl-fold" data-fold="${key}">
+          <span class="lvl-fold-arrow">${folded[key] ? '▾' : '▸'}</span>
+          <b>${title}</b>
+          <span class="field-hint">${hint}${count > 0 ? ` · ${count} 关` : ''}</span>
+        </button>`;
+
+      /** 支线按 `chapter` 分卷；没写 chapter 的归到「其他」 */
+      const sideByChapter = (() => {
+        const map = new Map<string, typeof sidePresets>();
+        for (const l of sidePresets) {
+          const key = l.chapter ?? '其他';
+          const list = map.get(key);
+          if (list) list.push(l);
+          else map.set(key, [l]);
+        }
+        return [...map.entries()];
+      })();
+
+      const levelsTabView = `
+        <section class="field">
+          ${foldHead('main', '自由对局 / 主线', '自己开一局，或者一关一关往下走', storyPresets.length)}
+          ${
+            folded.main
+              ? `<div class="map-gallery">
+                   <button type="button" class="map-card ${levelOn ? '' : 'active'}" data-level="" title="自己定所有设置">
+                     <span class="map-card-thumb is-random">自由</span>
+                     <b>自由对局</b>
+                     <i>自己选地图和对手</i>
+                   </button>
+                   ${storyPresets.map(levelCard).join('')}
+                 </div>
+                 <div class="field-hint">${
+                   storyPresets.length === 0
+                     ? '主线 / 教学关还在设计，这一栏暂时只有「自由对局」。想看关卡编辑器能做什么，点左边「编辑器」——那几张关都是用它搭出来的。'
+                     : '选一张之后，「战役」和「地图」两页里对应的设置会变成只读。'
+                 }</div>`
+              : ''
+          }
+        </section>
+
+        <section class="field">
+          ${foldHead('side', '支线', '和主线共用世界观，不占主线的位置', sidePresets.length)}
+          ${
+            folded.side
+              ? sideByChapter
+                  .map(
+                    ([chapter, list]) => `
+                    <div class="side-chapter">
+                      <div class="field-label">${esc(chapter)}<span class="field-hint">${list.length} 关</span></div>
+                      <div class="map-gallery">${list.map(levelCard).join('')}</div>
+                    </div>`,
+                  )
+                  .join('') +
+                `<div class="field-hint">${
+                  sidePresets.length === 0
+                    ? '还没有支线关。'
+                    : '支线不影响主线进度，随时可以进来打。'
+                }</div>`
+              : ''
+          }
+        </section>`;
+
+      const storyView = levelsTabView;
       const levelsView = levelsViewWith(demoPresets, 'demo');
 
       /*
@@ -1699,6 +1779,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           return;
         }
         close(null);
+        return;
+      }
+
+      // 关卡栏的分组折叠（2026-11-18）
+      const foldBtn = target.closest<HTMLElement>('[data-fold]');
+      if (foldBtn?.dataset.fold === 'main' || foldBtn?.dataset.fold === 'side') {
+        const key = foldBtn.dataset.fold;
+        folded[key] = !folded[key];
+        paint();
         return;
       }
 

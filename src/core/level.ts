@@ -551,6 +551,27 @@ export interface LevelDef {
    */
   demo?: boolean;
   /**
+   * **支线关**（2026-11-18）：进菜单的「支线」栏。
+   *
+   * 为什么要有第三栏：「关卡」栏是主线 / 教学关，那条线有专人按顺序填，
+   * 别人往里塞一张剧情关会打乱节奏（而且顺序、前后依赖都不在自己手里）。
+   * 支线是"和主线共用世界观、但可以单独打"的关——**不占主线位置、不要求顺序**。
+   *
+   * 三栏的关系：
+   *   · 不写任何标记 = 主线（进「关卡」）；
+   *   · `demo: true`   = 编辑器示例关（进「编辑器」）；
+   *   · `side: true`   = 支线（进「支线」）。
+   * 优先级：`demo` > `side` > 主线。两个都写时按 `demo` 算（示例关优先，别偷偷进支线）。
+   */
+  side?: boolean;
+  /**
+   * 支线里的**分卷名**（2026-11-18）：同名的一组会在「支线」栏里归到同一个标题下。
+   *
+   * 为什么用显示名而不是 id：支线是给玩家看的目录，一个卷名就够了；
+   * 真要做"卷 → 章节"两级结构时再换成 id + 注册表，现在不值得多一层。
+   */
+  chapter?: string;
+  /**
    * **本地标记成"剧情关"**（2026-11-17）。
    *
    * 给开发者的自测口子：在编辑器里勾一下，这张关立刻出现在「关卡」栏，
@@ -803,6 +824,128 @@ const DRAGON_PAINT: Array<[number, number, string]> = (() => {
   return out;
 })();
 
+/**
+ * 「潮」系列：三张对称关的生成器（2026-11-18）。
+ *
+ * 三张关的**地图、玩家兵力、敌人群数完全一样**，只有两群敌人的成分不同。
+ * 这样"哪一支更难缠"是可比出来的，而不是各写一张关、各配一套兵再猜。
+ *
+ * 一群敌人固定是 1 头领 + 3 中坚 + 2 杂兵：
+ *   · 影系：影主 + 3 暗影 + 2 蚀影
+ *   · 血系：血核 + 3 淤血 + 2 血肉
+ *
+ * 胜负只认"头领全死"。混编那关两个头领**同属一组**（组内是"且"），
+ * 所以必须两个都杀掉——这正是我们想要的；分到两组的话就变成"杀一个就赢"。
+ */
+function tideLevel(o: {
+  id: string;
+  name: string;
+  brief: string;
+  groups: Array<'shadow' | 'blood'>;
+  leader: string;
+  unit?: string;
+  opening: string;
+  growing: string;
+  down: string;
+}): LevelDef {
+  const squad = {
+    shadow: { boss: 'shadow-lord', mid: 'shade', low: 'shadow-beast' },
+    blood: { boss: 'blood-core', mid: 'blood-pool', low: 'flesh' },
+  } as const;
+
+  /**
+   * 一群敌人：1 头领 + 2 中坚 + 1 杂兵 = 4 个。
+   *
+   * 为什么是 4 而不是 6：第一版按"1+3+2"配，两群就是 12 个，比改动前的影潮（7 个）
+   * 多了近一倍，AI 打 AI 的结果直接从"玩家能压着打"变成"20 个行动被打穿"。
+   * 编队规模要贴着原来那关走，否则三张关之间能比、但和玩家记忆里的影潮对不上。
+   */
+  const group = (kind: 'shadow' | 'blood', y: 'top' | 'bottom') => {
+    const t = squad[kind];
+    const y0 = y === 'top' ? 2 : 15;
+    const dir = y === 'top' ? 1 : -1;
+    return [
+      { type: t.boss, x: 15, y: y0 },
+      { type: t.mid, x: 14, y: y0 + dir },
+      { type: t.mid, x: 16, y: y0 + dir * 2 },
+      { type: t.low, x: 13, y: y0 },
+    ];
+  };
+
+  const kinds = new Set(o.groups);
+  const leaders = [...kinds].map((k) => squad[k].boss);
+
+  return {
+    id: o.id,
+    version: LEVEL_VERSION,
+    /*
+     * 支线关（`side`）：进菜单「关卡」栏里的「黑暗动乱」那一卷，不占主线的位置。
+     * 主线那条线有别人按顺序填，这张塞进去会打乱节奏。
+     */
+    side: true,
+    chapter: '黑暗动乱',
+    name: o.name,
+    brief: `${o.brief}（数值是占位版，先看这一关的节奏对不对。）`,
+    map: {
+      id: `levelmap:${o.id.replace('level:', '')}`,
+      name: o.name,
+      w: 18,
+      h: 18,
+      rows: rowsOf(18, 18, [
+        // 中间一片林子，把两边隔开一点，也给玩家一段可以撤退的路
+        [7, 4, 'f'], [8, 4, 'f'], [7, 5, 'f'], [8, 5, 'f'], [9, 5, 'f'],
+        [8, 12, 'f'], [9, 12, 'f'], [9, 13, 'f'],
+        [4, 9, 'h'], [5, 9, 'h'], [12, 9, 'h'], [13, 9, 'h'],
+      ]),
+      citiesA: [{ x: 1, y: 8 }],
+      // B 席没有城（cityless），这两组都不会用到
+      citiesB: [],
+      source: 'builtin',
+    },
+    /*
+     * B 是没有城的席位：敌人不造兵，只靠"自己长大"（暗影杀人、化血、增生）。
+     * 它也因此不吃"丢城"那套出局判定——兵打光才完。
+     */
+    seats: { count: 2, ai: ['B'], cityless: ['B'] },
+    // 第 5 代：玩家得拿得出打得穿 10+ 甲的东西，不然这关只有挨打的份
+    setup: { startEra: 5, firstSide: 'A' },
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        { type: 'tank', x: 4, y: 7 },
+        { type: 'tank', x: 4, y: 10 },
+        { type: 'squad', x: 3, y: 7 },
+        { type: 'squad', x: 3, y: 10 },
+        { type: 'hmg', x: 2, y: 11 },
+        { type: 'crew', x: 2, y: 6 },
+      ],
+      B: [...group(o.groups[0]!, 'top'), ...group(o.groups[1] ?? o.groups[0]!, 'bottom')],
+    },
+    /*
+     * 只认"头领全死"。不要"守住 N 回合"那种保底胜利条件——玩家实际打下来能压着打，
+     * 守满就判赢等于白打（这两版都试过了，见设计文档）。
+     * 混编关两个头领写在同一组里：组内是"且"，所以必须两个都死。
+     */
+    goals: leaders.map((t) => ({
+      kind: 'assassinate' as const,
+      winner: 'A' as const,
+      loser: 'B' as const,
+      unitType: t,
+      label: o.leader,
+      group: 1,
+    })),
+    events: [
+      { id: 'opens', when: { kind: 'turn', at: 1 }, do: [{ kind: 'say', text: o.opening }] },
+      { id: 'grows', when: { kind: 'turn', at: 10 }, do: [{ kind: 'say', text: o.growing }] },
+      ...leaders.map((t, i) => ({
+        id: `down-${i}`,
+        when: { kind: 'unitDied' as const, type: t },
+        do: [{ kind: 'say' as const, text: o.down }],
+      })),
+    ],
+  };
+}
+
 export const LEVELS: LevelDef[] = [
   /* ── 玩家关 1：孤城（防守）────────────────────────────────── */
   {
@@ -1020,9 +1163,15 @@ export const LEVELS: LevelDef[] = [
      * 这样就得到了"限时击杀"，**不需要给胜负判定加任何新东西**——
      * 用的是已有的 assassinate + survive。
      */
+    /*
+     * `group` 必须分开：不写 group 的几条会被引擎当成**同一组**，而组内是"且"。
+     * 这两条一个是"玩家杀掉守将"、一个是"守方撑满 18 次行动"，永远不可能同时成立
+     * ——不分组的话，两条都等于不存在，这一关只能靠把对面打光才结束
+     * （2026-11-18 实测：把守将删掉之后交棒，胜者仍是"未决"）。
+     */
     goals: [
-      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'warden', label: '守将' },
-      { kind: 'survive', seat: 'B', untilTurn: 18 },
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'warden', label: '守将', group: 1 },
+      { kind: 'survive', seat: 'B', untilTurn: 18, group: 2 },
     ],
     events: [
       {
@@ -1550,6 +1699,139 @@ export const LEVELS: LevelDef[] = [
     ],
   },
 
+  /* ── 玩家关 6：黑暗动乱（剧情 / 限时）────────────────────────── */
+  {
+    id: 'level:dark-turmoil',
+    version: LEVEL_VERSION,
+    // 2026-11-18：从「编辑器」栏挪到「支线」——它是剧情关，不是编辑器示例
+    side: true,
+    chapter: '黑暗动乱',
+    name: '黑暗动乱',
+    brief:
+      '16×16。尸骸仙帝在沉眠地苟延残喘，寿元将尽。在它把天地吃干之前杀掉它——或者，等它自己老死。' +
+      '（数值是占位版，先看循环能不能跑。）',
+    map: {
+      id: 'levelmap:dark-turmoil',
+      name: '黑暗动乱',
+      w: 16,
+      h: 16,
+      rows: rowsOf(16, 16, [
+        [5, 5, 'f'], [6, 5, 'f'], [5, 6, 'f'], [6, 6, 'f'],
+        [10, 9, 'f'], [11, 9, 'f'], [10, 10, 'f'],
+        [7, 2, 'h'], [8, 2, 'h'], [7, 3, 'h'],
+        [3, 12, 'h'], [4, 12, 'h'],
+      ]),
+      citiesA: [{ x: 1, y: 7 }],
+      // B 席没有城（cityless），这两组都不会用到
+      citiesB: [],
+      source: 'builtin',
+    },
+    /*
+     * B 是**没有城的席位**：仙帝的军团没有产线，全靠开局摆上去的那几个。
+     * 它也因此不吃"丢城"那套出局判定——兵打光就完。
+     */
+    seats: { count: 2, ai: ['B'], cityless: ['B'] },
+    setup: { startEra: 2, firstSide: 'A' },
+    // 这一关讲的是修真包的事，两个包都必须开
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        { type: 'qi-cultivator', x: 2, y: 6 },
+        { type: 'qi-cultivator', x: 2, y: 8 },
+        { type: 'sword-cultivator', x: 3, y: 7 },
+        { type: 'body-cultivator', x: 3, y: 9 },
+        { type: 'cultivation-servant', x: 1, y: 10 },
+      ],
+      B: [
+        { type: 'corpse-emperor', x: 12, y: 5 },
+        { type: 'slumber-site', x: 12, y: 7 },
+        // 两具"应急食品"：仙帝饿起来会先吃它们，玩家能亲眼看到这一幕
+        { type: 'qi-cultivator', x: 11, y: 6 },
+        { type: 'qi-cultivator', x: 13, y: 6 },
+      ],
+    },
+    /*
+     * 两条判据顺序很关键：
+     *   1. 仙帝没了（被打死，或者老死）→ 玩家赢。**老死也算赢**，这是这一关的核心张力：
+     *      你可以不打，但你得熬得住它出山吃人。
+     *   2. 它撑到第 60 次行动 → 它赢（不能无限拖）。
+     */
+    goals: [
+      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'corpse-emperor', label: '尸骸仙帝', group: 1 },
+      { kind: 'survive', seat: 'B', untilTurn: 60, group: 2 },
+    ],
+    events: [
+      {
+        id: 'wake',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'say', text: '沉眠地的白骨又动了一下。它在数这个天地间还剩多少活物。' },
+        ],
+      },
+      {
+        id: 'devour-warning',
+        when: { kind: 'turn', at: 6 },
+        do: [{ kind: 'say', text: '仙帝的呼吸越来越重——它快饿死了，而它带来的那两个"侍从"正站在它身边。' }],
+      },
+      {
+        id: 'emperor-down',
+        when: { kind: 'unitDied', type: 'corpse-emperor' },
+        do: [{ kind: 'say', text: '尸骸散落一地。天地间忽然安静下来，只剩下风声。' }],
+      },
+    ],
+  },
+
+  /* ── 支线 1~3：三张对称关（影 / 血 / 混编）─────────────────────
+   *
+   * 为什么要做成**对称**的三张：这一套敌人（影系、血系）都是"越打越多"的设计，
+   * 强度到底合不合适，只跑空场看不出来。三张关的地图、玩家兵力、敌人**群数**
+   * 完全一样，只有两群敌人的成分不同：
+   *
+   *   影潮 = 影 + 影      血潮 = 血 + 血      浊潮 = 影 + 血
+   *
+   * 同一张图、同一批玩家兵，打三遍就能对照出"哪一支更难缠"，
+   * 而且不用改任何别的东西。等数值定下来，这三张关可以只留一张。
+   */
+  tideLevel({
+    id: 'level:shadow-tide',
+    name: '影潮',
+    brief:
+      '18×18。两团影主在远处的黑暗里醒来，它们会自己长大：影主定期分裂出暗影，' +
+      '暗影杀掉的每一个兵都会变成蚀影。**把两个影主都杀掉**，影潮才会退。',
+    groups: ['shadow', 'shadow'],
+    leader: '影主',
+    unit: 'shadow-lord',
+    opening: '远处的黑先动了。那不是夜——那是影潮。',
+    growing: '它们比开战时更多了。你打死的每一个，都会站起来。',
+    down: '一团影主散开了。剩下的那片黑，收得更紧了。',
+  }),
+  tideLevel({
+    id: 'level:blood-tide',
+    name: '血潮',
+    brief:
+      '18×18。两团血肉结晶在远处鼓胀：血核每回合自愈，满血就剥出新的血肉；' +
+      '每一具被它们打死的尸体都会重新站起来。**把两个血核都杀掉**，血潮才会干。',
+    groups: ['blood', 'blood'],
+    leader: '血核',
+    unit: 'blood-core',
+    opening: '风里有股铁锈味。地上的血在往一处聚。',
+    growing: '它们比开战时更多了。你流出来的每一滴，都成了它们。',
+    down: '一颗血核塌了。血还在流，但慢了。',
+  }),
+  tideLevel({
+    id: 'level:mixed-tide',
+    name: '浊潮',
+    brief:
+      '18×18。一边是影，一边是血——两种"会自己长大"的东西撞在同一片地上。' +
+      '**把影主和血核都杀掉**，这一夜才算过去。',
+    groups: ['shadow', 'blood'],
+    leader: '影主 / 血核',
+    unit: undefined,
+    opening: '一边在暗，一边在红。它们不是一伙的，但它们都在往你这边来。',
+    growing: '影在长，血也在长。你打死的每一个，都会换个样子站起来。',
+    down: '一头栽下去了。另一边的呼吸，变得更响。',
+  }),
+
   {
     id: 'level:probe-flat',
     version: LEVEL_VERSION,
@@ -1914,7 +2196,8 @@ export function storyLevels(): LevelDef[] {
    */
   return [
     ...storyList(),
-    ...LEVELS.filter((l) => l.dev !== true && l.demo !== true),
+    // `side` 的关走支线栏，不进主线（见 LevelDef.side）
+    ...LEVELS.filter((l) => l.dev !== true && l.demo !== true && l.side !== true),
     // 本机自己做的、在编辑器里勾了「这一关是剧情关」的（给开发者自测用）
     ...extraLevels().filter((l) => l.story === true && l.dev !== true),
   ];
@@ -1924,6 +2207,17 @@ export function storyLevels(): LevelDef[] {
 export function demoLevels(): LevelDef[] {
   // 同上：内建示例关。玩家复制出来的那份没有 demo 标记，会出现在"我的关卡"里
   return LEVELS.filter((l) => l.dev !== true && l.demo === true);
+}
+
+/**
+ * **支线**（菜单的「支线」栏，2026-11-18）。
+ *
+ * 和主线的区别只有一条：**不要求顺序、不占主线的位置**。
+ * 所以它不读 `storyList()`（那是主线的 JSON 目录），只看内建关里的 `side` 标记。
+ * 玩家自制关想进这一栏，得先有"支线"这个概念在关卡 JSON 里——现在还没有，先不做。
+ */
+export function sideLevels(): LevelDef[] {
+  return LEVELS.filter((l) => l.dev !== true && l.side === true && l.demo !== true);
 }
 
 /**
