@@ -1174,6 +1174,17 @@ export interface Expansion {
    * 会从数据里印，别在这里重复一遍。
    */
   manualNotes?: string[];
+
+  /**
+   * 规则书里的一张图（内联 SVG 或 HTML 片段），印在**特殊规则**中这个包的最前面。
+   *
+   * 为什么要这个字段：有些东西写十行字不如一张图——比如"这十几只怪谁把谁变出来"。
+   * 放在这里而不是让生成器去读数据画图：**"长什么样"是编辑决定**，
+   * 生成器只负责把它插进正确的位置（和 `scale` 归册同一个理由）。
+   *
+   * 约定：用内联 SVG，不要引用外部图片——规则书要能单文件分发、能打印。
+   */
+  manualDiagram?: string;
 }
 
 function nameOf(state: GameState, typeId: string): string {

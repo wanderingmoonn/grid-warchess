@@ -2205,6 +2205,95 @@ for (const a of [
   PACK_ABILITIES.set(a.id, a);
 }
 
+/**
+ * 规则书里那张关系图（2026-11-19）。
+ *
+ * 为什么要有它：试玩的时候没人搞明白这十二只谁把谁变出来——
+ * 光读文字要来回翻三节。这里四条横链（影 / 血 / 骨 / 零散），
+ * **箭头就是"变成"**，交叉的地方用虚线框标出来。
+ *
+ * 用内联 SVG 而不是图片文件：规则书要能单文件分发、能打印、能跟着主题走。
+ */
+const TURMOIL_DIAGRAM = '<svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" ' +
+  'font-family="ui-sans-serif, system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif">' +
+  '<defs>' +
+  '<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+  '<path d="M0,0 L10,5 L0,10 z" fill="#8a8278"/></marker>' +
+  '<marker id="arw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+  '<path d="M0,0 L10,5 L0,10 z" fill="#b9b1a0"/></marker>' +
+  '</defs>' +
+
+  '<text x="8" y="16" font-size="12" fill="#6b6459">箭头 = “变成” · 虚线 = 跨系列 / 不是同类</text>' +
+
+  // ── 影 lane ──
+  '<text x="8" y="66" font-size="15" font-weight="600" fill="#3f5878">影</text>' +
+  '<text x="8" y="84" font-size="11" fill="#9a9287">暗影领域</text>' +
+  box(96, 34, '影主', '化影：每 4 回合两团') +
+  box(316, 34, '暗影', '看不见的猎手') +
+  box(536, 34, '蚀影', '影子里的伏击者') +
+  arrow(246, 62, 316, '化影') +
+  arrow(466, 62, 536, '击杀') +
+
+  // ── 血 lane ──
+  '<text x="8" y="162" font-size="15" font-weight="600" fill="#b8433a">血</text>' +
+  '<text x="8" y="180" font-size="11" fill="#9a9287">越打越多</text>' +
+  box(96, 130, '血核', '增生：满血剥血肉') +
+  box(316, 130, '血肉', '汲取 · 侵染') +
+  box(536, 130, '淤血', '化血：伤害攒够') +
+  arrow(246, 158, 316, '增生') +
+  arrow(466, 158, 536, '化血·长出') +
+
+  // ── 骨 lane ──
+  '<text x="8" y="258" font-size="15" font-weight="600" fill="#8a7b5a">骨</text>' +
+  '<text x="8" y="276" font-size="11" fill="#9a9287">会拼装</text>' +
+  box(96, 226, '骸骨', '找血肉') +
+  box(316, 226, '尸骸', '找暗影') +
+  box(536, 226, '不详', '朝仙帝走，4 格停') +
+  arrow(246, 254, 316, '寻躯·吞血肉') +
+  arrow(466, 254, 536, '复苏·吞暗影') +
+
+  // ── 零散 lane ──
+  '<text x="8" y="354" font-size="15" font-weight="600" fill="#6b6459">零散</text>' +
+  '<text x="8" y="372" font-size="11" fill="#9a9287">不成一支</text>' +
+  box(96, 322, '黑蝗', '繁殖：一回合翻一倍') +
+  box(316, 322, '黑茧', '不会动的炮台') +
+  '<rect x="536" y="322" width="150" height="56" rx="7" fill="#faf8f4" stroke="#b9b1a0" stroke-dasharray="5 4"/>' +
+  '<text x="611" y="347" font-size="14" text-anchor="middle" fill="#6b6459">影主 / 血核</text>' +
+  '<text x="611" y="364" font-size="11" text-anchor="middle" fill="#9a9287">（变成它们的头）</text>' +
+  arrow(246, 350, 316, '结茧') +
+  '<line x1="466" y1="350" x2="536" y2="350" stroke="#b9b1a0" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arw2)"/>' +
+  '<text x="501" y="342" font-size="10" text-anchor="middle" fill="#9a9287">升华</text>' +
+
+  // ── 诡异：独立 ──
+  '<rect x="96" y="402" width="590" height="42" rx="7" fill="#faf8f4" stroke="#b9b1a0" stroke-dasharray="5 4"/>' +
+  '<text x="110" y="428" font-size="14" fill="#6b6459">诡异</text>' +
+  '<text x="158" y="428" font-size="12" fill="#6b6459">不属于任何一支：看不见、跳得远，只有被它打过的人才打得中它</text>' +
+
+  // ── 两条容易搞混的规则 ──
+  '<text x="96" y="470" font-size="12" fill="#2b2823">' +
+  '<tspan font-weight="600">尸体归谁：</tspan>暗影杀 → 蚀影 · 血系杀 → 血肉 · 骨系「拼装 / 解离」→ 骸骨 + 淤血 + 暗影</text>' +
+  '<text x="96" y="490" font-size="12" fill="#2b2823">' +
+  '<tspan font-weight="600">变形要停一回合：</tspan>寻躯 / 复苏 / 升华都会让对方原地一回合不动——那一回合是下手的机会</text>' +
+  '</svg>';
+
+/** 图里的一格：白底圆角框 + 名字 + 一行小注 */
+function box(x: number, y: number, name: string, note: string): string {
+  return (
+    `<rect x="${x}" y="${y}" width="150" height="56" rx="7" fill="#ffffff" stroke="#ddd6c8"/>` +
+    `<text x="${x + 75}" y="${y + 25}" font-size="14" text-anchor="middle" fill="#2b2823">${name}</text>` +
+    `<text x="${x + 75}" y="${y + 43}" font-size="11" text-anchor="middle" fill="#9a9287">${note}</text>`
+  );
+}
+
+/** 两个框之间的一支箭头（带标签） */
+function arrow(fromX: number, y: number, toX: number, label: string): string {
+  const mid = (fromX + toX) / 2;
+  return (
+    `<line x1="${fromX}" y1="${y}" x2="${toX}" y2="${y}" stroke="#8a8278" stroke-width="2" marker-end="url(#arw)"/>` +
+    `<text x="${mid}" y="${y - 6}" font-size="11" text-anchor="middle" fill="#6b6459">${label}</text>`
+  );
+}
+
 export const DARK_TURMOIL: Expansion = {
   id: 'dark-turmoil',
   name: '黑暗动乱',
@@ -2218,6 +2307,7 @@ export const DARK_TURMOIL: Expansion = {
    * 决定的。玩家在战场上只能看到"它往那边走了"，看不到"它为什么往那边走"——
    * 不给一份书面说明，这套东西就是不可学习的。
    */
+
   manualNotes: [
     /*
      * 以 `## ` 开关的一条是**小节标题**（规则书会拿它做锚点和导航），
@@ -2247,6 +2337,7 @@ export const DARK_TURMOIL: Expansion = {
       '把那只催成影主或血核。',
     '**诡异**：看不见、也发现不了，只在出手之后现形；射程内**补刀血最少**的，没有目标就沉进暗影最深处。',
   ],
+  manualDiagram: TURMOIL_DIAGRAM,
   blurb: '一位会老死的仙帝，和它为了续命掀起的浩劫。',
   summary:
     '剧情向扩展：尸骸仙帝（远超九级修士，但**有寿元**）会定期出山清洗天地换取寿元，' +
