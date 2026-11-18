@@ -114,7 +114,6 @@ const EMPEROR_DEF: UnitTypeDef = {
   vision: 9,
   magicAtk: 120,
   magicRes: 25,
-  element: 'dark',
   summonedOnly: true,
   skills: [
     {
@@ -155,7 +154,6 @@ const SLUMBER_DEF: UnitTypeDef = {
   range: 0,
   vision: 4,
   magicRes: 20,
-  element: 'dark',
   summonedOnly: true,
 };
 
@@ -407,7 +405,6 @@ const SHADOW_BEAST_DEF: UnitTypeDef = {
   maxHp: 55,
   range: 1,
   vision: 5,
-  element: 'dark',
   summonedOnly: true,
   shadowRadius: 3,
   aiAutonomy: 1,
@@ -439,7 +436,6 @@ const SHADE_DEF: UnitTypeDef = {
   range: 2,
   vision: 6,
   burst: 3,
-  element: 'dark',
   flight: true,
   layer: 'air',
   summonedOnly: true,
@@ -471,7 +467,6 @@ const SHADOW_LORD_DEF: UnitTypeDef = {
   range: 4,
   vision: 8,
   burst: 2,
-  element: 'dark',
   flight: true,
   layer: 'air',
   summonedOnly: true,
@@ -874,6 +869,9 @@ function markShadowLordAttack(state: GameState, player: PlayerId): void {
 export const DARK_TURMOIL: Expansion = {
   id: 'dark-turmoil',
   name: '黑暗动乱',
+  // 规则书归册：进「修真」那本合册，不塞进"小型扩展合订本"
+  // （它一个兵种表 + 一个暗影领域 + 吞噬/召唤/衰老，塞合订本里会被淹掉）
+  scale: 'large',
   blurb: '一位会老死的仙帝，和它为了续命掀起的浩劫。',
   summary:
     '剧情向扩展：尸骸仙帝（远超九级修士，但**有寿元**）会定期出山清洗天地换取寿元，' +
@@ -969,13 +967,32 @@ export const DARK_TURMOIL: Expansion = {
      * 不给数字是刻意的——寿元是这一关的节奏，玩家该靠"它越来越虚弱/越来越急"
      * 感觉出来，而不是盯着一个倒计时算回合数。
      */
+    /**
+     * 面板：玩家必须能看见"这东西为什么打我这么疼""它为什么会变多"。
+     *
+     * 仿修真那册写「真元 ×1.5（33 点）」的口径：**数字写出来，别只写能力名**。
+     * 暗蚀是这里的"真元"，只写"有暗蚀"玩家根本算不出伤害。
+     */
     getUnitPanelLines: ({ state, unit }) => {
-      if (!isEmperor(unit)) return [];
-      const left = yearsLeft(unit);
-      return [
-        `寿元：${lifespanWords(left)}`,
-        inSlumber(state, unit) ? '正在沉眠地休整（衰老减半）' : '在外行走（衰老加快）',
-      ];
+      const def = state.unitTypes[unit.type];
+      const lines: string[] = [];
+
+      const radius = def?.shadowRadius ?? 0;
+      if (radius > 0) lines.push(`暗影领域：半径 ${radius} 格（里面的单位视野与射程减半）`);
+
+      const erosion = erosionOf(unit);
+      if (erosion > 0) lines.push(`暗蚀 ${erosion} 点（每次攻击额外结算，无视护甲）`);
+
+      if (unit.type === SHADE) lines.push('击杀单位后，原地生出一个蚀影');
+      if (unit.type === SHADOW_LORD) {
+        lines.push(`每 ${SUMMON_EVERY} 个自己的回合分裂出一个暗影（本回合攻击过则更快）`);
+      }
+
+      if (isEmperor(unit)) {
+        lines.push(`寿元：${lifespanWords(yearsLeft(unit))}`);
+        lines.push(inSlumber(state, unit) ? '正在沉眠地休整（衰老减半）' : '在外行走（衰老加快）');
+      }
+      return lines;
     },
   },
 };

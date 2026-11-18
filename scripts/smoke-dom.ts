@@ -9286,14 +9286,33 @@ check('左侧四页：关卡 / 支线 / 战役 / 编辑器', () => {
   );
 });
 
-check('「关卡」栏现在是空的：主线 / 教学关还没设计，并指路编辑器', () => {
+check('「关卡」栏：自由对局 + 主线（现在只有自由对局），支线单独一组', () => {
   click('[data-tab="levels"]');
-  const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
-  // 只剩「自由对局」那一张（data-level="")
-  assert.deepEqual(ids, [''], `关卡栏应该只有「自由对局」，实际 ${ids.join(',') || '空'}`);
-  const body = doc.querySelector('.modal-body')?.textContent ?? '';
-  assert.ok(body.includes('还在设计'), `空状态要说清为什么空，实际：${body.slice(0, 160)}`);
-  assert.ok(body.includes('编辑器'), '空状态要指路「编辑器」那一栏');
+  const body = doc.querySelector('.modal-body') as HTMLElement;
+  // 两块可折叠标题：主线 / 支线
+  const folds = [...body.querySelectorAll<HTMLElement>('[data-fold]')].map((el) => el.dataset.fold);
+  assert.deepEqual(folds, ['main', 'side'], `应该有两块可折叠分组，实际 ${folds.join(',')}`);
+  // 主线组里只有「自由对局」（data-level=""）
+  const mainIds = [...body.querySelectorAll<HTMLElement>('[data-fold="main"] ~ .map-gallery [data-level]')].map(
+    (el) => el.dataset.level,
+  );
+  assert.deepEqual(mainIds, [''], `主线组应该只有「自由对局」，实际 ${mainIds.join(',') || '空'}`);
+  assert.ok((body.textContent ?? '').includes('还在设计'), '主线空着时要说明为什么');
+  // 支线组里是那两张带卷名的关
+  const sideIds = [...body.querySelectorAll<HTMLElement>('[data-fold="side"] ~ .side-chapter [data-level]')].map(
+    (el) => el.dataset.level,
+  );
+  assert.ok(sideIds.includes('level:dark-turmoil') && sideIds.includes('level:shadow-tide'), `支线组缺关：${sideIds.join(',')}`);
+  assert.ok((body.textContent ?? '').includes('黑暗动乱'), '支线要显示卷名「黑暗动乱」');
+});
+
+check('折起「支线」：那一组关消失，再点一次回来', () => {
+  const before = doc.querySelectorAll('[data-fold="side"] ~ .side-chapter').length;
+  click('[data-fold="side"]');
+  const folded = doc.querySelectorAll('[data-fold="side"] ~ .side-chapter').length;
+  assert.ok(before > 0 && folded === 0, `点一下应该收起支线，实际 ${before} → ${folded}`);
+  click('[data-fold="side"]');
+  assert.ok(doc.querySelectorAll('[data-fold="side"] ~ .side-chapter').length > 0, '再点一次应该展开');
 });
 
 check('支线栏列出剧情关：黑暗动乱 / 影潮', () => {

@@ -3593,7 +3593,7 @@ const BOOK_GROUPS: BookGroup[] = [
     file: 'public/manual-pack-cultivation.html',
     title: '时代与回旋镖 · 修真扩展',
     subtitle: '修真系列合册',
-    ids: ['cultivation'],
+    ids: ['cultivation', 'dark-turmoil'],
     kind: 'era',  
     intro: `<p>这一册收了修真系列的几个包……但是目前只有一个包，未来会有更多内容。</p>`,
     rulesHtml: () => cultivationRules(),
