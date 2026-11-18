@@ -121,9 +121,12 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   mask.className = 'modal-mask';
   mask.innerHTML = `
     <div class="modal wide">
-      <div class="modal-head">
-        <h2>关卡事件</h2>
-        <p>一条事件就是「当…就…」，动作按顺序执行。区域和落点在右边地图上点。</p>
+      <div class="modal-head level-events-head">
+        <div class="level-events-head-text">
+          <h2>关卡事件</h2>
+          <p>一条事件就是「当…就…」，动作按顺序执行。区域和落点在右边地图上点。</p>
+        </div>
+        <button class="btn btn-sm" data-act="help" title="条件 / 动作 / 规则一页看完">速查</button>
       </div>
       <div class="modal-body">
         <div class="level-events-wrap">
@@ -149,6 +152,42 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
       <div class="modal-foot">
         <button class="btn btn-primary" data-act="apply">保存</button>
         <button class="btn" data-act="cancel">取消</button>
+      </div>
+    </div>
+    <div class="level-help-layer" data-help hidden>
+      <div class="level-help-card">
+        <div class="level-help-head">
+          <b>事件系统速查</b>
+          <button class="btn btn-sm" data-act="help-close">关闭</button>
+        </div>
+        <div class="level-help-body">
+          <h3>条件（什么时候）</h3>
+          <ul class="level-help-list">
+            <li><b>第 N 次行动</b> —— 可配 ≥ ≤ = &gt; &lt;（默认 ≥）</li>
+            <li><b>某一家的兵死了</b> —— 可限定兵种</li>
+            <li><b>有单位走进区域</b> —— 从区域外走进来才算</li>
+            <li><b>另一件事已发生</b> —— 可填次数；只有勾了「每次走进都触发」的事件次数会超过 1</li>
+            <li><b>最高城的时代 / 最低城的血 / 手上的金币</b> —— 读当前局面，没城按 0 算</li>
+            <li><b>全部满足 / 任一满足 / 取反</b> —— 可以套娃，最多 3 层；空组会报错</li>
+          </ul>
+          <h3>动作（做什么）</h3>
+          <ul class="level-help-list">
+            <li><b>播报</b> —— 战报里写一句；带它的事件会把战报自动展开</li>
+            <li><b>刷兵</b> —— 不看钱、不看产线，只看格子站不站得住</li>
+            <li><b>改 AI 打法 / 让席位登场 / 改地形 / 点亮 / 加扣金币</b></li>
+            <li><b>直接判胜</b> —— 不用等胜利条件，一局只认第一次</li>
+            <li><b>如果…就…（分支）</b> —— 按当下局势二选一，可再嵌分支</li>
+          </ul>
+          <h3>三条规则</h3>
+          <ol class="level-help-list">
+            <li>每条事件默认<b>只触发一次</b>；要反复触发就勾「每次走进都触发」。</li>
+            <li>每手检查一次。<b>兵死了 / 走进区域</b> 只在这一手成立——两个这类条件写在一起，
+                意思是"<b>同一个动作里</b>同时发生"，不是"之前发生过"。</li>
+            <li>事件的条件读<b>当下</b>；分支里的条件读的是"<b>执行到那一步</b>"，
+                所以"先加钱、再判断有没有钱"是能工作的。</li>
+          </ol>
+          <p class="field-hint">完整说明（含六种常见剧本）见仓库里的 docs/GUIDE-EVENTS.md。</p>
+        </div>
       </div>
     </div>`;
 
@@ -1152,6 +1191,13 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
   mask.addEventListener('click', (ev) => {
     const t = ev.target as HTMLElement;
 
+    // 速查：只有点在遮罩空白处才关（点在卡片里、或者点卡片上的按钮，都不拦）
+    const helpLayer = t.closest<HTMLElement>('[data-help]');
+    if (helpLayer && t === helpLayer) {
+      helpLayer.hidden = true;
+      return;
+    }
+
     // 选区域 / 点落点：进入待选模式，提示作者去右边地图上操作
     const pickWhenZone = t.closest<HTMLElement>('[data-pick-when-zone]');
     if (pickWhenZone) {
@@ -1274,6 +1320,19 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     }
 
     const act = t.closest<HTMLElement>('[data-act]')?.dataset.act;
+
+    // 速查层：打开 / 关闭。它不参与保存，纯阅读
+    if (act === 'help') {
+      const layer = mask.querySelector<HTMLElement>('[data-help]');
+      if (layer) layer.hidden = false;
+      return;
+    }
+    if (act === 'help-close') {
+      const layer = mask.querySelector<HTMLElement>('[data-help]');
+      if (layer) layer.hidden = true;
+      return;
+    }
+
     if (act === 'add-event') {
       events = [...events, { id: nextId(), when: defaultWhen('turn'), do: [defaultDo('say')] }];
       renderAll();
