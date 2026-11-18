@@ -94,6 +94,7 @@ import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
 import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from './unit-ai.ts';
 import type { UnitAiBinding } from './unit-ai.ts';
 import type { UnitAiResult } from './expansions.ts';
+import { SKILL_AI_HINTS } from './skill-hooks.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -3639,6 +3640,55 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
     // 于是整局一次都不藏。
     const state = heroSkillsOf(view, u).find((x) => x.def.id === k.id);
     if (!state?.ready) continue;
+
+    /*
+     * ── 技能自带的 AI 提示优先 ──────────────────────────────────
+     *
+     * 技能效果在哪个包里，就由那个包声明"什么条件下值得放、值多少分"。
+     * 查到了就走它，没查到继续走下面那串写死的 case（渐进迁移：搬一个少一个）。
+     *
+     * 返回值三种：null = 现在不放；数字 = 值几分；`{score,x,y}` = 值几分并指定落点。
+     * 一个提示抛错不该把整局打死——记一次，按"不放"处理。
+     */
+    const hint = SKILL_AI_HINTS[k.effect];
+    if (hint) {
+      let r: ReturnType<typeof hint> = null;
+      try {
+        r = hint({
+          state: view,
+          unit: u,
+          def,
+          skill: k,
+          api: abilityApi,
+          foes,
+          hpRatio,
+          allies: unitsOf(view, u.owner),
+        });
+      } catch (err) {
+        unitAiWarn(
+          `skillai:${k.effect}`,
+          `[skill-ai] 技能「${k.effect}」的 AI 提示抛错了，这一步按"不放"处理：${String(err)}`,
+        );
+        r = null;
+      }
+      const hinted = r === null ? 0 : typeof r === 'number' ? r : r.score;
+      if (hinted > 0) {
+        const at = r !== null && typeof r !== 'number' ? r : null;
+        return {
+          action: {
+            type: 'HERO_SKILL',
+            unitId: u.id,
+            skillId: k.id,
+            ...(at && typeof at.x === 'number' && typeof at.y === 'number'
+              ? { targetX: at.x, targetY: at.y }
+              : {}),
+          },
+          score: hinted,
+        };
+      }
+      continue;
+    }
+
     let score = 0;
     switch (k.effect) {
       case 'throw-axe': {
@@ -3802,18 +3852,8 @@ function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
         score = hpRatio < 0.6 ? 38 : 30;
         break;
       }
-      case 'dragon-egg': {
-        /*
-         * 陨卵：一枚卵既是伤害也是两回合后的一条龙，所以只要**有一个敌人**
-         * 能吃下这一发就该放——它不是终结技，是"往对面阵线里插一根钉子"。
-         * 真正没得放的情况（周围六格全是自己人/走不进去）交给规则层拒绝，
-         * 这里只做粗判，免得 AI 每次都去试一个必然失败的技能。
-         */
-        const reach = k.radius ?? 6;
-        if (!foes.some((f) => distance(f, u) <= reach)) break;
-        score = 30;
-        break;
-      }
+      // 陨卵（dragon-egg）的判定已经搬回奇想包了，见 fantasy-packs.ts 的
+      // 「技能自带的 AI 提示」一节。以后新技能一律走那边，不要再往这里加 case。
       case 'fuse': {
         /*
          * 聚合：碎片在场上凑够两只就该合回去，血越少越急——

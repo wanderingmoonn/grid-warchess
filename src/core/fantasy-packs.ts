@@ -42,7 +42,7 @@ import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, marksAt } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
 import { registerStatus } from './statuses.ts';
-import { registerSkillEffect } from './skill-hooks.ts';
+import { registerSkillAi, registerSkillEffect } from './skill-hooks.ts';
 import type { UnitTypeDef } from './types.ts';
 
 /* ==========================================================================
@@ -2929,6 +2929,32 @@ registerSkillEffect('vanish', (c) => {
     return;
   }
   c.self.heroBuff = { ...c.self.heroBuff, hidden: true };
+});
+
+/* ==========================================================================
+ * 四、技能自带的 AI 提示（2026-11-18）
+ *
+ * 以前"AI 该不该放这个技能"是写死在 `ai.ts` 的一串 `case '效果名'` 里的。
+ * 那是**引擎认识具体内容**：每加一个英雄技能就要回核心改一处，而扩展的技能
+ * （比如修真的法术）AI 根本不认识，配上去等于没配。
+ *
+ * 现在反过来：技能在哪个包里，就由这个包顺手声明"什么条件下值得放、值多少分"。
+ * 核心只负责问，然后照常比分数。
+ *
+ * 返回值：`null` = 现在不放；数字 = 值几分（落点交给规则层自动挑）；
+ * `{score,x,y}` = 值几分并指定落点。**不要在这里改局面**，它只是"建议"。
+ * ========================================================================== */
+
+/**
+ * 陨卵：一枚卵既是伤害，也是两回合后的一条龙，所以只要**有一个敌人**吃得到
+ * 就该放——它不是终结技，是"往对面阵线里插一根钉子"。
+ *
+ * 30 分是原来的值，搬过来照抄；落点不指定——规则层会自动挑"砸到人最多"的那格。
+ */
+registerSkillAi('dragon-egg', (c) => {
+  const reach = c.skill.radius ?? 6;
+  if (!c.foes.some((f) => c.api.distance(f, c.unit) <= reach)) return null;
+  return 30;
 });
 
 /**
