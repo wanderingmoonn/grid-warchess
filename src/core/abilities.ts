@@ -40,6 +40,21 @@ export interface AbilityDef {
   group: AbilityGroup;
   /** 引擎在哪些时机问它。没有钩子的能力只是个标签（留给将来的机制用） */
   hooks?: AbilityHooks;
+  /**
+   * 这条能力在某个兵种身上的**具体数值**，例如「暗蚀 12 点」「每 5 回合召唤一个」。
+   *
+   * 为什么放在能力上：同一个能力挂在不同的兵身上数值不同（影主 15 点、暗影 4 点），
+   * 而说明文字必须只有一份。以前的做法是——规则书印通用说明、面板另外手写一行带数字的，
+   * 于是"改了两边不同步"成了必然（2026-11-18 就是这么发现血肉的暗蚀只写在面板上的）。
+   *
+   * 现在：数字由这条函数现算，**面板和规则书都问它**，改一处两边一起变。
+   * 返回 `null` = 这个兵身上没有可展示的数值，只印通用说明。
+   */
+  /*
+   * 名字里不能带 `valueOf`：那是 `Object.prototype` 上的方法，写在接口里会和
+   * 所有对象字面量的继承成员打架（TS 会报"返回值 Object 不能赋给 string"）。
+   */
+  valueLabel?: (def: UnitTypeDef) => string | null;
 }
 
 export const ABILITY_GROUP_NAME: Record<AbilityGroup, string> = {
