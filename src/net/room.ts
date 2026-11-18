@@ -254,6 +254,34 @@ export async function createRoom(state: GameState, seat: Seat, token: string): P
 }
 
 export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
+  /*
+   * **房间读取走 RPC，不走 GET**（2026-11-18 恢复并保留）。
+   *
+   * 观战端停在某一帧的原因，两次独立观测都指向"读到了旧响应"：
+   *   · 11-17：库里 turn=16，观战端拿到 12；
+   *   · 11-18：房主侧 turn=14 且已推送 8 次，观战端 0 秒前刚拉取，拿到的仍是 6。
+   * 后者尤其干净——"刚拉过"和"拿到旧数据"同时成立，只可能是响应被缓存了。
+   *
+   * GET 会经过网关/CDN 缓存；RPC 是 POST，天然不缓存，因此读取改走
+   * `warchess_room_get(code)`（SECURITY DEFINER，已授权 anon）。
+   * 函数不存在或报错时退回下面的老路径，老房间不会因此打不开。
+   */
+  try {
+    const rpcDb = (await cloudDatabase()) as unknown as {
+      rpc(
+        name: string,
+        args?: Record<string, unknown>,
+      ): PromiseLike<{ data?: unknown; error?: unknown }>;
+    };
+    const rpc = await rpcDb.rpc('warchess_room_get', { code: code.toUpperCase() });
+    if (!rpc.error && rpc.data) {
+      const row = rpc.data as Row;
+      const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
+      return toSnapshot({ ...row, state });
+    }
+  } catch {
+    /* 函数不存在 / 网络不通：落到下面的老路径 */
+  }
   const { data, error } = await (await table()).q.select('*').eq('code', code).maybeSingle();
   if (error) throw new Error(readableError(error));
   // 服务端是 jsonb 列，SDK 会直接反序列化成对象；个别环境会退回字符串
