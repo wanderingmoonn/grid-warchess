@@ -313,7 +313,14 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
       const deploy: Partial<Record<PlayerId, DeployUnit[]>> = {};
       for (const seat of seats) {
         const list = placed.filter((u) => u.owner === seat).map((u) => ({ type: u.type, x: u.x, y: u.y }));
+        /*
+         * 刚清空的那一席要写成 `[]`，不能直接去掉这个键（2026-11-18）。
+         * 去掉键 = "作者没管这一席" = 开局自动撒兵；写 `[]` = "这一席开局就是空的"。
+         * 这两件事在作者眼里完全不同，界面上都只是"列表空了"。
+         */
+        const hadBefore = (level.deploy?.[seat]?.length ?? 0) > 0;
         if (list.length > 0) deploy[seat] = list;
+        else if (hadBefore) deploy[seat] = [];
       }
       if (Object.keys(deploy).length > 0) next.deploy = deploy;
       else delete (next as { deploy?: unknown }).deploy;

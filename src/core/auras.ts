@@ -9,6 +9,7 @@ import type {
 import { distBetweenUnits } from './query.ts';
 import { aurasOf, hooksFor } from './ability-registry.ts';
 import { activeExpansions } from './expansions.ts';
+import { memoByState, memoTable } from './memo.ts';
 
 /** 本局兵种表。和 rules.ts 的 utype 同一口径，这里不抛新错。 */
 function defOf(s: GameState, u: Unit): UnitTypeDef {
@@ -17,8 +18,25 @@ function defOf(s: GameState, u: Unit): UnitTypeDef {
   return def;
 }
 
-/** 合并 extraAbilities 的 aurasOf，和 rules.ts 原来的私有版本同一口径 */
+/**
+ * 合并 extraAbilities 的 aurasOf，和 rules.ts 原来的私有版本同一口径。
+ *
+ * 结果在同一次决策里会被问上百遍（每个"我挨多少打"的估算都要扫一遍友军的光环），
+ * 而它每次都新建一个数组、还要跑一遍动态光环钩子，所以在决策作用域里记一份。
+ * 返回值是**共享的只读数组**：调用方只许遍历，不许往里 push。
+ */
 export function aurasOfUnit(s: GameState, u: Unit): AuraSpec[] {
+  const cache = memoTable<Map<string, AuraSpec[]>>('aura-specs');
+  if (!cache) return aurasOfUnitNow(s, u);
+  const byUnit = memoByState(cache, s, () => new Map<string, AuraSpec[]>());
+  const hit = byUnit.get(u.id);
+  if (hit) return hit;
+  const made = aurasOfUnitNow(s, u);
+  byUnit.set(u.id, made);
+  return made;
+}
+
+function aurasOfUnitNow(s: GameState, u: Unit): AuraSpec[] {
   const def = defOf(s, u);
   const out = aurasOf(def, u.extraAbilities);
   /*
@@ -146,11 +164,87 @@ export function auraSourcesOf(
   }));
 }
 
+export interface AuraBonus {
+  atk: number;
+  armor: number;
+  move: number;
+}
+
+const ZERO_BONUS: AuraBonus = { atk: 0, armor: 0, move: 0 };
+
+/** 一个单位从友军光环里拿到的加成，单算一遍（不进缓存时的路径） */
+function computeBonus(s: GameState, unit: Unit): AuraBonus {
+  let atk = 0;
+  let armor = 0;
+  let move = 0;
+  for (const ally of s.units) {
+    if (ally.id === unit.id || ally.owner !== unit.owner) continue;
+    const gap = distBetweenUnits(s, ally, unit);
+    for (const a of aurasOfUnit(s, ally)) {
+      if (gap > (a.radius ?? 1)) continue;
+      // 和 `auraSourcesOf` 逐项相加完全等价：按 label 聚合后再求和 = 全部源直接求和，
+      // 而且这里的累加顺序就是 s.units 的顺序，浮点结果逐位相同。
+      if (a.allyAtk) atk += a.allyAtk;
+      if (a.allyArmor) armor += a.allyArmor;
+      if (a.allyMove) move += a.allyMove;
+    }
+  }
+  return { atk, armor, move };
+}
+
+/**
+ * 整张图一次算完：每个单位各拿多少光环加成。
+ *
+ * 为什么要有"整张"这一层：`computeDamage` 每算一对攻防就调一次 `auraBonusOf`，
+ * 而它一次要扫全场友军、每扫一个还要重建那个友军的光环表。一次 AI 决策里
+ * `computeDamage` 会被调几万次（每个候选 × 每个目标 × 前瞻的 6 个分身），
+ * 于是这个 O(单位²) 的小循环被乘成了 O(单位²·对数)，实测占决策耗时的四成。
+ *
+ * 摊平成"每个状态算一次"之后，一对攻防只剩一次 Map 查表。
+ * 结果与逐次调用完全相同：外层按 `s.units` 顺序遍历发光环的那一方，
+ * 内层给被照到的单位累加——对某一个单位来说，累加顺序和原来一模一样。
+ */
+function computeBonusTable(s: GameState): Map<string, AuraBonus> {
+  const table = new Map<string, AuraBonus>();
+  // 先把每个单位的光环表建好（`aurasOfUnit` 里有动态光环钩子，只能按状态算一次）
+  const specs = new Map<string, ReturnType<typeof aurasOfUnit>>();
+  for (const u of s.units) specs.set(u.id, aurasOfUnit(s, u));
+  for (const ally of s.units) {
+    const list = specs.get(ally.id);
+    if (!list || list.length === 0) continue;
+    for (const unit of s.units) {
+      if (unit.id === ally.id || unit.owner !== ally.owner) continue;
+      const gap = distBetweenUnits(s, ally, unit);
+      for (const a of list) {
+        if (gap > (a.radius ?? 1)) continue;
+        let got = table.get(unit.id);
+        if (!got) {
+          got = { atk: 0, armor: 0, move: 0 };
+          table.set(unit.id, got);
+        }
+        if (a.allyAtk) got.atk += a.allyAtk;
+        if (a.allyArmor) got.armor += a.allyArmor;
+        if (a.allyMove) got.move += a.allyMove;
+      }
+    }
+  }
+  return table;
+}
+
+/**
+ * 加成的缓存挂在 `memo.ts` 的决策作用域上（见那个文件的说明）：
+ * 一次 AI 决策里 `computeDamage` 会被调几万次，同一个"局面对象"的光环表
+ * 本该只算一次。作用域外（面板、渲染）照旧现算——那里一帧只问几十次，
+ * 而且拿到的局面每帧都是新的，缓存也不会有命中。
+ */
+const BONUS_TABLE = 'aura-bonus';
+
 /** 数值型友军光环的总和：攻击 / 护甲 / 移动力 */
-export function auraBonusOf(s: GameState, unit: Unit): { atk: number; armor: number; move: number } {
-  const sum = (kind: 'allyAtk' | 'allyArmor' | 'allyMove') =>
-    auraSourcesOf(s, unit, kind).reduce((n, x) => n + x.value, 0);
-  return { atk: sum('allyAtk'), armor: sum('allyArmor'), move: sum('allyMove') };
+export function auraBonusOf(s: GameState, unit: Unit): AuraBonus {
+  const cache = memoTable<Map<string, AuraBonus>>(BONUS_TABLE);
+  if (!cache) return computeBonus(s, unit);
+  const table = memoByState(cache, s, () => computeBonusTable(s));
+  return table.get(unit.id) ?? ZERO_BONUS;
 }
 
 /** 威吓：贴着几个会吓人的敌人，就少几分攻击（每源 cap 后累加） */
