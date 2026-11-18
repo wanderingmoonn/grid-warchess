@@ -491,6 +491,22 @@ export interface DamagedCtx {
   api: AbilityApi;
 }
 
+/**
+ * 自己回合**结束**时的上下文。
+ *
+ * 和 `onTurnStart` 的分工：那个在别人交棒过来时跑（`acted/moved` 已经被重置），
+ * 这个在**自己刚打完**、标记还没清的时候跑——"本回合攻击过没有""相邻有没有东西"
+ * 这类判断只能在这里做。
+ */
+export interface TurnEndCtx {
+  state: GameState;
+  /** 自己那张图的只读视角 */
+  view: GameState;
+  self: Unit;
+  owner: PlayerId;
+  api: AbilityApi;
+}
+
 export interface KillCtx {
   state: GameState;
   /**
@@ -783,6 +799,14 @@ export interface AbilityHooks {
   magicMul?: (c: MagicCtx) => number;
   /** 自己回合开始（见 TURN_START） */
   onTurnStart?: Staged<TurnStartCtx>[];
+  /**
+   * 自己回合结束（标记还没被重置）。
+   *
+   * 只有"必须看清这一回合做过什么"的能力才该用它——比如"本回合攻击过就起飞"。
+   * 单纯的回血、召唤用 `onTurnStart` 就够了，别放这儿：
+   * 这里跑在切人之后、清场之前，能改动的东西比回合开始少。
+   */
+  onTurnEnd?: Staged<TurnEndCtx>[];
   /** 覆盖进入某格的步耗（穿林：森林丘陵按 1） */
   moveCost?: (c: MoveCostCtx) => number | undefined;
   /** 步耗倍率（重甲难行 ×2） */

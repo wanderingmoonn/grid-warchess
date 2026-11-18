@@ -837,21 +837,27 @@ const DRAGON_PAINT: Array<[number, number, string]> = (() => {
  * 胜负只认"头领全死"。混编那关两个头领**同属一组**（组内是"且"），
  * 所以必须两个都杀掉——这正是我们想要的；分到两组的话就变成"杀一个就赢"。
  */
+/** 「潮」系列里一队敌人的编制：1 头领 + 2 中坚 + 1 杂兵 */
+const TIDE_SQUAD = {
+  shadow: { boss: 'shadow-lord', mid: 'shade', low: 'shadow-beast' },
+  blood: { boss: 'blood-core', mid: 'blood-pool', low: 'flesh' },
+  bone: { boss: 'bone-unnamed', mid: 'bone-corpse', low: 'bone-skeleton' },
+} as const;
+
+type TideKind = keyof typeof TIDE_SQUAD;
+
 function tideLevel(o: {
   id: string;
   name: string;
   brief: string;
-  groups: Array<'shadow' | 'blood'>;
+  groups: TideKind[];
   leader: string;
   unit?: string;
   opening: string;
   growing: string;
   down: string;
 }): LevelDef {
-  const squad = {
-    shadow: { boss: 'shadow-lord', mid: 'shade', low: 'shadow-beast' },
-    blood: { boss: 'blood-core', mid: 'blood-pool', low: 'flesh' },
-  } as const;
+  const squad = TIDE_SQUAD;
 
   /**
    * 一群敌人：1 头领 + 2 中坚 + 1 杂兵 = 4 个。
@@ -860,7 +866,7 @@ function tideLevel(o: {
    * 多了近一倍，AI 打 AI 的结果直接从"玩家能压着打"变成"20 个行动被打穿"。
    * 编队规模要贴着原来那关走，否则三张关之间能比、但和玩家记忆里的影潮对不上。
    */
-  const group = (kind: 'shadow' | 'blood', y: 'top' | 'bottom') => {
+  const group = (kind: TideKind, y: 'top' | 'bottom') => {
     const t = squad[kind];
     const y0 = y === 'top' ? 2 : 15;
     const dir = y === 'top' ? 1 : -1;
@@ -944,6 +950,153 @@ function tideLevel(o: {
       })),
     ],
   };
+}
+
+/**
+ * 「大势」模板：24×24、**玩家双城**、**三队敌人**（2026-11-18）。
+ *
+ * 为什么另起一个模板而不是把「潮」关拉大：两群敌人只能比"两支谁更强"，
+ * 要比"1 系 / 2 系 / 3 系混编"就得三群。地图也跟着放大（18→24）、玩家多一座城
+ * （对面三路，一座城的经济撑不住）。
+ *
+ * 三队各占一条路（上/中/下），玩家两座城一上一下，中间靠机动。
+ */
+function tideBigLevel(o: {
+  id: string;
+  name: string;
+  brief: string;
+  groups: [TideKind, TideKind, TideKind];
+  leader: string;
+  opening: string;
+  growing: string;
+  down: string;
+}): LevelDef {
+  /** 一队敌人：头领 + 中坚 + 杂兵，围着锚点摆 */
+  const group = (kind: TideKind, y0: number) => {
+    const t = TIDE_SQUAD[kind];
+    return [
+      { type: t.boss, x: 21, y: y0 },
+      { type: t.mid, x: 20, y: y0 - 1 },
+      { type: t.mid, x: 20, y: y0 + 1 },
+      { type: t.low, x: 22, y: y0 },
+    ];
+  };
+
+  const kinds = new Set(o.groups);
+  const leaders = [...kinds].map((k) => TIDE_SQUAD[k].boss);
+
+  return {
+    id: o.id,
+    version: LEVEL_VERSION,
+    side: true,
+    chapter: '黑暗动乱 · 大势',
+    name: o.name,
+    brief: `${o.brief}（数值是占位版，先看这一关的节奏对不对。）`,
+    map: {
+      id: `levelmap:${o.id.replace('level:', '')}`,
+      name: o.name,
+      w: 24,
+      h: 24,
+      rows: rowsOf(24, 24, [
+        // 上中下三条路各有一段林子和丘陵，给玩家卡位的地方
+        [8, 5, 'f'], [9, 5, 'f'], [8, 6, 'f'], [9, 6, 'f'],
+        [12, 11, 'h'], [13, 11, 'h'], [12, 12, 'h'],
+        [8, 18, 'f'], [9, 18, 'f'], [8, 19, 'f'],
+        [15, 8, 'h'], [16, 8, 'h'],
+        [15, 16, 'h'], [16, 16, 'h'],
+      ]),
+      // 玩家两座城，一上一下——三队敌人从右边三路压过来
+      citiesA: [{ x: 1, y: 4 }, { x: 1, y: 18 }],
+      citiesB: [],
+      source: 'builtin',
+    },
+    seats: { count: 2, ai: ['B'], cityless: ['B'] },
+    setup: { startEra: 5, firstSide: 'A' },
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        // 上路
+        { type: 'tank', x: 4, y: 5 },
+        { type: 'squad', x: 5, y: 6 },
+        { type: 'hmg', x: 3, y: 6 },
+        // 中路机动
+        { type: 'tank', x: 5, y: 11 },
+        { type: 'squad', x: 5, y: 12 },
+        // 下路
+        { type: 'tank', x: 4, y: 18 },
+        { type: 'squad', x: 5, y: 17 },
+        { type: 'hmg', x: 3, y: 17 },
+        // 经济
+        { type: 'crew', x: 2, y: 3 },
+        { type: 'crew', x: 2, y: 19 },
+      ],
+      B: [
+        ...group(o.groups[0], 4),
+        ...group(o.groups[1], 12),
+        ...group(o.groups[2], 20),
+      ],
+    },
+    /*
+     * 头领全死才算赢。同系三队只有一个头领兵种（一条目标就够），
+     * 混编时每种头领一条——写在同一组里（组内是"且"），所以必须全清。
+     */
+    goals: leaders.map((t) => ({
+      kind: 'assassinate' as const,
+      winner: 'A' as const,
+      loser: 'B' as const,
+      unitType: t,
+      label: o.leader,
+      group: 1,
+    })),
+    events: [
+      { id: 'opens', when: { kind: 'turn', at: 1 }, do: [{ kind: 'say', text: o.opening }] },
+      { id: 'grows', when: { kind: 'turn', at: 12 }, do: [{ kind: 'say', text: o.growing }] },
+      ...leaders.map((t, i) => ({
+        id: `down-${i}`,
+        when: { kind: 'unitDied' as const, type: t },
+        do: [{ kind: 'say' as const, text: o.down }],
+      })),
+    ],
+  };
+}
+
+/**
+ * 「满潮」的地形：一条竖河把战场切成两半，只有两处渡口。
+ *
+ * 为什么给两个玩家一条河：同盟最怕"各打各的"，河把战场逼成两条战线，
+ * 两个人必须先商量"谁守上渡口、谁守下渡口"，不然总有一边被穿过去。
+ */
+function fullTidePaint(): Array<[number, number, string]> {
+  const paint: Array<[number, number, string]> = [];
+  const crossings = new Set([9, 10, 22, 23]);
+  for (let y = 0; y < 32; y += 1) {
+    const ch = crossings.has(y) ? '=' : '~';
+    paint.push([14, y, ch], [15, y, ch]);
+  }
+  // 东岸的山：分割出三条走廊，避免"一马平川"
+  for (const [x, y] of [
+    [24, 3], [25, 3], [24, 4], [30, 4], [30, 5], [24, 11], [25, 11],
+    [24, 12], [30, 19], [30, 20], [25, 27], [24, 27], [24, 28], [30, 27],
+  ] as const) {
+    paint.push([x, y, '^']);
+  }
+  // 西岸（玩家侧）的林子和丘陵：给防守方一点遮蔽和卡位
+  for (const [x, y] of [
+    [7, 3], [8, 3], [7, 4], [9, 10], [10, 10], [8, 11], [7, 20], [8, 20], [9, 21],
+    [10, 30], [11, 30], [8, 31], [12, 15], [12, 16],
+  ] as const) {
+    paint.push([x, y, 'f']);
+  }
+  for (const [x, y] of [
+    [6, 12], [7, 12], [11, 6], [11, 7], [6, 18], [10, 25], [11, 26],
+  ] as const) {
+    paint.push([x, y, 'h']);
+  }
+  // 东岸的沼泽：飞行单位不怕，地面单位得绕
+  for (const [x, y] of [[20, 8], [21, 9], [20, 23], [21, 24], [22, 15]] as const) {
+    paint.push([x, y, 'w']);
+  }
+  return paint;
 }
 
 export const LEVELS: LevelDef[] = [
@@ -1831,6 +1984,174 @@ export const LEVELS: LevelDef[] = [
     growing: '影在长，血也在长。你打死的每一个，都会换个样子站起来。',
     down: '一头栽下去了。另一边的呼吸，变得更响。',
   }),
+
+  /* ── 大势 1~5：24×24、玩家双城、三队敌人 ────────────────────────
+   *
+   * 三队分别占上/中/下三条路。五张关的**玩家兵力、地图、群数完全相同**，
+   * 只有三队的成分不同，所以"1 系 → 2 系 → 3 系混编"是能一条线比下来的：
+   *
+   *   三影 / 三血 / 三骨   ← 单系基线
+   *   影血               ← 两系
+   *   影血骨             ← 三系全上
+   */
+  tideBigLevel({
+    id: 'level:tide-all-shadow',
+    name: '三影',
+    brief:
+      '24×24，你有两座城，对面三条路各压来一队影。纯影系的基线：看它把三条路铺满要多久。',
+    groups: ['shadow', 'shadow', 'shadow'],
+    leader: '影主',
+    opening: '三条路上，黑一起涌过来了。',
+    growing: '影在复制自己。你杀掉的，正站在你面前。',
+    down: '一个影主散了。另外两片黑没有回头。',
+  }),
+  tideBigLevel({
+    id: 'level:tide-all-blood',
+    name: '三血',
+    brief:
+      '24×24，双城对三条路上的三队血肉。纯血系的基线：它们不会追你，但你也杀不干净。',
+    groups: ['blood', 'blood', 'blood'],
+    leader: '血核',
+    opening: '三条路上的土都湿了，腥味从三个方向来。',
+    growing: '血越铺越厚。你打出去的每一刀都在喂它。',
+    down: '一颗血核塌了。地上的血还在往别处流。',
+  }),
+  tideBigLevel({
+    id: 'level:tide-all-bone',
+    name: '三骨',
+    brief:
+      '24×24，双城对三条路上的三队枯骨。骨系不吃人，它**拼人**：骨头会吞掉血肉和暗影，长成更麻烦的东西。',
+    groups: ['bone', 'bone', 'bone'],
+    leader: '不详',
+    opening: '三条路上响起了骨头摩擦的声音。',
+    growing: '它们开始互相拼了。你打碎的每一块，都会去找下一块。',
+    down: '一具"不详"散了。地上散落的骨、血、影，正各自爬起来。',
+  }),
+  tideBigLevel({
+    id: 'level:tide-shadow-blood',
+    name: '影血',
+    brief:
+      '24×24，双城对三队敌人：两路影、一路血。两系混编——影会再生，血会吸血，看它们怎么互相掩护。',
+    groups: ['shadow', 'shadow', 'blood'],
+    leader: '影主 / 血核',
+    opening: '一边是黑，一边是红，中间那道最安静。',
+    growing: '影在长，血也在长。它们不打起来，只一起朝你来。',
+    down: '一队倒了。另外两队的呼吸没变。',
+  }),
+  tideBigLevel({
+    id: 'level:tide-three',
+    name: '影血骨',
+    brief:
+      '24×24，双城对**三系全上**。骨的零件会变成血、血会被骨吞掉长成骨——这是这套设计最极端的形状。',
+    groups: ['shadow', 'blood', 'bone'],
+    leader: '影主 / 血核 / 不详',
+    opening: '上、中、下三条路，三种东西同时醒了。',
+    growing: '它们开始交换零件了。你已经分不清哪一摊是哪一系。',
+    down: '一路清空了。另外两路，正把它剩下的东西捡走。',
+  }),
+
+  /*
+   * ── 满潮：32×32、两座城、三家（两个真人同盟 vs 全系列诡异）──────────
+   *
+   * 这是给"两个人一起打"用的：A/B 是同盟的两座城（各在北岸 / 南岸），
+   * C 是同一条河北岸……不，是**南岸**的荒野，铺满了三系 + 三个零散的东西。
+   * 河把两边隔开，只有两处渡口，所以"谁守哪一段、什么时候过河"是两个人要商量的事。
+   */
+  {
+    id: 'level:full-tide',
+    version: LEVEL_VERSION,
+    side: true,
+    chapter: '黑暗动乱 · 大势',
+    name: '满潮',
+    brief:
+      '32×32，两座城（A / B 同盟）对**全系列诡异**：影、血、骨三支 + 黑茧、黑蝗、诡异。' +
+      '一条河隔开两岸，只有两处渡口。把影主、血核、不详三个头都砍掉就算赢，' +
+      '但在这之前它们会一直往外长。（数值是占位版。）',
+    map: {
+      id: 'levelmap:full-tide',
+      name: '满潮',
+      w: 32,
+      h: 32,
+      rows: rowsOf(32, 32, fullTidePaint()),
+      citiesA: [{ x: 2, y: 6 }],
+      citiesB: [{ x: 2, y: 24 }],
+      source: 'builtin',
+    },
+    seats: {
+      count: 3,
+      ai: ['C'],
+      cityless: ['C'],
+      // A 和 B 是同盟：不能互打、可以穿过对方的兵，胜负按队算
+      teams: [['A', 'B'], ['C']],
+    },
+    setup: { startEra: 5, firstSide: 'A' },
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        { type: 'tank', x: 5, y: 5 },
+        { type: 'tank', x: 5, y: 8 },
+        { type: 'squad', x: 4, y: 6 },
+        { type: 'squad', x: 4, y: 9 },
+        { type: 'hmg', x: 3, y: 8 },
+        { type: 'crew', x: 3, y: 4 },
+      ],
+      B: [
+        { type: 'tank', x: 5, y: 23 },
+        { type: 'tank', x: 5, y: 26 },
+        { type: 'squad', x: 4, y: 24 },
+        { type: 'squad', x: 4, y: 27 },
+        { type: 'hmg', x: 3, y: 25 },
+        { type: 'crew', x: 3, y: 28 },
+      ],
+      C: [
+        // 影
+        { type: 'shadow-lord', x: 28, y: 6 },
+        { type: 'shade', x: 27, y: 7 },
+        { type: 'shade', x: 29, y: 7 },
+        { type: 'shadow-beast', x: 27, y: 6 },
+        // 血
+        { type: 'blood-core', x: 28, y: 16 },
+        { type: 'blood-pool', x: 27, y: 17 },
+        { type: 'blood-pool', x: 29, y: 17 },
+        { type: 'flesh', x: 27, y: 16 },
+        // 骨
+        { type: 'bone-unnamed', x: 28, y: 26 },
+        { type: 'bone-corpse', x: 27, y: 25 },
+        { type: 'bone-skeleton', x: 29, y: 25 },
+        // 不成系的三个
+        { type: 'black-cocoon', x: 30, y: 11 },
+        { type: 'black-locust', x: 29, y: 12 },
+        { type: 'black-locust', x: 29, y: 13 },
+        { type: 'unnamable', x: 26, y: 21 },
+      ],
+    },
+    /*
+     * 三个头都死才算赢——写在同一组里（组内是"且"）。
+     * C 没有城，兵打光本来也会出局，所以"清剿干净"是另一条路。
+     */
+    goals: [
+      { kind: 'assassinate', winner: 'A', loser: 'C', unitType: 'shadow-lord', label: '影主', group: 1 },
+      { kind: 'assassinate', winner: 'A', loser: 'C', unitType: 'blood-core', label: '血核', group: 1 },
+      { kind: 'assassinate', winner: 'A', loser: 'C', unitType: 'bone-unnamed', label: '不详', group: 1 },
+    ],
+    events: [
+      {
+        id: 'opens',
+        when: { kind: 'turn', at: 1 },
+        do: [{ kind: 'say', text: '河对岸开始动了。不是一支，是整片。' }],
+      },
+      {
+        id: 'grows',
+        when: { kind: 'turn', at: 14 },
+        do: [{ kind: 'say', text: '它们已经过了河。你们得决定谁守哪一段。' }],
+      },
+      {
+        id: 'one-down',
+        when: { kind: 'unitDied', type: 'bone-unnamed' },
+        do: [{ kind: 'say', text: '那具拼起来的东西散了。地上的零件还在动。' }],
+      },
+    ],
+  },
 
   {
     id: 'level:probe-flat',

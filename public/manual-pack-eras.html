@@ -62,6 +62,22 @@
   }
   nav a:hover { color: var(--text); border-left-color: var(--line); }
   nav a.sub { padding-left: 22px; font-size: 12px; }
+  nav a.sub2 { padding-left: 34px; font-size: 12px; opacity: .8; }
+  /* 「特殊规则」的小节收进可折叠分组：全摊开会把后面的项挤出屏幕 */
+  nav details.nav-group { margin: 2px 0; }
+  nav details.nav-group > summary {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; list-style: none; padding: 2px 0;
+  }
+  nav details.nav-group > summary::-webkit-details-marker { display: none; }
+  nav details.nav-group > summary::before {
+    content: '▸'; font-size: 10px; color: var(--faint); width: 10px;
+  }
+  nav details.nav-group[open] > summary::before { content: '▾'; }
+  nav details.nav-group > summary i {
+    font-style: normal; font-size: 11px; color: var(--faint);
+  }
+  nav details.nav-group > a { display: block; padding-top: 1px; padding-bottom: 1px; }
 
   main { min-width: 0; }
   header.page-head { margin-bottom: 44px; }
@@ -361,6 +377,7 @@
     <a class="sub" href="#p-era-arms">时代军备</a>
     <a class="sub" href="#p-pack-contemporary">信息化</a>
     <a href="#g-notes">3. 各包要点</a>
+    
     <a href="#g-terms">4. 机制词条</a>
   
   </nav>
