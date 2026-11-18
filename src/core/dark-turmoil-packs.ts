@@ -27,11 +27,12 @@
  */
 
 import type { Expansion } from './expansions.ts';
-import { DAMAGE_STAGE, STRIKE_STAGE, TURN_START } from './ability-hooks.ts';
+import { DAMAGE_STAGE, HIT_STAGE, STRIKE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { AbilityApi } from './ability-hooks.ts';
 import type { AbilityDef } from './abilities.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import { registerSkillAi, registerSkillEffect } from './skill-hooks.ts';
+import { registerStatus } from './statuses.ts';
 import type { UnitAiCtx, UnitAiProfile, UnitAiResult, UnitAiCandidate } from './expansions.ts';
 
 export const EMPEROR = 'corpse-emperor';
@@ -1842,19 +1843,68 @@ const COCOON_ASCEND: AbilityDef = {
 /**
  * 「无形」：不可言说之物，**相邻也看不见**；攻击之后才现形。
  *
- * ⚠️ 作者原案还有后半条——"破隐后只有被命中的目标打得中它"。
- * 这一半**没做**：引擎里没有"谁能打谁"的钩子（`AbilityHooks` 里只有
- * `hidden` 决定"看不看得见"，没有"打不打得到"）。要做的话得给核心加一条
- * `canBeAttackedBy(ctx)`，在 `doAttack` 的合法性检查里问一次。
- * 先把看得见的那半做出来，那一半等定了方案再说。
+ * 后半条（作者 2026-11-18 定的方案）：**被它打过的目标才打得中它**。
+ * 引擎没有"谁能打谁"的钩子，所以走用户给的思路——
+ *
+ *   1. 它打中谁，就给谁贴一层「无形凝视」（自己的回合结束才消，正好撑过那一回合）；
+ *   2. 它挨打时，如果打它的人身上没有「无形凝视」，**这一下直接打空**：
+ *      伤害归零、战报写"打了个空"，就像那颗棋子本来就是空的。
+ *
+ * 为什么不真的"把 victim 换成假单位"：换单位要新建、删除、还要处理追击/连带伤害，
+ * 一次攻击里能改的东西太多；而"这一下伤害为 0"在表现上完全一样（血没掉、人还在），
+ * 却只碰一个数。以后真要做"假目标"（比如诱骗走位），再单独做。
  */
 const UNNAMABLE_FORM: AbilityDef = {
   id: 'unnamable-formless',
   name: '无形',
-  summary: '看不见，也无法被相邻发现；出手攻击之后才现形。',
+  summary: '看不见，也无法被相邻发现；出手后现形。只有被它打过的敌人才打得中它。',
   group: 'move',
-  hooks: { hidden: (c) => !c.self.acted },
+  valueLabel: () => '打过的才打得中',
+  hooks: {
+    hidden: (c) => !c.self.acted,
+    // 打中谁，谁就"看见"它一回合
+    onHit: [
+      {
+        stage: HIT_STAGE.status,
+        apply: (c) => {
+          c.target.status = { ...(c.target.status ?? {}), [FORMLESS_GAZE]: 2 };
+          c.touched.push('无形凝视');
+        },
+      },
+    ],
+    /*
+     * 挨打：打它的人没有「无形凝视」→ 打空。
+     * 挂在最前面（attackFlat）是为了让后面的乘法/减法都作用在这个 0 上。
+     */
+    damage: [
+      {
+        stage: DAMAGE_STAGE.attackFlat,
+        apply: (c) => {
+          if (c.side !== 'defender') return;
+          const attacker = c.foe;
+          if (!attacker) return;
+          if ((attacker.status?.[FORMLESS_GAZE] ?? 0) > 0) return;
+          c.damage = 0;
+          c.items.push({ label: '无形：这一下打空了', delta: 0 });
+          c.state.log.push({
+            turn: c.state.turn,
+            player: attacker.owner,
+            text: `${c.state.unitTypes[attacker.type]?.name ?? ''}挥了一记，什么都没碰到。`,
+          });
+        },
+      },
+    ],
+  },
 };
+
+/** 「无形凝视」：被无形之物打过之后，一回合内看得见、也打得中它 */
+export const FORMLESS_GAZE = 'formless-gaze';
+
+registerStatus({
+  id: FORMLESS_GAZE,
+  name: '无形凝视',
+  summary: '刚被"无形"之物打过，这一回合看得见它、也打得中它。',
+});
 
 /* ── 三个兵 ─────────────────────────────────────────────────────── */
 

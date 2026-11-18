@@ -68,6 +68,21 @@ function arena(): Arena {
     s.units.push(u);
     return u;
   };
+  // 一个"普通打手"：用来验"没被无形打过的人打它会不会打空"
+  s.unitTypes['probe-killer'] = {
+    ...s.unitTypes['militia']!,
+    id: 'probe-killer',
+    name: '处刑者',
+    category: 'combat',
+    atk: 100,
+    // 射程 2：诡异在**空中层**，地面单位打它要多算一格（strikeDistance）
+    range: 2,
+    move: 2,
+    armor: 4,
+    maxHp: 300,
+    skills: [],
+    aiAutonomy: 0,
+  };
   for (const a of [0, 999]) {
     s.unitTypes[`probe-tank-${a}`] = {
       ...s.unitTypes['militia']!,
@@ -248,6 +263,49 @@ console.log('\n[6] 无形');
   check('没出手时对面看不见（即使相邻）', isHiddenFrom(s, u, 'A'));
   u.acted = true;
   check('出手之后现形', !isHiddenFrom(s, u, 'A'));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 6b. 「无形凝视」：只有被它打过的人才打得中它
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[6b] 无形凝视');
+{
+  const { s, mk } = arena();
+  const un = mk('un', UNNAMABLE, 'B', 5, 5);
+  mk('w', 'probe-killer', 'A', 5, 6);
+  const hp0 = un.hp;
+
+  // 1) 没被它打过的人打它 —— 应该打空
+  s.current = 'A';
+  const r1 = applyAction(s, { type: 'ATTACK', unitId: 'w', targetId: 'un' });
+  check('这一下能出手（不是合法性被拦）', r1.ok, r1.ok ? '' : r1.reason);
+  const afterR1 = r1.ok ? r1.state.units.find((x) => x.id === 'un')! : un;
+  check('打空了：它一点血都没掉', afterR1.hp === hp0, `${afterR1.hp} / ${hp0}`);
+
+  // 2) 它反过来打那个人 —— 目标获得凝视
+  const st = r1.ok ? r1.state : s;
+  st.current = 'B';
+  const r2 = applyAction(st, { type: 'ATTACK', unitId: 'un', targetId: 'w' });
+  check('它反击得出去', r2.ok, r2.ok ? '' : r2.reason);
+  if (r2.ok) {
+    const w = r2.state.units.find((x) => x.id === 'w')!;
+    check('被打的人获得「无形凝视」', (w.status?.['formless-gaze'] ?? 0) > 0, JSON.stringify(w.status));
+
+    // 3) 现在这个人打得中它了
+    r2.state.current = 'A';
+    const w2 = r2.state.units.find((x) => x.id === 'w')!;
+    w2.acted = false;
+    w2.moved = false;
+    delete w2.attacksLeft; // 上一下已经把这一回合的攻击额度用掉了
+    const r3 = applyAction(r2.state, { type: 'ATTACK', unitId: 'w', targetId: 'un' });
+    const afterR3 = r3.ok ? r3.state.units.find((x) => x.id === 'un') : undefined;
+    // 100 攻打 60 血：这一下直接打死也算"打得中"（所以找不到它 = 打中了）
+    check(
+      '带凝视的人这一下打得中',
+      r3.ok && (!afterR3 || afterR3.hp < hp0),
+      r3.ok ? (afterR3 ? `${afterR3.hp} / ${hp0}` : '直接打死了') : r3.reason,
+    );
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
