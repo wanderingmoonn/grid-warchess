@@ -314,13 +314,17 @@ export function openLevelArmy(opts: LevelArmyOptions): void {
       for (const seat of seats) {
         const list = placed.filter((u) => u.owner === seat).map((u) => ({ type: u.type, x: u.x, y: u.y }));
         /*
-         * 刚清空的那一席要写成 `[]`，不能直接去掉这个键（2026-11-18）。
-         * 去掉键 = "作者没管这一席" = 开局自动撒兵；写 `[]` = "这一席开局就是空的"。
-         * 这两件事在作者眼里完全不同，界面上都只是"列表空了"。
+         * **每一席都写键，空的也写成 `[]`**（2026-11-18 第二次修）。
+         *
+         * 上一版只给"原本有兵、现在清空"的席位写 `[]`，于是**旧关卡永远治不好**：
+         * 那些关卡在更早的版本里就把空席位的键删掉了，作者再怎么删兵也只会得到
+         * "还是没有这个键" → 开局继续自动撒兵。而弹窗明明写着"会以零兵力开局
+         * （不是自动撒兵）"——那句话当时是在说谎。
+         *
+         * 现在改成：动过「摆兵」就等于作者接管了**所有**席位。点「应用」时
+         * 已经会二次确认每一席的零兵状态，作者看到的就是最终结果。
          */
-        const hadBefore = (level.deploy?.[seat]?.length ?? 0) > 0;
-        if (list.length > 0) deploy[seat] = list;
-        else if (hadBefore) deploy[seat] = [];
+        deploy[seat] = list;
       }
       if (Object.keys(deploy).length > 0) next.deploy = deploy;
       else delete (next as { deploy?: unknown }).deploy;
