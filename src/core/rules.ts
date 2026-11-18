@@ -141,6 +141,7 @@ import { boardIdOf, boardIds, boardOf, boardStateOf, EARTH, idxOn } from './boar
 import { clearSpotlightsOfOthers, spotlightCellsOn } from './spotlight.ts';
 import { hazardArmorOf, hazardFor, hazardMoveOf } from './hazard.ts';
 import { reconCellsOn } from './recon.ts';
+import { memoByState, memoTable } from './memo.ts';
 import { skillsOf } from './query.ts';
 export { seatsOf };
 import { SKILL_EFFECTS, registerSkillEffect, SKILL_READY_CHECKS, registerSkillTargetCells } from './skill-hooks.ts';
@@ -2043,8 +2044,32 @@ function applyStatusVision(
   return r;
 }
 
+/**
+ * 视野半径的缓存（只在决策作用域内生效，见 `memo.ts`）。
+ *
+ * 这个函数单次不贵，贵在它每次都要 `buildingAt` 扫一遍全场找"我是不是站在
+ * 自家塔上"。而"看得见才打得到"那条判据会把每个兵 × 每个目标都问一遍，
+ * 于是它被乘成了 O(单位³)：32×32、一百个兵时，一次决策里光这一项就一亿次级别。
+ * 结果只取决于局面对象（兵的兵种、状态、落点、脚下有没有自家建筑），
+ * 所以在同一次思考里问第二遍没有意义。
+ */
+const VISION_TABLE = 'vision';
+
 /** 算上扩展规则后的视野半径 */
 export function visionOf(s: GameState, unit: Unit): number {
+  const cache = memoTable<Map<string, number>>(VISION_TABLE);
+  if (cache) {
+    const byUnit = memoByState(cache, s, () => new Map<string, number>());
+    const hit = byUnit.get(unit.id);
+    if (hit !== undefined) return hit;
+    const r = visionOfNow(s, unit);
+    byUnit.set(unit.id, r);
+    return r;
+  }
+  return visionOfNow(s, unit);
+}
+
+function visionOfNow(s: GameState, unit: Unit): number {
   const selfDef = utype(s, unit.type);
   let r = selfDef.vision;
   // 驻军：塔上的哨位看得比平地远——这是"兵进驻"最直接的收益
@@ -8430,6 +8455,27 @@ export function tileVisibleTo(
   id: BoardId = EARTH,
 ): boolean {
   if (!s.fog) return true;
+  /*
+   * 决策作用域里改查"整张可见格表"。
+   *
+   * 逐格扫来源在单次调用上是省钱的（建全图集合确实更贵），但它被乘在
+   * "每个兵 × 每个目标"上：一百个兵时，一次思考要把同一张可见表算几万遍。
+   * 作用域内按 (局面, 阵营, 图) 建一次表，之后每格一次哈希。
+   *
+   * 两种算法等价：`visibleTilesOn` 就是把下面这个循环收集成集合，
+   * 再并上额外视野 / 点亮 / 侦察——三条这里也逐个查了。
+   */
+  const cache = memoTable<Map<string, Set<number>>>(VISION_TABLE + ':cells');
+  if (cache) {
+    const byKey = memoByState(cache, s, () => new Map<string, Set<number>>());
+    const key = `${p}:${id}`;
+    let set = byKey.get(key);
+    if (!set) {
+      set = visibleTilesOn(s, p, id);
+      byKey.set(key, set);
+    }
+    return set.has(y * boardOf(s, id).w + x);
+  }
   let lit = false;
   forEachVisionSource(s, p, (b, cx, cy, r) => {
     if (lit) return;
