@@ -404,6 +404,33 @@ console.log('\n[9] 影主藏身');
       `走到 ${tx},${ty}`,
     );
   }
+  /*
+   * 影主之间"不过分靠近"（2026-11-18 作者定的手感：平均 2 格）。
+   * 两个影主叠在相邻格时，其中一个要让开。
+   */
+  {
+    const { s: s3, mk: mk3 } = arena();
+    const a = mk3('lord-a', SHADOW_LORD, 'B', 9, 10);
+    const b = mk3('lord-b', SHADOW_LORD, 'B', 10, 10); // 相邻
+    refreshShadow(s3);
+    const out = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s3, a));
+    const move = out.add?.find((x) => x.action.type === 'MOVE')?.action;
+    check(
+      '两个影主贴在一起时会散开',
+      move?.type === 'MOVE' && dist({ x: move.x, y: move.y }, b) > dist(a, b),
+      JSON.stringify(move),
+    );
+
+    // 已经隔开 2 格：不再为了散开而挪
+    const { s: s4, mk: mk4 } = arena();
+    const c = mk4('lord-c', SHADOW_LORD, 'B', 9, 10);
+    mk4('lord-d', SHADOW_LORD, 'B', 11, 10); // 距离 2
+    refreshShadow(s4);
+    const quiet = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s4, c));
+    const moved = quiet.add?.some((x) => x.action.type === 'MOVE') ?? false;
+    check('已经隔开 2 格就不再挤', !moved, JSON.stringify(quiet.add));
+  }
+
   // 已经是最深处就别再动
   const { s: s2, mk: mk2 } = arena();
   const lord2 = mk2('lord', SHADOW_LORD, 'B', 10, 10);
@@ -526,7 +553,12 @@ console.log('\n[12] 面板上写清楚');
   };
   const beast = lines(SHADOW_BEAST).join(' | ');
   check('蚀影：写了暗蚀的具体数值', beast.includes('暗蚀：8 点'), beast);
-  check('蚀影：写了暗影半径', /半径\s*3\s*格/.test(beast), beast);
+  const beastRadius = arena().s.unitTypes[SHADOW_BEAST]!.shadowRadius;
+  check(
+    '蚀影：写了暗影半径（读兵种表，别写死）',
+    beast.includes(`半径 ${beastRadius} 格`),
+    beast,
+  );
 
   const shade = lines(SHADE).join(' | ');
   check('暗影：挂了「暗影侵蚀」词条（击杀变蚀影）', shade.includes('暗影侵蚀'), shade);

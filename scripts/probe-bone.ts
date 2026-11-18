@@ -106,9 +106,24 @@ function ctxOf(s: GameState, u: Unit): UnitAiCtx {
   };
 }
 
-/** 让 `side` 这一方结束一个回合（能力的 onTurnEnd 会在这里跑） */
+/** 让 `side` 这一方**结束**一个回合（能力的 onTurnEnd 会在这里跑） */
 const endTurnOf = (s: GameState, side: PlayerId): GameState => {
   if (s.current !== side) s.current = side;
+  const e = applyAction(s, { type: 'END_TURN' });
+  if (!e.ok) throw new Error(`END_TURN 失败：${e.reason}`);
+  return e.state;
+};
+
+/**
+ * 让 `side` 这一方**开始**一个新的回合（能力的 onTurnStart 会在这里跑）。
+ *
+ * 和 `endTurnOf` 是两回事，别混：结束 B 的回合只会开启 A 的回合，
+ * B 的回合开始钩子要等 A 交棒。第一版拿 `endTurnOf` 当 `beginTurnOf` 用，
+ * 表现成"凝结期间没有锁住移动"。
+ */
+const beginTurnOf = (s: GameState, side: PlayerId): GameState => {
+  const other: PlayerId = side === 'A' ? 'B' : 'A';
+  if (s.current !== other) s.current = other;
   const e = applyAction(s, { type: 'END_TURN' });
   if (!e.ok) throw new Error(`END_TURN 失败：${e.reason}`);
   return e.state;
@@ -145,34 +160,59 @@ console.log('[1] 三个兵');
 /* ══════════════════════════════════════════════════════════════════
  * 2. 寻躯 / 复苏：回合末吞掉相邻单位并变形
  * ══════════════════════════════════════════════════════════════════ */
-console.log('\n[2] 寻躯 / 复苏');
+console.log('\n[2] 寻躯 / 复苏（两段式：吞下 → 原地一回合 → 变形）');
 {
   const { s, mk } = arena();
   mk('bone', BONE_SKELETON, 'B', 5, 5);
   mk('flesh', FLESH, 'B', 5, 6); // 相邻
-  const after = endTurnOf(s, 'B');
-  const nowBone = after.units.find((u) => u.id === 'bone')!;
-  check('骸骨吞掉血肉后变成尸骸', nowBone.type === BONE_CORPSE, nowBone.type);
-  check('那团血肉没了', !after.units.some((u) => u.id === 'flesh'));
-  check('变形后血量不超过新上限', nowBone.hp <= (after.unitTypes[BONE_CORPSE]?.maxHp ?? 0));
+  const t1 = endTurnOf(s, 'B');
+  const mid = t1.units.find((u) => u.id === 'bone')!;
+  check('第一个回合末：吞掉了血肉', !t1.units.some((u) => u.id === 'flesh'));
+  check('但还没变形（要等一回合）', mid.type === BONE_SKELETON, mid.type);
+  check('记下了要变成什么', mid.custom?.formTo === BONE_CORPSE, String(mid.custom?.formTo));
 
-  // 不相邻不变
+  // 下一回合它被锁住移动
+  const t2 = beginTurnOf(t1, 'B'); // 让它进入自己的回合（回合开始钩子在这里跑）
+  const frozen = t2.units.find((u) => u.id === 'bone');
+  check('凝结期间动不了（moved 被锁住）', frozen?.moved === true, String(frozen?.moved));
+
+  const t3 = endTurnOf(t2, 'B');
+  const done = t3.units.find((u) => u.id === 'bone')!;
+  check('第二个回合末：变成尸骸', done.type === BONE_CORPSE, done.type);
+  check('变形后血量按比例换算（满血 70 → 满血 150）', done.hp === (t3.unitTypes[BONE_CORPSE]?.maxHp ?? 0), String(done.hp));
+
+  // 半血变形：70 血的骸骨掉到 35，应该变成 75 血的尸骸
+  const half = arena();
+  const b3 = half.mk('bone3', BONE_SKELETON, 'B', 5, 5);
+  b3.hp = 35;
+  half.mk('flesh3', FLESH, 'B', 5, 6);
+  const h1 = endTurnOf(half.s, 'B');
+  const h1b = beginTurnOf(h1, 'B');
+  const h2 = endTurnOf(h1b, 'B');
+  const hb = h2.units.find((u) => u.id === 'bone3')!;
+  check(
+    '半血变形：35/70 → 75/150（按比例，不是简单截断）',
+    hb.type === BONE_CORPSE && hb.hp === 75,
+    `${hb.type} ${hb.hp}`,
+  );
+
+  // 隔太远不会吞
   const far = arena();
-  const b2 = far.mk('bone2', BONE_SKELETON, 'B', 5, 5);
+  far.mk('bone2', BONE_SKELETON, 'B', 5, 5);
   far.mk('flesh2', FLESH, 'B', 9, 5);
   const afterFar = endTurnOf(far.s, 'B');
   check('血肉隔太远就不会被吞', afterFar.units.find((u) => u.id === 'bone2')!.type === BONE_SKELETON);
-  void b2;
 
-  // 复苏：尸骸 + 暗影
+  // 复苏：尸骸 + 暗影 → 两段之后变不详
   const rev = arena();
-  const corpse = rev.mk('corpse', BONE_CORPSE, 'B', 8, 8);
+  rev.mk('corpse', BONE_CORPSE, 'B', 8, 8);
   rev.mk('shade', SHADE, 'B', 8, 9);
-  const afterRev = endTurnOf(rev.s, 'B');
-  const nowCorpse = afterRev.units.find((u) => u.id === 'corpse')!;
-  check('尸骸吞掉暗影后变成不详', nowCorpse.type === BONE_UNNAMED, nowCorpse.type);
-  check('那团暗影没了', !afterRev.units.some((u) => u.id === 'shade'));
-  void corpse;
+  const r1 = endTurnOf(rev.s, 'B');
+  check('第一个回合末：暗影被吞掉', !r1.units.some((u) => u.id === 'shade'));
+  check('但还没变成不详', r1.units.find((u) => u.id === 'corpse')!.type === BONE_CORPSE);
+  const r2 = beginTurnOf(r1, 'B');
+  const r3 = endTurnOf(r2, 'B');
+  check('第二个回合末：变成不详', r3.units.find((u) => u.id === 'corpse')!.type === BONE_UNNAMED);
 }
 
 /* ══════════════════════════════════════════════════════════════════

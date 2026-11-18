@@ -493,10 +493,11 @@ const SHADOW_BEAST_DEF: UnitTypeDef = {
   range: 1,
   vision: 5,
   summonedOnly: true,
-  shadowRadius: 3,
+  shadowRadius: 4,
   aiAutonomy: 1,
   aiProfile: 'shadow-beast-edge',
-  abilities: ['shadow-erosion'],
+  // 影系偏弱（2026-11-18）：蚀影也分得一份「化影」
+  abilities: ['shadow-erosion', 'shadow-spawn'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -526,7 +527,7 @@ const SHADE_DEF: UnitTypeDef = {
   flight: true,
   layer: 'air',
   summonedOnly: true,
-  shadowRadius: 1,
+  shadowRadius: 2,
   aiAutonomy: 1,
   aiProfile: 'shade-spread',
   abilities: ['shadow-erosion', 'shadow-possess'],
@@ -557,10 +558,11 @@ const SHADOW_LORD_DEF: UnitTypeDef = {
   flight: true,
   layer: 'air',
   summonedOnly: true,
-  shadowRadius: 7,
+  shadowRadius: 8,
   aiAutonomy: 1,
   aiProfile: 'shadow-lord-kite',
-  abilities: ['shadow-erosion', 'shadow-spawn'],
+  // 影主也带「暗影侵蚀」：它自己打死的也要站起来
+  abilities: ['shadow-erosion', 'shadow-spawn', 'shadow-possess'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -630,6 +632,21 @@ function bestShadowJump(
     if (!best || s > best.s) best = { x, y, s };
   }
   return best;
+}
+
+/**
+ * 同类之间"不过分靠近"的打分惩罚。
+ *
+ * 2026-11-18 作者定的手感：影主之间、血核之间平均保持 **2 格**；
+ * 影主和血核之间不限制（各是各的根，凑一起反而更好看）。
+ * 所以惩罚只按**同兵种**算：距离 2 及格，1 和 0 才扣分——
+ * 这样"往暗影深处走"和"别贴在一起"叠起来，平衡点正好落在 2 格左右。
+ */
+function kinCrowd(c: UnitAiCtx, at: { x: number; y: number }, type: string): number {
+  const kin = c.allies.filter((a) => a.type === type && a.id !== c.unit.id && a.hp > 0);
+  if (kin.length === 0) return 0;
+  const near = Math.min(...kin.map((k) => dist(k, at)));
+  return near >= 2 ? 0 : (2 - near) * 14;
 }
 
 /** 离最近敌人有多远（没有敌人时给 Infinity） */
@@ -866,7 +883,10 @@ const SHADOW_LORD_AI: UnitAiProfile = {
     // 3）没敌人：回暗影深处
     const deep = deepestShadow(c.state, c.unit);
     if (!deep) return {};
-    if (deep.x === c.unit.x && deep.y === c.unit.y) return {};
+    /*
+     * 站在最深处也**不直接摆烂走人**：同类别贴太近时它还是要挪一格。
+     * "不动"交给下面的打分判（站着的分 vs 挪一步的分），不在这儿一刀切返回。
+     */
     /*
      * 深处还很远（走路一步到不了）就直接跳进去——"化进影子里"，
      * 比一步步往回爬更像影主。近了才走，免得每回合都在天上闪。
@@ -877,14 +897,19 @@ const SHADOW_LORD_AI: UnitAiProfile = {
         action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: deep.x, targetY: deep.y },
         score: 140,
       });
-    } else {
-      const walk = steps(c, Math.max(1, c.def.move))
-        .filter((p) => p.d > 0)
-        .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
-      if (walk && dist(walk, deep) < gap) {
-        add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
-      }
+      return { add };
     }
+    /*
+     * 走位打分 = 离深处多近 − 和同类的挤压。只在"比站着更好"时才挪，
+     * 所以两个影主会各自找一个又深、彼此又隔开两格的位置，而不是叠在同一个最深点上。
+     */
+    const here = -gap - kinCrowd(c, c.unit, SHADOW_LORD);
+    let best: { x: number; y: number; s: number } | null = null;
+    for (const p of steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0)) {
+      const s2 = -dist(p, deep) - kinCrowd(c, p, SHADOW_LORD);
+      if (s2 > here + 0.5 && (!best || s2 > best.s)) best = { x: p.x, y: p.y, s: s2 };
+    }
+    if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 });
     return add.length ? { add } : {};
   },
 };
@@ -1122,7 +1147,8 @@ const FLESH_DEF: UnitTypeDef = {
   // 12 → 8（2026-11-18 跑批后调）：160 血 + 12 甲 + 每回合吸 31 血，
   // 第 5 代的兵打它净伤害是负的，整局杀不掉一团。
   armor: 8,
-  maxHp: 160,
+  // 160 → 130（2026-11-18 作者：血系太肉，既给影系铺暗影又打不死）
+  maxHp: 130,
   range: 1,
   vision: 4,
   summonedOnly: true,
@@ -1271,13 +1297,15 @@ const BLOOD_CORE_AI: UnitAiProfile = {
     }
 
     const deep = deepestShadow(c.state, c.unit);
-    if (!deep || (deep.x === c.unit.x && deep.y === c.unit.y)) return {};
-    const walk = steps(c, Math.max(1, c.def.move))
-      .filter((p) => p.d > 0)
-      .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
-    if (walk && dist(walk, deep) < dist(c.unit, deep)) {
-      add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
+    if (!deep) return {};
+    // 和影主同一条逻辑：往深处走，但别和同类挤在一格（站在深处也一样要判）
+    const here = -dist(c.unit, deep) - kinCrowd(c, c.unit, BLOOD_CORE);
+    let best: { x: number; y: number; s: number } | null = null;
+    for (const p of steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0)) {
+      const s2 = -dist(p, deep) - kinCrowd(c, p, BLOOD_CORE);
+      if (s2 > here + 0.5 && (!best || s2 > best.s)) best = { x: p.x, y: p.y, s: s2 };
     }
+    if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 });
     return add.length ? { add } : {};
   },
 };
@@ -1320,11 +1348,20 @@ function spawnAt(
   return state.units.find((u) => u.type === type && u.x === x && u.y === y) ?? null;
 }
 
-/** 单位原地"变形"成另一个兵种（保留位置，血量按新上限截断） */
+/**
+ * 单位原地"变形"成另一个兵种。
+ *
+ * 血量**按比例**换算，不是简单截断（2026-11-18 作者指出）：
+ * 一具 70 血的骸骨满血变成 150 血的尸骸，应该是 150；半血（35）变成 75。
+ * 简单 `min(hp, newMax)` 会让"半血骸骨"变成"半血尸骸里最亏的那种"——
+ * 变形等于白送一堆血，白白让玩家占了便宜、也说不通。
+ */
 function transform(u: Unit, type: string, state: GameState): void {
+  const oldMax = state.unitTypes[u.type]?.maxHp ?? 1;
+  const ratio = oldMax > 0 ? Math.max(0, Math.min(1, u.hp / oldMax)) : 0;
   u.type = type;
-  const max = state.unitTypes[type]?.maxHp ?? u.hp;
-  u.hp = Math.min(u.hp, max);
+  const newMax = state.unitTypes[type]?.maxHp ?? u.hp;
+  u.hp = Math.max(1, Math.round(newMax * ratio));
 }
 
 /** 身边（曼哈顿 1 格）某类活着的单位 */
@@ -1337,53 +1374,97 @@ function adjacentOf(state: GameState, u: Unit, type: string): Unit | undefined {
 /* ── 词条 ─────────────────────────────────────────────────────────── */
 
 /**
- * 「寻躯」：回合结束吞掉相邻的血肉，自己变成尸骸。
+ * 「吞噬变形」类词条（寻躯 / 复苏共用一个实现）。
  *
- * 为什么在回合末：玩家得先看到"骸骨走到血肉旁边"，再看到它变形——
- * 放在回合开始会变成"它突然就变了"，中间那一步的因果看不见。
+ * 两段式：
+ *   1. 回合末吞下相邻的目标单位，记下 `custom.formTo`；
+ *   2. **下一个自己回合结束时，如果这一回合没动过**，才真正变形。
+ *
+ * 为什么加这一回合（2026-11-18 作者）：立刻变形等于"打掉一个兵、场上立刻多一个
+ * 更强的兵"，玩家没有反应窗口。加一回合之后，玩家能看到"它正在凝聚"并抢在
+ * 变形前把它打掉——这才是骨系该有的压力节奏。
  */
-const BONE_SEEK: AbilityDef = {
+function devourFormAbility(o: {
+  id: string;
+  name: string;
+  summary: string;
+  eat: string;
+  become: string;
+  eatText: (name: string) => string;
+  doneText: string;
+}): AbilityDef {
+  return {
+    id: o.id,
+    name: o.name,
+    summary: o.summary,
+    group: 'support',
+    hooks: {
+        /*
+         * 凝结期间**锁住移动**：回合开始就把 `moved` 置真。
+         *
+         * 为什么用这个办法：引擎没有"禁止移动"的开关，`canMove` 只看 `moved`。
+         * 而 `grantTurnTo`（重置 moved）跑在 `turnStartSkills` **之前**，
+         * 所以这里写下的 true 会保留整整一回合——AI 也提不出走位候选。
+         * 攻击不受影响：它只是"原地不动"，不是"不能动"。
+         */
+        onTurnStart: [
+          {
+            stage: TURN_START.self,
+            apply: (c) => {
+              if (typeof c.self.custom?.formTo === 'string') c.self.moved = true;
+            },
+          },
+        ],
+      onTurnEnd: [
+        {
+          stage: 0,
+          apply: (c) => {
+            const pending = c.self.custom?.formTo;
+            if (typeof pending === 'string') {
+              // 这一回合被锁住了移动，直接完成变形
+              transform(c.self, pending, c.state);
+              c.self.custom = { ...(c.self.custom ?? {}), formTo: undefined };
+              c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: o.doneText });
+              return;
+            }
+            const prey = adjacentOf(c.state, c.self, o.eat);
+            if (!prey) return;
+            const preyName = c.state.unitTypes[prey.type]?.name ?? prey.type;
+            c.api.killUnit(c.state, prey, undefined, o.eatText(preyName));
+            c.self.custom = { ...(c.self.custom ?? {}), formTo: o.become };
+            c.state.log.push({
+              turn: c.state.turn,
+              player: c.self.owner,
+              text: `它吞下了${preyName}，开始凝聚——下一回合原地不动就会变成新的东西。`,
+            });
+          },
+        },
+      ],
+    },
+  };
+}
+
+/** 「寻躯」：骸骨吞血肉 → 凝结一回合 → 尸骸 */
+const BONE_SEEK = devourFormAbility({
   id: 'bone-seek-body',
   name: '寻躯',
-  summary: '回合结束时，若相邻有血肉，吞掉它并变成尸骸。',
-  group: 'support',
-  hooks: {
-    onTurnEnd: [
-      {
-        stage: 0,
-        apply: (c) => {
-          const flesh = adjacentOf(c.state, c.self, FLESH);
-          if (!flesh) return;
-          c.api.killUnit(c.state, flesh, undefined, '血肉被骸骨吞下');
-          transform(c.self, BONE_CORPSE, c.state);
-          c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '骸骨吞下血肉，拼成了一具尸骸。' });
-        },
-      },
-    ],
-  },
-};
+  summary: '回合结束若相邻有血肉，吞掉它；下一个回合原地不动，就会变成尸骸。',
+  eat: FLESH,
+  become: BONE_CORPSE,
+  eatText: () => `血肉被骸骨吞下`,
+  doneText: '骸骨撑开骨架，拼成了一具尸骸。',
+});
 
-/** 「复苏」：回合结束吞掉相邻的暗影，自己变成不详。 */
-const BONE_REVIVE: AbilityDef = {
+/** 「复苏」：尸骸吞暗影 → 凝结一回合 → 不详 */
+const BONE_REVIVE = devourFormAbility({
   id: 'bone-revive',
   name: '复苏',
-  summary: '回合结束时，若相邻有暗影，吞掉它并变成不详。',
-  group: 'support',
-  hooks: {
-    onTurnEnd: [
-      {
-        stage: 0,
-        apply: (c) => {
-          const shade = adjacentOf(c.state, c.self, SHADE);
-          if (!shade) return;
-          c.api.killUnit(c.state, shade, undefined, '暗影被尸骸吞下');
-          transform(c.self, BONE_UNNAMED, c.state);
-          c.state.log.push({ turn: c.state.turn, player: c.self.owner, text: '尸骸吞下暗影，重新拼成了"不详"。' });
-        },
-      },
-    ],
-  },
-};
+  summary: '回合结束若相邻有暗影，吞掉它；下一个回合原地不动，就会变成不详。',
+  eat: SHADE,
+  become: BONE_UNNAMED,
+  eatText: () => `暗影被尸骸吞下`,
+  doneText: '尸骸重新拼合，站了起来——"不详"。',
+});
 
 /**
  * 「腾空」：这一回合攻击过就起飞；没攻击过就降落。
@@ -1570,6 +1651,9 @@ const BONE_SKELETON_AI: UnitAiProfile = {
   handler: (c: UnitAiCtx): UnitAiResult => {
     const add: UnitAiCandidate[] = [];
     const range = c.def.range ?? 1;
+
+    // 正在凝结（寻躯的第二段）：站着别动，动来动去永远变不成尸骸
+    if (typeof c.unit.custom?.formTo === 'string') return {};
 
     const prey = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
     if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 170 });
