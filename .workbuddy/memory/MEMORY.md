@@ -80,6 +80,12 @@ handler 只拿 `playerView`（不能看真局）；不许 `Math.random`、不许
 （会误伤三个兵依次进架势）。指纹**不含 `unit.custom`**，否则形态切换这类空转永远抓不到。
 只喂成功的动作。跑批脚本还没装（靠 50 兜底），阶段 4 一起迁移。
 
+**阶段 1 骨架已落（2026-11-18）**：`UnitTypeDef.aiAutonomy` / `aiProfile` +
+`Expansion.unitAi` + `core/unit-ai.ts`（注册表、白名单、`UNIT_AI_MUST_SCORE=1000`）。
+转化在 `ai.ts` 的 `unitAiCandidates()`；`Candidate` 多了 `ignoreRisk`（`must` 恒为 true）。
+探针 `npm run probe:unit-ai` 已接进 `npm test`，5 段：零变化 / 未注册 / 白名单 / 清单。
+**验收硬指标是"自主分 0 或 profile 返回空时，动作序列逐条相同"**，现在两档都验过。
+
 **顺带量出的真病灶**：20 个兵里一半以上每回合什么都不做（走位收益太低+评分门槛），
 不是名额问题。要动它得另开议题，别顺手改。
 

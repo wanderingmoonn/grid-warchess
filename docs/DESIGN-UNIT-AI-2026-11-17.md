@@ -4,6 +4,9 @@
 > 这份文档只回答"机制怎么接进引擎、接在哪、有哪些不许碰的地方"。
 > 实施顺序见 `PLAN-UNIT-AI-2026-11-17.md`。
 >
+> **进度**：阶段 0（步数上限 + 卡死检测）、阶段 1（骨架）已落地，见 PLAN 的实测记录。
+> 阶段 2（一个测试兵 + `must`）尚未开始。
+>
 > 需求来源：修真扩展包要做一个"按特定流程行动"的 boss（扩展包「黑暗动乱」），
 > 而现引擎只有一套按席位算分的 AI，兵种之间没有行为差异。
 
@@ -149,7 +152,7 @@ UnitAiResult = {
 | 打死一个贵兵/英雄 | 120 ~ 300 |
 | 抢一座城 / 打掉城防 | 60 ~ 150 |
 | 造一个兵 | 20 ~ 80 |
-| **必须做（`must`）** | **1000** |
+| **必须做（`must`）** | **`UNIT_AI_MUST_SCORE = 1000`**（写死在 `core/unit-ai.ts`，不打折、不吃推演） |
 
 校准方法：先给一个估的数，跑探针看它在候选里排第几；如果它一直选不上，是分给低了；
 如果它抢走一切（比如该补刀的时候去放法术），是分给高了。**这一步没有公式，只能试。**
@@ -158,8 +161,9 @@ UnitAiResult = {
 
 ## 6. 插入点（`ai.ts` 里具体接在哪）
 
-位置：`aiNextActionCore` 里那个 per-unit 循环（约 6085 行，现在是
-`for (const u of unitsOf(view, me)) { unitCandidates(...); heroSkillCandidate(...) }`）。
+位置：`aiNextActionCore` 里那个 per-unit 循环（约 6097 行，现在是
+`for (const u of unitsOf(view, me)) { … }`）。真正的转换在 `ai.ts` 的
+`unitAiCandidates()` 里（紧挨着 `unitCandidates` 定义），校验在 `core/unit-ai.ts`。
 
 顺序：
 

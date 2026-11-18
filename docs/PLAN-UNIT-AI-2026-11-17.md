@@ -192,6 +192,50 @@ npm run test:replay          # 回放还成立
 
 ---
 
+## 阶段 1 实测记录（2026-11-18 完成）
+
+### 落地清单
+
+| 文件 | 改动 |
+|---|---|
+| `src/core/types.ts` | `UnitTypeDef` 加 `aiAutonomy?` / `aiProfile?`（都带长注释：0 = 全听全局） |
+| `src/core/expansions.ts` | 新类型 `UnitAiCandidate` / `UnitAiCtx` / `UnitAiResult` / `UnitAiProfile`；`Expansion.unitAi?` |
+| `src/core/unit-ai.ts`（新） | 注册表：`registerUnitAiProfile`（重复 id 抛错）/ `unitAiOf` / `unitAiProfileOf` / `allUnitAiProfiles` / `unitAiActionProblem`（白名单）/ `UNIT_AI_MUST_SCORE` / `unitAiWarn`（同一问题只警告一次） |
+| `src/core/ai.ts` | 新函数 `unitAiCandidates()`；per-unit 循环里加一步；`Candidate.ignoreRisk`；推演削分跳过 `ignoreRisk` |
+| `scripts/probe-unit-ai.ts`（新） | 探针 5 段，接进 `npm test` |
+| `package.json` | `probe:unit-ai` + 接进 `test` |
+
+### 关键实现选择（和原设计的两处微调）
+
+1. **`must` 给 1000 且 `ignoreRisk: true`**。原设计只说"给固定高分"。落地时把
+   "跳过推演削分"也挂上了——否则作者写的"第三回合变身"会被"对面下一回合能打多疼"
+   否决掉，流程时灵时不灵。代价是：如果 `must` 是攻击型招式，它会不顾伤亡地打出去。
+   这正是剧本要的。
+2. **`score` 在进入候选表时才乘自主分**（`c.score * autonomy`），扩展给的是
+   "这个 profile 认为值多少"。同一个 profile 挂在自主分 0.5 的兵身上自动打折，
+   不用每个扩展自己乘。
+
+### 探针结果（全过）
+
+```
+[0] 注册探针 profile —— 重复 id 会抛错 ✓
+[1] 零变化：
+    · 自主分 0          → handler 一次都没被调用，序列一致 ✓
+    · 自主分 1、返回空   → handler 被调用了，序列仍一致 ✓（这条证明路是通的，不是死代码）
+    · 自主分 1、未注册   → 静默降级 + 警告一次，序列一致 ✓
+    · 自主分 1、提非法动作（END_TURN）→ 被丢弃 + 告警，序列一致 ✓
+[2] 查不到 profile 时返回 null，不抛错 ✓
+[3] 白名单：走/施法可用；结束回合、招募、替别的兵做主 被拦 ✓
+[4] 本局 52 个兵种，写 aiProfile 的 0 个 ✓；悬空 aiProfile 能被查出来 ✓
+```
+
+### 回归
+
+`tsc --noEmit` 干净；`test:rules` 956、`test:ai-optimization` 53、
+`probe:level`、`test:boot`、`test:replay` 9、`test:net` 全过。
+
+---
+
 ## 阶段 2：一个测试兵 + `must`（只在 dev 夹具里）
 
 **目标：把三道门试出来**——分差够不够、被拒之后会不会重复提、会不会被推演削没。
