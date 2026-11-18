@@ -161,7 +161,7 @@ console.log('\n[3] 蚀影的本能：贴边');
   // 一个影主在远处铺出大片暗影；蚀影站在圈外、敌人也在圈外
   mk('lord', SHADOW_LORD, 'B', 8, 8);
   const beast = mk('beast', SHADOW_BEAST, 'B', 17, 17);
-  mk('foe', 'militia', 'A', 5, 5);
+  // 这一段不摆敌人：有敌人它会先去伏击（那条在 [11] 里验）
   refreshShadow(s);
   const cells = new Set(s.overlays?.[SHADOW_KEY] ?? []);
   const edge = (x: number, y: number): boolean =>
@@ -303,7 +303,193 @@ console.log('\n[7] 暗影跳跃');
   if (inside.ok) {
     const after = inside.state.units.find((u) => u.id === 'shade')!;
     check('瞬移到位', after.x === 9 && after.y === 9, `${after.x},${after.y}`);
-    check('跳完这一回合不能再走（moved = true）', after.moved === true);
+    check('跳完**不**占移动额度（还能走）', after.moved === false, String(after.moved));
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 8. 目标偏好
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[8] 目标偏好');
+{
+  // 蚀影：扑落单的那个
+  {
+    const { s, mk } = arena();
+    /*
+     * 近战（射程 1）的场摆不出"落单 vs 有护卫"：贴脸的两个敌人彼此一定只差 2 格，
+     * 按"两格内有同伴"的判据，它们永远互为护卫。所以这里用一个**射程 2 的探针变体**
+     * （同一套 profile），把四个目标同时放进射程内。
+     */
+    s.unitTypes['probe-beast-r2'] = { ...s.unitTypes[SHADOW_BEAST]!, id: 'probe-beast-r2', range: 2 };
+    const beast = mk('beast', 'probe-beast-r2', 'B', 5, 5);
+    // 落单的要离其他敌人 ≥3 格，否则按"两格内有同伴"它就又有护卫了
+    const lone = mk('lone', 'probe-tank-0', 'A', 5, 7);
+    const buddy1 = mk('b1', 'probe-tank-0', 'A', 4, 5);       // 和 b2 挤在一起
+    const buddy2 = mk('b2', 'probe-tank-0', 'A', 3, 5);
+    lone.hp = 999; buddy1.hp = 50; buddy2.hp = 50;            // 故意让"血少的"是人堆里的
+    const out = unitAiProfileOf('shadow-beast-edge')!.handler(ctxOf(s, beast));
+    const atk = out.add?.find((x) => x.action.type === 'ATTACK')?.action;
+    check(
+      '蚀影扑落单的，而不是扑血最少但有人护着的',
+      atk?.type === 'ATTACK' && (atk as { targetId: string }).targetId === 'lone',
+      JSON.stringify(atk),
+    );
+  }
+  // 暗影：补刀（血最少）
+  {
+    const { s, mk } = arena();
+    const shade = mk('shade', SHADE, 'B', 5, 5);
+    const healthy = mk('h', 'probe-tank-0', 'A', 5, 6);
+    const hurt = mk('hurt', 'probe-tank-0', 'A', 6, 5);
+    healthy.hp = 999; hurt.hp = 7;
+    const out = unitAiProfileOf('shade-spread')!.handler(ctxOf(s, shade));
+    const atk = out.add?.find((x) => x.action.type === 'ATTACK')?.action;
+    check('暗影补刀（挑血最少的）', atk?.type === 'ATTACK' && (atk as { targetId: string }).targetId === 'hurt', JSON.stringify(atk));
+  }
+  // 影主：打威胁大的
+  {
+    const { s, mk } = arena();
+    const lord = mk('lord', SHADOW_LORD, 'B', 5, 5);
+    const weak = mk('w', 'probe-tank-0', 'A', 5, 6);   // 打 0
+    mk('strong', 'probe-tank-0', 'A', 6, 5);
+    // 给"strong"换个高攻兵种
+    s.unitTypes['probe-heavy'] = { ...s.unitTypes['militia']!, id: 'probe-heavy', name: '重炮', atk: 200, range: 5, move: 0, armor: 2, maxHp: 200, skills: [] };
+    const strong = s.units.find((u) => u.id === 'strong')!;
+    strong.type = 'probe-heavy';
+    strong.hp = 200;
+    weak.hp = 200;
+    const out = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s, lord));
+    const atk = out.add?.find((x) => x.action.type === 'ATTACK')?.action;
+    check('影主打威胁大的（不是随便挑一个）', atk?.type === 'ATTACK' && (atk as { targetId: string }).targetId === 'strong', JSON.stringify(atk));
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 9. 影主没事的时候往暗影深处躲
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[9] 影主藏身');
+{
+  const { s, mk } = arena();
+  const lord = mk('lord', SHADOW_LORD, 'B', 10, 10);
+  refreshShadow(s);            // 暗影以 (10,10) 为中心铺开
+  lord.x = 3;                  // 然后把它挪到圈外（暗影不会跟着走）
+  lord.y = 3;
+  const out = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s, lord));
+  const act = out.add?.[0]?.action;
+  check('没有敌人时提出了动作', !!act, JSON.stringify(out.add));
+  if (act && (act.type === 'MOVE' || act.type === 'HERO_SKILL')) {
+    const tx = act.type === 'MOVE' ? act.x : act.targetX!;
+    const ty = act.type === 'MOVE' ? act.y : act.targetY!;
+    check(
+      '往暗影深处走（离中心更近）',
+      dist({ x: tx, y: ty }, { x: 10, y: 10 }) < dist(lord, { x: 10, y: 10 }),
+      `走到 ${tx},${ty}`,
+    );
+  }
+  // 已经是最深处就别再动
+  const { s: s2, mk: mk2 } = arena();
+  const lord2 = mk2('lord', SHADOW_LORD, 'B', 10, 10);
+  refreshShadow(s2);
+  const quiet = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s2, lord2));
+  check('已经躲在最深处时不再乱动', !quiet.add || quiet.add.length === 0, JSON.stringify(quiet.add));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 10. 跳跃的时机限制
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[10] 跳跃的时机');
+{
+  const jump = (mut: (u: Unit) => void): ReturnType<typeof applyAction> => {
+    const { s, mk } = arena();
+    mk('lord', SHADOW_LORD, 'B', 10, 10);
+    mk('keep-alive', 'probe-tank-999', 'A', 18, 1); // 留个活口，否则 B 立刻获胜、后面的动作全被拒
+    refreshShadow(s);
+    const u = mk('unit', SHADE, 'B', 10, 10);
+    s.current = 'B';
+    s.turn = 20;
+    mut(u);
+    return applyAction(s, { type: 'HERO_SKILL', unitId: u.id, skillId: 'shadow-step', targetX: 12, targetY: 12 });
+  };
+  check('攻击过就不能跳', !jump((u) => { u.acted = true; }).ok);
+  check('走完还能跳', jump((u) => { u.moved = true; }).ok);
+  check('什么都没做当然能跳', jump(() => {}).ok);
+
+  // 跳完还能走
+  {
+    const { s, mk } = arena();
+    mk('lord', SHADOW_LORD, 'B', 10, 10);
+    mk('keep-alive', 'probe-tank-999', 'A', 18, 1);
+    refreshShadow(s);
+    const u = mk('unit', SHADE, 'B', 10, 10);
+    s.current = 'B';
+    s.turn = 20;
+    const r1 = applyAction(s, { type: 'HERO_SKILL', unitId: u.id, skillId: 'shadow-step', targetX: 12, targetY: 12 });
+    check('先跳成功', r1.ok, r1.ok ? '' : r1.reason);
+    if (r1.ok) {
+      const afterJump = r1.state.units.find((x) => x.id === 'unit')!;
+      check('跳完 moved 还是 false', afterJump.moved === false);
+      const r2 = applyAction(r1.state, { type: 'MOVE', unitId: 'unit', x: 13, y: 12 });
+      check('跳完还能走一步', r2.ok, r2.ok ? '' : r2.reason);
+    }
+  }
+
+  // 冷却 1：同一回合不能连跳两次，下一回合可以
+  {
+    const { s, mk } = arena();
+    mk('lord', SHADOW_LORD, 'B', 10, 10);
+    mk('keep-alive', 'probe-tank-999', 'A', 18, 1);
+    refreshShadow(s);
+    const u = mk('unit', SHADE, 'B', 10, 10);
+    s.current = 'B';
+    s.turn = 20;
+    const r1 = applyAction(s, { type: 'HERO_SKILL', unitId: u.id, skillId: 'shadow-step', targetX: 11, targetY: 11 });
+    const r2 = r1.ok
+      ? applyAction(r1.state, { type: 'HERO_SKILL', unitId: 'unit', skillId: 'shadow-step', targetX: 12, targetY: 12 })
+      : r1;
+    check('同一回合不能连跳两次', !r2.ok, r2.ok ? '居然连跳了' : r2.reason);
+    if (r1.ok) {
+      // 过一回合：冷却回到 0
+      const u2 = r1.state.units.find((x) => x.id === 'unit')!;
+      u2.skillCd = { ...(u2.skillCd ?? {}), 'shadow-step': 0 };
+      u2.skillTurn = 0;
+      const r3 = applyAction(r1.state, { type: 'HERO_SKILL', unitId: 'unit', skillId: 'shadow-step', targetX: 12, targetY: 12 });
+      check('下一回合能再跳（冷却 1 = 隔一回合）', r3.ok, r3.ok ? '' : r3.reason);
+    }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 11. 它们自己会用跳跃
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[11] 自己会用跳跃');
+{
+  // 影主远离暗影深处，且走不到 → 应该提跳跃
+  const { s, mk } = arena();
+  const lord = mk('lord', SHADOW_LORD, 'B', 10, 10);
+  refreshShadow(s);
+  lord.x = 1;
+  lord.y = 1; // 远处，走 2 步到不了中心
+  const out = unitAiProfileOf('shadow-lord-kite')!.handler(ctxOf(s, lord));
+  const skill = out.add?.find((x) => x.action.type === 'HERO_SKILL')?.action;
+  check('影主离深处太远就直接跳进去（化进影子里）', skill?.type === 'HERO_SKILL', JSON.stringify(out.add));
+
+  // 蚀影：落单的敌人够不着 → 从影子里跳到他旁边
+  {
+    const { s: s3, mk: mk3 } = arena();
+    const beast = mk3('beast', SHADOW_BEAST, 'B', 4, 4);
+    mk3('lord', SHADOW_LORD, 'B', 14, 14);      // 远处铺出一片暗影
+    const prey = mk3('prey', 'probe-tank-0', 'A', 15, 15); // 落单，挨着暗影中心
+    refreshShadow(s3);
+    const out3 = unitAiProfileOf('shadow-beast-edge')!.handler(ctxOf(s3, beast));
+    const jump3 = out3.add?.find((x) => x.action.type === 'HERO_SKILL')?.action;
+    check('蚀影够不着落单目标时，从影子里扑过去', jump3?.type === 'HERO_SKILL', JSON.stringify(out3.add));
+    if (jump3 && jump3.type === 'HERO_SKILL') {
+      check(
+        '落点贴着那个目标（下一回合就能打）',
+        Math.abs(jump3.targetX! - prey.x) + Math.abs(jump3.targetY! - prey.y) === 1,
+        `${jump3.targetX},${jump3.targetY}`,
+      );
+    }
   }
 }
 

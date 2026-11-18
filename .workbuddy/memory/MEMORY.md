@@ -139,7 +139,12 @@ rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`u
 **影系三兵已跑通（2026-11-18）**：蚀影（贴暗影边）/ 暗影（同类散开、击杀原地生蚀影）/
 影主（不贴身、计时器召唤暗影，攻击过更快）。真伤叫**暗蚀**，走 `DAMAGE_STAGE.trueDamage`。
 **坑**：包内不能 import `unit-ai.ts`（它顶层读 EXPANSIONS → 循环），
-必须走 `Expansion.unitAi`。`UnitAiCtx` 现在带 `foes`/`allies`。探针 `npm run probe:shade`。
+必须走 `Expansion.unitAi`。`UnitAiCtx` 现在带 `foes`/`allies`。探针 `npm run probe:shade`（50 条）。
+
+**影系第二轮（2026-11-18）**：目标偏好（蚀影扑落单 / 暗影补刀 / 影主打威胁最大）；
+影主没事走「暗影最深处」（离边界最远，**不用重心**——重心可能落在暗影外）；
+暗影跳跃改成"攻击后不能跳、走完能跳、跳完能走、冷却 1"，且三个兵自己会用（蚀影跳跃伏击、
+影主远距离化进去）。
 
 ## 协作约定
 

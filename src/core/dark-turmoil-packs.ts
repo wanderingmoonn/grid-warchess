@@ -340,16 +340,23 @@ function inShadowCell(state: GameState, x: number, y: number, board?: string): b
 /**
  * 暗影跳跃：瞬移到任意一个暗影格子。
  *
- * 三条规矩：
+ * 四条规矩：
  *   · 落点必须在暗影领域里——这是它唯一的交通方式，也是这个系列的性格；
  *   · 落点站得下（不能叠在别人身上）；
- *   · 用掉之后 `moved = true`：它是"这一回合的移动"，不能跳完再走。
+ *   · **攻击过就不能再跳**：跳是"换个位置"，不是"打完再溜"。但**走完可以跳**、
+ *     **跳完也能走**——它和普通移动不是同一个额度，所以这里不碰 `moved`；
+ *   · 冷却 1 个自己的回合（等于每回合一次），另由 `skillTurn` 兜住"一回合一次"。
  */
 registerSkillEffect('shadow-step', (c) => {
   const t = c.target;
   if (!t) {
     c.result.ok = false;
     c.result.reason = '要先选一个暗影格子';
+    return;
+  }
+  if (c.self.acted) {
+    c.result.ok = false;
+    c.result.reason = '攻击之后就不能再跳了';
     return;
   }
   if (!inShadowCell(c.state, t.x, t.y, c.self.board)) {
@@ -365,18 +372,18 @@ registerSkillEffect('shadow-step', (c) => {
   const from = `${c.self.x},${c.self.y}`;
   c.self.x = t.x;
   c.self.y = t.y;
-  c.self.moved = true;
   c.result.log = `暗影跳跃：${from} → ${t.x},${t.y}`;
 });
 
 const SHADOW_STEP_SKILL = {
   id: 'shadow-step',
   name: '暗影跳跃',
-  summary: '瞬间移动到任意一个暗影格子。这一回合就不能再走了。',
+  summary: '瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。',
   effect: 'shadow-step',
   targeting: 'point' as const,
   radius: 40,
   multiCast: false,
+  cooldown: 1,
 };
 
 /* ── 三个兵 ─────────────────────────────────────────────────────── */
@@ -509,98 +516,291 @@ function onShadowEdge(c: UnitAiCtx, x: number, y: number): boolean {
   );
 }
 
+/** 能不能跳（冷却/这一回合放没放/攻击过没有）。只看自己身上那几个字段，不查规则层 */
+function canStep(c: UnitAiCtx): boolean {
+  if (c.unit.acted) return false;
+  if (c.unit.skillTurn === c.state.turn) return false;
+  return (c.unit.skillCd?.['shadow-step'] ?? 0) <= 0;
+}
+
 /**
- * 蚀影：喜欢待在暗影的边缘。
+ * 在暗影领域里挑一个"跳过去"的落点。`score` 越大越好；返回 null 表示没有更好的。
  *
- * 为什么是边缘而不是深处：它是从黑影里伸出来的东西——站在边界上，
- * 下一步就能扑到亮处的人身上；站深处则看不见外面。玩家因此能从"黑雾边上"
- * 读出它的进攻方向。
+ * 为什么要传打分函数：三个兵对同一个落点的看法完全不同——
+ * 蚀影要边界、影主要最深处。挑点的逻辑只有一份，口味由调用方给。
+ */
+function bestShadowJump(
+  c: UnitAiCtx,
+  score: (x: number, y: number) => number,
+): { x: number; y: number; s: number } | null {
+  const cells = c.state.overlays?.[SHADOW_KEY] ?? [];
+  if (cells.length === 0) return null;
+  let best: { x: number; y: number; s: number } | null = null;
+  for (const i of cells) {
+    const x = i % c.state.w;
+    const y = Math.floor(i / c.state.w);
+    if (x === c.unit.x && y === c.unit.y) continue;
+    if (!c.api.canStandAt(c.state, x, y, c.unit.type)) continue;
+    const s = score(x, y);
+    if (!best || s > best.s) best = { x, y, s };
+  }
+  return best;
+}
+
+/** 离最近敌人有多远（没有敌人时给 Infinity） */
+function nearestFoe(c: UnitAiCtx, at: { x: number; y: number }): number {
+  return Math.min(...c.foes.map((f) => dist(f, at)), Infinity);
+}
+
+/** 这个敌人身边有几个同伴（"落单"的判据：身边没人） */
+function escortOf(c: UnitAiCtx, target: Unit): number {
+  return c.foes.filter((f) => f.id !== target.id && dist(f, target) <= 2).length;
+}
+
+/** 威胁大小：能打出多少伤害（物攻 + 法攻），血越少越"好欺负"只是附加项 */
+function threatOf(c: UnitAiCtx, u: Unit): number {
+  const d = c.state.unitTypes[u.type];
+  return (d?.atk ?? 0) + (d?.magicAtk ?? 0);
+}
+
+/**
+ * 蚀影：**优先扑落单的生物**，站在暗影边界上。
  *
- * 已经站在边界上就不动，让全局 AI 去决定打谁（它的本职是近战）。
+ * "落单"的定义：两格内没有别的敌人。为什么用这个而不是"血最少"——
+ * 它是从黑影里伸出来的手，抓的是掉队的人；扑进人堆只会被围死。
+ *
+ * 顺序：先看有没有落单的能打到 → 站不到边界就找边界（走不到就跳过去）。
  */
 const SHADOW_BEAST_AI: UnitAiProfile = {
   id: 'shadow-beast-edge',
   handler: (c: UnitAiCtx): UnitAiResult => {
-    if (onShadowEdge(c, c.unit.x, c.unit.y)) return {};
-    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
-    let best: { x: number; y: number } | null = null;
-    let bestScore = -Infinity;
-    for (const p of tiles) {
-      if (!onShadowEdge(c, p.x, p.y)) continue;
-      const near = Math.min(...c.foes.map((f) => dist(p, f)), Infinity);
-      // 边界格里挑离敌人最近的（下一步就能扑上去）
-      const score = -near;
-      if (score > bestScore) {
-        bestScore = score;
-        best = p;
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const inRange = c.foes.filter((f) => dist(f, c.unit) <= range);
+
+    // 1）够得着的落单目标，优先级最高
+    const lone = inRange
+      .filter((f) => escortOf(c, f) === 0)
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (lone) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: lone.id }, score: 180 });
+
+    /*
+     * 2）够不着但看得见的落单目标：**从影子里扑过去**。
+     *
+     * 这是暗影跳跃存在的意义——它是伏击者，不是追人的猎犬。
+     * 条件：目标落单 + 它旁边有一格在暗影里（从那里出来正好贴脸）。
+     */
+    if (canStep(c)) {
+      const far = c.foes
+        .filter((f) => dist(f, c.unit) > range && escortOf(c, f) === 0)
+        .sort((a, b) => a.hp - b.hp)[0];
+      if (far) {
+        const spot = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+          .map(([dx, dy]) => ({ x: far.x + dx!, y: far.y + dy! }))
+          .find((p2) => inShadowCell(c.state, p2.x, p2.y, c.unit.board) && c.api.canStandAt(c.state, p2.x, p2.y, c.unit.type));
+        if (spot) {
+          add.push({
+            action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: spot.x, targetY: spot.y },
+            score: 165,
+          });
+        }
       }
     }
-    if (!best) return {};
-    const add: UnitAiCandidate[] = [
-      { action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 },
-    ];
-    return { add };
+
+    // 3）守住边界：已经在边界就不动，让全局去决定打谁
+    if (!onShadowEdge(c, c.unit.x, c.unit.y)) {
+      const walk = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0 && onShadowEdge(c, p.x, p.y));
+      const walkBest = walk.sort((a, b) => nearestFoe(c, a) - nearestFoe(c, b))[0];
+      if (walkBest) {
+        add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walkBest.x, y: walkBest.y }, score: 120 });
+      } else if (canStep(c)) {
+        // 走不到边界：跳过去（暗影域里离敌人最近的边界格）
+        const jump = bestShadowJump(c, (x, y) =>
+          onShadowEdge(c, x, y) ? -nearestFoe(c, { x, y }) : -9999,
+        );
+        if (jump && jump.s > -9999) {
+          add.push({ action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: jump.x, targetY: jump.y }, score: 130 });
+        }
+      }
+    }
+    return add.length ? { add } : {};
   },
 };
 
 /**
- * 暗影：同类之间会自动散开。
+ * 暗影：**优先补刀**，同时跟同类散开。
  *
- * 为什么：一团影子挤在一起没有意义——它们的暗影半径只有 1，叠着等于浪费；
- * 散开才铺得满场。这也是玩家能看出"它们不是人"的第一眼。
- *
- * 只有"另一个暗影太近"时才提意见，别的时候交给全局 AI（它自己会去打人）。
+ * 补刀的定义就是字面意思：射程内挑血最少的打。它一回合 3 段，
+ * 常常"第一段砍死、后两段换目标"，所以这里只负责指出"先打谁"，
+ * 剩下的交给全局（每一步都会重算）。
  */
 const SHADE_AI: UnitAiProfile = {
   id: 'shade-spread',
   handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 2;
+    const inRange = c.foes.filter((f) => dist(f, c.unit) <= range);
+    const prey = [...inRange].sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 170 });
+
+    // 同类太近就散开（叠着浪费暗影半径，也浪费输出位）
     const kin = c.allies.filter((a) => a.type === SHADE && a.id !== c.unit.id && a.hp > 0);
-    if (kin.length === 0) return {};
-    const nearestKin = Math.min(...kin.map((k) => dist(k, c.unit)));
-    if (nearestKin > 3) return {}; // 已经散开了
-    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
-    let best: { x: number; y: number } | null = null;
-    let bestScore = -Infinity;
-    for (const p of tiles) {
-      // 离同类越远越好；同时别离敌人太远（它还得打人）
-      const away = Math.min(...kin.map((k) => dist(k, p)), Infinity);
-      const near = Math.min(...c.foes.map((f) => dist(f, p)), Infinity);
-      const score = away * 2 - near * 0.3;
-      if (score > bestScore) {
-        bestScore = score;
-        best = p;
+    if (kin.length > 0 && Math.min(...kin.map((k) => dist(k, c.unit))) <= 3) {
+      const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+      let best: { x: number; y: number } | null = null;
+      let bestScore = -Infinity;
+      for (const p of tiles) {
+        const away = Math.min(...kin.map((k) => dist(k, p)), Infinity);
+        const near = nearestFoe(c, p);
+        const score = away * 2 - near * 0.3;
+        if (score > bestScore) {
+          bestScore = score;
+          best = p;
+        }
       }
+      if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 });
     }
-    if (!best) return {};
-    return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 }] };
+    return add.length ? { add } : {};
   },
 };
 
 /**
- * 影主：不贴身。
+ * 「暗影深处」：暗影领域里离边界最远的那一格。
  *
- * 它射程 4、走 2、血厚但慢——被贴住就只剩肉盾价值。所以有敌人进了 3 格
- * 就往后退，其余时间交给全局 AI（它会自己找目标开火）。
- * 真正让它有威胁的是召唤（见 `tickShadowLords`），不是它的走位。
+ * 为什么不用重心：重心可以是**暗影外**的格子（一团环形、或者两块分开的黑雾，
+ * 重心正好落在中间那块亮处），也可能被一块又长又细的影子拉到边界上。
+ * "离边界最远"这一格**按定义就在暗影里**，而且越深的格子越安全——
+ * 影主往里一缩，玩家就得把整片黑雾翻开才找得到它。
+ *
+ * 代价每次都要 BFS 一遍，所以按 overlay 数组对象缓存（同一回合里数组不变）。
+ */
+const depthCache = new WeakMap<number[], Map<number, number>>();
+
+function shadowDepth(state: GameState): Map<number, number> {
+  const cells = state.overlays?.[SHADOW_KEY] ?? [];
+  const hit = depthCache.get(cells);
+  if (hit) return hit;
+  const set = new Set(cells);
+  const depth = new Map<number, number>();
+  // 多源 BFS：从"挨着非暗影（或地图外）的暗影格"出发，逐层往里
+  const queue: number[] = [];
+  for (const i of cells) {
+    const x = i % state.w;
+    const y = Math.floor(i / state.w);
+    const edge =
+      !set.has((y) * state.w + x + 1) || !set.has(y * state.w + x - 1) ||
+      !set.has((y + 1) * state.w + x) || !set.has((y - 1) * state.w + x);
+    if (edge) {
+      depth.set(i, 1);
+      queue.push(i);
+    }
+  }
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const i = queue[qi]!;
+    const d = depth.get(i)!;
+    const x = i % state.w;
+    const y = Math.floor(i / state.w);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= state.w || ny >= state.h) continue;
+      const j = ny * state.w + nx;
+      if (!set.has(j) || depth.has(j)) continue;
+      depth.set(j, d + 1);
+      queue.push(j);
+    }
+  }
+  depthCache.set(cells, depth);
+  return depth;
+}
+
+/** 暗影最深的一格（同深度取离自己近的，少走两步） */
+function deepestShadow(state: GameState, from: { x: number; y: number }): { x: number; y: number } | null {
+  const depth = shadowDepth(state);
+  let best: { x: number; y: number } | null = null;
+  let bestD = -1;
+  let bestDist = Infinity;
+  for (const [i, d] of depth) {
+    if (d < bestD) continue;
+    const x = i % state.w;
+    const y = Math.floor(i / state.w);
+    const dd = dist(from, { x, y });
+    if (d > bestD || dd < bestDist) {
+      bestD = d;
+      bestDist = dd;
+      best = { x, y };
+    }
+  }
+  return best;
+}
+
+/**
+ * 影主：**优先打威胁大的**；不贴身；没事的时候往暗影最深处躲。
+ *
+ * 三条按优先级排：
+ *   1. 射程内有敌人 → 打"能打出最多伤害的那个"（影主自己怕的就是它）；
+ *   2. 敌人贴到 3 格内 → 退；
+ *   3. 一个敌人都看不见 → 回暗影深处（走不到就跳）。
+ *
+ * 第 3 条是本轮新加的：以前它只会"不退就交给全局"，全局会把它往前线拱。
+ * 影主跑到前线等于把召唤器送到刀口上，压力太大。
  */
 const SHADOW_LORD_AI: UnitAiProfile = {
   id: 'shadow-lord-kite',
   handler: (c: UnitAiCtx): UnitAiResult => {
-    const nearest = Math.min(...c.foes.map((f) => dist(f, c.unit)), Infinity);
-    if (!(nearest <= 3)) return {};
-    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
-    let best: { x: number; y: number } | null = null;
-    let bestScore = -Infinity;
-    for (const p of tiles) {
-      const near = Math.min(...c.foes.map((f) => dist(f, p)), Infinity);
-      if (near <= nearest) continue; // 只往更安全的地方退
-      if (near > bestScore) {
-        bestScore = near;
-        best = p;
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 4;
+    const inRange = c.foes.filter((f) => dist(f, c.unit) <= range);
+
+    // 1）打威胁最大的
+    const scary = [...inRange].sort((a, b) => threatOf(c, b) - threatOf(c, a) || a.hp - b.hp)[0];
+    if (scary) {
+      add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: scary.id }, score: 190 });
+      return { add };
+    }
+
+    // 2）贴身了就往后退
+    const nearest = nearestFoe(c, c.unit);
+    if (nearest <= 3) {
+      const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+      let best: { x: number; y: number } | null = null;
+      let bestNear = nearest;
+      for (const p of tiles) {
+        const near = nearestFoe(c, p);
+        if (near > bestNear) {
+          bestNear = near;
+          best = p;
+        }
+      }
+      if (best) {
+        add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 150 });
+      }
+      return { add };
+    }
+
+    // 3）没敌人：回暗影深处
+    const deep = deepestShadow(c.state, c.unit);
+    if (!deep) return {};
+    if (deep.x === c.unit.x && deep.y === c.unit.y) return {};
+    /*
+     * 深处还很远（走路一步到不了）就直接跳进去——"化进影子里"，
+     * 比一步步往回爬更像影主。近了才走，免得每回合都在天上闪。
+     */
+    const gap = dist(c.unit, deep);
+    if (canStep(c) && gap > Math.max(1, c.def.move) + 2) {
+      add.push({
+        action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: deep.x, targetY: deep.y },
+        score: 140,
+      });
+    } else {
+      const walk = steps(c, Math.max(1, c.def.move))
+        .filter((p) => p.d > 0)
+        .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
+      if (walk && dist(walk, deep) < gap) {
+        add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
       }
     }
-    if (!best) return {};
-    return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 150 }] };
+    return add.length ? { add } : {};
   },
 };
 
