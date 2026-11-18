@@ -918,6 +918,15 @@ export interface UnitAiCtx {
   candidates: ReadonlyArray<{ action: Action; score: number }>;
   /** 这一回合已经被规则拒过的动作。别重复提同样的东西 */
   rejected: ReadonlySet<string>;
+  /**
+   * 核心筛好的敌人 / 自己人（都只含活着的、按席位和同盟算）。
+   *
+   * 由核心给而不是让扩展自己 `filter`：一次 AI 决策要给每个兵问一遍，
+   * 每个 profile 自己扫一遍全图，代价是 O(兵 × 兵)。而且"谁是敌人"要认同盟，
+   * 各写一遍迟早有人漏。
+   */
+  foes: Unit[];
+  allies: Unit[];
 }
 
 /** 扩展的回答。只有两项，别再扩。 */

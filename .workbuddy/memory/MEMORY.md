@@ -136,6 +136,11 @@ rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`u
 **`modifyVision` 里绝不能再调 `visionOf`/`playerView`（死循环）**，只能用 `base`。
 探针 `npm run probe:shadow`（8 段）。
 
+**影系三兵已跑通（2026-11-18）**：蚀影（贴暗影边）/ 暗影（同类散开、击杀原地生蚀影）/
+影主（不贴身、计时器召唤暗影，攻击过更快）。真伤叫**暗蚀**，走 `DAMAGE_STAGE.trueDamage`。
+**坑**：包内不能 import `unit-ai.ts`（它顶层读 EXPANSIONS → 循环），
+必须走 `Expansion.unitAi`。`UnitAiCtx` 现在带 `foes`/`allies`。探针 `npm run probe:shade`。
+
 ## 协作约定
 
 - 判断类结论要有实测支撑（真跑 `applyAction`，别只看配置表）。

@@ -27,9 +27,12 @@
  */
 
 import type { Expansion } from './expansions.ts';
+import { DAMAGE_STAGE } from './ability-hooks.ts';
 import type { AbilityApi } from './ability-hooks.ts';
+import type { AbilityDef } from './abilities.ts';
 import type { GameState, PlayerId, Unit, UnitTypeDef } from './types.ts';
 import { registerSkillAi, registerSkillEffect } from './skill-hooks.ts';
+import type { UnitAiCtx, UnitAiProfile, UnitAiResult, UnitAiCandidate } from './expansions.ts';
 
 export const EMPEROR = 'corpse-emperor';
 export const SLUMBER = 'slumber-site';
@@ -267,6 +270,401 @@ function tickEmperor(state: GameState, player: PlayerId, api: AbilityApi): void 
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 五、影系（2026-11-18）
+ *
+ * 诡异的第一支：不听指挥，按自己的本能行动。
+ * 三个兵 + 一个通用技能（暗影跳跃）。
+ *
+ * ── 真伤为什么叫「暗蚀」────────────────────────────────────────────
+ *
+ * 修真那边叫"真元"——那是修士的东西。诡异用同一个词会很出戏，所以单独起名
+ * **暗蚀**：无视护甲、每次攻击额外结算一次。实现上和真元是同一条路
+ * （`DAMAGE_STAGE.trueDamage` 上加一段），只是换了个名字和一段数值表。
+ *
+ * ── 数值全是占位的 ────────────────────────────────────────────────
+ *
+ * 关卡节奏还没定，先按"能看出性格"给：暗影脆而快、蚀影慢而硬一点、影主厚而远。
+ * 调的时候改下面这张表，别去改逻辑。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const SHADOW_BEAST = 'shadow-beast';
+export const SHADE = 'shade';
+export const SHADOW_LORD = 'shadow-lord';
+
+/** 暗蚀：每次攻击附带的、无视护甲的伤害。占位值 */
+const EROSION_BY_TYPE: Record<string, number> = {
+  [SHADOW_BEAST]: 8,
+  [SHADE]: 4,
+  [SHADOW_LORD]: 15,
+};
+
+function erosionOf(u: Unit): number {
+  return EROSION_BY_TYPE[u.type] ?? 0;
+}
+
+/**
+ * 「暗蚀」：和修真的真元走同一条路——在护甲结算之后的 `trueDamage` 阶段加一段伤害。
+ *
+ * 为什么不做成新字段：伤害管线已经有这个阶段，真元、天气的真伤都挂在这里；
+ * 再开一条"无视护甲的额外伤害"只会让"到底谁先算"变成一团。
+ */
+const EROSION_ABILITY: AbilityDef = {
+  id: 'shadow-erosion',
+  name: '暗蚀',
+  summary: '每次攻击附带一段无视护甲的暗蚀伤害。',
+  group: 'attack',
+  hooks: {
+    damage: [
+      {
+        stage: DAMAGE_STAGE.trueDamage,
+        apply: (c) => {
+          if (c.side !== 'attacker') return;
+          const amt = erosionOf(c.self);
+          if (amt > 0) c.damage += amt;
+        },
+      },
+    ],
+  },
+};
+
+/* ── 通用技能：暗影跳跃 ─────────────────────────────────────────── */
+
+/** 这一格在暗影领域里吗（只认地球） */
+function inShadowCell(state: GameState, x: number, y: number, board?: string): boolean {
+  if (board && board !== 'earth') return false;
+  const cells = state.overlays?.[SHADOW_KEY];
+  if (!cells || cells.length === 0) return false;
+  return cells.includes(y * state.w + x);
+}
+
+/**
+ * 暗影跳跃：瞬移到任意一个暗影格子。
+ *
+ * 三条规矩：
+ *   · 落点必须在暗影领域里——这是它唯一的交通方式，也是这个系列的性格；
+ *   · 落点站得下（不能叠在别人身上）；
+ *   · 用掉之后 `moved = true`：它是"这一回合的移动"，不能跳完再走。
+ */
+registerSkillEffect('shadow-step', (c) => {
+  const t = c.target;
+  if (!t) {
+    c.result.ok = false;
+    c.result.reason = '要先选一个暗影格子';
+    return;
+  }
+  if (!inShadowCell(c.state, t.x, t.y, c.self.board)) {
+    c.result.ok = false;
+    c.result.reason = '只能跳进暗影领域';
+    return;
+  }
+  if (!c.api.canStandAt(c.state, t.x, t.y, c.self.type)) {
+    c.result.ok = false;
+    c.result.reason = '那一格站不下';
+    return;
+  }
+  const from = `${c.self.x},${c.self.y}`;
+  c.self.x = t.x;
+  c.self.y = t.y;
+  c.self.moved = true;
+  c.result.log = `暗影跳跃：${from} → ${t.x},${t.y}`;
+});
+
+const SHADOW_STEP_SKILL = {
+  id: 'shadow-step',
+  name: '暗影跳跃',
+  summary: '瞬间移动到任意一个暗影格子。这一回合就不能再走了。',
+  effect: 'shadow-step',
+  targeting: 'point' as const,
+  radius: 40,
+  multiCast: false,
+};
+
+/* ── 三个兵 ─────────────────────────────────────────────────────── */
+
+/**
+ * 蚀影（被暗影侵蚀的生物）。
+ *
+ * 名字是补的：原文"被暗影侵蚀的生物"太长，做兵种名牌放不下。
+ * 备选：影蚀体 / 侵影。定稿改这里就行。
+ */
+const SHADOW_BEAST_DEF: UnitTypeDef = {
+  id: SHADOW_BEAST,
+  name: '蚀影',
+  short: '蚀',
+  era: 6,
+  category: 'combat',
+  cost: 90,
+  move: 2,
+  atk: 22,
+  armor: 6,
+  maxHp: 55,
+  range: 1,
+  vision: 5,
+  element: 'dark',
+  summonedOnly: true,
+  shadowRadius: 3,
+  aiAutonomy: 1,
+  aiProfile: 'shadow-beast-edge',
+  abilities: ['shadow-erosion'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/**
+ * 暗影（一团会杀人的影子）。
+ *
+ * 血薄、甲厚——"打不着实体"这件事用护甲表示，而不是给它闪避率：
+ * 这套引擎里没有命中判定，护甲是唯一"看起来打中了，其实没伤到"的表达。
+ * 杀死单位后在原地生出蚀影——所以它越打越多，玩家的清场顺序会变得重要。
+ */
+const SHADE_DEF: UnitTypeDef = {
+  id: SHADE,
+  name: '暗影',
+  short: '影',
+  era: 6,
+  category: 'combat',
+  cost: 120,
+  move: 5,
+  atk: 10,
+  armor: 18,
+  maxHp: 40,
+  range: 2,
+  vision: 6,
+  burst: 3,
+  element: 'dark',
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 1,
+  aiProfile: 'shade-spread',
+  abilities: ['shadow-erosion'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/**
+ * 影主（第一任暗影之主是尸骸仙帝的影子）。
+ *
+ * 远程、厚、甲高、攻击次数多，还会自己召唤暗影——它不走，它让暗影走。
+ * 计时器用 `custom.summonIn`，写在钩子里（见 `tickShadowLords`）。
+ */
+const SHADOW_LORD_DEF: UnitTypeDef = {
+  id: SHADOW_LORD,
+  name: '影主',
+  short: '主',
+  era: 6,
+  category: 'combat',
+  cost: 400,
+  move: 2,
+  atk: 40,
+  armor: 15,
+  maxHp: 220,
+  range: 4,
+  vision: 8,
+  burst: 2,
+  element: 'dark',
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 7,
+  aiAutonomy: 1,
+  aiProfile: 'shadow-lord-kite',
+  abilities: ['shadow-erosion'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/* ── 行为：三个 profile ─────────────────────────────────────────── */
+
+/** 四向可达格（含脚下），和技能/走位同一套判断 */
+function steps(c: UnitAiCtx, n: number): Array<{ x: number; y: number; d: number }> {
+  const start = { x: c.unit.x, y: c.unit.y, d: 0 };
+  const seen = new Map<string, { x: number; y: number; d: number }>([[`${start.x},${start.y}`, start]]);
+  let frontier = [start];
+  for (let i = 0; i < n; i += 1) {
+    const next: typeof frontier = [];
+    for (const p of frontier) {
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const x = p.x + dx;
+        const y = p.y + dy;
+        const key = `${x},${y}`;
+        if (seen.has(key)) continue;
+        if (!c.api.canStandAt(c.state, x, y, c.unit.type)) continue;
+        const node = { x, y, d: p.d + 1 };
+        seen.set(key, node);
+        next.push(node);
+      }
+    }
+    frontier = next;
+  }
+  return [...seen.values()];
+}
+
+/** 这一格贴着暗影边界吗（自己在暗影里，四邻里至少有一个不在） */
+function onShadowEdge(c: UnitAiCtx, x: number, y: number): boolean {
+  if (!inShadowCell(c.state, x, y, c.unit.board)) return false;
+  return (
+    !inShadowCell(c.state, x + 1, y, c.unit.board) ||
+    !inShadowCell(c.state, x - 1, y, c.unit.board) ||
+    !inShadowCell(c.state, x, y + 1, c.unit.board) ||
+    !inShadowCell(c.state, x, y - 1, c.unit.board)
+  );
+}
+
+/**
+ * 蚀影：喜欢待在暗影的边缘。
+ *
+ * 为什么是边缘而不是深处：它是从黑影里伸出来的东西——站在边界上，
+ * 下一步就能扑到亮处的人身上；站深处则看不见外面。玩家因此能从"黑雾边上"
+ * 读出它的进攻方向。
+ *
+ * 已经站在边界上就不动，让全局 AI 去决定打谁（它的本职是近战）。
+ */
+const SHADOW_BEAST_AI: UnitAiProfile = {
+  id: 'shadow-beast-edge',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    if (onShadowEdge(c, c.unit.x, c.unit.y)) return {};
+    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
+    for (const p of tiles) {
+      if (!onShadowEdge(c, p.x, p.y)) continue;
+      const near = Math.min(...c.foes.map((f) => dist(p, f)), Infinity);
+      // 边界格里挑离敌人最近的（下一步就能扑上去）
+      const score = -near;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (!best) return {};
+    const add: UnitAiCandidate[] = [
+      { action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 },
+    ];
+    return { add };
+  },
+};
+
+/**
+ * 暗影：同类之间会自动散开。
+ *
+ * 为什么：一团影子挤在一起没有意义——它们的暗影半径只有 1，叠着等于浪费；
+ * 散开才铺得满场。这也是玩家能看出"它们不是人"的第一眼。
+ *
+ * 只有"另一个暗影太近"时才提意见，别的时候交给全局 AI（它自己会去打人）。
+ */
+const SHADE_AI: UnitAiProfile = {
+  id: 'shade-spread',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const kin = c.allies.filter((a) => a.type === SHADE && a.id !== c.unit.id && a.hp > 0);
+    if (kin.length === 0) return {};
+    const nearestKin = Math.min(...kin.map((k) => dist(k, c.unit)));
+    if (nearestKin > 3) return {}; // 已经散开了
+    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
+    for (const p of tiles) {
+      // 离同类越远越好；同时别离敌人太远（它还得打人）
+      const away = Math.min(...kin.map((k) => dist(k, p)), Infinity);
+      const near = Math.min(...c.foes.map((f) => dist(f, p)), Infinity);
+      const score = away * 2 - near * 0.3;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (!best) return {};
+    return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 120 }] };
+  },
+};
+
+/**
+ * 影主：不贴身。
+ *
+ * 它射程 4、走 2、血厚但慢——被贴住就只剩肉盾价值。所以有敌人进了 3 格
+ * 就往后退，其余时间交给全局 AI（它会自己找目标开火）。
+ * 真正让它有威胁的是召唤（见 `tickShadowLords`），不是它的走位。
+ */
+const SHADOW_LORD_AI: UnitAiProfile = {
+  id: 'shadow-lord-kite',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const nearest = Math.min(...c.foes.map((f) => dist(f, c.unit)), Infinity);
+    if (!(nearest <= 3)) return {};
+    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
+    for (const p of tiles) {
+      const near = Math.min(...c.foes.map((f) => dist(f, p)), Infinity);
+      if (near <= nearest) continue; // 只往更安全的地方退
+      if (near > bestScore) {
+        bestScore = near;
+        best = p;
+      }
+    }
+    if (!best) return {};
+    return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 150 }] };
+  },
+};
+
+/* ── 影主的召唤计时器 ───────────────────────────────────────────── */
+
+/** 正常情况下几个自己的回合召唤一个暗影 */
+const SUMMON_EVERY = 4;
+
+/** 找到附近一格能站的位置（八邻域，先近后远） */
+function freeNear(state: GameState, u: Unit, type: string, api: AbilityApi): { x: number; y: number } | null {
+  for (let r = 1; r <= 3; r += 1) {
+    for (let dy = -r; dy <= r; dy += 1) {
+      for (let dx = -r; dx <= r; dx += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = u.x + dx;
+        const y = u.y + dy;
+        if (api.canStandAt(state, x, y, type)) return { x, y };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 影主的召唤计时器。**在它自己的回合开始时走一格**，攻击过则多走一格。
+ *
+ * 为什么不用"本回合攻击过就当场加速"：回合开始的钩子跑在它出手之前，
+ * 那时还不知道这回合会不会打。所以拆成两步——
+ *   · 回合末（`markShadowLordAttack`）记下"这回合打没打"；
+ *   · 下回合开始（这里）按这个标记走计时器。
+ * 说人话：它越凶，暗影来得越勤，但节奏差半拍——玩家有机会在它召唤前打断。
+ */
+function tickShadowLords(state: GameState, player: PlayerId, api: AbilityApi): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.type !== SHADOW_LORD || u.hp <= 0) continue;
+    let left = Number(u.custom?.summonIn ?? SUMMON_EVERY);
+    left -= Number(u.custom?.hitLastTurn ?? 0) === 1 ? 2 : 1;
+    if (left <= 0) {
+      const spot = freeNear(state, u, SHADE, api);
+      if (spot) {
+        api.spawn(state, u.owner, SHADE, spot.x, spot.y);
+        left = SUMMON_EVERY;
+        state.log.push({
+          turn: state.turn,
+          player: u.owner,
+          text: '影主分裂出一团暗影。',
+        });
+      } else {
+        left = 1; // 没地方站，下回合再试
+      }
+    }
+    u.custom = { ...(u.custom ?? {}), summonIn: left };
+  }
+}
+
+/** 回合末记下"这回合打没打"（回合开始时要读，那时 acted 已经被重置了） */
+function markShadowLordAttack(state: GameState, player: PlayerId): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.type !== SHADOW_LORD || u.hp <= 0) continue;
+    u.custom = { ...(u.custom ?? {}), hitLastTurn: u.acted ? 1 : 0 };
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 五、扩展本体
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -279,10 +677,15 @@ export const DARK_TURMOIL: Expansion = {
     '寿元将尽而周围无物可食时，它会吞下自己人。全部兵种只能由关卡生成，不进货架。',
   // 它借的是修真那套"境界 / 寿元"的语义，单独开没有意义
   requires: ['cultivation'],
-  units: [EMPEROR_DEF, SLUMBER_DEF],
+  units: [EMPEROR_DEF, SLUMBER_DEF, SHADOW_BEAST_DEF, SHADE_DEF, SHADOW_LORD_DEF],
+  abilities: [EROSION_ABILITY],
+  // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
+  // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
+  unitAi: [SHADOW_BEAST_AI, SHADE_AI, SHADOW_LORD_AI],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
+      tickShadowLords(state, player, api);
     },
     /*
      * 暗影：站在里面视野和射程减半。
@@ -300,7 +703,33 @@ export const DARK_TURMOIL: Expansion = {
       inShadow(state, unit, range) ? Math.max(1, Math.ceil(range / 2)) : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
-    onTurnEnd: ({ state }) => refreshShadow(state),
+    onTurnEnd: ({ state, player }) => {
+      markShadowLordAttack(state, player);
+      refreshShadow(state);
+    },
+    /**
+     * 暗影杀人：在被杀的位置原地长出一个蚀影。
+     *
+     * 这是影系"越打越多"的来源，也是玩家必须改清场顺序的原因——
+     * 先清暗影，不然每杀一个杂兵就多一具会走路的尸体。
+     *
+     * 只对**非建筑**生效：影子从石头里长出来太出戏了。
+     */
+    onUnitKilled: ({ state, victim, killer, api }) => {
+      if (!killer || killer.type !== SHADE) return;
+      if (victim.owner === killer.owner) return;
+      if (api.utype(state, victim.type)?.category === 'building') return;
+      const spot = api.canStandAt(state, victim.x, victim.y, SHADOW_BEAST)
+        ? { x: victim.x, y: victim.y }
+        : freeNear(state, victim, SHADOW_BEAST, api);
+      if (!spot) return;
+      api.spawn(state, killer.owner, SHADOW_BEAST, spot.x, spot.y);
+      state.log.push({
+        turn: state.turn,
+        player: killer.owner,
+        text: '被暗影吞噬的尸体爬了起来——蚀影。',
+      });
+    },
     /**
      * 棋盘上的「暗影」视图。
      *
