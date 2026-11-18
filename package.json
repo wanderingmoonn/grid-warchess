@@ -101,7 +101,8 @@
     "duel:smoke": "node --experimental-strip-types scripts/ai-duel-batch.ts --games 20 --parallel 20",
     "art:index": "node --experimental-strip-types scripts/art-index.ts",
     "probe:ai-steps": "node --experimental-strip-types scripts/probe-ai-steps.ts",
-    "probe:unit-ai": "node --experimental-strip-types scripts/probe-unit-ai.ts"
+    "probe:unit-ai": "node --experimental-strip-types scripts/probe-unit-ai.ts",
+    "probe:dragon-king": "node --experimental-strip-types scripts/probe-dragon-king.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
