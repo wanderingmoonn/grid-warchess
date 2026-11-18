@@ -7352,72 +7352,14 @@ export function heroSkillsOf(
   });
 }
 
-//技能
-SKILL_EFFECTS['throw-axe'] = (c) => {
-  c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
-};
-SKILL_EFFECTS['regenerate'] = (c) => {
-  const power = c.skill.power ?? 0;
-  const before = c.self.hp;
-  c.self.hp = Math.min(maxHpOf(c.state, c.self), c.self.hp + Math.max(1, Math.round(maxHpOf(c.state, c.self) * power)));
-  if (c.self.hp === before) {
-    c.result.ok = false;
-    c.result.reason = '已经是满血了';
-  }
-};
-SKILL_EFFECTS['dive'] = (c) => {
-  const power = c.skill.power ?? 0;
-  c.self.heroBuff = { 
-    ...c.self.heroBuff, 
-    moveBonus: power, 
-    burnLayers: Math.max(1, Math.round(power)) 
-  };
-};
-SKILL_EFFECTS['cycle'] = (c) => {
-  const def = utype(c.state, c.self.type);
-  const cyc = def.cycle ?? [];
-  if (cyc.length === 0) {
-    c.result.ok = false;
-    c.result.reason = '这个单位没有可切的属性';
-    return;
-  }
-  const cur = c.self.element ?? cyc[0]!;
-  const i = cyc.indexOf(cur);
-  const next = cyc[(i + 1) % cyc.length]!;
-  c.self.element = next;
-  c.self.heroBuff = { ...c.self.heroBuff, elementHit: next };
-};
-SKILL_EFFECTS['descend'] = (c) => {
-  const power = c.skill.power ?? 0;
-  const radius = c.skill.radius ?? 1;
-  let healed = 0;
-  let cleansed = 0;
-  for (const t of c.state.units) {
-    if (t.owner !== c.self.owner || t.hp <= 0) continue;
-    if (distance(t, c.self) > radius) continue;
-    const td = utype(c.state, t.type);
-    if (t.hp < maxHpOf(c.state, t) && canBeHealed(td)) {
-      t.hp = Math.min(maxHpOf(c.state, t), t.hp + Math.max(1, Math.round(maxHpOf(c.state, t) * power)));
-      healed += 1;
-    }
-    if (t.status && Object.keys(t.status).length > 0) {
-      t.status = {};
-      cleansed += 1;
-    }
-  }
-  if (healed === 0 && cleansed === 0) {
-    c.result.ok = false;
-    c.result.reason = '附近没有人需要救治';
-  }
-};
-SKILL_EFFECTS['vanish'] = (c) => {
-  if (c.self.heroBuff?.hidden === true) {
-    c.result.ok = false;
-    c.result.reason = '已经藏好了';
-    return;
-  }
-  c.self.heroBuff = { ...c.self.heroBuff, hidden: true };
-};
+/*
+ * 技能实现。
+ *
+ * 简单的四个（投斧 / 再生 / 俯冲 / 切属性）已经搬回奇想包
+ * （`fantasy-packs.ts` 第三节），走的是同一个 `registerSkillEffect` 表。
+ * 留在这里的是**要用规则层内部函数**的那些：hurtUnit、sweepDead、armySize…
+ * 它们要搬，得先给技能上下文补口子。
+ */
 /**
  * 招魂（暗夜死灵法师）：付这个兵的生产价格，把本回合倒下的一名友军拉回来。
  *

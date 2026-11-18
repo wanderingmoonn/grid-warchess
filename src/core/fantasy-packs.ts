@@ -42,6 +42,7 @@ import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, marksAt } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
 import { registerStatus } from './statuses.ts';
+import { registerSkillEffect } from './skill-hooks.ts';
 import type { UnitTypeDef } from './types.ts';
 
 /* ==========================================================================
@@ -2832,6 +2833,103 @@ const HEROES: Expansion = {
   hooks: {},
   units: HERO_UNITS,
 };
+
+/* ==========================================================================
+ * 三、四个简单的英雄技能实现（2026-11-18 从 rules.ts 搬过来）
+ *
+ * 为什么搬：技能是**内容**，不是规则。它们原来写在核心的 `rules.ts` 里，
+ * 等于"引擎认识矮人王的投斧"——和先前把中毒/灼烧状态搬出核心是同一件事
+ * （见上面第二节）。`registerSkillEffect` 和核心自己用的是同一张表，
+ * 搬运不改变任何行为：`test:rules` 的 956 项就是证人。
+ *
+ * 只搬了"不需要规则层内部函数"的这四个。剩下的（降临、圣旗、飞升、陨卵、
+ * 裂殖、聚合、招魂）要用 `hurtUnit` / `sweepDead` / `armySize` 那些，
+ * 得先给技能上下文补口子——清单见 `docs/PLAN-UNIT-AI-2026-11-17.md` 的
+ * 「核心污染清单」一节。
+ * ========================================================================== */
+
+/** 投斧：这一回合把自己改成"射程 3、六成伤、附带一次免费射击" */
+registerSkillEffect('throw-axe', (c) => {
+  c.self.heroBuff = { ...c.self.heroBuff, range: 3, rangeMul: 0.6, freeShot: true };
+});
+
+/** 再生：按技能强度回一段血；满血时拒掉（不然按钮白按） */
+registerSkillEffect('regenerate', (c) => {
+  const power = c.skill.power ?? 0;
+  const max = c.api.maxHpOf(c.state, c.self);
+  const before = c.self.hp;
+  c.self.hp = Math.min(max, c.self.hp + Math.max(1, Math.round(max * power)));
+  if (c.self.hp === before) {
+    c.result.ok = false;
+    c.result.reason = '已经是满血了';
+  }
+});
+
+/** 烈焰俯冲：本回合移动力加成 + 攻击带灼烧层数 */
+registerSkillEffect('dive', (c) => {
+  const power = c.skill.power ?? 0;
+  c.self.heroBuff = {
+    ...c.self.heroBuff,
+    moveBonus: power,
+    burnLayers: Math.max(1, Math.round(power)),
+  };
+});
+
+/** 属性循环：切到下一系，并给这一击附上对应的属性 */
+registerSkillEffect('cycle', (c) => {
+  const cyc = c.state.unitTypes[c.self.type]?.cycle ?? [];
+  if (cyc.length === 0) {
+    c.result.ok = false;
+    c.result.reason = '这个单位没有可切的属性';
+    return;
+  }
+  const cur = c.self.element ?? cyc[0]!;
+  const i = cyc.indexOf(cur);
+  const next = cyc[(i + 1) % cyc.length]!;
+  c.self.element = next;
+  c.self.heroBuff = { ...c.self.heroBuff, elementHit: next };
+});
+
+/**
+ * 降临（天使）：半径内的友军回血 + 清状态；一个人都没救到就拒掉。
+ *
+ * 用 `c.api.maxHpOf` / `c.api.canBeHealed` 而不是规则层的同名函数——
+ * 这两个本来就是给扩展准备的（"生命上限算没算境界加成"不该让每个技能自己猜）。
+ */
+registerSkillEffect('descend', (c) => {
+  const power = c.skill.power ?? 0;
+  const radius = c.skill.radius ?? 1;
+  let healed = 0;
+  let cleansed = 0;
+  for (const t of c.state.units) {
+    if (t.owner !== c.self.owner || t.hp <= 0) continue;
+    if (c.api.distance(t, c.self) > radius) continue;
+    const td = c.state.unitTypes[t.type];
+    const max = c.api.maxHpOf(c.state, t);
+    if (t.hp < max && td && c.api.canBeHealed(c.state, t)) {
+      t.hp = Math.min(max, t.hp + Math.max(1, Math.round(max * power)));
+      healed += 1;
+    }
+    if (t.status && Object.keys(t.status).length > 0) {
+      t.status = {};
+      cleansed += 1;
+    }
+  }
+  if (healed === 0 && cleansed === 0) {
+    c.result.ok = false;
+    c.result.reason = '附近没有人需要救治';
+  }
+});
+
+/** 隐匿（刺客）：藏起来；已经藏好了就拒掉（不然按钮白按） */
+registerSkillEffect('vanish', (c) => {
+  if (c.self.heroBuff?.hidden === true) {
+    c.result.ok = false;
+    c.result.reason = '已经藏好了';
+    return;
+  }
+  c.self.heroBuff = { ...c.self.heroBuff, hidden: true };
+});
 
 /**
  * 「奇想」：把原来五个包并成一个（2026-11-04）。

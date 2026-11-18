@@ -26,6 +26,7 @@ import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
 import { nextEraLevelOf } from './era-routes.ts';
 import type { ValueContext } from './unit-value.ts';
 import {
+  abilityApi,
   armySize,
   applyAction,
   attackableTargets,
@@ -90,6 +91,9 @@ import type { Action, AiIntent, City, GameState, PlayerId, Terrain, Unit, UnitTy
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
 import type { AiBudget } from './ai-meta.ts';
 import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
+import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from './unit-ai.ts';
+import type { UnitAiBinding } from './unit-ai.ts';
+import type { UnitAiResult } from './expansions.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -112,6 +116,15 @@ const WADE_COST = 14;
 interface Candidate {
   action: Action;
   score: number;
+  /**
+   * 跳过"推演削分"（下面 lookahead 那一段）。
+   *
+   * 只有两种候选会带它：扩展用 `must` 提出的"剧本动作"，和它自己标了
+   * `ignoreRisk` 的演出招式。理由是这两类不是"求最优的一手"——
+   * 一个是剧本要求，一个是设计上就该以伤换伤。普通走位和普攻标了它，
+   * 等于让这个兵站着送。
+   */
+  ignoreRisk?: boolean;
 }
 
 export function aiActionKey(action: Action): string { return JSON.stringify(action); }
@@ -3295,6 +3308,74 @@ function scoreBuild(
   return raw;
 }
 
+/**
+ * 把扩展的回答接进候选表。
+ *
+ * 三件事：调 handler、校验它提的动作、把分换算成"自主分 × 局部分"。
+ * 注意这里**不排序、不插队**——加进去之后就交给后面那四道门（推演削分、
+ * 分数≤0、随机带宽）统一处理。单兵 AI 不该有"后门"。
+ *
+ * 三层防御：
+ *   · handler 抛错 → 记一次，按"没意见"处理（一个写坏的扩展不能把整局打死）；
+ *   · 提了不该提的动作（替别的兵做主 / 招募 / 结束回合）→ 丢掉并告警；
+ *   · 提了被规则拒过的动作 → 直接跳过（`rejected` 已经告诉我们了）。
+ */
+function unitAiCandidates(
+  view: GameState,
+  unit: Unit,
+  own: Candidate[],
+  rejected: ReadonlySet<string>,
+  ai: UnitAiBinding,
+): Candidate[] {
+  const def = utype(view, unit.type);
+  let out: UnitAiResult;
+  try {
+    out = ai.profile.handler({
+      state: view,
+      unit,
+      def,
+      api: abilityApi,
+      candidates: own.map((c) => ({ action: c.action, score: c.score })),
+      rejected,
+    });
+  } catch (err) {
+    unitAiWarn(
+      `crash:${ai.profile.id}`,
+      `[unit-ai] profile「${ai.profile.id}」抛错了，这一步按"没意见"处理：${String(err)}`,
+    );
+    return [];
+  }
+  const list: Candidate[] = [];
+  const take = (action: Action, score: number, ignoreRisk?: boolean): void => {
+    const problem = unitAiActionProblem(action, unit.id);
+    if (problem) {
+      unitAiWarn(
+        `bad:${ai.profile.id}:${problem}`,
+        `[unit-ai] profile「${ai.profile.id}」提了不能执行的动作，已丢弃：${problem}`,
+      );
+      return;
+    }
+    if (!Number.isFinite(score)) {
+      unitAiWarn(
+        `nan:${ai.profile.id}`,
+        `[unit-ai] profile「${ai.profile.id}」给了一个非数字的分（${String(score)}），已丢弃。`,
+      );
+      return;
+    }
+    if (rejected.has(aiActionKey(action))) return;
+    list.push({ action, score, ignoreRisk });
+  };
+  for (const c of out.add ?? []) take(c.action, c.score * ai.autonomy, c.ignoreRisk);
+  /*
+   * `must` 不打折、也不吃推演那一刀。
+   *
+   * 不打折是因为它表达的不是"我偏好"，而是"剧本要求"；不吃刀是因为
+   * "对面下一回合能打多疼"不该否决一段剧情——那会让作者写的流程时灵时不灵。
+   */
+  if (out.must) take(out.must.action, UNIT_AI_MUST_SCORE, true);
+  return list;
+}
+
 function unitCandidates(
   s: GameState,
   unit: Unit,
@@ -6083,9 +6164,18 @@ function aiNextActionCore(
   }
 
   for (const u of unitsOf(view, me)) {
-    candidates.push(...unitCandidates(view, u, fields, traits, rejected));
+    const own = unitCandidates(view, u, fields, traits, rejected);
+    candidates.push(...own);
     const skill = heroSkillCandidate(view, u);
     if (skill) candidates.push({ ...skill, score:skill.score+300 });
+    /*
+     * 单兵 AI：问一句"这个兵自己打算干什么"。
+     *
+     * 只有兵种写了 `aiProfile` 且自主分 > 0 才会走到这里（`unitAiOf` 连表都不查），
+     * 所以现有对局的行为**一个字节都不变**——这是这一层能合进主线的唯一前提。
+     */
+    const unitAi = unitAiOf(view, u);
+    if (unitAi) candidates.push(...unitAiCandidates(view, u, own, rejected, unitAi));
   }
 
   // 这一回合"要不要养海军"：整回合只算一次（里面有一次全图 flood fill），
@@ -6223,7 +6313,8 @@ function aiNextActionCore(
     const applied = applyAction(view, c.action);
     if (!applied.ok) continue;
     let v = c.score;
-    if (lookahead) v -= LOOKAHEAD_W * Math.max(0, foeOutput(applied.state, me) - reply0);
+    // 剧本动作 / 演出招式不吃这一刀（见 Candidate.ignoreRisk 的说明）
+    if (lookahead && !c.ignoreRisk) v -= LOOKAHEAD_W * Math.max(0, foeOutput(applied.state, me) - reply0);
     shortlist.push({ c, v });
   }
   if (shortlist.length === 0) return null;
@@ -6419,4 +6510,14 @@ export function aiNextAction(
   return { type: 'END_TURN' };
 }
 
-export { AI_MAX_STEPS, DEFAULT_BUDGET, aiLevelOf, aiLevelLabel, isAiSide, anyAiSide } from './ai-meta.ts';
+export {
+  AI_MAX_STEPS,
+  DEFAULT_BUDGET,
+  aiLevelOf,
+  aiLevelLabel,
+  isAiSide,
+  anyAiSide,
+  aiStepCap,
+  aiStallGuard,
+  aiProgressFingerprint,
+} from './ai-meta.ts';

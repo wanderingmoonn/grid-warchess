@@ -58,6 +58,53 @@
 **测试**：`npm run probe:level`（26 段）比整套 test 快得多，第 1 段逐条列关卡校验错因。
 探针断言不许钉死具体数值（时间/地形/阵容），要么读事件数据，要么退回结构性要求。
 
+## 单兵 AI / 自主分（2026-11-17 立地基，未开工）
+
+**先读 `docs/DESIGN-UNIT-AI-2026-11-17.md`（清单/接口/12 条红线）+ `PLAN-UNIT-AI-2026-11-17.md`（四阶段）。**
+
+方向：核心加一层通用机制，`UnitTypeDef.aiAutonomy`(0~1) + `aiProfile`（扩展在 `Expansion.unitAi` 注册），
+扩展只返回两样：`add`（自己想的动作，分数已换算成全局量级，生效分＝自主分×分）和 `must`（一回合一条，固定 1000）。
+**不要用"自主分×全局分"**——全局分没有统一量纲；乘法只能发生在"已换算的局部分"上。
+
+四条不许忘：默认全 0（否则 208 场基线作废）；只给 `level.units` 的 boss 填值；
+handler 只拿 `playerView`（不能看真局）；不许 `Math.random`、不许副作用。
+
+**50 步上限已拆（2026-11-17 阶段 0 完成）**：主流程改用 `aiStepCap(s) = 8 + 6×本单位数 + 6×本城数`
+（每兵 6＝走一步+最多 4 段 burst+技能）。**实测 18 局：平均 8 步/回合、最大 23、撞上限 0 次**
+——"24 兵×2=48 必然爆"是推错的，AI 在 `best.v<=0` 时就收手。所以这次改动是行为空操作，
+拆它的理由在将来（单兵 AI 会推高步数）。**`AI_MAX_STEPS` 没删**（`scripts/baselines/*` 与四十多个脚本 import 它）。
+测量工具：`npm run probe:ai-steps`（同种子跑两档并排对比）。
+
+**卡死检测（阶段 0b 已落）**：`aiStallGuard` + `aiProgressFingerprint`（`ai-meta.ts`）。
+判据是"同一个动作 key 连续成功 + 局面指纹没变，第 3 次交棒"——**不是**"连续三步都没变化"
+（会误伤三个兵依次进架势）。指纹**不含 `unit.custom`**，否则形态切换这类空转永远抓不到。
+只喂成功的动作。跑批脚本还没装（靠 50 兜底），阶段 4 一起迁移。
+
+**阶段 1 骨架已落（2026-11-18）**：`UnitTypeDef.aiAutonomy` / `aiProfile` +
+`Expansion.unitAi` + `core/unit-ai.ts`（注册表、白名单、`UNIT_AI_MUST_SCORE=1000`）。
+转化在 `ai.ts` 的 `unitAiCandidates()`；`Candidate` 多了 `ignoreRisk`（`must` 恒为 true）。
+探针 `npm run probe:unit-ai` 已接进 `npm test`，5 段：零变化 / 未注册 / 白名单 / 清单。
+**验收硬指标是"自主分 0 或 profile 返回空时，动作序列逐条相同"**，现在两档都验过。
+
+**阶段 2 三道门已过（2026-11-18）**：`probe:unit-ai` 第 5 段用手工小局面（不建 dev 关卡）
+验了 `must` 压得住贴脸普攻（8 种子全中）、自主分真在打折（200 分 / 0.01 打折后输给普攻）、
+rejected 契约。**重要事实：非法候选在挑选前就被 `applyAction(view)` 筛掉，所以"被拒后重提"
+在结构上不存在**——别把这个筛子"优化"掉。
+**基准值：24 攻打 100 血 2 甲，贴脸普攻 ≈ 89 分**（定招式的分拿它当 1 倍基准）。
+
+**阶段 3 已用邪龙王验过（2026-11-18）**：`npm run probe:dragon-king`。
+挂"7~9 格游弋 + 2 条魔龙才出击 + 魔龙护主"后，王从"压到 3 格开打"变成
+"全程 8~12 格、一次不打"，魔龙离王 5.3 → 4.2。**机制能承载剧本行为**。
+坑：`s.cities = []` 会让席位第一帧出局（第二次踩）；真兵一発卵就没了，实验要用木桩。
+
+**核心污染清理第一批（2026-11-18）**：6 个只依赖 `SkillCtx`+`api` 的技能实现
+（throw-axe/regenerate/dive/cycle/descend/vanish）从 `rules.ts` 搬回 `fantasy-packs.ts`，
+走同一个 `registerSkillEffect`，行为零变化。**剩余清单在 PLAN 的阶段 3 一节**：
+rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`unit-value.ts` 的能力定价表。
+
+**顺带量出的真病灶**：20 个兵里一半以上每回合什么都不做（走位收益太低+评分门槛），
+不是名额问题。要动它得另开议题，别顺手改。
+
 ## 协作约定
 
 - 判断类结论要有实测支撑（真跑 `applyAction`，别只看配置表）。
