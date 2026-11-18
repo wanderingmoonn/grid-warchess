@@ -9272,16 +9272,17 @@ console.log('\n关卡模式');
 openSetup();
 await wait(40);
 
-check('左侧三页：关卡 / 战役 / 编辑器', () => {
+check('左侧四页：关卡 / 支线 / 战役 / 编辑器', () => {
   /*
    * 2026-11-17：地图从导航里撤掉了。只有自由对局会选图，它变成战役页里的一个小窗口；
    * 上传和管理并进「编辑器」——和上传关卡是同一种事。
+   * 2026-11-18：「支线」加在关卡后面——它和主线共用世界观，但不占主线的位置。
    */
   const tabs = [...doc.querySelectorAll<HTMLElement>('[data-tab]')].map((el) => el.dataset.tab);
   assert.deepEqual(
     tabs,
-    ['levels', 'battle', 'editor'],
-    `三页的顺序应该是 关卡 / 战役 / 编辑器，实际 ${tabs.join(',')}`,
+    ['levels', 'side', 'battle', 'editor'],
+    `四页的顺序应该是 关卡 / 支线 / 战役 / 编辑器，实际 ${tabs.join(',')}`,
   );
 });
 
@@ -9293,6 +9294,15 @@ check('「关卡」栏现在是空的：主线 / 教学关还没设计，并指�
   const body = doc.querySelector('.modal-body')?.textContent ?? '';
   assert.ok(body.includes('还在设计'), `空状态要说清为什么空，实际：${body.slice(0, 160)}`);
   assert.ok(body.includes('编辑器'), '空状态要指路「编辑器」那一栏');
+});
+
+check('支线栏列出剧情关：黑暗动乱 / 影潮', () => {
+  click('[data-tab="side"]');
+  const ids = [...doc.querySelectorAll<HTMLElement>('[data-level]')].map((el) => el.dataset.level);
+  assert.ok(!ids.includes(''), '支线栏不该有「自由对局」——它属于关卡栏');
+  assert.ok(ids.includes('level:dark-turmoil'), `支线栏缺「黑暗动乱」，实际 ${ids.join(',') || '空'}`);
+  assert.ok(ids.includes('level:shadow-tide'), `支线栏缺「影潮」，实际 ${ids.join(',') || '空'}`);
+  assert.ok(!ids.includes('level:lone-city'), '示例关不该混进支线栏');
 });
 
 check('编辑器栏列出五张示例关，测试夹具不出现', () => {

@@ -3327,6 +3327,8 @@ function unitAiCandidates(
   own: Candidate[],
   rejected: ReadonlySet<string>,
   ai: UnitAiBinding,
+  foes: Unit[],
+  allies: Unit[],
 ): Candidate[] {
   const def = utype(view, unit.type);
   let out: UnitAiResult;
@@ -3338,6 +3340,8 @@ function unitAiCandidates(
       api: abilityApi,
       candidates: own.map((c) => ({ action: c.action, score: c.score })),
       rejected,
+      foes,
+      allies,
     });
   } catch (err) {
     unitAiWarn(
@@ -6203,7 +6207,8 @@ function aiNextActionCore(
     if (aiTrace.on) aiTrace.staleCalls += 1;
   }
 
-  for (const u of unitsOf(view, me)) {
+  const myUnitsNow = unitsOf(view, me);
+  for (const u of myUnitsNow) {
     const own = unitCandidates(view, u, fields, traits, rejected);
     candidates.push(...own);
     const skill = heroSkillCandidate(view, u);
@@ -6215,7 +6220,7 @@ function aiNextActionCore(
      * 所以现有对局的行为**一个字节都不变**——这是这一层能合进主线的唯一前提。
      */
     const unitAi = unitAiOf(view, u);
-    if (unitAi) candidates.push(...unitAiCandidates(view, u, own, rejected, unitAi));
+    if (unitAi) candidates.push(...unitAiCandidates(view, u, own, rejected, unitAi, foeUnits, myUnitsNow));
   }
 
   // 这一回合"要不要养海军"：整回合只算一次（里面有一次全图 flood fill），
