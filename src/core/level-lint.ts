@@ -14,7 +14,7 @@ import { CONFIG, UNIT_TYPES, navigable, passable } from './config.ts';
 import { EXPANSIONS } from './expansions.ts';
 import { loadCustomUnits } from './customUnits.ts';
 import { terrainFromChar } from './mapgen.ts';
-import { LEVEL_TERRAINS, type DeployUnit, type LevelDef, type LevelDo, type LevelWhen } from './level.ts';
+import { LEVEL_TERRAINS, flattenDo, type DeployUnit, type LevelDef, type LevelDo, type LevelWhen } from './level.ts';
 import type { PlayerId, Terrain, UnitTypeDef } from './types.ts';
 
 export interface LevelIssue {
@@ -210,7 +210,7 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
    * 而且"还剩几家"也不算它——玩家那边看到的是"这关说有三家，我只见到两家"。
    */
   for (const seat of level.seats?.hidden ?? []) {
-    const called = (level.events ?? []).some((ev) => ev.do.some((a) => a.kind === 'deploy' && a.seat === seat));
+    const called = (level.events ?? []).some((ev) => flattenDo(ev.do).some((a) => a.kind === 'deploy' && a.seat === seat));
     if (!called) {
       out.push({
         severity: 'error',
@@ -331,8 +331,9 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
 
   /* ---- 事件 ---- */
   for (const ev of level.events ?? []) {
-    const hasSay = ev.do.some((a) => a.kind === 'say');
-    for (const act of ev.do) {
+    const acts = flattenDo(ev.do);
+    const hasSay = acts.some((a) => a.kind === 'say');
+    for (const act of acts) {
       if (act.kind === 'spawn') {
         const label = `事件「${ev.id}」刷兵`;
         checkUnits(act.units, label, known, out);
@@ -378,7 +379,7 @@ export function lintLevel(level: LevelDef): LevelIssue[] {
     if (goal.kind === 'escort') {
       const z = goal.zone;
       for (const e of level.events ?? []) {
-        for (const act of e.do) {
+        for (const act of flattenDo(e.do)) {
           if (act.kind !== 'reveal') continue;
           const r = act.zone;
           const same = r.x0 === z.x0 && r.y0 === z.y0 && r.x1 === z.x1 && r.y1 === z.y1;

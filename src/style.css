@@ -5715,6 +5715,32 @@ a.btn {
   opacity: 1;
 }
 
+/*
+ * 动作分支（2026-11-18）。缩进用左边框表达层级，和条件树是同一个读法：
+ * 越往右越深，"满足时 / 否则"两段各自往里退一格。
+ */
+.level-do-branch {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.level-do-sub-label {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+
+.level-do-sub-add {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .level-when-arg {
   display: inline-flex;
   align-items: center;

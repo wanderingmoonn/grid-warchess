@@ -4749,7 +4749,7 @@ export function runLevelEvents(prev: GameState, cur: GameState): void {
       executed.add(ev.id);
       ranThisPass += 1;
       total += 1;
-      for (const act of ev.do) runEventAction(cur, act);
+      for (const act of ev.do) runEventAction(cur, act, { died, moved, fired: snapshot, counts: snapshotCounts });
     }
     if (ranThisPass === 0) break;
   }
@@ -4850,7 +4850,26 @@ function eventMatches(
   });
 }
 
-function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
+/** 分支条件要用的"这一手"上下文：和事件触发时是同一份 */
+interface EventCtx {
+  died: Unit[];
+  moved: Array<{ owner: PlayerId; type: string; fromX: number; fromY: number; x: number; y: number }>;
+  fired: ReadonlySet<string>;
+  counts: Readonly<Record<string, number>>;
+}
+
+function runEventAction(s: GameState, act: import('./level.ts').LevelDo, ctx: EventCtx): void {
+  if (act.kind === 'branch') {
+    /*
+     * 条件读**执行到这一步时**的 `s`（不是事件触发那一刻）：所以"先加钱再判断
+     * 有没有钱"能工作。边沿条件用的是同一次动作的差量（`ctx`）。
+     */
+    const hit = eventMatches(act.when, s, ctx.died, ctx.moved, ctx.fired, ctx.counts);
+    const list = hit ? act.then : (act.else ?? []);
+    for (const sub of list) runEventAction(s, sub, ctx);
+    return;
+  }
+
   if (act.kind === 'win') {
     /*
      * 记在 `levelState.decided` 而不是直接写 `s.winner`：`applyAction` 结尾会用
@@ -4920,14 +4939,16 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo): void {
     }
     return;
   }
-  // doctrine：给这一席电脑换一句"怎么打"。下一手 AI 就按它来
-  s.orderDirectives = {
-    ...(s.orderDirectives ?? {}),
-    [act.seat]: {
-      strategy: act.strategy,
-      ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
-    },
-  };
+  if (act.kind === 'doctrine') {
+    // 给这一席电脑换一句"怎么打"。下一手 AI 就按它来
+    s.orderDirectives = {
+      ...(s.orderDirectives ?? {}),
+      [act.seat]: {
+        strategy: act.strategy,
+        ...(act.targetSeat ? { target: { seat: act.targetSeat } } : {}),
+      },
+    };
+  }
 }
 
 /**

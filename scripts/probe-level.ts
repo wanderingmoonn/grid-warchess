@@ -1374,6 +1374,57 @@ console.log('');
 }
 
 /* ------------------------------------------------------------------ */
+/* 动作分支：if / else（2026-11-18）                                    */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const say = (text: string) => [{ kind: 'say', text }];
+  /*
+   * 先扣光钱再判断：验证「分支条件读的是执行到这一步时的局面」。
+   * 如果读的是事件触发那一刻的局面，这里就会走 then（开局有钱）。
+   */
+  const level = validateLevel({
+    ...structuredClone(base),
+    id: 'level:tmp-branch',
+    name: '分支探针',
+    events: [
+      {
+        id: 'e1',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'gold', seat: 'A', amount: -9999 },
+          {
+            kind: 'branch',
+            when: { kind: 'gold', seat: 'A', op: '>=', value: 100 },
+            then: say('有钱'),
+            else: say('没钱'),
+          },
+        ],
+      },
+    ],
+  });
+  check(level.ok, '带分支的事件能通过校验', level.ok ? '' : level.errors[0]);
+  if (level.ok) {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: level.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    const after = r.ok ? r.state : st;
+    const said = after.log.filter((l) => l.system === true).map((l) => l.text);
+    check(said.includes('没钱'), '分支走 else（先扣钱、再判断，说明条件读的是当下）', said.join(' / '));
+    check(!said.includes('有钱'), 'else 成立时 then 不该执行');
+  }
+
+  // 空分支要拦：一块空白没人知道该填什么
+  const empty = validateLevel({
+    ...structuredClone(base),
+    id: 'level:tmp-branch2',
+    name: '空分支',
+    events: [{ id: 'e1', when: { kind: 'turn', at: 1 }, do: [{ kind: 'branch', when: { kind: 'turn', at: 1 }, then: [] }] }],
+  });
+  check(!empty.ok, '空分支被校验拦下', empty.ok ? '' : (empty.errors[0]?.slice(0, 40) ?? ''));
+}
+
+/* ------------------------------------------------------------------ */
 /* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
 

@@ -144,6 +144,21 @@ export type LevelWhen =
 
 /** 事件触发后做什么。一批动作按数组顺序执行。 */
 export type LevelDo =
+  /**
+   * **按条件分两支**（2026-11-18）。
+   *
+   * `when` 用的是和事件触发同一套条件树（`all` / `any` / `not` 全都能用）。
+   * 真正不可替代的场景是 **`repeat` 事件 + 分支**：两条"相反条件"的事件各自
+   * 只会触发一次，第二次就不响了；分支则每次都按当时的局势选一支。
+   *
+   * 三条语义要知道：
+   *   · **条件读的是"执行到这一步时"的局面**，不是事件触发那一刻——所以
+   *     "先给自己加钱、再判断有没有钱"是能工作的；
+   *   · 边沿条件（`enter` / `unitDied`）在这里仍然指"**这一手**"，即使事件本身
+   *     是 `turn` 触发的；
+   *   · `then` / `else` 里的动作按顺序执行，可以再嵌分支（最多 3 层）。
+   */
+  | { kind: 'branch'; when: LevelWhen; then: LevelDo[]; else?: LevelDo[] }
   /** 刷兵：不看钱、不看产线，只看"这一格站不站得住"*/
   | { kind: 'spawn'; owner: PlayerId; units: DeployUnit[] }
   /** 播报一句。写进战报，双方都能看到（`open`） */
@@ -2654,15 +2669,61 @@ function normalizeGoals(
   return out.length > 0 ? out : undefined;
 }
 
+/** 分支里的一组动作。空数组算错（渲染出来是一块空白，作者会以为保存坏了） */
+function normalizeDoList(
+  raw: unknown,
+  id: string,
+  map: FixedMap,
+  seated: readonly PlayerId[],
+  errors: string[],
+  depth: number,
+  label: string,
+): LevelDo[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    errors.push(`事件「${id}」的分支里「${label}」没有动作`);
+    return undefined;
+  }
+  const out: LevelDo[] = [];
+  for (const item of raw) {
+    const act = normalizeDo(item, id, map, seated, errors, depth);
+    if (act) out.push(act);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function normalizeDo(
   raw: unknown,
   id: string,
   map: FixedMap,
   seated: readonly PlayerId[],
   errors: string[],
+  depth = 0,
 ): LevelDo | undefined {
   const a = (raw ?? {}) as Record<string, unknown>;
   const kind = String(a.kind ?? '');
+
+  if (depth > 3) {
+    errors.push(`事件「${id}」的动作嵌套超过 3 层，收拢一下`);
+    return undefined;
+  }
+
+  /*
+   * 分支：`when` 和事件触发用同一套条件树；`then` / `else` 递归成动作列表。
+   * `then` 至少要有一个动作（空分支等于写错，而且渲染出来是一块空白）。
+   */
+  if (kind === 'branch') {
+    if (!a.when) {
+      errors.push(`事件「${id}」的分支没写条件`);
+      return undefined;
+    }
+    const when = normalizeWhen(a.when, id, map, seated, errors);
+    if (!when) return undefined;
+    const then = normalizeDoList(a.then, id, map, seated, errors, depth + 1, '满足时');
+    if (!then) return undefined;
+    const els = a.else === undefined ? undefined : normalizeDoList(a.else, id, map, seated, errors, depth + 1, '否则');
+    if (a.else !== undefined && !els) return undefined;
+    return { kind: 'branch', when, then, ...(els ? { else: els } : {}) };
+  }
 
   if (kind === 'spawn') {
     const owner = String(a.owner ?? '').toUpperCase() as PlayerId;
@@ -2788,9 +2849,24 @@ function normalizeDo(
   }
 
   errors.push(
-    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold / win）`,
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold / win / branch）`,
   );
   return undefined;
+}
+
+/**
+ * 把动作树拍平（分支递归展开）。
+ *
+ * 校验和界面里有十来处"这一关有没有某类动作"的检查，它们不关心层级，
+ * 只想知道"有没有"。树化之后这些地方统一走这个函数，别各写一份递归。
+ */
+export function flattenDo(list: LevelDo[]): LevelDo[] {
+  const out: LevelDo[] = [];
+  for (const act of list) {
+    out.push(act);
+    if (act.kind === 'branch') out.push(...flattenDo(act.then), ...flattenDo(act.else ?? []));
+  }
+  return out;
 }
 
 /**
