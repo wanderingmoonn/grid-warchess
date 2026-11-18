@@ -378,7 +378,6 @@ const SHADOW_SPAWN: AbilityDef = {
   name: '化影',
   summary: `每 ${SUMMON_EVERY} 个自己的回合分裂出一个暗影；这一回合攻击过的话，来得更快。`,
   group: 'support',
-  valueLabel: () => `每 ${SUMMON_EVERY} 回合一个`,
   hooks: {
     onStrike: [
       {
@@ -965,7 +964,6 @@ const BLOOD_CLOT: AbilityDef = {
   name: '化血',
   summary: `造成的伤害累计成「血」：每 ${CLOT_DAMAGE} 点就在旁边长出一滩淤血（一回合最多两滩）。`,
   group: 'attack',
-  valueLabel: () => `每 ${CLOT_DAMAGE} 点伤害长一滩`,
   hooks: {
     damage: [
       {
@@ -1057,7 +1055,6 @@ const BLOOD_GROW: AbilityDef = {
   name: '增生',
   summary: `每回合回复 ${GROW_HEAL} 点生命；生命已满时累计 1 层，攒够 ${GROW_TURNS} 层剥出一团血肉。`,
   group: 'support',
-  valueLabel: () => `满血 ${GROW_TURNS} 回合长一团血肉`,
   hooks: {
     onTurnStart: [
       {
@@ -1540,7 +1537,8 @@ const BONE_UNNAMED_DEF: UnitTypeDef = {
   move: 3,
   atk: 38,
   armor: 12,
-  maxHp: 140,
+  // 140 → 160（2026-11-18 作者指出）：它是骨系的头，血不该比尸骸（150）还少
+  maxHp: 160,
   range: 3,
   vision: 7,
   burst: 2,
