@@ -824,6 +824,128 @@ const DRAGON_PAINT: Array<[number, number, string]> = (() => {
   return out;
 })();
 
+/**
+ * 「潮」系列：三张对称关的生成器（2026-11-18）。
+ *
+ * 三张关的**地图、玩家兵力、敌人群数完全一样**，只有两群敌人的成分不同。
+ * 这样"哪一支更难缠"是可比出来的，而不是各写一张关、各配一套兵再猜。
+ *
+ * 一群敌人固定是 1 头领 + 3 中坚 + 2 杂兵：
+ *   · 影系：影主 + 3 暗影 + 2 蚀影
+ *   · 血系：血核 + 3 淤血 + 2 血肉
+ *
+ * 胜负只认"头领全死"。混编那关两个头领**同属一组**（组内是"且"），
+ * 所以必须两个都杀掉——这正是我们想要的；分到两组的话就变成"杀一个就赢"。
+ */
+function tideLevel(o: {
+  id: string;
+  name: string;
+  brief: string;
+  groups: Array<'shadow' | 'blood'>;
+  leader: string;
+  unit?: string;
+  opening: string;
+  growing: string;
+  down: string;
+}): LevelDef {
+  const squad = {
+    shadow: { boss: 'shadow-lord', mid: 'shade', low: 'shadow-beast' },
+    blood: { boss: 'blood-core', mid: 'blood-pool', low: 'flesh' },
+  } as const;
+
+  /**
+   * 一群敌人：1 头领 + 2 中坚 + 1 杂兵 = 4 个。
+   *
+   * 为什么是 4 而不是 6：第一版按"1+3+2"配，两群就是 12 个，比改动前的影潮（7 个）
+   * 多了近一倍，AI 打 AI 的结果直接从"玩家能压着打"变成"20 个行动被打穿"。
+   * 编队规模要贴着原来那关走，否则三张关之间能比、但和玩家记忆里的影潮对不上。
+   */
+  const group = (kind: 'shadow' | 'blood', y: 'top' | 'bottom') => {
+    const t = squad[kind];
+    const y0 = y === 'top' ? 2 : 15;
+    const dir = y === 'top' ? 1 : -1;
+    return [
+      { type: t.boss, x: 15, y: y0 },
+      { type: t.mid, x: 14, y: y0 + dir },
+      { type: t.mid, x: 16, y: y0 + dir * 2 },
+      { type: t.low, x: 13, y: y0 },
+    ];
+  };
+
+  const kinds = new Set(o.groups);
+  const leaders = [...kinds].map((k) => squad[k].boss);
+
+  return {
+    id: o.id,
+    version: LEVEL_VERSION,
+    /*
+     * 支线关（`side`）：进菜单「关卡」栏里的「黑暗动乱」那一卷，不占主线的位置。
+     * 主线那条线有别人按顺序填，这张塞进去会打乱节奏。
+     */
+    side: true,
+    chapter: '黑暗动乱',
+    name: o.name,
+    brief: `${o.brief}（数值是占位版，先看这一关的节奏对不对。）`,
+    map: {
+      id: `levelmap:${o.id.replace('level:', '')}`,
+      name: o.name,
+      w: 18,
+      h: 18,
+      rows: rowsOf(18, 18, [
+        // 中间一片林子，把两边隔开一点，也给玩家一段可以撤退的路
+        [7, 4, 'f'], [8, 4, 'f'], [7, 5, 'f'], [8, 5, 'f'], [9, 5, 'f'],
+        [8, 12, 'f'], [9, 12, 'f'], [9, 13, 'f'],
+        [4, 9, 'h'], [5, 9, 'h'], [12, 9, 'h'], [13, 9, 'h'],
+      ]),
+      citiesA: [{ x: 1, y: 8 }],
+      // B 席没有城（cityless），这两组都不会用到
+      citiesB: [],
+      source: 'builtin',
+    },
+    /*
+     * B 是没有城的席位：敌人不造兵，只靠"自己长大"（暗影杀人、化血、增生）。
+     * 它也因此不吃"丢城"那套出局判定——兵打光才完。
+     */
+    seats: { count: 2, ai: ['B'], cityless: ['B'] },
+    // 第 5 代：玩家得拿得出打得穿 10+ 甲的东西，不然这关只有挨打的份
+    setup: { startEra: 5, firstSide: 'A' },
+    expansions: { require: ['cultivation', 'dark-turmoil'] },
+    deploy: {
+      A: [
+        { type: 'tank', x: 4, y: 7 },
+        { type: 'tank', x: 4, y: 10 },
+        { type: 'squad', x: 3, y: 7 },
+        { type: 'squad', x: 3, y: 10 },
+        { type: 'hmg', x: 2, y: 11 },
+        { type: 'crew', x: 2, y: 6 },
+      ],
+      B: [...group(o.groups[0]!, 'top'), ...group(o.groups[1] ?? o.groups[0]!, 'bottom')],
+    },
+    /*
+     * 只认"头领全死"。不要"守住 N 回合"那种保底胜利条件——玩家实际打下来能压着打，
+     * 守满就判赢等于白打（这两版都试过了，见设计文档）。
+     * 混编关两个头领写在同一组里：组内是"且"，所以必须两个都死。
+     */
+    goals: leaders.map((t) => ({
+      kind: 'assassinate' as const,
+      winner: 'A' as const,
+      loser: 'B' as const,
+      unitType: t,
+      label: o.leader,
+      group: 1,
+    })),
+    events: [
+      { id: 'opens', when: { kind: 'turn', at: 1 }, do: [{ kind: 'say', text: o.opening }] },
+      { id: 'grows', when: { kind: 'turn', at: 10 }, do: [{ kind: 'say', text: o.growing }] },
+      ...leaders.map((t, i) => ({
+        id: `down-${i}`,
+        when: { kind: 'unitDied' as const, type: t },
+        do: [{ kind: 'say' as const, text: o.down }],
+      })),
+    ],
+  };
+}
+
 export const LEVELS: LevelDef[] = [
   /* ── 玩家关 1：孤城（防守）────────────────────────────────── */
   {
@@ -1659,95 +1781,56 @@ export const LEVELS: LevelDef[] = [
     ],
   },
 
-  /* ── 支线 1：影潮（防守 / 增殖压力）──────────────────────────── */
-  {
+  /* ── 支线 1~3：三张对称关（影 / 血 / 混编）─────────────────────
+   *
+   * 为什么要做成**对称**的三张：这一套敌人（影系、血系）都是"越打越多"的设计，
+   * 强度到底合不合适，只跑空场看不出来。三张关的地图、玩家兵力、敌人**群数**
+   * 完全一样，只有两群敌人的成分不同：
+   *
+   *   影潮 = 影 + 影      血潮 = 血 + 血      浊潮 = 影 + 血
+   *
+   * 同一张图、同一批玩家兵，打三遍就能对照出"哪一支更难缠"，
+   * 而且不用改任何别的东西。等数值定下来，这三张关可以只留一张。
+   */
+  tideLevel({
     id: 'level:shadow-tide',
-    version: LEVEL_VERSION,
-    /*
-     * 支线关（`side`）：进菜单的「支线」栏，不占主线的位置。
-     * 主线那条线有别人按顺序填，这张塞进去会打乱节奏。
-     */
-    side: true,
-    chapter: '黑暗动乱',
     name: '影潮',
     brief:
       '18×18。两团影主在远处的黑暗里醒来，它们会自己长大：影主定期分裂出暗影，' +
-      '暗影杀掉的每一个兵都会变成蚀影。**把两个影主都杀掉**，影潮才会退。' +
-      '（数值是占位版，先看这一关的节奏对不对。）',
-    map: {
-      id: 'levelmap:shadow-tide',
-      name: '影潮',
-      w: 18,
-      h: 18,
-      rows: rowsOf(18, 18, [
-        // 中间一片林子，把两边隔开一点，也给玩家一段可以撤退的路
-        [7, 4, 'f'], [8, 4, 'f'], [7, 5, 'f'], [8, 5, 'f'], [9, 5, 'f'],
-        [8, 12, 'f'], [9, 12, 'f'], [9, 13, 'f'],
-        [4, 9, 'h'], [5, 9, 'h'], [12, 9, 'h'], [13, 9, 'h'],
-      ]),
-      citiesA: [{ x: 1, y: 8 }],
-      // B 席没有城（cityless），这两组都不会用到
-      citiesB: [],
-      source: 'builtin',
-    },
-    /*
-     * B 是没有城的席位：影潮不造兵，只靠"影主分裂"和"暗影杀人"长大。
-     * 它也因此不吃"丢城"那套出局判定——兵打光才完。
-     */
-    seats: { count: 2, ai: ['B'], cityless: ['B'] },
-    // 第 5 代：玩家得拿得出打得穿 15 甲的东西，不然这关只有挨打的份
-    setup: { startEra: 5, firstSide: 'A' },
-    expansions: { require: ['cultivation', 'dark-turmoil'] },
-    deploy: {
-      A: [
-        { type: 'tank', x: 4, y: 7 },
-        { type: 'tank', x: 4, y: 10 },
-        { type: 'squad', x: 3, y: 7 },
-        { type: 'squad', x: 3, y: 10 },
-        { type: 'hmg', x: 2, y: 11 },
-        { type: 'crew', x: 2, y: 6 },
-      ],
-      B: [
-        // 两个影主分在右上、右下：它们各自的半径 7 会连成一片
-        { type: 'shadow-lord', x: 15, y: 2 },
-        { type: 'shadow-lord', x: 15, y: 15 },
-        { type: 'shade', x: 14, y: 3 },
-        { type: 'shade', x: 16, y: 4 },
-        { type: 'shade', x: 14, y: 14 },
-        { type: 'shadow-beast', x: 13, y: 2 },
-        { type: 'shadow-beast', x: 13, y: 16 },
-      ],
-    },
-    /*
-     * 只有一条：**两个影主都死**。玩家实际打下来能压着打（甚至快全歼），
-     * 所以不需要"守住 N 回合"这种保底胜利条件——那种条件会让"打得赢"变成"熬时间"。
-     *
-     * 曾经写过 survive（守 34 / 守方撑 26），两版都不对：
-     *   · "B 撑到 26 就赢"：玩家整局一个影主都杀不掉，只能被耗死；
-     *   · "A 守 34 就赢"：玩家明明能全歼，却提前被判定胜利，白打了。
-     * 现在只认"杀光影主"，另外 B 是 cityless 席位，兵打光本来也会出局。
-     */
-    goals: [
-      { kind: 'assassinate', winner: 'A', loser: 'B', unitType: 'shadow-lord', label: '影主' },
-    ],
-    events: [
-      {
-        id: 'tide-comes',
-        when: { kind: 'turn', at: 1 },
-        do: [{ kind: 'say', text: '远处的黑先动了。那不是夜——那是影潮。' }],
-      },
-      {
-        id: 'tide-grows',
-        when: { kind: 'turn', at: 10 },
-        do: [{ kind: 'say', text: '它们比开战时更多了。你打死的每一个，都会站起来。' }],
-      },
-      {
-        id: 'one-lord-down',
-        when: { kind: 'unitDied', type: 'shadow-lord' },
-        do: [{ kind: 'say', text: '一团影主散开了。剩下的那片黑，收得更紧了。' }],
-      },
-    ],
-  },
+      '暗影杀掉的每一个兵都会变成蚀影。**把两个影主都杀掉**，影潮才会退。',
+    groups: ['shadow', 'shadow'],
+    leader: '影主',
+    unit: 'shadow-lord',
+    opening: '远处的黑先动了。那不是夜——那是影潮。',
+    growing: '它们比开战时更多了。你打死的每一个，都会站起来。',
+    down: '一团影主散开了。剩下的那片黑，收得更紧了。',
+  }),
+  tideLevel({
+    id: 'level:blood-tide',
+    name: '血潮',
+    brief:
+      '18×18。两团血肉结晶在远处鼓胀：血核每回合自愈，满血就剥出新的血肉；' +
+      '每一具被它们打死的尸体都会重新站起来。**把两个血核都杀掉**，血潮才会干。',
+    groups: ['blood', 'blood'],
+    leader: '血核',
+    unit: 'blood-core',
+    opening: '风里有股铁锈味。地上的血在往一处聚。',
+    growing: '它们比开战时更多了。你流出来的每一滴，都成了它们。',
+    down: '一颗血核塌了。血还在流，但慢了。',
+  }),
+  tideLevel({
+    id: 'level:mixed-tide',
+    name: '浊潮',
+    brief:
+      '18×18。一边是影，一边是血——两种"会自己长大"的东西撞在同一片地上。' +
+      '**把影主和血核都杀掉**，这一夜才算过去。',
+    groups: ['shadow', 'blood'],
+    leader: '影主 / 血核',
+    unit: undefined,
+    opening: '一边在暗，一边在红。它们不是一伙的，但它们都在往你这边来。',
+    growing: '影在长，血也在长。你打死的每一个，都会换个样子站起来。',
+    down: '一头栽下去了。另一边的呼吸，变得更响。',
+  }),
 
   {
     id: 'level:probe-flat',

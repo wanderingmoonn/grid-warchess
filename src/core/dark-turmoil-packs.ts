@@ -808,8 +808,13 @@ const SHADOW_LORD_AI: UnitAiProfile = {
 
 /* ── 影主的召唤计时器 ───────────────────────────────────────────── */
 
-/** 正常情况下几个自己的回合召唤一个暗影 */
-const SUMMON_EVERY = 4;
+/**
+ * 正常情况下几个自己的回合召唤一个暗影。
+ *
+ * 4 → 5（2026-11-18 跑批后调）：三张对称关里，4 回合一个的节奏让影系在
+ * 30 个行动内从 8 个涨到 19 个，玩家被压着打。这不是"难"，是"滚雪球"。
+ */
+export const SUMMON_EVERY = 5;
 
 /** 找到附近一格能站的位置（八邻域，先近后远） */
 function freeNear(state: GameState, u: Unit, type: string, api: AbilityApi): { x: number; y: number } | null {
@@ -886,12 +891,20 @@ export const BLOOD_POOL = 'blood-pool';
 export const FLESH = 'flesh';
 export const BLOOD_CORE = 'blood-core';
 
-/** 造成多少伤害攒够一滩淤血 */
-const CLOT_DAMAGE = 60;
+/**
+ * 造成多少伤害攒够一滩淤血。
+ *
+ * 60 → 100（同上）：淤血一回合 3 段 ×14 攻 ≈ 42 点，三滩一起打就是 1.5 回合
+ * 长一滩，滚得比玩家清得还快。
+ *
+ * 导出给探针：断言"攒够阈值就长"，而不是"攒够 60 就长"——数值一调探针就红，
+ * 那是探针在替数值背锅（项目自己的规矩）。
+ */
+export const CLOT_DAMAGE = 100;
 /** 一回合最多长几滩（不封顶会雪崩：一次溅射打五个兵就长五滩） */
 const CLOT_PER_TURN = 2;
-/** 血核满血多少回合长一团血肉 */
-const GROW_TURNS = 3;
+/** 血核满血多少回合长一团血肉（导出给探针） */
+export const GROW_TURNS = 3;
 /** 血核每回合回多少血（增生） */
 const GROW_HEAL = 12;
 /** 是不是血系（淤血 / 血肉 / 血核） */
@@ -966,7 +979,9 @@ const FLESH_DEF: UnitTypeDef = {
   cost: 150,
   move: 2,
   atk: 26,
-  armor: 12,
+  // 12 → 8（2026-11-18 跑批后调）：160 血 + 12 甲 + 每回合吸 31 血，
+  // 第 5 代的兵打它净伤害是负的，整局杀不掉一团。
+  armor: 8,
   maxHp: 160,
   range: 1,
   vision: 4,

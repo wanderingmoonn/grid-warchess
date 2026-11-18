@@ -18,7 +18,9 @@ import {
   DARK_TURMOIL,
   BLOOD_CORE,
   BLOOD_POOL,
+  CLOT_DAMAGE,
   FLESH,
+  GROW_TURNS,
   refreshShadow,
 } from '../src/core/dark-turmoil-packs.ts';
 import { unitAiProfileOf } from '../src/core/unit-ai.ts';
@@ -149,16 +151,16 @@ console.log('\n[2] 化血');
   // 直接把血攒满，走一次回合开始
   const { s: s2, mk: mk2 } = arena();
   const pool2 = mk2('pool', BLOOD_POOL, 'B', 5, 5);
-  pool2.custom = { blood: 60 };
+  pool2.custom = { blood: CLOT_DAMAGE };
   tick(s2, 'B');
   const born = s2.units.filter((u) => u.type === BLOOD_POOL);
-  check('攒够 60 点：长出一滩新的淤血', born.length === 2, `${born.length} 滩`);
+  check(`攒够 ${CLOT_DAMAGE} 点：长出一滩新的淤血`, born.length === 2, `${born.length} 滩`);
   check('计数清零', Number(s2.units.find((u) => u.id === 'pool')?.custom?.blood ?? 0) === 0);
 
   // 一回合最多长两滩（防止一次溅射打五个兵就长五滩）
   const { s: s3, mk: mk3 } = arena();
   const pool3 = mk3('pool', BLOOD_POOL, 'B', 5, 5);
-  pool3.custom = { blood: 600 };
+  pool3.custom = { blood: CLOT_DAMAGE * 10 };
   tick(s3, 'B');
   check(
     '一回合最多两滩（不然会雪崩）',
@@ -234,21 +236,21 @@ console.log('\n[5] 增生');
 {
   const { s, mk } = arena();
   const core = mk('core', BLOOD_CORE, 'B', 5, 5);
-  for (let i = 0; i < 2; i += 1) tick(s, 'B');
+  for (let i = 0; i < GROW_TURNS - 1; i += 1) tick(s, 'B');
   check(
-    '满血攒两回合还不长（要三回合）',
+    `满血攒 ${GROW_TURNS - 1} 回合还不长（要 ${GROW_TURNS} 回合）`,
     !s.units.some((u) => u.type === FLESH),
     String(core.custom?.grow),
   );
   tick(s, 'B');
-  check('第三回合剥出一团血肉', s.units.filter((u) => u.type === FLESH).length === 1);
+  check(`第 ${GROW_TURNS} 回合剥出一团血肉`, s.units.filter((u) => u.type === FLESH).length === 1);
   check('计数归零', Number(s.units.find((u) => u.id === 'core')?.custom?.grow ?? 0) === 0);
 
   // 不满血就不攒
   const { s: s2, mk: mk2 } = arena();
   const core2 = mk2('core', BLOOD_CORE, 'B', 5, 5);
   core2.hp = 100;
-  for (let i = 0; i < 4; i += 1) tick(s2, 'B');
+  for (let i = 0; i < GROW_TURNS + 1; i += 1) tick(s2, 'B');
   check(
     '一直不满血：回血但不剥东西',
     !s2.units.some((u) => u.type === FLESH) && core2.hp > 100,

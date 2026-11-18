@@ -21,6 +21,7 @@ import {
   SHADOW_BEAST,
   SHADOW_LORD,
   SLUMBER,
+  SUMMON_EVERY,
   refreshShadow,
   SHADOW_KEY,
 } from '../src/core/dark-turmoil-packs.ts';
@@ -231,11 +232,14 @@ console.log('\n[5] 影主的召唤');
     }
     return s.units.filter((u) => u.type === SHADE).length;
   };
-  check('不攻击：第 4 个回合才召唤出第一只', summon(3, false) === 0 && summon(4, false) === 1);
   check(
-    '每回合都攻击：第 2 个回合就召唤出来（计时器走得更快）',
-    summon(2, true) === 1,
-    `${summon(2, true)} 只`,
+    `不攻击：第 ${SUMMON_EVERY} 个回合才召唤出第一只`,
+    summon(SUMMON_EVERY - 1, false) === 0 && summon(SUMMON_EVERY, false) === 1,
+  );
+  check(
+    '每回合都攻击：提前两回合召唤出来（计时器走得更快）',
+    summon(SUMMON_EVERY - 2, true) === 1,
+    `${summon(SUMMON_EVERY - 2, true)} 只`,
   );
 }
 
