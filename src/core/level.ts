@@ -2136,8 +2136,20 @@ function normalizeDeploy(
       continue;
     }
     const list = obj[seat];
+    // 明写空数组 = "这一席开局没有兵"，是合法作者意图，不该报错
+    if (Array.isArray(list) && list.length === 0) {
+      out[seat] = [];
+      continue;
+    }
     const units = normUnits(list, `第 ${seat} 家的部署`, map, taken, errors);
-    if (units.length > 0) out[seat] = units;
+    /*
+     * **空数组也要留下来**（2026-11-18）。
+     *
+     * 这里原来只在 `units.length > 0` 时写键，于是"作者明确写了这一席 0 个兵"
+     * 和"作者根本没提这一席"在校验后就分不清了——两者都会变成"没有这个键"。
+     * 建局时那一侧看到"没这个键"就按常规开局自动撒兵，作者的意图被悄悄推翻。
+     */
+    out[seat] = units;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

@@ -671,7 +671,14 @@ export function createMatch(
   const levelDeploy = level?.deploy ?? {};
   for (const p of seats) {
     if (hiddenSeatList.includes(p)) continue;
-    if ((levelDeploy[p]?.length ?? 0) > 0) continue;
+    /*
+     * **看"有没有这个键"，不看"里面几个兵"**（2026-11-18）。
+     *
+     * 作者把某席的兵全删了（`deploy: { A: [] }`）是明确表态："这一席开局没有兵"。
+     * 原来这里判 `length > 0`，空数组等于"没写"，于是引擎又把默认开局兵撒回来——
+     * 表现就是"删光了兵，一开局莫名其妙又冒出一队"。
+     */
+    if (levelDeploy[p] !== undefined) continue;
     for (const s of layoutSpawns[p]) pushUnit(p, s.type, s.x, s.y);
   }
 
@@ -685,7 +692,7 @@ export function createMatch(
     for (const owner of seats) {
       // 关卡写了部署的席位也不送经济单位：那会把它写死的兵力再加两个，
       // 而作者要的正是"就这几个人"。
-      if ((levelDeploy[owner]?.length ?? 0) > 0) continue;
+      if (levelDeploy[owner] !== undefined) continue;
       // 还没登场的席位也不发经济单位：它连城都没有，发了也站在虚空里
       if (hiddenSeatList.includes(owner)) continue;
       const ownCity = cities.find((c) => c.owner === owner);
