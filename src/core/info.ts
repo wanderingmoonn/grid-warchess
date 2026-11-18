@@ -190,9 +190,17 @@ export function describeUnit(
   // allow.types 里存的是兵种 id，写给人看得翻成名字（本局兵种表优先，原版表兜底）
   const nameOf = (id: string): string => s.unitTypes[id]?.name ?? UNIT_TYPES[id]?.name ?? id;
 
-  // 哀兵必胜：这条加成写在伤害结算里，面板上不写就等于没有——
-  // 玩家只看到"我打它 13 点"，永远不知道为什么是 14。
-  if (owner && s.firstCityLost === owner) {
+  /*
+   * 哀兵必胜：这条加成写在伤害结算里，面板上不写就等于没有——
+   * 玩家只看到"我打它 13 点"，永远不知道为什么是 14。
+   *
+   * **但必须确认这一包开着**（2026-11-17 修）。`firstCityLost` 是局面字段，
+   * 不管开没开这一包都会记下来；原来这里只看这个字段，于是没开「哀兵必胜」的局
+   * 照样在面板上写"全军伤害 ×1.10"，玩家照这个数去算，伤害少 2 点，
+   * 报上来是"明明该打死却剩 2 血"。面板说的每一句都得是这一局真在跑的东西。
+   */
+  const lastStandOn = activeExpansions(s).some((e) => e.id === 'last-stand');
+  if (lastStandOn && owner && s.firstCityLost === owner) {
     lines.push(
       `哀兵必胜：本方丢过首城，全军伤害 ×${(1 + LAST_STAND_BONUS).toFixed(2)}（+${Math.round(
         LAST_STAND_BONUS * 100,
