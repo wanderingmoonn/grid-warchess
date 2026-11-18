@@ -42,6 +42,12 @@ const SMALL_FILE = 'manual-small.html';
  */
 const GROUP_BOOKS: Array<{ ids: readonly string[]; file: string; title: string; note: string }> = [
   {
+    ids: ['cultivation', 'dark-turmoil'],
+    file: 'manual-pack-cultivation.html',
+    title: '修真扩展',
+    note: '修真系列合册（修真 + 黑暗动乱）：境界、寿元、法术，以及诡异的暗影领域',
+  },
+  {
     ids: ['fantasy'],
     file: 'manual-pack-fantasy.html',
     title: '奇幻扩展',

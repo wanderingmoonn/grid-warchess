@@ -21,7 +21,7 @@ import { aiNextAction } from '../src/core/ai.ts';
 import { isAiSide } from '../src/core/ai-meta.ts';
 import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
-import { allLevels, demoLevels, levelById, playableLevels, storyLevels, validateLevel } from '../src/core/level.ts';
+import { allLevels, demoLevels, levelById, playableLevels, sideLevels, storyLevels, validateLevel } from '../src/core/level.ts';
 import { lintLevel } from '../src/core/level-lint.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
@@ -992,15 +992,21 @@ line('23. 地图上的桥不该自己塌');
 line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
 {
   /*
-   * 2026-11-17 菜单分成两栏：
-   *   · 「关卡」= 主线 / 教学关（`demo` 不写）——现在还没设计，空着是正常状态；
-   *   · 「编辑器」= 示例关（`demo: true`）——内建那五张。
-   * 两栏加起来就是"玩家可见的关卡"，也就是 `playableLevels()`。
+   * 2026-11-18 菜单是三栏：
+   *   · 「关卡」= 主线 / 教学关（`demo` 不写、也没标 `side`）——现在还没设计；
+   *   · 「支线」= `side: true`，和主线共用世界观但不占它的位置；
+   *   · 「编辑器」= 示例关（`demo: true`）。
+   * 三栏加起来就是"玩家可见的关卡"，也就是 `playableLevels()`。
    */
   const demos = demoLevels();
   const stories = storyLevels();
+  const sides = sideLevels();
   const menu = playableLevels();
-  check(demos.length === 5, `编辑器栏有五张示例关（${demos.map((l) => l.name).join(' / ')}）`);
+  /*
+   * 只要求"至少五张"，不钉死数字：加一张示例关不该让这条变红。
+   * （项目自己的规矩——探针不许钉死具体数量/数值，见 STATUS-LEVEL-MODE 第 7 条坑。）
+   */
+  check(demos.length >= 5, `编辑器栏至少有五张示例关（${demos.map((l) => l.name).join(' / ')}）`);
   check(
     demos.every((l) => l.demo === true),
     '示例关都标了 demo——不标的话它们会被当成主线关塞进「关卡」栏',
@@ -1011,9 +1017,30 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
     '这张新关没写 demo=true，被当成主线关了',
   );
   check(
-    menu.length === demos.length + stories.length,
-    `两栏加起来等于玩家可见的关卡（${demos.length} + ${stories.length} = ${menu.length}）`,
+    sides.length >= 1 && sides.every((l) => l.side === true && l.demo !== true),
+    `支线栏有内容，且都标了 side（${sides.map((l) => l.name).join(' / ') || '空'}）`,
   );
+  check(
+    menu.length === demos.length + stories.length + sides.length,
+    `三栏加起来等于玩家可见的关卡（${demos.length} 示例 + ${stories.length} 主线 + ${sides.length} 支线 = ${menu.length}）`,
+    '有张关既不在主线、也不在支线、也不在示例栏，玩家点不到',
+  );
+  /*
+   * 多目标的关**必须写 group**（2026-11-18 修完斩首/黑暗动乱之后补的）。
+   *
+   * 引擎的规则是"组内且、组间或"；不写 group 的几条全落在第 1 组里，
+   * 于是"杀掉守将"和"守方撑满 18 次行动"这种对立的条件被 AND 起来——
+   * 两条都不成立，这关只能靠把对面打光才结束。玩家不会知道为什么目标没生效。
+   */
+  const badGoals = allLevels()
+    .filter((l) => (l.goals?.length ?? 0) >= 2)
+    .filter((l) => (l.goals ?? []).some((g) => g.group === undefined));
+  check(
+    badGoals.length === 0,
+    `多目标的关都写了 group（不是"且"）${badGoals.length ? `：${badGoals.map((l) => l.name).join(' / ')}` : ''}`,
+    '不写 group 的几条会被 AND 起来，目标永远不会触发',
+  );
+
   check(
     allLevels().length > menu.length,
     `夹具关还在注册表里（全 ${allLevels().length} 张，玩家可见 ${menu.length} 张）`,
