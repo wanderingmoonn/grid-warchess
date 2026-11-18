@@ -154,6 +154,7 @@ export type StagedKey =
   | 'onHit'
   | 'onStrike'
   | 'onTurnStart'
+  | 'onTurnEnd'
   | 'siegeDamage';
 
 const NONE: never[] = [];
