@@ -3839,6 +3839,14 @@ function singleGoalWinner(s: GameState, goal: import('./level.ts').LevelGoal): P
 }
 
 function checkWinner(s: GameState): PlayerId | null {
+  /*
+   * 肉鸽撤离：胜负先按下不表（2026-11-19）。
+   *
+   * `doEndTurn` 一进来就调这里，判到赢家就早退——不换手、不推进回合、
+   * 不重置 `moved`。肉鸽里"清空敌人"正是玩家判胜的时刻，于是第一次
+   * 结束回合之后回合永远停在原地（玩家看到的"撤离只有第一回合能动"）。
+   */
+  if (s.config.holdWinner === true) return null;
   // 上帝模式不判负。
   //
   // 沙盒里"城"只是可以摆上来挨打的靶子，不是根：有人就想试"二十个长弓手

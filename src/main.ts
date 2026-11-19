@@ -3536,7 +3536,27 @@ function dispatch(action: Action): boolean {
    * 于是下一步 `applyAction` 直接返回"对局已结束"，倒计时、走兵、结束回合
    * 全军覆没（实测：turn 停在 1、current 停在 A、evacLeft 一直 2）。
    */
-  if (rogue && rogue.snap.phase === 'evac') keepPlaying(state);
+  /*
+   * 肉鸽里"我把敌人清空了"**不等于这一局结束**——后面还有撤离要走。
+   *
+   * 原来这里只在 `phase === 'evac'` 时清胜负，而**第一手结束时阶段还是
+   * battle**（撤离判定发生在这一手之后），于是 `applyAction(END_TURN)`
+   * 被"对局已结束"拒掉：回合不前进、`moved` 标记不重置，
+   * 玩家看到的就是"撤离只有第一回合能动"（2026-11-19 复现）。
+   *
+   * 现在只要 run 还在、赢的是玩家自己，就一律把胜负按下不表——
+   * 真正的收尾交给撤离结算（`finishRogueStage`）。
+   */
+  if (rogue && !rogue.settled && state.winner === 'A') keepPlaying(state);
+  /*
+   * 清场那一刻就要把"先别判胜负"打开（2026-11-19）。
+   *
+   * 只等 hook 里按 phase 打开太晚——第一次按"结束回合"时 phase 还是 battle，
+   * `doEndTurn` 已经判胜并早退，回合没推进，于是"撤离只有第一回合能动"。
+   */
+  if (rogue && !rogue.settled && (rogue.snap.phase === 'evac' || foesLeft(state) === 0)) {
+    state.config.holdWinner = true;
+  }
   // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
   if (replay) {
     toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -6262,6 +6282,10 @@ function applyRushDirective(): void {
   };
 }
 
+function foesLeft(s: GameState): number {
+  return s.units.filter((u) => u.owner !== 'A' && u.hp > 0).length;
+}
+
 function rogueAfterAction(prev: GameState, next: GameState): void {
   if (!rogue || rogue.settled) return;
   /*
@@ -6282,9 +6306,15 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
   applyRushDirective(); // 每一手都重发，否则第二回合起敌人就站住了
   const before = rogue.snap;
   const after = observe(prev, next, before, rogueCtx());
+  /*
+   * 撤离一开始就把"先别判胜负"打开（2026-11-19）：
+   * 否则 `doEndTurn` 会以"玩家已赢"为由早退，回合不推进、`moved` 不重置，
+   * 于是撤离只有第一手能动。撤离结束（进入下一关/结算）时再关掉。
+   */
+  state.config.holdWinner = after.phase === 'evac';
   rogue.snap = after;
-  // 撤离期间每一步都可能被引擎重新判胜，见到就抹掉
-  if (after.phase === 'evac') keepPlaying(state);
+  // 撤离期间每一步都可能被引擎重新判胜（玩家清场即判胜），见到就抹掉
+  if (after.phase !== 'battle' || foesLeft(state) === 0) keepPlaying(state);
   if (after.phase === before.phase && after.evacLeft === before.evacLeft) return;
 
   /*
@@ -6572,6 +6602,13 @@ if (new URLSearchParams(location.search).has('roguedebug')) {
     hud: (): string => (document.getElementById('rogue-hud')?.textContent ?? '').trim(),
     snap: () => rogue?.snap ?? null,
     sel: (): string | null => selectedId,
+    /** 撤离期排查：回合/席位/胜负 + 我方的 moved/acted 标记 */
+    probeTurn: (): string =>
+      `turn=${state.turn} cur=${state.current} winner=${state.winner ?? '-'} | ` +
+      state.units
+        .filter((u) => u.owner === 'A')
+        .map((u) => `${u.id}@${u.x},${u.y} m=${u.moved ? 1 : 0} a=${u.acted ? 1 : 0} hp=${u.hp}`)
+        .join(' / '),
     /** AI 调度链的门：卡住时看这四个值就知道断在哪 */
     aiTrace: (): string[] => aiTrace.slice(-14),
     ai: (): string =>

@@ -25,7 +25,7 @@ import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage } from '
 import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '../../../src/core/roguelike/enemy-pools.ts';
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
-import { incomeOf } from '../../../src/core/rules.ts';
+import { applyAction, incomeOf } from '../../../src/core/rules.ts';
 import { TACTICS, TACTIC_BY_ID, applyTacticNow } from '../../../src/core/roguelike/tactics.ts';
 import {
   capacityBonus,
@@ -412,6 +412,27 @@ export function run() {
     assert.ok(buffed.taken.length > plain.taken.length, '驮马应该多带走几个人');
     assert.ok(buffed.taken.every((u) => u.hp >= 5), '军械只能加血不能减');
     assert.ok(buffed.taken.every((u) => typeof u.hp === 'number'));
+  });
+
+  test('肉鸽：撤离期间回合必须照常推进（holdWinner）', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let s = createMatch({ ...DEFAULT_CONFIG, level: r.level, holdWinner: true } as never, 77);
+    // 清空敌人后，结束回合必须"换手 + turn+1"，否则 moved 标记永远不重置
+    s.units = s.units.filter((u) => u.owner === 'A');
+    const before = s.turn;
+    const res = applyAction(s, { type: 'END_TURN' });
+    assert.ok(res.ok, '结束回合应当被接受');
+    assert.ok(res.state.turn > before, '回合必须推进');
+    assert.equal(res.state.winner, null, 'holdWinner 下不该判胜负');
+
+    // 关掉开关后照常判胜（普通对局不受影响）
+    const plain = createMatch({ ...DEFAULT_CONFIG, level: r.level } as never, 78);
+    plain.units = plain.units.filter((u) => u.owner === 'A');
+    const res2 = applyAction(plain, { type: 'END_TURN' });
+    assert.ok(res2.ok);
+    assert.equal(res2.state.winner, 'A', '没开关时清场即判胜，老行为不变');
   });
 
   test('肉鸽：升城市时代价钱递增', () => {
