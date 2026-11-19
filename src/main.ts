@@ -404,8 +404,21 @@ if (new URLSearchParams(location.search).has('fresh')) {
   console.info('[存档] 已按 ?fresh=1 清掉本机存档');
 }
 
-let hasRealSave = loadMatch() !== null;
-let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+/*
+ * **开机不再把上次那局当成"当前局"**（2026-11-19 用户报"一进联机就是那张图"）。
+ *
+ * 原来这里是 `loadMatch() ?? createMatch(...)`：开机就把存档读进 `state`。
+ * 于是"创建房间"上传的是上次那局（比如某个关卡），玩家看到的是一张
+ * 他从没打算打的图，而且换房间码也没用——传上去的都是同一张。
+ *
+ * 现在：内存里先放一局**全新的默认对局**当占位，存档只在你点
+ * 「继续上一局」时才装进来。在点之前**挂起自动存档**，
+ * 否则这局占位会立刻覆盖掉真正的存档（那才是灾难）。
+ */
+const bootSave = loadMatch();
+let hasRealSave = bootSave !== null;
+let state: GameState = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+if (hasRealSave) suspendSaves(true);
 
 /*
  * 棋盘视图的开关：悬停看一眼，点一下钉住。
@@ -6073,6 +6086,12 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     onRogue: openRoguelike,
     onTutorial: startTutorial,
     onContinue: () => {
+      // 存档在开机时被挂起了，这里才真正装进来（见 bootSave 那段注释）
+      const saved = loadMatch();
+      if (saved) state = saved;
+      suspendSaves(false);
+      refreshMemory(state);
+      clearSelection();
       render();
       kickAiIfNeeded();
     },
@@ -6115,6 +6134,7 @@ function pushRoomAfterNewMatch(): void {
 function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
+    suspendSaves(false);
     state = createMatch(result.config, result.seed, loadCustomUnits());
     pushRoomAfterNewMatch();
     /*
