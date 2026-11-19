@@ -37,6 +37,16 @@ export interface OnlineHost {
   watch(code: string, snapshot: RoomSnapshot): void;
   /** 退出房间，回到本机对局 */
   leave(): void;
+  /**
+   * 一句话说清"要上传的是哪一局"（2026-11-19）。
+   *
+   * 用户报过"一进联机就被锁在一张不认识的图上"：那不是联机的错，
+   * 是他本机还停着上一次的关卡存档，创建房间时被原样传了上去。
+   * 面板必须先把这件事说清，再让人点创建。
+   */
+  describe(): string;
+  /** 放弃当前这局，去开一局新的（关卡/对局面板） */
+  newGame(): void;
 }
 
 export function openOnlinePanel(host: OnlineHost): void {
@@ -132,9 +142,11 @@ export function openOnlinePanel(host: OnlineHost): void {
                 会以你现在执的一方入座，顺便把这局原样传上去。
                 之后每一步都在本机走，点「结束回合」才提交给对方。
               </div>
+              <div class="online-current">当前这局：<b>${escapeHtml(host.describe())}</b></div>
               <button class="btn btn-primary btn-block" data-act="create" ${busy ? 'disabled' : ''}>
                 ${busy ? '正在创建…' : '创建房间'}
               </button>
+              <button class="btn btn-block" data-act="new-game">不是这局——去开一局新的</button>
             </section>
 
             <section class="field">
@@ -416,6 +428,11 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (act === 'watch') void doWatch();
     if (act === 'refresh') void refresh();
     if (act === 'probe') void runProbe();
+    if (act === 'new-game') {
+      close();
+      host.newGame();
+      return;
+    }
     if (act === 'leave') {
       host.leave();
       close();

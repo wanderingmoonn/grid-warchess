@@ -5232,6 +5232,20 @@ function handleAction(act: string, el: HTMLElement): void {
         enter: (seat, snapshot) => applyRoom(seat, snapshot),
         watch: (code, snapshot) => watchRoom(code, snapshot),
         leave: () => leaveRoom(),
+        describe: () => {
+          /*
+           * "要上传的是哪一局"（2026-11-19）。
+           *
+           * 玩家报过"一进联机就被锁在一张不认识的图上"——本机还停着上次的
+           * 关卡存档，创建房间时被原样传上去。把这一行摆在按钮上面，
+           * 至少他点之前知道自己在传什么。
+           */
+          const lv = state.config.level?.name;
+          const mine = state.units.filter((u) => u.owner === me()).length;
+          const cv = state.cities.filter((c) => c.owner === me()).length;
+          return `第 ${state.turn} 回合 · ${state.w}×${state.h} · ${lv ? `关卡「${lv}」` : '普通对局'} · 我 ${mine} 兵 ${cv} 城`;
+        },
+        newGame: () => newGameFlow(),
       });
       return;
     }
