@@ -317,24 +317,24 @@ export function run() {
      * 关卡摆兵是按 `state.unitTypes` 查兵种的，所以拿它收窄"可造"，
      * 会连带把关卡里 deploy 的骑士/长弓变成"这一局没有这个兵种"而被静默跳过。
      */
-    assert.equal(s.unitTypes.knight, undefined, '这个行为本身就是坑，别拿它收窄可造集');
+    assert.equal(s.unitTypes.spearman, undefined, '这个行为本身就是坑，别拿它收窄可造集');
   });
 
   test('肉鸽：recruitOnly 只夹"能不能造"，不裁兵种表', () => {
-    const r = validateLevel(SLICE_STAGES[2]!.level); // 第 3 关有长弓、骑士
+    const r = validateLevel(SLICE_STAGES[0]!.level); // 第 3 关有长弓、骑士
     assert.ok(r.ok);
     const s = createMatch(
       { ...DEFAULT_CONFIG, level: r.level, recruitOnly: ['militia', 'archer'], noIncome: true } as never,
       31,
     );
     assert.equal(canUseType(s, 'A', 'militia'), true);
-    assert.equal(canUseType(s, 'A', 'knight'), false, '没抽到的兵种不该能造');
+    assert.equal(canUseType(s, 'A', 'spearman'), false, '没抽到的兵种不该能造');
     // 关键：兵种表完整，所以关卡摆的敌人还在
     assert.ok(s.unitTypes.knight, '兵种表必须完整（否则关卡摆兵会被静默跳过）');
     assert.ok(s.units.filter((u) => u.owner === 'B').length > 0, '敌人必须还在场上');
     // 普通对局不受影响
     const plain = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 32);
-    assert.equal(canUseType(plain, 'A', 'knight'), true);
+    assert.equal(canUseType(plain, 'A', 'spearman'), true);
   });
 
   test('肉鸽：战术卡——补给立刻给钱，空投进背包，修整回满血', () => {
@@ -521,19 +521,26 @@ export function run() {
     }
   });
 
-  test('肉鸽：三场手写遭遇都能过校验并建出局', () => {
-    assert.equal(SLICE_STAGES.length, 3);
+  test('肉鸽：九场遭遇（三幕×三场）都能过校验并建出局', () => {
+    assert.equal(SLICE_STAGES.length, 9);
     for (const st of SLICE_STAGES) {
       const r = validateLevel(st.level);
       assert.ok(r.ok, `${st.level.name} 校验失败：${!r.ok ? r.errors.join(' / ') : ''}`);
       const s = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 11);
       const b = s.units.filter((u) => u.owner === 'B').length;
       assert.ok(b > 0, `${st.level.name} 的敌人没摆上去`);
-      assert.equal(
-        s.cities.filter((c) => c.owner === 'B').length,
-        0,
-        `${st.level.name} 的敌人不该有城（cityless）`,
-      );
+      /*
+       * 三幕结构：前两场是精英（无城），第三场是 Boss（**带城**）。
+       * 2026-11-19 定：城只给 Boss，精英改成「一只新怪 + 常规队」。
+       */
+      const foeCities = s.cities.filter((c) => c.owner === 'B').length;
+      if (st.meta.slot === 3) {
+        assert.equal(foeCities, 1, `${st.level.name} 是 Boss，应当有城`);
+        assert.ok(!(st.level.seats.cityless ?? []).includes('B'), 'Boss 不该是无城席位');
+      } else {
+        assert.equal(foeCities, 0, `${st.level.name} 是精英关，不该有城`);
+        assert.ok((st.level.seats.cityless ?? []).includes('B'), '精英关的敌人是无城席位');
+      }
       assert.equal(s.cities.filter((c) => c.owner === 'A').length, 1, '玩家必须有一座城');
       assert.ok(st.meta.evacTurns >= 1);
       assert.ok(st.meta.expectedTurns >= st.meta.evacTurns);

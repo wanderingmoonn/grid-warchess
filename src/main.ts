@@ -28,6 +28,8 @@ import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/r
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { ELITE_UNIT_MAP } from './core/roguelike/elites.ts';
+import { actLabel, isBossStage } from './core/roguelike/stages.ts';
 import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.ts';
 import { cityUpgradeCost } from './core/roguelike/rewards.ts';
@@ -6090,7 +6092,7 @@ function showRunPanel(): void {
     run: rogue.run,
     stageNo: rogue.run.node + 1,
     total: SLICE_STAGES.length,
-    stageTitle: st.level.name,
+    stageTitle: `${actLabel(rogue.run.node)} · ${st.level.name}${isBossStage(rogue.run.node) ? ' · BOSS' : ''}`,
     onStart: startRogueStage,
     onNewRun: (allowRestart) => {
       rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner(), settled: false };
@@ -6114,7 +6116,8 @@ function startRogueStage(): void {
     toast(`这一关的数据有问题：${checked.errors[0] ?? '未知'}`);
     return;
   }
-  const units = mergeUnits(loadCustomUnits(), compileUnits(rogue.run.cards));
+  // 精英怪只存在于肉鸽：必须一起交给建局，否则关卡里的 elite_* 摆不出来
+  const units = mergeUnits(mergeUnits(loadCustomUnits(), ELITE_UNIT_MAP), compileUnits(rogue.run.cards));
   /*
    * 第 3 条（"只能造抽到的卡"）**暂不用 enabledUnits 实现**：
    * 它会把 `state.unitTypes` 一起裁掉，而关卡摆兵是按这张表查兵种的——
