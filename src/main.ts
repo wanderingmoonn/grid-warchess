@@ -5754,7 +5754,19 @@ async function runAiTurn(
     const actor = state.current;
     const before = state;
     const result = applyAction(state, action);
-    if (!result.ok) { rejected.add(engine.aiActionKey(action)); await sleep(0); continue; }
+    if (!result.ok) {
+      /*
+       * **动作被拒要留痕**（2026-11-19）。
+       *
+       * 这里原来只把动作塞进 `rejected` 就跳过了，什么痕迹都没有——
+       * 于是"AI 一回合什么都没做"在外部看来完全无解。现在把拒绝原因记进
+       * aiTrace（屏幕上能看到），一眼就知道是"单位已动过"还是"打不到"。
+       */
+      aiLog(`reject ${String((action as { type?: string }).type ?? '?')}: ${result.reason}`);
+      rejected.add(engine.aiActionKey(action));
+      await sleep(0);
+      continue;
+    }
     rejected.clear();
 
     state = result.state;
