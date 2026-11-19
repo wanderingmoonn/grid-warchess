@@ -110,6 +110,17 @@ function lifespanWords(left: number): string {
  * 造价写这么高不是让它能造（`summonedOnly` 挡死产线），是给 AI 估值用的：
  * AI 会据此认为"这东西极贵、不能随便送"。
  */
+const SHADOW_STEP_SKILL = {
+  id: 'shadow-step',
+  name: '暗影跳跃',
+  summary: '瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。',
+  effect: 'shadow-step',
+  targeting: 'point' as const,
+  radius: 40,
+  multiCast: false,
+  cooldown: 1,
+};
+
 const EMPEROR_DEF: UnitTypeDef = {
   id: EMPEROR,
   name: '尸骸仙帝',
@@ -125,10 +136,35 @@ const EMPEROR_DEF: UnitTypeDef = {
   vision: 9,
   burst: 5,
   splash: 2,
+  // 黑暗的源头：它自己就在空中、投下 8 格暗影
+  flight: true,
+  layer: 'air',
   summonedOnly: true,
-  shadowRadius: 6,
-  abilities: ['shadow-erosion'],
+  shadowRadius: 8,
+  /*
+   * 2026-11-19 作者给的全套词条——"作为黑暗的源头，不能只有白板"。
+   * 这一串等于把三系的核心机制全挂在一个兵身上：自己繁殖（化影/黑暗之源/衍脉）、
+   * 杀什么长什么（暗影侵蚀/侵染/点化）、越打越厚（化血/增生/汲取）、
+   * 还能把人往黑暗里拽（勾魂）、破城断传承。
+   * 只有走修真路线练到高层，才有和它对线的资格。
+   */
+  abilities: [
+    'shadow-erosion',
+    'blood-clot',
+    'soul-hook',
+    'shadow-spawn',
+    'blood-infect',
+    'shadow-possess',
+    'break-lineage',
+    'blood-siphon',
+    'dull-wit',
+    'blood-grow',
+    'bone-transmute',
+    'dark-source',
+    'lineage-well',
+  ],
   skills: [
+    SHADOW_STEP_SKILL,
     {
       id: 'devour',
       name: '吞噬',
@@ -136,11 +172,9 @@ const EMPEROR_DEF: UnitTypeDef = {
         '吞下一个**自己人**，用它的生机换自己的寿元。不耗灵力、没有冷却，' +
         '因为这是它续命的本能，不是战术选择。',
       effect: 'soul-devour',
-      // 选点式：玩家（或者 AI）点一个同伴所在的格子
       targeting: 'point',
       radius: 2,
       power: 1,
-      // 一回合可以吃好几个：它饿起来是没有节制的（每个仍算一个动作）
       multiCast: true,
     },
   ],
@@ -497,17 +531,6 @@ registerSkillEffect('shadow-step', (c) => {
   c.self.y = t.y;
   c.result.log = `暗影跳跃：${from} → ${t.x},${t.y}`;
 });
-
-const SHADOW_STEP_SKILL = {
-  id: 'shadow-step',
-  name: '暗影跳跃',
-  summary: '瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。',
-  effect: 'shadow-step',
-  targeting: 'point' as const,
-  radius: 40,
-  multiCast: false,
-  cooldown: 1,
-};
 
 /* ── 三个兵 ─────────────────────────────────────────────────────── */
 
@@ -2766,8 +2789,22 @@ const KINDRED_CONVERT: AbilityDef = {
   },
 };
 
-/** 「衍嗣」/「传裔」共用的召唤：每 N 个自己的回合召一个，封顶 M */
-function heirSummon(o: { id: string; name: string; summary: string; every: number; type: string; max: number }): AbilityDef {
+/**
+ * 「衍嗣」/「传裔」/「黑暗之源」共用的召唤：每 N 个自己的回合召一个，封顶 M。
+ *
+ * `key` 是计时器存在 `custom` 里的字段名。**必须能分开**：同一个兵身上挂两条召唤时
+ * （仙帝既有「黑暗之源」又有「衍脉」），共用一个键会让两条互相偷计时器。
+ */
+function heirSummon(o: {
+  id: string;
+  name: string;
+  summary: string;
+  every: number;
+  type: string;
+  max: number;
+  key?: string;
+}): AbilityDef {
+  const key = o.key ?? 'spawnIn';
   return {
     id: o.id,
     name: o.name,
@@ -2782,18 +2819,18 @@ function heirSummon(o: { id: string; name: string; summary: string; every: numbe
             const { state, self, api } = c;
             const alive = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && u.type === o.type).length;
             if (alive >= o.max) return;
-            const left = Number(self.custom?.spawnIn ?? o.every) - 1;
+            const left = Number(self.custom?.[key] ?? o.every) - 1;
             if (left > 0) {
-              self.custom = { ...(self.custom ?? {}), spawnIn: left };
+              self.custom = { ...(self.custom ?? {}), [key]: left };
               return;
             }
             const spot = freeNear(state, self, o.type, api);
             if (!spot) {
-              self.custom = { ...(self.custom ?? {}), spawnIn: 1 };
+              self.custom = { ...(self.custom ?? {}), [key]: 1 };
               return;
             }
             api.spawn(state, self.owner, o.type, spot.x, spot.y);
-            self.custom = { ...(self.custom ?? {}), spawnIn: o.every };
+            self.custom = { ...(self.custom ?? {}), [key]: o.every };
             state.log.push({ turn: state.turn, player: self.owner, text: `${o.name}：又添了一个。` });
           },
         },
@@ -2898,6 +2935,28 @@ const DESCEND_KINDLE = heirSummon({
   every: 3,
   type: KINDRED,
   max: 2,
+});
+
+/** 「黑暗之源」：每 3 回合爬出一只黑蝗（上限 3）。仙帝与骨灰罐共有。 */
+const DARK_SOURCE = heirSummon({
+  id: 'dark-source',
+  name: '黑暗之源',
+  summary: `每 3 个自己的回合爬出一只黑蝗（上限 3 只）。`,
+  every: 3,
+  type: BLACK_LOCUST,
+  max: 3,
+  key: 'locustIn',
+});
+
+/** 「衍脉」：每回合生一个子嗣（上限 2）。仙帝与骨灰罐共有——这条是它们"最贵"的地方。 */
+const LINEAGE_WELL = heirSummon({
+  id: 'lineage-well',
+  name: '衍脉',
+  summary: '每个自己的回合生出一个子嗣（上限 2 个）。',
+  every: 1,
+  type: OFFSPRING,
+  max: 2,
+  key: 'heirIn',
 });
 
 /** 「衍嗣」：子嗣每 2 回合生一个后裔（上限 2） */
@@ -3020,7 +3079,8 @@ const URN_DEF: UnitTypeDef = {
   vision: 3,
   summonedOnly: true,
   shadowRadius: 10,
-  abilities: ['transcend'],
+  // 罐子不只是遗物：它自己也在往黑暗里吐东西（黑暗之源 + 衍脉）
+  abilities: ['transcend', 'dark-source', 'lineage-well'],
 };
 
 /** 成帝碑：碑文本身就是武器。 */
@@ -3064,11 +3124,15 @@ const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
   vision: 9,
   burst: 4,
   splash: 2,
+  flight: true,
+  layer: 'air',
   summonedOnly: true,
   shadowRadius: 3,
   aiAutonomy: 0.6,
   aiProfile: 'mortal-immortal-harvest',
-  abilities: ['shadow-erosion', 'break-lineage'],
+  // 2026-11-19 作者给的一套：飞、跳、化血、暗影侵蚀、断传承、痴愚
+  abilities: ['shadow-erosion', 'blood-clot', 'shadow-possess', 'break-lineage', 'dull-wit'],
+  skills: [SHADOW_STEP_SKILL],
 };
 
 /** 红尘仙的暗蚀 */
@@ -3515,6 +3579,8 @@ for (const a of [
   OFFSPRING_BEAR,
   TRANSCEND,
   KNOWLEDGE_POLLUTION,
+  DARK_SOURCE,
+  LINEAGE_WELL,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -3767,6 +3833,8 @@ export const DARK_TURMOIL: Expansion = {
     OFFSPRING_BEAR,
     TRANSCEND,
     KNOWLEDGE_POLLUTION,
+    DARK_SOURCE,
+    LINEAGE_WELL,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。

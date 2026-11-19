@@ -186,6 +186,82 @@ console.log('\n[1b] 对标修士');
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 1c. 黑暗的源头：仙帝与红尘仙的词条
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[1c] 黑暗的源头');
+{
+  const { s } = arena();
+  const em = s.unitTypes[EMPEROR]!;
+  const mi = s.unitTypes[MORTAL_IMMORTAL]!;
+  check('仙帝暗影领域 8 格', em.shadowRadius === 8, String(em.shadowRadius));
+  check('仙帝会飞', em.flight === true && em.layer === 'air');
+  check('仙帝会暗影跳跃', (em.skills ?? []).some((k) => k.effect === 'shadow-step'));
+
+  const wantEmperor = [
+    'blood-clot', // 化血
+    'soul-hook', // 勾魂
+    'shadow-spawn', // 化影
+    'blood-infect', // 侵染
+    'shadow-possess', // 暗影侵蚀
+    'break-lineage', // 断传承
+    'blood-siphon', // 汲取
+    'dull-wit', // 痴愚
+    'blood-grow', // 增生
+    'bone-transmute', // 点化
+    'dark-source', // 黑暗之源
+    'lineage-well', // 衍脉（生 子嗣）
+  ];
+  const missing = wantEmperor.filter((a) => !(em.abilities ?? []).includes(a));
+  check(`仙帝十二条词条一个不少（缺：${missing.join(',') || '无'}）`, missing.length === 0);
+
+  check('红尘仙会飞', mi.flight === true && mi.layer === 'air');
+  check('红尘仙会暗影跳跃', (mi.skills ?? []).some((k) => k.effect === 'shadow-step'));
+  const wantMi = ['blood-clot', 'shadow-possess', 'break-lineage', 'dull-wit'];
+  const missMi = wantMi.filter((a) => !(mi.abilities ?? []).includes(a));
+  check(`红尘仙词条齐全（缺：${missMi.join(',') || '无'}）`, missMi.length === 0);
+
+  const urn = s.unitTypes[FUNERARY_URN]!;
+  check('骨灰罐也会吐东西（黑暗之源 + 衍脉）', ['dark-source', 'lineage-well'].every((a) => (urn.abilities ?? []).includes(a)));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 1d. 两条召唤：黑暗之源 / 衍脉
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[1d] 黑暗之源 / 衍脉');
+{
+  const { s, mk } = arena();
+  const em0 = mk('em', EMPEROR, 'B', 10, 10);
+  // 把寿元拉长：否则跑到第 12 个回合仙帝自己老死了，测的就变成"老死"而不是"召唤"
+  em0.custom = { lifespan: 9999, dtInit: 1 };
+  let cur = s;
+  const count = (t: string): number => cur.units.filter((u) => u.type === t && u.hp > 0).length;
+
+  // 衍脉：每回合一个子嗣
+  cur = beginTurnOf(cur, 'B');
+  check('第 1 回合就生出一个子嗣', count('offspring') === 1, String(count('offspring')));
+  // 黑暗之源：每 3 回合一只黑蝗
+  check('第 1 回合还没有黑蝗', count(BLACK_LOCUST) === 0, String(count(BLACK_LOCUST)));
+
+  for (let i = 0; i < 2; i += 1) cur = beginTurnOf(cur, 'B');
+  check('第 3 回合爬出一只黑蝗', count(BLACK_LOCUST) === 1, String(count(BLACK_LOCUST)));
+  check('子嗣封顶 2 个', count('offspring') === 2, String(count('offspring')));
+
+  for (let i = 0; i < 9; i += 1) cur = beginTurnOf(cur, 'B');
+  check('黑蝗封顶 3 只', count(BLACK_LOCUST) === 3, String(count(BLACK_LOCUST)));
+  check('子嗣仍然是 2 个', count('offspring') === 2, String(count('offspring')));
+
+  // 两条召唤共用 custom 时不会互相偷计时器（各自 key 不同）
+  const em = cur.units.find((u) => u.id === 'em')!;
+  check('两条召唤各有各的计时器', 'locustIn' in (em.custom ?? {}) && 'heirIn' in (em.custom ?? {}), JSON.stringify(em.custom));
+
+  // 骨灰罐也验一次（它不会动，但会生）
+  const { s: s2, mk: mk2 } = arena();
+  mk2('urn', FUNERARY_URN, 'B', 10, 10);
+  const t2 = beginTurnOf(s2, 'B');
+  check('骨灰罐第一回合就生出子嗣', t2.units.filter((u) => u.type === 'offspring').length === 1);
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 2. 超脱：仙帝可以反复复活，但一次比一次弱
  * ══════════════════════════════════════════════════════════════════ */
 console.log('\n[2] 超脱');
