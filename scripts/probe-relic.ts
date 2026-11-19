@@ -23,6 +23,7 @@ import {
   IMPERIAL_STELE,
   MORTAL_IMMORTAL,
   SLUMBER,
+  refreshShadow,
 } from '../src/core/dark-turmoil-packs.ts';
 import { realmArmorBase, realmAtkBase, trueDamageForRank, extraAttacksForRank } from '../src/core/cultivation/stats.ts';
 import { totalHpBonusForRank } from '../src/core/cultivation/progression.ts';
@@ -279,6 +280,33 @@ console.log('\n[1c2] 出山与返程');
     a.mk('home', SLUMBER, 'B', 10, 11);
     const out = profile.handler(ctxOf(a.s, em));
     check('在家就待着（不乱跑）', !out.add || out.add.length === 0, JSON.stringify(out.add));
+  }
+
+  // 会跳：暗影跳跃不是"没挂"，是之前他的 profile 里根本没这条候选
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns: 5 };
+    em.age = 150; // 寿元 50：在外面，没吃够，会去追人
+    // 沉眠地要放远：2 格内算"在家"，在家就什么都不做（这条是刻意的）
+    a.mk('home', SLUMBER, 'B', 10, 2);
+    a.mk('prey', 'militia', 'A', 22, 10); // 12 格外：走不过去
+    refreshShadow(a.s);
+    const out = profile.handler(ctxOf(a.s, em));
+    const jump = out.add?.find((x) => x.action.type === 'HERO_SKILL');
+    check('在外面够不着敌人时会暗影跳跃', !!jump, JSON.stringify(out.add));
+  }
+
+  // 回家路上也会跳（省路）
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns: 8 };
+    em.age = 130; // 寿元 70 ≥ 60：该回家了
+    a.mk('home', SLUMBER, 'B', 26, 10); // 16 格外
+    refreshShadow(a.s);
+    const out = profile.handler(ctxOf(a.s, em));
+    check('回家的路上会跳一段', !!out.add?.some((x) => x.action.type === 'HERO_SKILL'), JSON.stringify(out.add));
   }
 
   // 词条会记住沉眠地的位置

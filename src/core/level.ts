@@ -1344,19 +1344,30 @@ export function boneSeaMap(): { rows: string[]; citiesA: MapPoint[]; citiesB: Ma
 /** 骨海的地图与城位（同一份数据，关卡和部署都用它，免得两边对不上） */
 const BONE_SEA_MAP = boneSeaMap();
 
-/** 从城位派生开局兵：每座城门口放一个民兵加一个工兵 */
+/**
+ * 从城位派生开局兵：每座城门口一个民兵 + 一个**工匠**，另外第一座城多给一个**炼气士**。
+ *
+ * 2026-11-19 改的两处：
+ *   · 原来第二格放的是 `crew`（建筑队，**第 5 代**，280 金）——开局是青铜时代，
+ *     放一个五代单位等于白送，玩家会觉得"我什么时候能造这个？"（他自己也发现不对）。
+ *     换成同时代同职能的**工匠**（`anc_engineer`，1 代、55 金）。
+ *   · 每方多送**一个炼气士**：这一关的实话是"只有修真的路线能对上仙帝"，
+ *     那就别让玩家自己摸索前 30 回合，开局手上先有一个能练的种子。
+ */
 function boneSeaDeploy(cities: MapPoint[]): Array<{ type: string; x: number; y: number }> {
   const out: Array<{ type: string; x: number; y: number }> = [];
-  for (const c of cities) {
+  cities.forEach((c, i) => {
     const ring: Array<[number, number]> = [
       [c.x, c.y + 2], [c.x + 2, c.y], [c.x - 1, c.y], [c.x, c.y - 1],
       [c.x + 1, c.y + 2], [c.x - 1, c.y + 1], [c.x + 2, c.y + 1], [c.x + 1, c.y - 1],
     ];
     const free = ring.filter(([x, y]) => BONE_SEA_MAP.rows[y]?.[x] === '.');
-    if (free.length < 2) continue;
+    if (free.length < 2) return;
     out.push({ type: 'militia', x: free[0]![0], y: free[0]![1] });
-    out.push({ type: 'crew', x: free[1]![0], y: free[1]![1] });
-  }
+    out.push({ type: 'anc_engineer', x: free[1]![0], y: free[1]![1] });
+    // 第一座城多一个炼气士（i === 0），别每座城都塞——那是八个，太厚了
+    if (i === 0 && free[2]) out.push({ type: 'qi-cultivator', x: free[2]![0], y: free[2]![1] });
+  });
   return out;
 }
 

@@ -3332,6 +3332,23 @@ const EMPEROR_CYCLE_AI: UnitAiProfile = {
       if (shouldReturn) {
         const gap = dist(unit, home);
         if (gap === 0) return {};
+        /*
+         * 回家也用它自己的暗影跳跃：8 格暗影铺出去之后，"跳一段再走"比纯走快得多。
+         * 只在不亏的时候跳（至少省 3 格），否则老实走。
+         */
+        if (canStep(c) && gap > 4) {
+          const jump = bestShadowJump(c, (x, y) => -dist({ x, y }, home));
+          if (jump && dist({ x: jump.x, y: jump.y }, home) <= gap - 3) {
+            return {
+              add: [
+                {
+                  action: { type: 'HERO_SKILL', unitId: unit.id, skillId: 'shadow-step', targetX: jump.x, targetY: jump.y },
+                  score: 245,
+                },
+              ],
+            };
+          }
+        }
         const walk = steps(c, Math.max(1, c.def.move))
           .filter((p) => p.d > 0)
           .sort((a, b) => dist(a, home) - dist(b, home))[0];
@@ -3350,10 +3367,21 @@ const EMPEROR_CYCLE_AI: UnitAiProfile = {
     if (prey) add.push({ action: { type: 'ATTACK', unitId: unit.id, targetId: prey.id }, score: 170 });
     const goal = c.foes.sort((a, b) => dist(a, unit) - dist(b, unit))[0];
     if (goal) {
+      const gap = dist(unit, goal);
+      // 走不够快的时候跳：暗影跳跃是它 8 格暗影之外唯一的机动手段
+      if (canStep(c) && gap > range + 4) {
+        const jump = bestShadowJump(c, (x, y) => -dist({ x, y }, goal));
+        if (jump && dist({ x: jump.x, y: jump.y }, goal) <= gap - 3) {
+          add.push({
+            action: { type: 'HERO_SKILL', unitId: unit.id, skillId: 'shadow-step', targetX: jump.x, targetY: jump.y },
+            score: 175,
+          });
+        }
+      }
       const walk = steps(c, Math.max(1, c.def.move))
         .filter((p) => p.d > 0)
         .sort((a, b) => dist(a, goal) - dist(b, goal))[0];
-      if (walk && dist(walk, goal) < dist(unit, goal)) {
+      if (walk && dist(walk, goal) < gap) {
         add.push({ action: { type: 'MOVE', unitId: unit.id, x: walk.x, y: walk.y }, score: 150 });
       }
     }
