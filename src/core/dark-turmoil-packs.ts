@@ -2621,6 +2621,317 @@ const SERVANT_HANG_BACK: UnitAiProfile = {
   },
 };
 
+/* ══════════════════════════════════════════════════════════════════
+ * 十一、裔系（2026-11-19）
+ *
+ * 仙帝的直系血脉：眷属 → 后裔 → 子嗣，一层比一层强，也一层比一层"认家"。
+ * 共同点：**看到弱小的城就撤**——它们不是来抢地盘的，是来巡视的。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const KINDRED = 'kindred';
+export const DESCENDANT = 'descendant';
+export const OFFSPRING = 'offspring';
+
+/** 撤离期多长（自己的回合数） */
+const WITHDRAW_TURNS = 10;
+/** 看到时代 ≤ 这个数的敌城就撤 */
+const WITHDRAW_ERA = 3;
+
+/** 仆系与卫系的全部兵种——眷属"归附"时按这个名单挑最少的那种 */
+const SERVANT_TYPES = [BRONZE_GUARD, SHADOW_GUARD, HORN_GUARD, PUPPET_MASTER, SOUL_HOOKER, BLOOD_MEDIC];
+
+/**
+ * 「避城」：看到弱的城就撤，撤十回合再回来。
+ *
+ * 为什么这么设计（作者）：裔系不是来抢地盘的，是来**巡视**的。
+ * 一座城退到 3 代以下，说明这里已经没什么可收的了——它们会退回沉眠地附近，
+ * 或者干脆沉进暗影里等着。十回合后照旧出来走一圈。
+ *
+ * 这条也给了玩家一个反向的活路：**把城打残、让它掉级，能换来十回合的安宁**。
+ */
+const HEIR_WITHDRAW: AbilityDef = {
+  id: 'heir-withdraw',
+  name: '避城',
+  summary: `看到时代 ≤ ${WITHDRAW_ERA} 的敌方城市就撤离 ${WITHDRAW_TURNS} 个回合，退回沉眠地附近或暗影深处。`,
+  group: 'move',
+  valueLabel: () => `见弱城撤离 ${WITHDRAW_TURNS} 回合`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          const { state, self } = c;
+          const until = Number(self.custom?.retreatUntil ?? 0);
+          if (until > state.turn) return; // 还在撤
+          if (until > 0) self.custom = { ...(self.custom ?? {}), retreatUntil: 0 };
+          const sight = state.unitTypes[self.type]?.vision ?? 5;
+          const weak = state.cities.find(
+            (city) =>
+              !city.ruined &&
+              city.owner !== self.owner &&
+              city.era <= WITHDRAW_ERA &&
+              Math.abs(city.x - self.x) + Math.abs(city.y - self.y) <= sight,
+          );
+          if (!weak) return;
+          self.custom = { ...(self.custom ?? {}), retreatUntil: state.turn + WITHDRAW_TURNS };
+          state.log.push({
+            turn: state.turn,
+            player: self.owner,
+            text: `那一族的天塌了。${state.unitTypes[self.type]?.name ?? '它'}不再往这边来。`,
+          });
+        },
+      },
+    ],
+  },
+};
+
+/** 「不据城」：裔系不占人类的废墟——它们不屑，也不愿意。 */
+const SCORN_CITY: AbilityDef = {
+  id: 'scorn-city',
+  name: '不据城',
+  summary: '不屑于占据人类的城市废墟：不会进驻废墟、也不会占领城市。',
+  group: 'move',
+  hooks: { canCaptureCity: () => '不据城：裔系不屑于占据一堆石头。' },
+};
+
+/**
+ * 「归附」：眷属在场上待够了，就**变成一名仆从**。
+ *
+ * 待多久看"家里有多少仆从"：**仆从越多，越慢**（2 + 仆从数）。一个都没有时 2 回合就变——
+ * 那时候它得赶紧去补个缺。变谁看"哪种最少"，所以它会自动补齐短板。
+ */
+const KINDRED_CONVERT: AbilityDef = {
+  id: 'kindred-convert',
+  name: '归附',
+  summary: '在场上待够回合后变成一名仆从（仆从越多等得越久；变成场上最少的那种）。',
+  group: 'support',
+  valueLabel: () => '待够就变仆从',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self } = c;
+          const servants = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && SERVANT_TYPES.includes(u.type));
+          const need = 2 + servants.length;
+          const waited = Number(self.custom?.waited ?? 0) + 1;
+          if (waited < need) {
+            self.custom = { ...(self.custom ?? {}), waited };
+            return;
+          }
+          // 挑场上最少的那种仆从；一样多就按名单顺序
+          let pick = SERVANT_TYPES[0]!;
+          let fewest = Infinity;
+          for (const t of SERVANT_TYPES) {
+            const n = servants.filter((u) => u.type === t).length;
+            if (n < fewest) {
+              fewest = n;
+              pick = t;
+            }
+          }
+          transform(self, pick, state);
+          self.custom = { ...(self.custom ?? {}), waited: 0 };
+          state.log.push({
+            turn: state.turn,
+            player: self.owner,
+            text: `${state.unitTypes[pick]?.name ?? '仆从'}的队伍里多了一个人——它原来是个眷属。`,
+          });
+        },
+      },
+    ],
+  },
+};
+
+/** 「衍嗣」/「传裔」共用的召唤：每 N 个自己的回合召一个，封顶 M */
+function heirSummon(o: { id: string; name: string; summary: string; every: number; type: string; max: number }): AbilityDef {
+  return {
+    id: o.id,
+    name: o.name,
+    summary: o.summary,
+    group: 'support',
+    valueLabel: () => `每 ${o.every} 回合一个，上限 ${o.max}`,
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.summon,
+          apply: (c) => {
+            const { state, self, api } = c;
+            const alive = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && u.type === o.type).length;
+            if (alive >= o.max) return;
+            const left = Number(self.custom?.spawnIn ?? o.every) - 1;
+            if (left > 0) {
+              self.custom = { ...(self.custom ?? {}), spawnIn: left };
+              return;
+            }
+            const spot = freeNear(state, self, o.type, api);
+            if (!spot) {
+              self.custom = { ...(self.custom ?? {}), spawnIn: 1 };
+              return;
+            }
+            api.spawn(state, self.owner, o.type, spot.x, spot.y);
+            self.custom = { ...(self.custom ?? {}), spawnIn: o.every };
+            state.log.push({ turn: state.turn, player: self.owner, text: `${o.name}：又添了一个。` });
+          },
+        },
+      ],
+    },
+  };
+}
+
+/* ── 裔系三个兵 ─────────────────────────────────────────────────── */
+
+/** 眷属：比后裔弱一层，和仆系基础数值相当。 */
+const KINDRED_DEF: UnitTypeDef = {
+  id: KINDRED,
+  name: '眷属',
+  short: '眷',
+  era: 4,
+  category: 'combat',
+  cost: 120,
+  move: 3,
+  atk: 18,
+  armor: 8,
+  maxHp: 100,
+  range: 2,
+  vision: 6,
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 0.25,
+  aiProfile: 'heir-order',
+  abilities: ['break-lineage', 'leave-food', 'heir-withdraw', 'scorn-city', 'kindred-convert'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 后裔：比子嗣弱一层，会生出眷属。 */
+const DESCENDANT_DEF: UnitTypeDef = {
+  id: DESCENDANT,
+  name: '后裔',
+  short: '裔',
+  era: 4,
+  category: 'combat',
+  cost: 200,
+  move: 3,
+  atk: 26,
+  armor: 10,
+  maxHp: 130,
+  range: 3,
+  vision: 7,
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 0.25,
+  aiProfile: 'heir-order',
+  abilities: [
+    'break-lineage',
+    'leave-food',
+    'heir-withdraw',
+    'scorn-city',
+    'heir-summon-descendant',
+  ],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 子嗣：全方位的强，会飞，会生后裔。 */
+const OFFSPRING_DEF: UnitTypeDef = {
+  id: OFFSPRING,
+  name: '子嗣',
+  short: '嗣',
+  era: 4,
+  category: 'combat',
+  cost: 320,
+  move: 3,
+  atk: 40,
+  armor: 14,
+  maxHp: 180,
+  range: 4,
+  vision: 8,
+  // "拥有真元"：真元是修士境界系统的产物，子嗣不是修士，所以用**魔法段**
+  // （同样是"无视护甲的固定一段"）来表达，不去动境界那条线。
+  magicAtk: 20,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 0.25,
+  aiProfile: 'heir-order',
+  abilities: [
+    'break-lineage',
+    'leave-food',
+    'heir-withdraw',
+    'scorn-city',
+    'heir-summon-offspring',
+  ],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 「传裔」：后裔每 3 回合生一个眷属（上限 2） */
+const DESCEND_KINDLE = heirSummon({
+  id: 'heir-summon-descendant',
+  name: '传裔',
+  summary: '每 3 个自己的回合生出一个眷属（上限 2 个）。',
+  every: 3,
+  type: KINDRED,
+  max: 2,
+});
+
+/** 「衍嗣」：子嗣每 2 回合生一个后裔（上限 2） */
+const OFFSPRING_BEAR = heirSummon({
+  id: 'heir-summon-offspring',
+  name: '衍嗣',
+  summary: '每 2 个自己的回合生出一个后裔（上限 2 个）。',
+  every: 2,
+  type: DESCENDANT,
+  max: 2,
+});
+
+/* ── 裔系行为 ───────────────────────────────────────────────────── */
+
+/**
+ * 裔系：**平时听指挥往前走，撤离期往家里退**。
+ *
+ * "听指挥"靠 `aiAutonomy` 只有 0.25——大部分行动由总体 AI 决定；
+ * 这条 profile 只在撤离期说话（分数 220，压得住其它走位）。
+ */
+const HEIR_ORDER: UnitAiProfile = {
+  id: 'heir-order',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const { state } = c;
+    const until = Number(c.unit.custom?.retreatUntil ?? 0);
+    if (until <= state.turn) return {};
+
+    /*
+     * 撤离目标按优先级挑：
+     *   1. 沉眠地（"回到仙帝身边待命"——最符合剧情）；
+     *   2. 暗影最深处（没有沉眠地就沉进黑暗）；
+     *   3. 都不是自己站着的地方时才会用；否则退而求其次——**离那座弱城远一点**。
+     *
+     * 第三条是必要的兜底：裔系自己只投下 1 格暗影，站在空地上时"最深处"就是脚下，
+     * 不给兜底的话它会站在原地"撤离"，看起来像卡住了。
+     */
+    const slumber = c.allies.find((a) => a.type === SLUMBER && a.hp > 0);
+    const deep = deepestShadow(state, c.unit);
+    const weakCity = state.cities.find((city) => !city.ruined && city.owner !== c.unit.owner && city.era <= WITHDRAW_ERA);
+    let goal: { x: number; y: number } | null = slumber ?? null;
+    if (!goal && deep && (deep.x !== c.unit.x || deep.y !== c.unit.y)) goal = deep;
+
+    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    if (goal) {
+      const gap = dist(c.unit, goal);
+      const walk = tiles.sort((a, b) => dist(a, goal!) - dist(b, goal!))[0];
+      if (walk && dist(walk, goal) < gap) {
+        return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 220 }] };
+      }
+      return {};
+    }
+    if (weakCity) {
+      let best: { x: number; y: number } | null = null;
+      let bestD = dist(c.unit, weakCity);
+      for (const p of tiles) if (dist(p, weakCity) > bestD) (bestD = dist(p, weakCity)), (best = p);
+      if (best) return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 220 }] };
+    }
+    return {};
+  },
+};
+
 /* ── 仆从行为 ───────────────────────────────────────────────────── */
 
 /**
@@ -2916,6 +3227,11 @@ for (const a of [
   SHADOW_STALK,
   SOUL_HOOK,
   BLOOD_AURA,
+  HEIR_WITHDRAW,
+  SCORN_CITY,
+  KINDRED_CONVERT,
+  DESCEND_KINDLE,
+  OFFSPRING_BEAR,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -3069,6 +3385,16 @@ export const DARK_TURMOIL: Expansion = {
     '**血医**：「**增生光环**」治疗 3 格内不分敌我的单位（已失去血量的一半，一次最多 12 点），' +
       '但治多少就在那人身上积多少「**影蚀之血**」；积过最大生命的三成，人就化成血肉与暗影。' +
       '挨打会把这份污染冲淡——所以"先打一顿再治"才是救人。',
+    '### 裔系（仙帝的直系）',
+    '**避城**（三只都有）：看到**时代 ≤ 3 的敌方城市**就撤离 10 个回合——退回沉眠地附近、' +
+      '或者沉进暗影最深处。十回合后照旧出来巡视。所以**把城打残**能换来一阵安宁。',
+    '**不据城**（三只都有）：不屑于占据人类的废墟。',
+    '三只都带暗影跳跃、都投下 1 格暗影。',
+    '**眷属**：「**归附**」——在场上待够就变成一名仆从。仆从越多等得越久（2 + 仆从数），' +
+      '一个都没有时两回合就变；变成场上**最少**的那一种。',
+    '**后裔**：「**传裔**」——每 3 回合生一个眷属（上限 2）。',
+    '**子嗣**：「**衍嗣**」——每 2 回合生一个后裔（上限 2）。它会飞，且同时带暗蚀与一段' +
+      '无视护甲的魔法伤害。',
     '## 不成系的三个',
     '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
       '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
@@ -3106,6 +3432,9 @@ export const DARK_TURMOIL: Expansion = {
     PUPPET_MASTER_DEF,
     SOUL_HOOKER_DEF,
     BLOOD_MEDIC_DEF,
+    KINDRED_DEF,
+    DESCENDANT_DEF,
+    OFFSPRING_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -3136,6 +3465,11 @@ export const DARK_TURMOIL: Expansion = {
     SHADOW_STALK,
     SOUL_HOOK,
     BLOOD_AURA,
+    HEIR_WITHDRAW,
+    SCORN_CITY,
+    KINDRED_CONVERT,
+    DESCEND_KINDLE,
+    OFFSPRING_BEAR,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -3154,6 +3488,7 @@ export const DARK_TURMOIL: Expansion = {
     UNNAMABLE_AI,
     SERVANT_AI,
     SERVANT_HANG_BACK,
+    HEIR_ORDER,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {

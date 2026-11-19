@@ -2132,6 +2132,10 @@ export const LEVELS: LevelDef[] = [
         { type: 'puppet-master', x: 22, y: 13 },
         { type: 'soul-hooker', x: 19, y: 25 },
         { type: 'blood-medic', x: 22, y: 8 },
+        // 裔系：仙帝的直系——看到弱城会撤
+        { type: 'offspring', x: 24, y: 20 },
+        { type: 'descendant', x: 25, y: 9 },
+        { type: 'kindred', x: 23, y: 26 },
       ],
     },
     /*
