@@ -401,6 +401,7 @@ import { test, stats } from './tests/support.ts';
 
 import { run as runCultivation } from './tests/packs/cultivation.test.ts';
 import { run as runSpace } from './tests/packs/space.test.ts';
+import { run as runRoguelike } from './tests/packs/roguelike.test.ts';
 
 export const BASE: MatchConfig = {
   size: 16,
@@ -20601,6 +20602,7 @@ test('战报折叠：只有带 say 的事件才展开', () => {
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑
 // `npm run test:space` 就行，这里调一次保证全量两边不漂。
 runSpace();
+  runRoguelike();
 
 console.log(`\n通过 ${stats.passed} 项，失败 ${stats.failed} 项\n`);
 if (stats.failed > 0) process.exit(1);
