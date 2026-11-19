@@ -10647,3 +10647,75 @@ a.btn {
 /* 支线里的一卷：标题 + 这一卷的关卡 */
 .side-chapter { margin: 10px 0 14px; }
 .side-chapter .field-label { margin-bottom: 6px; }
+
+/* 肉鸽面板（切片） */
+.rogue-panel {
+  width: min(560px, 100%);
+}
+
+.rogue-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.rogue-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #efece5;
+  color: #554f45;
+  font-size: 13px;
+}
+
+.rogue-chip b {
+  color: #2f2b26;
+}
+
+/* 肉鸽三选一 */
+.rogue-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.rogue-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #d9d3c6;
+  background: #fbf9f4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rogue-card:hover {
+  border-color: #b9ad96;
+  background: #f5f1e7;
+}
+
+.rogue-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #2f2b26;
+}
+
+.rogue-card-note,
+.rogue-card-owned {
+  font-size: 12px;
+  color: #6b6357;
+}
+
+/* 肉鸽：常驻的"下一关"入口（面板被关掉也能回来） */
+.rogue-hud {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 60;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  background: #e8c96a;
+  border: 1px solid #c9a83f;
+  color: #2f2b26;
+  font-weight: 600;
+}

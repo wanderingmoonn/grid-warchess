@@ -175,7 +175,9 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
         if (res.ok) {
           result = res.duplicate
             ? '这条刚刚已经传过了，云端只留一份'
-            : '已上传。谢谢——带上这一手发生了什么，比截图有用得多。';
+            : res.id
+              ? `已上传并读回 #${res.id}。把这一句连同截图发给开发者，他就能直接定位。`
+              : res.note ?? '已上传（云端没回行号，但写入成功）。';
           resultBad = false;
           // 传成功了就把描述清空：下一次通常是另一个问题
           note = '';

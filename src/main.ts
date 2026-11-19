@@ -23,7 +23,16 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { goalText } from './core/level.ts';
+import { goalText, validateLevel } from './core/level.ts';
+import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
+import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
+import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
+import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
+import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.ts';
+import { cityUpgradeCost } from './core/roguelike/rewards.ts';
+import { cardLevel, cardsToNext, drawCards } from './core/roguelike/cards.ts';
+import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
@@ -39,6 +48,7 @@ import {
   canStandAt,
   cityAt,
   citiesOf,
+  cityTiles,
   cityName,
   distBetweenUnits,
   distToUnit,
@@ -3506,6 +3516,14 @@ function dropHeatFlash(): void {
 }
 
 function dispatch(action: Action): boolean {
+  /*
+   * 肉鸽撤离阶段：**每个动作入口都要先把胜负按下**（2026-11-19）。
+   *
+   * 引擎每走一步都会重新判一次胜负，而敌人已经清空 → 每一步都判"我赢"，
+   * 于是下一步 `applyAction` 直接返回"对局已结束"，倒计时、走兵、结束回合
+   * 全军覆没（实测：turn 停在 1、current 停在 A、evacLeft 一直 2）。
+   */
+  if (rogue && rogue.snap.phase === 'evac') keepPlaying(state);
   // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
   if (replay) {
     toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -3569,6 +3587,19 @@ function dispatch(action: Action): boolean {
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
   noteFinalFrame();
+  // 肉鸽：每走一步看一眼"敌人是否清空 / 撤离倒计时"
+  rogueAfterAction(before, state);
+  if (action.type === 'END_TURN' && rogue && !rogue.settled && rogue.snap.phase === 'evac') {
+    const before2 = rogue.snap;
+    rogue.snap = onPlayerEndTurn(rogue.snap, rogueCtx());
+    if (rogue.snap.phase !== before2.phase) {
+      finishRogueStage();
+    } else {
+      keepPlaying(state);
+      toast(`撤离：还剩 ${rogue.snap.evacLeft} 手`);
+      render();
+    }
+  }
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
@@ -3881,7 +3912,15 @@ function onBoardClick(e: Event): void {
    * 再点棋盘却被 `godMode` 那段接走（落子/选中），技能永远落不了点。
    * "正在等一个落点"是全局状态，不该被任何模式抢走。
    */
-  if (handoffOpen || state.winner) return;
+  if (handoffOpen) return;
+  if (state.winner) {
+    /*
+     * 肉鸽撤离阶段：引擎每一步都会重新判"我赢"，而这里的判断在 `dispatch`
+     * **之前**——不在这里放行，玩家点了棋盘什么都不会发生（2026-11-19 修）。
+     */
+    if (rogue && rogue.snap.phase === 'evac') keepPlaying(state);
+    else return;
+  }
 
   const coords = coordsFromEvent(e);
 
@@ -5682,6 +5721,13 @@ async function runAiTurn(
     rejected.clear();
 
     state = result.state;
+    /*
+     * 肉鸽：AI 循环里也要喂状态机（2026-11-19 修）。
+     *
+     * 撤离倒计时按"轮到玩家"扣，而"轮到玩家"这一下发生在 **AI 走完之后**——
+     * 只在 dispatch 里观察的话永远看不到，倒计时卡住不动。
+     */
+    rogueAfterAction(before, state);
     noteHpDrops(before, state);
     noteStrikeFlash(before, state);
     noteStep(actor, action);
@@ -5744,9 +5790,15 @@ async function runAiTurn(
    * 后面全部对不上。补上之后，日志才是一份能重放的完整动作序列。
    */
   const endActor = state.current;
+  const beforeEnd = state;
   const end = applyAction(state, { type: 'END_TURN' });
   if (end.ok) {
     state = end.state;
+    /*
+     * 敌人没兵时它一条动作都没有，循环里那个钩子永远不会触发——
+     * 而"轮到玩家"恰好就是这一次结束回合造成的（2026-11-19 修）。
+     */
+    rogueAfterAction(beforeEnd, state);
     noteStep(endActor, { type: 'END_TURN' });
   }
   if (end.ok) noteTurnEnd();
@@ -5795,6 +5847,7 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     version: BUILD_VERSION,
     latest: '新：新手教程（约 3 分钟，从首页进）',
     onNew: newGameFlow,
+    onRogue: openRoguelike,
     onTutorial: startTutorial,
     onContinue: () => {
       render();
@@ -5845,6 +5898,461 @@ function newGameFlow(): void {
     toast('新对局开始');
     kickAiIfNeeded();
   });
+}
+
+/**
+ * ── 肉鸽切片控制器（2026-11-19） ──────────────────────────────
+ *
+ * 只做"串起来"这件事：开局 → 打 → 敌人清空后撤离 → 结算 → 下一关。
+ * 规则在 `core/roguelike/*`，面板在 `ui/roguelike/run-screen.ts`，
+ * 这里负责把它们和主循环（dispatch / render / 存档）接上。
+ *
+ * **三选一、整备、路线选择还没接**——先把 3 关跑通，节奏对不对比面板更重要。
+ */
+let rogue: { run: RunState; snap: RunnerSnapshot; settled: boolean } | null = null;
+
+function rogueSave(): void {
+  if (rogue) localStorage.setItem(RUN_KEY, serializeRun(rogue.run));
+}
+
+function rogueCtx() {
+  const st = stageAt(rogue!.run.node);
+  return {
+    run: rogue!.run,
+    stageIndex: rogue!.run.node,
+    evacTurns: st.meta.evacTurns,
+    expectedTurns: st.meta.expectedTurns,
+    playerSeat: 'A' as const,
+  };
+}
+
+function openRoguelike(): void {
+  const saved = parseRun(localStorage.getItem(RUN_KEY));
+  rogue = saved ? { run: saved, snap: initRunner(), settled: false } : null;
+  syncRogueHud();
+  showRunPanel();
+}
+
+function showRunPanel(): void {
+  console.info('[rogue] 打开关卡面板', rogue ? `node=${rogue.run.node}` : 'no-run');
+  if (!rogue) {
+    openRunPanel({
+      run: newRun(randomSeed(), { allowRestart: true }),
+      fresh: true,
+      stageNo: 1,
+      total: SLICE_STAGES.length,
+      stageTitle: '还没开始：选一档新开一局',
+      onStart: () => {},
+      onNewRun: (allowRestart) => {
+        rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner(), settled: false };
+        rogueSave();
+        showRunPanel();
+      },
+      onClose: () => {},
+    });
+    return;
+  }
+  const st = stageAt(rogue.run.node);
+  openRunPanel({
+    run: rogue.run,
+    stageNo: rogue.run.node + 1,
+    total: SLICE_STAGES.length,
+    stageTitle: st.level.name,
+    onStart: startRogueStage,
+    onNewRun: (allowRestart) => {
+      rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner(), settled: false };
+      rogueSave();
+      showRunPanel();
+    },
+    onAbandon: () => {
+      localStorage.removeItem(RUN_KEY);
+      rogue = null;
+      showRunPanel();
+    },
+    onClose: () => {},
+  });
+}
+
+function startRogueStage(): void {
+  if (!rogue) return;
+  const st = stageAt(rogue.run.node);
+  const checked = validateLevel(st.level);
+  if (!checked.ok) {
+    toast(`这一关的数据有问题：${checked.errors[0] ?? '未知'}`);
+    return;
+  }
+  const units = mergeUnits(loadCustomUnits(), compileUnits(rogue.run.cards));
+  /*
+   * 第 3 条（"只能造抽到的卡"）**暂不用 enabledUnits 实现**：
+   * 它会把 `state.unitTypes` 一起裁掉，而关卡摆兵是按这张表查兵种的——
+   * 裁掉 longbow/knight 之后，第 2、3 关的敌人会**静默不出现**。
+   * 正确的落点是"产兵候选列表"那一层（只影响玩家能点什么），
+   * 那需要改城市面板，不在这一轮里。
+   */
+  /*
+   * **只能造"手上的兵"**（第 3 条）。
+   *
+   * 用 `recruitOnly` 而不是 `enabledUnits`：后者会把兵种表一起裁掉，
+   * 关卡摆兵的骑士/长弓会变成"这一局没有这个兵种"而静默跳过。
+   */
+  const allowed = [...new Set([...rogue.run.roster.map((u) => u.type), ...Object.keys(rogue.run.cards)])];
+  const buildable = allowed.length > 0 ? allowed : ['militia', 'archer'];
+  state = createMatch(
+    {
+      ...DEFAULT_CONFIG,
+      level: checked.level,
+      startEra: rogue.run.cityEra,
+      // 城市与经济单位都不产金：肉鸽的钱只能从战果来
+      noIncome: true,
+      recruitOnly: buildable,
+      // 整备关加固过城墙 → 城更大（兵额 4 → 9）
+      citySize: citySizeFor(rogue.run.wallProgress),
+    },
+    randomSeed(),
+    units,
+  );
+  /*
+   * **只有"手上没人"时才发初始兵**（2026-11-19 用户点名的第 5 条）。
+   *
+   * `createMatch` 会给没写 deploy 的席位自动撒一队开局兵（3 个战斗兵 + 2 个经济单位）。
+   * 原来我只删了经济单位，于是**每一关都凭空多出 3 个兵**——玩家从上一关辛苦带回来的
+   * 兵反倒成了"额外附加"，兵额、保留兵力这些设计全被稀释。
+   *
+   * 现在的规则：
+   *   · 花名册非空 → 清掉自动兵，**只摆花名册**（第 2 关起就该是这样）；
+   *   · 花名册为空 → 保留自动兵当"紧急征召"（第一关，或全灭后重开），
+   *     但仍然删掉经济单位（肉鸽里不产钱）。
+   */
+  const hasRoster = rogue.run.roster.length > 0;
+  state.units = state.units.filter((u) => {
+    if (u.owner === 'A' && hasRoster) return false; // 有花名册：一个默认兵都不要
+    const def = state.unitTypes[u.type];
+    return !def || def.category === 'combat'; // 否则也至少删掉经济单位
+  });
+  if (hasRoster) {
+    const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
+    const spots = city ? cityTiles(city).slice() : [];
+    const taken = new Set(state.units.map((u) => `${u.x},${u.y}`));
+    let seq = state.nextUnitSeq;
+    for (const r of rogue.run.roster) {
+      const spot = spots.find((t: { x: number; y: number }) => !taken.has(`${t.x},${t.y}`)) ?? null;
+      if (!spot) break;
+      taken.add(`${spot.x},${spot.y}`);
+      const def = state.unitTypes[r.type];
+      state.units.push({
+        id: `u${seq++}`,
+        type: r.type,
+        owner: 'A',
+        x: spot.x,
+        y: spot.y,
+        hp: Math.max(1, Math.min(r.hp, def?.maxHp ?? r.hp)),
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+    }
+    state.nextUnitSeq = seq;
+  }
+  state.aiControl = undefined;
+  document.querySelector('.title-screen')?.remove();
+  dropHeatFlash();
+  detachRoom();
+  resetZoom();
+  clearSelection();
+  resetRecorder();
+  rogue.snap = initRunner();
+  rogue.settled = false;
+  saveMatch(state);
+  hasRealSave = true;
+  render();
+  toast(`肉鸽 第 ${rogue.run.node + 1}/${SLICE_STAGES.length} 关：${st.level.name}`);
+  syncRogueHud();
+  kickAiIfNeeded();
+}
+
+/** dispatch 里每走一步之后调：只读局面，推进状态机 */
+/**
+ * 给所有敌方席位下发"主动进攻"。
+ *
+ * **每一手都要重发**（2026-11-19 修）：`orderDirectives` 是"这一回合的打法"，
+ * AI 用掉之后会清空，所以只在开局发一次的话，第二回合起敌人又原地待着了
+ * ——用户看到的"进攻意图只有第一回合"就是这么来的。
+ */
+function applyRushDirective(): void {
+  const foeSeats = [...new Set(state.units.filter((u) => u.owner !== 'A').map((u) => u.owner))];
+  if (foeSeats.length === 0) return;
+  state.orderDirectives = {
+    ...(state.orderDirectives ?? {}),
+    ...Object.fromEntries(foeSeats.map((seat) => [seat, { strategy: 'rush' as const }])),
+  };
+}
+
+function rogueAfterAction(prev: GameState, next: GameState): void {
+  if (!rogue || rogue.settled) return;
+  applyRushDirective(); // 每一手都重发，否则第二回合起敌人就站住了
+  const before = rogue.snap;
+  const after = observe(prev, next, before, rogueCtx());
+  rogue.snap = after;
+  // 撤离期间每一步都可能被引擎重新判胜，见到就抹掉
+  if (after.phase === 'evac') keepPlaying(state);
+  if (after.phase === before.phase && after.evacLeft === before.evacLeft) return;
+
+  if (after.phase !== before.phase) {
+    if (after.phase === 'evac') {
+      keepPlaying(state);
+      toast(`敌人清空！还有 ${after.evacLeft} 手把兵带回城（只有城里的能带走）`);
+      render();
+    } else if (after.phase === 'done') {
+      finishRogueStage();
+    }
+  } else if (after.phase === 'evac') {
+    // 撤离中扣了一手
+    keepPlaying(state);
+    toast(`撤离：还剩 ${after.evacLeft} 手`);
+    render();
+  }
+}
+
+function finishRogueStage(): void {
+  if (!rogue || rogue.settled) return;
+  console.info('[rogue] 结算开始');
+  // 先置位再干活：结算过程中任何回调都不该再触发一次结算
+  rogue.settled = true;
+  const st = stageAt(rogue.run.node);
+  const res = settleStage(state, rogue.snap, rogueCtx());
+  rogue.run.gold += res.gold + res.refund;
+  rogue.run.roster = res.taken;
+  if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) rogue.run.relics.push(st.meta.relic);
+  const finished = rogue.run.node + 1;
+  rogue.run.node = Math.min(finished, SLICE_STAGES.length - 1);
+  rogueSave();
+  syncRogueHud();
+  openSettlePanel({
+    gold: res.gold + res.refund,
+    taken: res.taken,
+    left: res.left,
+    refund: res.refund,
+    halfDone: res.halfDone,
+    onNext: () => {
+      if (finished >= SLICE_STAGES.length) {
+        showRogueEnd();
+        return;
+      }
+      try {
+        offerRogueCards(() => {
+          // 从第 2 关起，进关前有一次整备
+          maybeRest(() => {
+            toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
+            showRunPanel();
+          });
+        });
+      } catch (err) {
+        /*
+         * 三选一挂了也不能让整条链断掉（2026-11-19）：
+         * 原来的写法里这里抛错就是"面板消失、什么都不弹"，
+         * 玩家看到的就是"打完一关就没下文了"。出错也要能进下一关。
+         */
+        console.error('[rogue] 三选一失败', err);
+        toast('三选一出错，先跳过（看控制台）');
+        showRunPanel();
+      }
+    },
+  });
+}
+
+/**
+ * 战后三选一（2026-11-19）。
+ *
+ * 候选池 = 当前城市时代能用的全部战斗兵种（分支那条线暂停了，见 branches.ts 顶部）。
+ * 抽卡不写死随机：同一个 run 的 seed + 节点序号决定三张牌，重开本关不会变成刷奖励。
+ */
+function offerRogueCards(after: () => void): void {
+  if (!rogue) {
+    after();
+    return;
+  }
+  console.info('[rogue] 打开三选一');
+  const run = rogue.run; // 后面回调里 rogue 可能被置空，这里先抓住这一份
+  const eraOf = (id: string): number => UNIT_TYPES[id]?.era ?? 1;
+  const pool = Object.values(UNIT_TYPES)
+    .filter((d) => d.category === 'combat' && !d.legacy)
+    .map((d) => d.id);
+  const seed = run.seed + run.node * 7919;
+  const picks = drawCards(pool, run.cards, seed, 3, { cityEra: run.cityEra, eraOf });
+  const cards = picks.map((id) => {
+    const owned = run.cards[id] ?? 0;
+    const toNext = cardsToNext(owned);
+    return {
+      id,
+      name: UNIT_TYPES[id]?.name ?? id,
+      owned,
+      note: `第 ${cardLevel(owned) + 1} 级还差 ${toNext} 张${toNext === 1 ? '（拿了就升）' : ''}`,
+    };
+  });
+  const money = 80;
+  openCardChoice({
+    cards,
+    money,
+    onPick: (id) => {
+      if (!rogue) return;
+      rogue.run.cards[id] = (rogue.run.cards[id] ?? 0) + 1;
+      const lv = cardLevel(rogue.run.cards[id]!);
+      if (rogue.run.cards[id]! % 3 === 0) toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${lv} 级`);
+      rogueSave();
+      after();
+    },
+    onSkip: () => {
+      if (!rogue) return;
+      rogue.run.gold += money;
+      rogueSave();
+      toast(`没要卡，拿走 ${money} 金`);
+      after();
+    },
+  });
+}
+
+/**
+ * 顶栏的肉鸽状态条（2026-11-19）。
+ *
+ * 为什么需要：结算/三选一都是模态面板，**一旦某个面板没弹出来或被关掉，
+ * 玩家就再也找不到回下一关的入口**（用户实机反馈"杀光敌军弹结算，然后呢"）。
+ * 只要还在 run 里，顶栏就一直挂一个「肉鸽 1/3 · 下一关」，点它就能回到面板。
+ */
+function syncRogueHud(): void {
+  const total = SLICE_STAGES.length;
+  let el = document.getElementById('rogue-hud') as HTMLButtonElement | null;
+  if (!rogue) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('button');
+    el.id = 'rogue-hud';
+    el.className = 'btn btn-sm rogue-hud';
+    el.setAttribute('data-rogue-open', '');
+    document.body.appendChild(el);
+  }
+  el.textContent = `肉鸽 ${Math.min(rogue.run.node + 1, total)}/${total} · 下一关`;
+}
+
+/*
+ * 「下一关」常驻按钮的点击委托（2026-11-19 补）。
+ *
+ * 上一版只创建了按钮、**没绑事件**——点下去毫无反应，用户直接撞上。
+ * 用 document 级委托，面板在不在、挂在谁身上都不影响。
+ */
+document.addEventListener('click', (ev) => {
+  const hit = (ev.target as HTMLElement | null)?.closest?.('[data-rogue-open]');
+  if (!hit) return;
+  ev.preventDefault();
+  console.info('[rogue] 点击常驻入口');
+  showRunPanel();
+});
+
+/*
+ * 肉鸽调试钩子：只在 `?roguedebug=1` 下挂到 window（2026-11-19）。
+ * 用途：撤离/下一关这条链跨 4 个模态面板，无头浏览器要能把整条链跑完。
+ */
+if (new URLSearchParams(location.search).has('roguedebug')) {
+  (window as unknown as Record<string, unknown>).__rogueTest = {
+    state: () => state,
+    run: () => rogue,
+    clearFoes: (): number => {
+      const before = state.units.length;
+      state.units = state.units.filter((u) => u.owner === 'A');
+      render();
+      return before - state.units.length;
+    },
+    act: (action: unknown): boolean => dispatch(action as never),
+    panels: (): string[] =>
+      [...document.querySelectorAll('.modal-mask')].map((m) =>
+        (m.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 70),
+      ),
+    hud: (): string => (document.getElementById('rogue-hud')?.textContent ?? '').trim(),
+    snap: () => rogue?.snap ?? null,
+    sel: (): string | null => selectedId,
+    mine: (): Array<{ id: string; x: number; y: number }> =>
+      state.units.filter((u) => u.owner === 'A').map((u) => ({ id: u.id, x: u.x, y: u.y })),
+    foes: (): string =>
+      state.units
+        .filter((u) => u.owner !== 'A')
+        .map((u) => `${u.type}@${u.x},${u.y}`)
+        .sort()
+        .join(' '),
+  };
+}
+
+/**
+ * 整备关（2026-11-19）。
+ *
+ * 只在"已经打过一关之后"出现：第一关之前没什么可整备的（花名册是空的）。
+ * 三项各对应一条成长线——兵额（城墙）/ 兵力（回血）/ 兵种强度（卡）。
+ */
+function maybeRest(after: () => void): void {
+  if (!rogue || rogue.run.node === 0) {
+    after();
+    return;
+  }
+  const run = rogue.run;
+  const size = citySizeFor(run.wallProgress);
+  /** 打开整备面板；升城之后要重开一次，把新价钱显示出来 */
+  const show = (): void => openRestPanel({
+    wallProgress: run.wallProgress,
+    wallSteps: WALL_STEPS,
+    citySize: size,
+    capacity: cityCapacity(size),
+    roster: run.roster,
+    cardKinds: Object.keys(run.cards).length,
+    cityEra: run.cityEra,
+    upgradeCost: run.cityEra >= 8 ? null : cityUpgradeCost(run.cityEra),
+    gold: run.gold,
+    /*
+     * 升城**不占整备次数**（2026-11-19 用户定）：它是花钱买成长，
+     * 和"停下来整备一次"是两件事。所以这里不动三选一、也不关面板。
+     */
+    onUpgradeCity: () => {
+      const cost = cityUpgradeCost(run.cityEra);
+      if (run.cityEra >= 8 || run.gold < cost) return;
+      run.gold -= cost;
+      run.cityEra += 1;
+      rogueSave();
+      toast(`城市升到第 ${run.cityEra} 代（-${cost} 金）：卡池与可造兵种跟着换代`);
+      show();
+    },
+    onPick: (kind) => {
+      if (kind === 'wall') {
+        run.wallProgress += 1;
+        const now = citySizeFor(run.wallProgress);
+        toast(`城墙加固：${now}×${now}，兵额 ${cityCapacity(now)}`);
+        rogueSave();
+        after();
+      } else if (kind === 'heal') {
+        // 花名册按兵种上限回满（HP 跨关保留，所以这是唯一"回血"的入口）
+        run.roster = run.roster.map((u) => ({
+          ...u,
+          hp: UNIT_TYPES[u.type]?.maxHp ?? u.hp,
+        }));
+        toast(`部队修整完毕：${run.roster.length} 人回满血`);
+        rogueSave();
+        after();
+      } else {
+        offerRogueCards(() => {
+          rogueSave();
+          after();
+        });
+      }
+    },
+  });
+  show();
+}
+
+function showRogueEnd(): void {
+  const gold = rogue?.run.gold ?? 0;
+  toast(`切片跑完了：三关结束，剩 ${gold} 金。这一局到此为止（后续会加幕与 Boss）。`);
+  localStorage.removeItem(RUN_KEY);
+  rogue = null;
+  syncRogueHud();
+  showTitle();
 }
 
 /**

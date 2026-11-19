@@ -31,6 +31,8 @@ export interface SnapshotUploadResult {
   reason?: string;
   howTo?: string;
   note?: string;
+  /** 回读确认到的行号：玩家截图这一行，开发者就能直接找到那条反馈 */
+  id?: number;
 }
 
 interface DbFailure {
@@ -84,6 +86,32 @@ function classify(err: DbFailure | undefined): SnapshotUploadResult {
 /**
  * 上传一份快照。永远不抛：调用方是界面上的一个按钮。
  */
+/**
+ * 按 fingerprint 把刚写的那行读回来。
+ *
+ * 三种结果：`id`（读到了，带行号）、`missing`（没有——权限或写入失败）、
+ * `unknown`（读接口本身出错，不敢断言）。
+ */
+async function readBack(fingerprint: string): Promise<{ kind: 'id'; id: number } | { kind: 'missing' } | { kind: 'unknown' }> {
+  try {
+    const db = (await cloudDatabase()) as unknown as {
+      from(name: string): {
+        select(cols: string): {
+          eq(col: string, val: string): {
+            limit(n: number): PromiseLike<{ data?: Array<{ id?: number }> | null; error?: unknown }>;
+          };
+        };
+      };
+    };
+    const r = await db.from(TABLE).select('id').eq('fingerprint', fingerprint).limit(1);
+    if (r?.error) return { kind: 'unknown' };
+    const first = r?.data?.[0];
+    return first && typeof first.id === 'number' ? { kind: 'id', id: first.id } : { kind: 'missing' };
+  } catch {
+    return { kind: 'unknown' };
+  }
+}
+
 export async function uploadSnapshot(snap: BugSnapshot): Promise<SnapshotUploadResult> {
   try {
     const db = (await cloudDatabase()) as unknown as {
@@ -119,8 +147,30 @@ export async function uploadSnapshot(snap: BugSnapshot): Promise<SnapshotUploadR
       delete row.current_player;
       res = await db.from(TABLE).insert(row);
     }
+    if (res?.error) return classify(res.error);
 
-    return res?.error ? classify(res.error) : { ok: true };
+    /*
+     * **回读确认**（2026-11-19）：写入成功不等于"开发者看得到"。
+     *
+     * 反馈反复说"上传了但看不到"，而原来这里只要 insert 没报错就回一句
+     * "已上传"——RLS 拒绝、网络吞掉、或者表名写错，玩家看到的都是同一句话。
+     * 现在写完按 fingerprint 读回来：
+     *   · 读得到 → 把行号显示给玩家（"已上传 #12"），他截图就能给开发者定位；
+     *   · 读不到 → 明确说"写进去了但读不回来"，这通常是 RLS 策略问题。
+     */
+    const back = await readBack(row.fingerprint as string);
+    if (back.kind === 'missing') {
+      /*
+       * 写进去了但读不回来：**不算失败**（数据确实落了，别让玩家白填一次），
+       * 但必须说清楚——这通常是读权限策略的问题，不是玩家操作错。
+       */
+      return {
+        ok: true,
+        note: '已写入，但云端不允许回读确认（读权限策略）。如果开发者说没收到，请用「复制」把内容直接发给他。',
+      };
+    }
+    if (back.kind === 'id') return { ok: true, id: back.id };
+    return { ok: true };
   } catch (err) {
     return classify(err as DbFailure);
   }

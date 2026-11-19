@@ -4081,6 +4081,8 @@ export function unitYieldAt(s: GameState, u: Unit, x: number, y: number): Resour
  * 而那个扩展自己就是唯一的生产者。
  */
 export function incomeResOf(s: GameState, p: PlayerId): ResourceCost {
+  // 肉鸽模式：一分收入都没有，金币只能从战果来（见 MatchConfig.noIncome）
+  if (s.config.noIncome === true) return {};
   const out: ResourceCost = {};
   const add = (id: ResourceId, n: number | undefined): void => {
     if (!n) return;

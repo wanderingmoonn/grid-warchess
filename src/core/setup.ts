@@ -746,6 +746,9 @@ export function createMatch(
       // 在存档里显示成一句谎话。
       expansionIds: EXPANSIONS.filter((e) => liveExpansions.has(e.id)).map((e) => e.id),
       enabledUnits: [...pool],
+      // 肉鸽：完全无收入。默认不写 = undefined = 老行为（白名单必须逐个抄）
+      ...(config.noIncome === true ? { noIncome: true } : {}),
+      ...(Array.isArray(config.recruitOnly) ? { recruitOnly: [...config.recruitOnly] } : {}),
       // 关掉的那些也要活进 config：兵种池弹层靠它把"关着"的格子画回去，
       // 少了这一行，下一局打开面板会看到整排船又亮了起来。
       disabledUnits: Array.from(disabled).filter((id) => catalog[id]),
