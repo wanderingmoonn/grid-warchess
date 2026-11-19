@@ -1686,7 +1686,7 @@ function renderDebugHud(): void {
     `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
     `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
     // 最近两条 AI 调度痕迹：排查"电脑不行动"时截图就能读到（2026-11-19）
-    `ai: ${aiTrace.slice(-2).join(' | ') || '(无)'}`,
+    `ai: ${aiTrace.slice(-3).join(' | ') || '(无)'}`,
     `empty=${aiEmptyTurns} 单位=${state.units.length} 城=${state.cities.map((c) => `${c.owner}:${c.hp}`).join(',')}`,
     `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
       ` 拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'} 远端=${lastSnapHead || '-'}`,
@@ -5676,6 +5676,8 @@ async function runAiTurn(
   stopWhen?: () => boolean,
 ): Promise<void> {
   const player = state.current;
+  aiLog(`turn+ p=${player} token=${token}`);
+  let applied = 0;
   const budget: AiBudget = {
     ...DEFAULT_BUDGET,
     // 指挥官模式下**每一方**都只有"一回合一个兵"的产能，AI 也不例外。
@@ -5768,6 +5770,7 @@ async function runAiTurn(
       continue;
     }
     rejected.clear();
+    applied += 1;
 
     state = result.state;
     /*
@@ -5821,6 +5824,7 @@ async function runAiTurn(
    * 现在它至少能在控制台留痕：如果以后有人看到这句，说明式子该重推了
    * （或者有个"成功但没用"的动作在空转，那是卡死检测该管的事）。
    */
+  aiLog(`turn- p=${player} applied=${applied} cur=${state.current} winner=${state.winner ?? '-'}`);
   if (stepsRun >= stepCap && alive() && !state.winner) {
     const n = state.units.filter((u) => u.owner === player).length;
     const c = state.cities.filter((x) => x.owner === player).length;
