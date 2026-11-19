@@ -1840,6 +1840,36 @@ const COCOON_ASCEND: AbilityDef = {
   },
 };
 
+/** 「暗影呼吸」每回合回多少血 */
+export const BREATH_HEAL = 6;
+
+/**
+ * 「暗影呼吸」：每回合开始回一点血。
+ *
+ * 它自己就在暗影里，回血是"回到自己的介质中去"——不看地形、不要求站住不动，
+ * 和核心的「休整」（要求上回合没动没打）区别就在这。
+ */
+const SHADOW_BREATH: AbilityDef = {
+  id: 'shadow-breath',
+  name: '暗影呼吸',
+  summary: `每回合开始回复 ${BREATH_HEAL} 点生命。`,
+  group: 'support',
+  valueLabel: () => `每回合 +${BREATH_HEAL}`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          if (!c.healable) return;
+          const max = c.api.maxHpOf(c.state, c.self);
+          if (c.self.hp >= max) return;
+          c.self.hp = Math.min(max, c.self.hp + BREATH_HEAL);
+        },
+      },
+    ],
+  },
+};
+
 /**
  * 「无形」：不可言说之物，**相邻也看不见**；攻击之后才现形。
  *
@@ -1918,8 +1948,9 @@ const BLACK_LOCUST_DEF: UnitTypeDef = {
   cost: 60,
   move: 5,
   atk: 1,
-  armor: 4,
-  maxHp: 20,
+  // 4 → 2、20 → 14（2026-11-19 作者：黑蝗太耐打了，它该是"一把就能捏死、但永远捏不完"）
+  armor: 2,
+  maxHp: 14,
   range: 1,
   vision: 4,
   burst: 3,
@@ -1976,7 +2007,7 @@ const UNNAMABLE_DEF: UnitTypeDef = {
   shadowRadius: 6,
   aiAutonomy: 1,
   aiProfile: 'unnamable-stalk',
-  abilities: ['shadow-erosion', 'unnamable-formless'],
+  abilities: ['shadow-erosion', 'unnamable-formless', 'shadow-breath'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -1999,15 +2030,21 @@ const LOCUST_AI: UnitAiProfile = {
       .sort((a, b) => (c.state.unitTypes[b.type]?.armor ?? 0) - (c.state.unitTypes[a.type]?.armor ?? 0))[0];
     if (hard) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: hard.id }, score: 150 });
 
-    // 走位：偏好暗影格，同时离"打人疼的"远一点
+    /*
+     * 走位：偏好暗影格、离"打人疼的"远一点，**并且离黑茧远一点**
+     * （2026-11-19 作者加的）。理由很实：黑茧旁边是"该结茧的地方"，
+     * 一群黑蝗围着一颗茧只会被玩家一发溅射一起清掉——散开才铺得开。
+     */
     const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    const cocoons = c.allies.filter((a) => a.type === BLACK_COCOON && a.hp > 0);
     let best: { x: number; y: number } | null = null;
     let bestScore = -Infinity;
     for (const p of tiles) {
       const inShadow = inShadowCell(c.state, p.x, p.y, c.unit.board) ? 6 : 0;
       const strong = c.foes.filter((f) => (c.state.unitTypes[f.type]?.atk ?? 0) >= 30);
       const safe = Math.min(...strong.map((f) => dist(f, p)), 8);
-      const score = inShadow + safe * 0.8;
+      const awayCocoon = Math.min(...cocoons.map((k) => dist(k, p)), 6);
+      const score = inShadow + safe * 0.8 + awayCocoon * 0.9;
       if (score > bestScore) {
         bestScore = score;
         best = p;
@@ -2043,23 +2080,38 @@ const UNNAMABLE_AI: UnitAiProfile = {
     const add: UnitAiCandidate[] = [];
     const range = c.def.range ?? 3;
 
-    const prey = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
-    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 175 });
+    /*
+     * 血量越低越"往暗影里躲"，而且会**放弃攻击**（2026-11-19 作者）。
+     *
+     * 分界点定在一半血：过线之后它只做一件事——找最深的暗影钻进去，
+     * 而且越虚越急（`pull` 从 150 涨到 230，压得住大部分走位候选）。
+     * 配合「暗影呼吸」，它躲进去几回合就能回上来，再出来收人头——
+     * 这一整段就是它"打不死"的来源，也是玩家该追进去的理由。
+     */
+    const maxHp = c.def.maxHp || 1;
+    const ratio = Math.max(0, Math.min(1, c.unit.hp / maxHp));
+    const wounded = ratio <= 0.5;
+
+    if (!wounded) {
+      const prey = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
+      if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 175 });
+    }
 
     const deep = deepestShadow(c.state, c.unit);
     if (deep && (deep.x !== c.unit.x || deep.y !== c.unit.y)) {
       const gap = dist(c.unit, deep);
+      const pull = wounded ? 150 + Math.round((1 - ratio) * 80) : 120;
       if (canStep(c) && gap > Math.max(1, c.def.move) + 2) {
         add.push({
           action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: deep.x, targetY: deep.y },
-          score: 140,
+          score: pull + 20,
         });
       } else {
         const walk = steps(c, Math.max(1, c.def.move))
           .filter((p) => p.d > 0)
           .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
         if (walk && dist(walk, deep) < gap) {
-          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
+          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: pull });
         }
       }
     }
@@ -2201,6 +2253,7 @@ for (const a of [
   LOCUST_COCOON,
   COCOON_ASCEND,
   UNNAMABLE_FORM,
+  SHADOW_BREATH,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -2331,11 +2384,12 @@ export const DARK_TURMOIL: Expansion = {
     '## 尸骸仙帝',
     '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
     '## 不成系的三个',
-    '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人；咬**护甲最厚**的。它自己的暗影只有脚下那一格，' +
-      '所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
+    '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
+      '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
     '**黑茧**：不会动，打**射程内最近**的。两格内出现暗影或血肉，它会化开把自己烧掉，' +
       '把那只催成影主或血核。',
-    '**诡异**：看不见、也发现不了，只在出手之后现形；射程内**补刀血最少**的，没有目标就沉进暗影最深处。',
+    '**诡异**：看不见、也发现不了，只在出手之后现形；射程内**补刀血最少**的。' +
+      '每回合自己回一点血；**血掉到一半以下就会放弃攻击**，一头钻回暗影最深处——越虚躲得越急。',
   ],
   manualDiagram: TURMOIL_DIAGRAM,
   blurb: '一位会老死的仙帝，和它为了续命掀起的浩劫。',
@@ -2378,6 +2432,7 @@ export const DARK_TURMOIL: Expansion = {
     LOCUST_COCOON,
     COCOON_ASCEND,
     UNNAMABLE_FORM,
+    SHADOW_BREATH,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。

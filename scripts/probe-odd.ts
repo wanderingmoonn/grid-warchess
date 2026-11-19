@@ -17,6 +17,7 @@ import { abilityApi, applyAction, isHiddenFrom, visionOf } from '../src/core/rul
 import {
   BLACK_COCOON,
   BLACK_LOCUST,
+  BREATH_HEAL,
   DARK_TURMOIL,
   SHADE,
   SHADOW_LORD,
@@ -43,6 +44,9 @@ const CONFIG = {
   startEra: 6,
   expansionIds: [...DEFAULT_CONFIG.expansionIds, 'cultivation', 'dark-turmoil'],
 };
+
+const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 interface Arena {
   s: GameState;
@@ -345,6 +349,77 @@ console.log('\n[7] 目标偏好');
     const out = unitAiProfileOf('unnamable-stalk')!.handler(ctxOf(s, u));
     const atk = out.add?.find((x) => x.action.type === 'ATTACK')?.action;
     check('诡异补刀血最少的', atk?.type === 'ATTACK' && (atk as { targetId: string }).targetId === 'thin', JSON.stringify(atk));
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 7b. 暗影呼吸 / 低血撤退 / 黑蝗避开黑茧
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[7b] 暗影呼吸与两条新倾向');
+{
+  // 暗影呼吸：每回合回血
+  {
+    const { s, mk } = arena();
+    const u = mk('u', UNNAMABLE, 'B', 5, 5);
+    const max = s.unitTypes[UNNAMABLE]!.maxHp;
+    u.hp = max - 20;
+    const t1 = beginTurnOf(s, 'B');
+    const after = t1.units.find((x) => x.id === 'u')!.hp;
+    check(`每回合回血（+${BREATH_HEAL}）`, after === max - 20 + BREATH_HEAL, `${after} / ${max}`);
+    // 满血不涨
+    const t2 = beginTurnOf(t1, 'B');
+    check('满血后不再涨', t2.units.find((x) => x.id === 'u')!.hp <= max);
+  }
+
+  // 低血：放弃攻击、往暗影深处走
+  {
+    const { s, mk } = arena();
+    const u = mk('u', UNNAMABLE, 'B', 5, 5);
+    const max = s.unitTypes[UNNAMABLE]!.maxHp;
+    u.hp = Math.floor(max * 0.3);
+    mk('foe', 'probe-tank-0', 'A', 5, 6); // 射程内
+    const cocoon = mk('cocoon', BLACK_COCOON, 'B', 12, 12); // 远处铺一片暗影
+    refreshShadow(s);
+    const out = unitAiProfileOf('unnamable-stalk')!.handler(ctxOf(s, u));
+    const atk = out.add?.find((x) => x.action.type === 'ATTACK');
+    check('血量低时放弃攻击', !atk, JSON.stringify(out.add));
+    // 走也行、跳也行——只要落点比现在更靠近暗影中心
+    const mv = out.add?.find((x) => x.action.type === 'MOVE' || x.action.type === 'HERO_SKILL')?.action;
+    const to =
+      mv && mv.type === 'MOVE'
+        ? { x: mv.x, y: mv.y }
+        : mv && mv.type === 'HERO_SKILL'
+          ? { x: mv.targetX!, y: mv.targetY! }
+          : null;
+    check(
+      '血量低时往暗影深处退（走得过去就走，走不过去就跳）',
+      !!to && dist(to, cocoon) < dist(u, cocoon),
+      JSON.stringify(out.add),
+    );
+  }
+
+  // 满血：正常打
+  {
+    const { s, mk } = arena();
+    const u = mk('u', UNNAMABLE, 'B', 5, 5);
+    mk('foe', 'probe-tank-0', 'A', 5, 6);
+    const out = unitAiProfileOf('unnamable-stalk')!.handler(ctxOf(s, u));
+    check('血量健康时照常攻击', !!out.add?.find((x) => x.action.type === 'ATTACK'));
+  }
+
+  // 黑蝗：离黑茧远一点
+  {
+    const { s, mk } = arena();
+    const locust = mk('l', BLACK_LOCUST, 'B', 10, 10);
+    const cocoon = mk('c', BLACK_COCOON, 'B', 10, 11); // 紧贴着
+    refreshShadow(s);
+    const out = unitAiProfileOf('locust-swarm')!.handler(ctxOf(s, locust));
+    const mv = out.add?.find((x) => x.action.type === 'MOVE')?.action;
+    check(
+      '黑蝗往远离黑茧的方向走',
+      mv?.type === 'MOVE' && dist({ x: mv.x, y: mv.y }, cocoon) > dist(locust, cocoon),
+      JSON.stringify(out.add),
+    );
   }
 }
 
