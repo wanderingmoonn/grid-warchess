@@ -317,6 +317,7 @@ const EROSION_BY_TYPE: Record<string, number> = {
   // 裔系里只有子嗣带暗蚀（作者：它"同时拥有真元和暗蚀"）。
   // 眷属/后裔不写：写了也没用——没有「暗蚀」这条能力，那个数不会被读到。
   offspring: 20,
+  'mortal-immortal': 25,
 };
 
 function erosionOf(u: Unit): number {
@@ -2895,6 +2896,252 @@ const OFFSPRING_BEAR = heirSummon({
   max: 2,
 });
 
+/* ══════════════════════════════════════════════════════════════════
+ * 十二、"不好分类"的三件（2026-11-19）
+ *
+ * 两座建筑 + 一个强者。它们在剧情上是仙帝这条线的前因与后果：
+ *   骨灰罐 → 仙帝（腐化的来源，也是他一次次回来的地方）
+ *   成帝碑 → 知识污染（谁靠近都会变成诡异，只有修士能"读"它）
+ *   红尘仙 → 读过碑、或者熬到寿元将尽的那一类存在
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const FUNERARY_URN = 'funerary-urn';
+export const IMPERIAL_STELE = 'imperial-stele';
+export const MORTAL_IMMORTAL = 'mortal-immortal';
+
+/** 复活后生命上限低于这个数就再也回不来了 */
+const TRANSCEND_FLOOR = 200;
+/** 碑文的影响半径 = 该单位视野 × 这个比例（向上取整） */
+const STELE_VISION_RATIO = 0.5;
+/** 读过碑之后几回合死 */
+const STELE_DOOM_TURNS = 3;
+/** 「仙帝凝视」持续几回合 */
+const STELE_BUFF_TURNS = 2;
+/** 能免疫"知识污染"、也有资格去读碑的境界 */
+const STELE_RANK_GATE = 6;
+/** 「仙帝凝视」 */
+export const IMPERIAL_GAZE = 'imperial-gaze';
+
+registerStatus({
+  id: IMPERIAL_GAZE,
+  name: '仙帝凝视',
+  summary: '读过碑文的人：境界 +1，但三回合后必死。',
+});
+
+/**
+ * 「超脱」：仙帝倒下时，骨灰罐把他再拉回来一次——**代价是一次比一次弱**。
+ *
+ * 年龄清零、寿元减半、生命上限减半；下一次再死，就在这个基础上再减半。
+ * 生命上限跌到 200 以下时，罐子也就空了（`TRANSCEND_FLOOR`）。
+ *
+ * 记在骨灰罐的 `custom.revives` 上：一次超脱 +1，所以第 n 次复活的
+ * 生命上限是 `基础 / 2^n`。
+ */
+const TRANSCEND: AbilityDef = {
+  id: 'transcend',
+  name: '超脱',
+  summary: '尸骸仙帝倒下时，在罐边以 0 岁、寿元减半、生命上限减半的状态复活；上限跌破底线后不再复活。',
+  group: 'support',
+  valueLabel: () => '仙帝倒下就拉回来（每次更弱）',
+};
+
+/**
+ * 「知识污染」：靠近碑的东西会**直接变成诡异**。
+ *
+ * 半径按"看的那个人"算：`ceil(视野 / 2)`。所以眼睛越尖的越早中招——
+ * 这是一条反直觉但说得通的规则：你看得越远，越先读懂它。
+ *
+ * 6 级以上的修士免疫（他们能"读"，而不是被读）。
+ */
+const KNOWLEDGE_POLLUTION: AbilityDef = {
+  id: 'knowledge-pollution',
+  name: '知识污染',
+  summary: `视野一半内的敌人都变成 1 不详 + 2 黑蝗；${STELE_RANK_GATE} 级以上的修士免疫。`,
+  group: 'attack',
+  valueLabel: () => `视野 1/2 内污染`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const { state, self, api } = c;
+          for (const u of [...state.units]) {
+            if (u.hp <= 0 || u.owner === self.owner) continue;
+            if ((Number(u.custom?.rank ?? 0)) >= STELE_RANK_GATE) continue;
+            const sight = state.unitTypes[u.type]?.vision ?? 4;
+            const reach = Math.ceil(sight * STELE_VISION_RATIO);
+            if (Math.abs(u.x - self.x) + Math.abs(u.y - self.y) > reach) continue;
+            const at = { x: u.x, y: u.y };
+            api.killUnit(state, u, undefined, '读了不该读的东西');
+            api.spawnNear(state, self.owner, BONE_UNNAMED, { ...u, x: at.x, y: at.y } as Unit);
+            for (let i = 0; i < 2; i += 1) {
+              api.spawnNear(state, self.owner, BLACK_LOCUST, { ...u, x: at.x, y: at.y } as Unit);
+            }
+            state.log.push({ turn: state.turn, player: u.owner, text: '它读懂了碑上的字——然后就不成形状了。' });
+          }
+        },
+      },
+    ],
+  },
+};
+
+/** 尘封的岁数：仙帝/红尘仙都会老，红尘仙没资格吃同伴，所以只能更频繁地出山 */
+const MORTAL_LIFESPAN = 160;
+
+/* ── 三件东西本体 ───────────────────────────────────────────────── */
+
+/** 骨灰罐：两万血、两千甲，不会动也不会打。它只是在那里。 */
+const URN_DEF: UnitTypeDef = {
+  id: FUNERARY_URN,
+  name: '骨灰罐',
+  short: '罐',
+  era: 1,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 2000,
+  maxHp: 20000,
+  range: 0,
+  vision: 3,
+  summonedOnly: true,
+  shadowRadius: 10,
+  abilities: ['transcend'],
+};
+
+/** 成帝碑：碑文本身就是武器。 */
+const STELE_DEF: UnitTypeDef = {
+  id: IMPERIAL_STELE,
+  name: '成帝碑',
+  short: '碑',
+  era: 1,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 200,
+  maxHp: 5000,
+  range: 0,
+  vision: 4,
+  summonedOnly: true,
+  shadowRadius: 3,
+  abilities: ['knowledge-pollution'],
+};
+
+/** 红尘仙：八级修士的水准，和仙帝一样会老。 */
+const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
+  id: MORTAL_IMMORTAL,
+  name: '红尘仙',
+  short: '尘',
+  era: 4,
+  category: 'combat',
+  cost: 0,
+  move: 3,
+  atk: 80,
+  armor: 24,
+  maxHp: 400,
+  range: 4,
+  vision: 7,
+  summonedOnly: true,
+  shadowRadius: 3,
+  aiAutonomy: 0.6,
+  aiProfile: 'mortal-immortal-harvest',
+  abilities: ['shadow-erosion', 'break-lineage'],
+};
+
+/** 红尘仙的暗蚀 */
+// （加进 EROSION_BY_TYPE 的见下面那张表）
+
+/* ── 红尘仙的老死与出山 ─────────────────────────────────────────── */
+
+/**
+ * 红尘仙：和仙帝一样会老，但**没资格吃同伴**，所以只能更频繁地出山。
+ *
+ * 出山条件（任一）：
+ *   · 自己剩下的寿元不多（`STARVE_LEFT`，和仙帝同一个刻度）；
+ *   · 仙帝已经在出山了（同场上没有沉眠中的仙帝）。
+ *
+ * 平时就缩在沉眠地附近——`inSlumber` 那个判定直接复用。
+ */
+function tickMortals(state: GameState, player: PlayerId, api: AbilityApi): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.type !== MORTAL_IMMORTAL || u.hp <= 0) continue;
+    if (u.custom?.dtInit !== 1) {
+      u.custom = { ...(u.custom ?? {}), lifespan: MORTAL_LIFESPAN, dtInit: 1, rank: 8 };
+      if ((u.age ?? 0) <= 1) u.age = 120;
+    }
+    if (!inSlumber(state, u)) u.age = (u.age ?? 0) + 1;
+    if ((u.age ?? 0) > (lifespanOf(u) ?? MORTAL_LIFESPAN)) {
+      api.killUnit(state, u, undefined, '红尘仙寿元耗尽，散作尘埃');
+    }
+  }
+}
+
+/** 读过碑的人：三回合到了就死，尸体会站起一名红尘仙 */
+function tickDoomed(state: GameState, api: AbilityApi): void {
+  for (const u of [...state.units]) {
+    if (u.hp <= 0) continue;
+    const at = Number(u.custom?.doomAt ?? 0);
+    if (!at || at > state.turn) continue;
+    const owner = (u.custom?.steleOwner ?? u.owner) as PlayerId;
+    api.killUnit(state, u, undefined, '读碑的人走了');
+    const born = api.spawnNear(state, owner, MORTAL_IMMORTAL, u);
+    if (born) born.custom = { ...(born.custom ?? {}), lifespan: MORTAL_LIFESPAN, dtInit: 1, rank: 8 };
+    state.log.push({ turn: state.turn, player: owner, text: '他倒下的地方站起来一个人——红尘里又多了一位。' });
+  }
+}
+
+/** 红尘仙该不该出山 */
+function mortalIsOut(state: GameState, u: Unit): boolean {
+  const left = (lifespanOf(u) ?? MORTAL_LIFESPAN) - (u.age ?? 0);
+  if (left <= STARVE_LEFT) return true;
+  const emperor = state.units.find((o) => o.owner === u.owner && o.type === EMPEROR && o.hp > 0);
+  return !!emperor && !inSlumber(state, emperor);
+}
+
+/**
+ * 红尘仙：出山就收割，没出山就缩在沉眠地附近。
+ *
+ * 不打同族（这是仙帝的特权），所以它的目标永远是敌人。
+ */
+const MORTAL_IMMORTAL_AI: UnitAiProfile = {
+  id: 'mortal-immortal-harvest',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 4;
+    const out = mortalIsOut(c.state, c.unit);
+
+    const prey = c.foes
+      .filter((f) => dist(f, c.unit) <= range)
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (prey && out) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 185 });
+
+    if (out) {
+      const goal = c.foes.sort((a, b) => dist(a, c.unit) - dist(b, c.unit))[0];
+      if (goal) {
+        const walk = steps(c, Math.max(1, c.def.move))
+          .filter((p) => p.d > 0)
+          .sort((a, b) => dist(a, goal) - dist(b, goal))[0];
+        if (walk && dist(walk, goal) < dist(c.unit, goal)) {
+          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 150 });
+        }
+      }
+      return add.length ? { add } : {};
+    }
+
+    // 没出山：缩回沉眠地附近
+    const slumber = c.allies.find((a) => a.type === SLUMBER && a.hp > 0);
+    if (!slumber) return add.length ? { add } : {};
+    const walk = steps(c, Math.max(1, c.def.move))
+      .filter((p) => p.d > 0)
+      .sort((a, b) => dist(a, slumber) - dist(b, slumber))[0];
+    if (walk && dist(walk, slumber) < dist(c.unit, slumber)) {
+      add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 140 });
+    }
+    return add.length ? { add } : {};
+  },
+};
+
 /* ── 裔系行为 ───────────────────────────────────────────────────── */
 
 /**
@@ -3244,6 +3491,8 @@ for (const a of [
   KINDRED_CONVERT,
   DESCEND_KINDLE,
   OFFSPRING_BEAR,
+  TRANSCEND,
+  KNOWLEDGE_POLLUTION,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -3406,6 +3655,16 @@ export const DARK_TURMOIL: Expansion = {
       '一个都没有时两回合就变；变成场上**最少**的那一种。',
     '**后裔**：「**传裔**」——每 3 回合生一个眷属（上限 2）。',
     '**子嗣**：「**衍嗣**」——每 2 回合生一个后裔（上限 2）。它会飞，暗蚀极重（全包最高）。',
+    '### 不好分类的三件',
+    '**骨灰罐**：两万血、两千甲的罐子，不会动也不会打。它只有一个作用——「**超脱**」：' +
+      '尸骸仙帝倒下时，在罐边以 0 岁、寿元减半、生命上限减半的状态复活。' +
+      '每死一次就更薄一层，生命上限跌到 200 以下就再也回不来了。',
+    '**成帝碑**：碑上的字会传染。「**知识污染**」：视野一半以内（`ceil(视野/2)`）的敌人' +
+      '立刻变成 1 个不详 + 2 只黑蝗；6 级以上的修士免疫。',
+    '6 级以上的修士可以**主动**贴着碑「**阅读碑文**」：境界 +1、获得两回合「仙帝凝视」，' +
+      '但三回合后必死，尸体会原地站起一名**红尘仙**。所以这是一条用命换时间的路。',
+    '**红尘仙**：八级修士的水准，和仙帝一样会老。它不像仙帝那样能吃同伴，所以出山更频繁；' +
+      '平时缩在沉眠地附近，寿元将尽或者仙帝出山时，它也跟着出来收割。',
     '## 不成系的三个',
     '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
       '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
@@ -3446,6 +3705,9 @@ export const DARK_TURMOIL: Expansion = {
     KINDRED_DEF,
     DESCENDANT_DEF,
     OFFSPRING_DEF,
+    URN_DEF,
+    STELE_DEF,
+    MORTAL_IMMORTAL_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -3481,6 +3743,8 @@ export const DARK_TURMOIL: Expansion = {
     KINDRED_CONVERT,
     DESCEND_KINDLE,
     OFFSPRING_BEAR,
+    TRANSCEND,
+    KNOWLEDGE_POLLUTION,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -3500,10 +3764,13 @@ export const DARK_TURMOIL: Expansion = {
     SERVANT_AI,
     SERVANT_HANG_BACK,
     HEIR_ORDER,
+    MORTAL_IMMORTAL_AI,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
+      tickMortals(state, player, api);
+      tickDoomed(state, api);
       freezeForming(state, player);
     },
     /*
@@ -3530,6 +3797,34 @@ export const DARK_TURMOIL: Expansion = {
         : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
+    /**
+     * 「超脱」：仙帝倒下时，骨灰罐把他再拉回来一次——一次比一次弱。
+     *
+     * 写在扩展的 onUnitKilled 里而不是能力上：能力钩子只会在"挂载者"身上跑，
+     * 而这里要等的是**另一个单位**（仙帝）的死讯。
+     */
+    onUnitKilled: ({ state, api, victim }) => {
+      if (victim.type !== EMPEROR) return;
+      const urn = state.units.find((u) => u.owner === victim.owner && u.type === FUNERARY_URN && u.hp > 0);
+      if (!urn) return;
+      const revives = Number(urn.custom?.revives ?? 0);
+      const baseMax = state.unitTypes[EMPEROR]?.maxHp ?? 1;
+      const newMax = Math.floor(baseMax / 2 ** (revives + 1));
+      if (newMax < TRANSCEND_FLOOR) return;
+      const born = api.spawnNear(state, victim.owner, EMPEROR, urn);
+      if (!born) return;
+      const life = Math.max(1, Math.floor((lifespanOf(victim) ?? LIFESPAN) / 2));
+      born.age = 0;
+      born.custom = { ...(born.custom ?? {}), lifespan: life, dtInit: 1 };
+      born.maxHpBonus = newMax - baseMax;
+      born.hp = newMax;
+      urn.custom = { ...(urn.custom ?? {}), revives: revives + 1 };
+      state.log.push({
+        turn: state.turn,
+        player: victim.owner,
+        text: '罐子里有什么东西动了一下——他又站起来了，比上一次更薄。',
+      });
+    },
     onTurnEnd: ({ state, player, api }) => {
       /*
        * 先完成上一回合的凝结，再重铺暗影。
@@ -3540,6 +3835,45 @@ export const DARK_TURMOIL: Expansion = {
       completeForming(state, player);
       pullSouls(state, player, api);
       refreshShadow(state);
+    },
+    /**
+     * 「阅读碑文」：**只有 6 级以上的修士**才会看到这个按钮。
+     *
+     * 这不是"看一眼就变强"的免费午餐：境界 +1、拿两回合「仙帝凝视」，
+     * 代价是三回合后必死，而且尸体会站起一名红尘仙。所以它是一条"用命换时间"的路。
+     */
+    unitActions: ({ state, unit }) => {
+      if (Number(unit.custom?.rank ?? 0) < STELE_RANK_GATE) return [];
+      if (unit.custom?.doomAt) return [];
+      const stele = state.units.find(
+        (u) => u.type === IMPERIAL_STELE && u.hp > 0 && Math.abs(u.x - unit.x) + Math.abs(u.y - unit.y) <= 1,
+      );
+      if (!stele) return [];
+      return [
+        {
+          id: 'read-stele',
+          label: '阅读碑文',
+          group: '碑文',
+          detail: '境界 +1、获得「仙帝凝视」；三回合后必死，尸体会站起一名红尘仙。',
+        },
+      ];
+    },
+    onUnitAction: ({ state, unit, actionId }) => {
+      if (actionId !== 'read-stele') return null;
+      const stele = state.units.find(
+        (u) => u.type === IMPERIAL_STELE && u.hp > 0 && Math.abs(u.x - unit.x) + Math.abs(u.y - unit.y) <= 1,
+      );
+      if (!stele) return '碑不在旁边了';
+      if (Number(unit.custom?.rank ?? 0) < STELE_RANK_GATE) return '境界不够，读了只会变成那些东西';
+      unit.custom = {
+        ...(unit.custom ?? {}),
+        rank: Number(unit.custom?.rank ?? 0) + 1,
+        doomAt: state.turn + STELE_DOOM_TURNS,
+        steleOwner: stele.owner,
+      };
+      unit.status = { ...(unit.status ?? {}), [IMPERIAL_GAZE]: STELE_BUFF_TURNS };
+      state.log.push({ turn: state.turn, player: unit.owner, text: '它读完了碑上的最后一行。' });
+      return null;
     },
     /**
      * 棋盘上的「暗影」视图。
