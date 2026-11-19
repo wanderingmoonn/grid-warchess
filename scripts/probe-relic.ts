@@ -222,6 +222,8 @@ console.log('\n[1c] 黑暗的源头');
 
   const urn = s.unitTypes[FUNERARY_URN]!;
   check('骨灰罐也会吐东西（黑暗之源 + 衍脉）', ['dark-source', 'lineage-well'].every((a) => (urn.abilities ?? []).includes(a)));
+  const un = s.unitTypes['unnamable']!;
+  check('诡异自己带「黑暗之源」（它原来没有来源）', (un.abilities ?? []).includes('dark-source'));
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -239,15 +241,17 @@ console.log('\n[1d] 黑暗之源 / 衍脉');
   // 衍脉：每回合一个子嗣
   cur = beginTurnOf(cur, 'B');
   check('第 1 回合就生出一个子嗣', count('offspring') === 1, String(count('offspring')));
-  // 黑暗之源：每 3 回合一只黑蝗
+  // 黑暗之源：每 3 回合一只黑蝗 + 一个诡异
   check('第 1 回合还没有黑蝗', count(BLACK_LOCUST) === 0, String(count(BLACK_LOCUST)));
 
   for (let i = 0; i < 2; i += 1) cur = beginTurnOf(cur, 'B');
   check('第 3 回合爬出一只黑蝗', count(BLACK_LOCUST) === 1, String(count(BLACK_LOCUST)));
+  check('同一次也爬出一个诡异', count('unnamable') === 1, String(count('unnamable')));
   check('子嗣封顶 2 个', count('offspring') === 2, String(count('offspring')));
 
   for (let i = 0; i < 9; i += 1) cur = beginTurnOf(cur, 'B');
   check('黑蝗封顶 3 只', count(BLACK_LOCUST) === 3, String(count(BLACK_LOCUST)));
+  check('诡异封顶 3 个', count('unnamable') === 3, String(count('unnamable')));
   check('子嗣仍然是 2 个', count('offspring') === 2, String(count('offspring')));
 
   // 两条召唤共用 custom 时不会互相偷计时器（各自 key 不同）

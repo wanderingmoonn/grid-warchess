@@ -1692,7 +1692,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
                  ? `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久 ${city.hp} / ${city.maxHp}。观战不给操作。`
                  : input.commander === true
                    ? `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久 ${city.hp} / ${city.maxHp}。指挥官模式下产兵按你排的序列走。`
-                   : `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久打空才能易主。攻城伤害 = 你的攻击 − ${city.armor}。`
+                   : `这是${s.players[city.owner].name}的城市（${era.name}时代），耐久打空才能易主。`
              }
              <br />攻陷后会连同它的时代一起接收。
            </div>`
