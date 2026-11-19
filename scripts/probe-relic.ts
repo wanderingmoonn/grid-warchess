@@ -400,6 +400,31 @@ console.log('\n[5] 红尘仙');
   check('一上场就记了寿元', typeof after.custom?.lifespan === 'number', JSON.stringify(after.custom));
   check('它已经在老了', (after.age ?? 0) >= 120, String(after.age));
 
+  // 「加速衰老」在面板上看得见（以前只写在回合钩子里，玩家完全不知道它在老）
+  {
+    const lines = DARK_TURMOIL.hooks.getUnitPanelLines!({ state: s, unit: after }).join(' | ');
+    check('面板印出了寿元', lines.includes('寿元：'), lines);
+    check('面板说明"沉眠地外衰老加倍"', lines.includes('+2'), lines);
+  }
+
+  // 在沉眠地里 +1 / 回合，离开 +2
+  {
+    const inside = arena();
+    const e1 = inside.mk('e1', MORTAL_IMMORTAL, 'B', 10, 10);
+    e1.custom = { lifespan: 160, dtInit: 1 };
+    e1.age = 120;
+    inside.mk('sl', 'slumber-site', 'B', 11, 10);
+    const t1 = beginTurnOf(inside.s, 'B');
+    check('沉眠地旁边一回合老 1 岁', (t1.units.find((u) => u.id === 'e1')!.age ?? 0) === 121, String(t1.units.find((u) => u.id === 'e1')!.age));
+
+    const outside = arena();
+    const e2 = outside.mk('e2', MORTAL_IMMORTAL, 'B', 10, 10);
+    e2.custom = { lifespan: 160, dtInit: 1 };
+    e2.age = 120;
+    const t2 = beginTurnOf(outside.s, 'B');
+    check('离开沉眠地一回合老 2 岁', (t2.units.find((u) => u.id === 'e2')!.age ?? 0) === 122, String(t2.units.find((u) => u.id === 'e2')!.age));
+  }
+
   // 寿元耗尽会死
   const old = arena();
   const mi2 = old.mk('mi2', MORTAL_IMMORTAL, 'B', 10, 10);

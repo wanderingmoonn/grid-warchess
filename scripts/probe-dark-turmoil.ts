@@ -18,7 +18,7 @@ import { SKILL_AI_HINTS } from '../src/core/skill-hooks.ts';
 import type { SkillAiCtx } from '../src/core/skill-hooks.ts';
 import { DARK_TURMOIL, EMPEROR, SLUMBER } from '../src/core/dark-turmoil-packs.ts';
 import { LEVELS } from '../src/core/level.ts';
-import type { GameState, Unit } from '../src/core/types.ts';
+import type { GameState, PlayerId, Unit } from '../src/core/types.ts';
 
 let failed = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -273,20 +273,35 @@ console.log('\n[4] 吞一次的结算');
 /* ══════════════════════════════════════════════════════════════════
  * 5. 老死
  * ══════════════════════════════════════════════════════════════════ */
+/** 让 `side` 开始新回合（词条的 onTurnStart 在这时跑） */
+const beginTurnOf = (st: GameState, side: PlayerId): GameState => {
+  const other: PlayerId = side === 'A' ? 'B' : 'A';
+  if (st.current !== other) st.current = other;
+  const e = applyAction(st, { type: 'END_TURN' });
+  if (!e.ok) throw new Error(`END_TURN 失败：${e.reason}`);
+  return e.state;
+};
+
 console.log('\n[5] 寿元耗尽');
 {
+  /*
+   * 2026-11-19：老化从扩展的回合钩子搬进了「加速衰老」词条，
+   * 所以这里不能再直接调 `hooks.onTurnStart` —— 要让它**真的开始一个回合**，
+   * 词条的 onTurnStart 才会跑（和游戏里同一条路）。
+   */
   const { s, boss } = arena();
-  boss.age = 200; // 寿元 200，年龄 200 → 下一回合就过头
+  boss.age = 199; // 寿元 200：这一回合在沉眠地里 +1 刚好到 200，不该死
   boss.custom = { lifespan: 200, dtInit: 1 };
-  DARK_TURMOIL.hooks.onTurnStart!({ state: s, player: 'B', api: abilityApi });
-  check('年龄刚到寿元不死（要"超过"才算耗尽）', s.units.some((u) => u.id === 'boss'));
+  const t1 = beginTurnOf(s, 'B');
+  check('年龄刚到寿元不死（要"超过"才算耗尽）', t1.units.some((u) => u.id === 'boss'));
+  check('沉眠地里一回合只老 1 岁', (t1.units.find((u) => u.id === 'boss')!.age ?? 0) === 200, String(t1.units.find((u) => u.id === 'boss')!.age));
 
   const s2 = arena();
   s2.boss.age = 201;
   s2.boss.custom = { lifespan: 200, dtInit: 1 };
-  DARK_TURMOIL.hooks.onTurnStart!({ state: s2.s, player: 'B', api: abilityApi });
-  check('年龄超过寿元：原地坐化', !s2.s.units.some((u) => u.id === 'boss'));
-  check('战报里说清楚了死因（不是"被消灭"）', s2.s.log.some((l) => l.text.includes('寿元耗尽')));
+  const t2 = beginTurnOf(s2.s, 'B');
+  check('年龄超过寿元：原地坐化', !t2.units.some((u) => u.id === 'boss'));
+  check('战报里说清楚了死因（不是"被消灭"）', t2.log.some((l) => l.text.includes('寿元耗尽')));
 }
 
 /* ══════════════════════════════════════════════════════════════════
