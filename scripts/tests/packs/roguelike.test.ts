@@ -15,9 +15,12 @@ import {
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
 import { CARDS_PER_LEVEL, cardLevel, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
-import { PER_LEVEL, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
+import { PER_LEVEL_PCT, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
 import { SETTLE, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
+import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
+import { validateLevel } from '../../../src/core/level.ts';
+import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
 export function run() {
   test('肉鸽：新 run 的默认值', () => {
@@ -79,14 +82,26 @@ export function run() {
     assert.ok(near.includes('archer'), '差一张就升级的卡应该出现在候选里');
   });
 
-  test('肉鸽：卡等级编译成兵种表（每级 +攻/+血）', () => {
+  test('肉鸽：卡等级按百分比加攻加血', () => {
     const base = {
       archer: { id: 'archer', name: '弓', atk: 11, maxHp: 24 },
     };
+    // 6 张 = 2 级
     const table = compileUnits({ archer: 6, militia: 3 }, base);
-    assert.equal(table.archer.atk, 11 + PER_LEVEL.atk * 2);
-    assert.equal(table.archer.maxHp, 24 + PER_LEVEL.maxHp * 2);
+    assert.equal(table.archer.atk, Math.round(11 * (1 + PER_LEVEL_PCT.atk * 2)));
+    assert.equal(table.archer.maxHp, Math.round(24 * (1 + PER_LEVEL_PCT.maxHp * 2)));
+    assert.ok(table.archer.atk > 11 && table.archer.maxHp > 24);
     assert.equal(table.militia, undefined, '基础表里没有的兵种不该被凭空造出来');
+  });
+
+  test('肉鸽：百分比加成随等级线性且不翻倍', () => {
+    const base = { cheap: { id: 'cheap', atk: 4, maxHp: 10 } };
+    const lv1 = compileUnits({ cheap: 3 }, base).cheap;
+    const lv3 = compileUnits({ cheap: 9 }, base).cheap;
+    assert.equal(lv1.atk, Math.round(4 * (1 + PER_LEVEL_PCT.atk)));
+    assert.ok(lv3.atk > lv1.atk);
+    // 3 级也不该翻倍（12% × 3 = 36%）
+    assert.ok(lv3.atk < 4 * 2, '低攻杂兵不该被卡牌翻倍');
   });
 
   test('肉鸽：没有卡时不产生覆盖项', () => {
@@ -160,6 +175,30 @@ export function run() {
     );
     // 60/2 + 60/2 = 60
     assert.equal(r.refund, 30 + 30);
+  });
+
+  test('肉鸽：三场手写遭遇都能过校验并建出局', () => {
+    assert.equal(SLICE_STAGES.length, 3);
+    for (const st of SLICE_STAGES) {
+      const r = validateLevel(st.level);
+      assert.ok(r.ok, `${st.level.name} 校验失败：${!r.ok ? r.errors.join(' / ') : ''}`);
+      const s = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 11);
+      const b = s.units.filter((u) => u.owner === 'B').length;
+      assert.ok(b > 0, `${st.level.name} 的敌人没摆上去`);
+      assert.equal(
+        s.cities.filter((c) => c.owner === 'B').length,
+        0,
+        `${st.level.name} 的敌人不该有城（cityless）`,
+      );
+      assert.equal(s.cities.filter((c) => c.owner === 'A').length, 1, '玩家必须有一座城');
+      assert.ok(st.meta.evacTurns >= 1);
+      assert.ok(st.meta.expectedTurns >= st.meta.evacTurns);
+    }
+  });
+
+  test('肉鸽：节点越界钳到最后一场', () => {
+    assert.equal(stageAt(-5).level.id, SLICE_STAGES[0].level.id);
+    assert.equal(stageAt(99).level.id, SLICE_STAGES[SLICE_STAGES.length - 1].level.id);
   });
 
   test('肉鸽：城外全留在 left，兵额 0 时一个都带不走', () => {

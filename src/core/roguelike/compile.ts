@@ -10,8 +10,17 @@ import { UNIT_TYPES } from '../config.ts';
 import type { UnitTypeDef } from '../types.ts';
 import { cardLevel } from './cards.ts';
 
-/** 每一级卡给多少（数值待校准，集中在这里改） */
-export const PER_LEVEL = { atk: 1, maxHp: 2 } as const;
+/**
+ * 每一级卡的加成**按百分比**（2026-11-19 定，替换掉原来的固定 +1/+2）。
+ *
+ * 为什么必须按比例：固定值对低攻兵（atk 11）等于 +9%，对高攻兵几乎没有感觉，
+ * 越到后期越像"没升"。按比例之后每一级对任何兵种都是同样分量的质变，
+ * 数值也就不用跟着兵种表一路重调。
+ *
+ * 取整用 `Math.round`：低于 0.5 的增量会被舍掉，所以 1 级对极其便宜的兵可能看不出差别
+ * ——这是刻意的，卡牌不该让 5 攻的杂兵翻倍。
+ */
+export const PER_LEVEL_PCT = { atk: 0.12, maxHp: 0.12 } as const;
 
 /**
  * @param counts 卡 id → 抽到的张数
@@ -30,8 +39,8 @@ export function compileUnits(
     if (!def) continue;
     out[id] = {
       ...def,
-      atk: def.atk + PER_LEVEL.atk * lv,
-      maxHp: def.maxHp + PER_LEVEL.maxHp * lv,
+      atk: Math.round(def.atk * (1 + PER_LEVEL_PCT.atk * lv)),
+      maxHp: Math.round(def.maxHp * (1 + PER_LEVEL_PCT.maxHp * lv)),
     };
   }
   return out;
