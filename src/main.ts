@@ -1029,10 +1029,19 @@ let watchCount = 0;
 /** 记住"我现在在哪一局房间里"，刷新页面能自己回到那一局 */
 const ROOM_KEY = 'warchess:room-current';
 
+/** 会话级标记：这一趟会话是不是在这个房间里（关标签页即失效） */
+const IN_ROOM_KEY = 'warchess:in-room';
+
 function rememberRoom(code: string | null): void {
   try {
-    if (code) localStorage.setItem(ROOM_KEY, code);
-    else localStorage.removeItem(ROOM_KEY);
+    if (code) {
+      localStorage.setItem(ROOM_KEY, code);
+      // 这一趟会话里是在房间中：刷新可以回房，重新打开不会
+      sessionStorage.setItem(IN_ROOM_KEY, code);
+    } else {
+      localStorage.removeItem(ROOM_KEY);
+      sessionStorage.removeItem(IN_ROOM_KEY);
+    }
   } catch {
     // 隐私模式无所谓，顶多刷新之后要重新输一次代码
   }
@@ -1048,6 +1057,14 @@ function resumeRoom(): boolean {
   try {
     const code = localStorage.getItem(ROOM_KEY);
     if (!code) return false;
+    /*
+     * **只有"同一标签页里刷新"才自动回房**（2026-11-19）。
+     *
+     * 原来只看 localStorage，于是关掉浏览器、第二天打开，人还被塞回
+     * 上次那个房间和那张旧图里，看着像"一进联机就锁死在这张图"。
+     * sessionStorage 在关标签页时自动清空，正好表达"这一趟会话"。
+     */
+    if (sessionStorage.getItem(IN_ROOM_KEY) !== code) return false;
     const seat = loadSeat(code);
     if (!seat) return false;
     room = seat;
