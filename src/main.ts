@@ -6117,7 +6117,18 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
     const g = rogue.run.gold;
     rogue = null;
     syncRogueHud();
-    toast(`这一局结束了：你的兵打光了（剩 ${g} 金）。肉鸽的 run 到这里为止。`);
+    /*
+     * 措辞必须对准真实判据（2026-11-19 被用户当场纠正）：
+     * 普通席位的出局条件是**没有城**，不是没有兵。
+     * 实测那种局面是"5 个兵还活着、城被敌人占了"，
+     * 写成"兵打光了"会让玩家以为自己看错了棋盘。
+     */
+    const alive = state.units.filter((u) => u.owner === 'A').length;
+    toast(
+      alive > 0
+        ? `这一局结束了：你的城被占了（场上还有 ${alive} 个兵，但没城就判负）。剩 ${g} 金。`
+        : `这一局结束了：兵打光了。剩 ${g} 金。`,
+    );
     showTitle();
     return;
   }
