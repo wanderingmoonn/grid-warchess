@@ -701,6 +701,12 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
    * 不会出现"面板列得出来、点下去被拒"。
    */
   if (state.config.level?.banUnits?.includes(typeId)) return false;
+  /*
+   * 肉鸽：只允许产"手上的兵"（花名册 ∪ 抽到的卡）。同样放在这个共同出口上，
+   * 产线面板、军营、AI 采购、建造单位全都自动同一个口径。
+   */
+  const only = state.config.recruitOnly;
+  if (only && !only.includes(typeId)) return false;
   const draft = state.draft;
   if (!draft) return true;
   // 跳过选卡＝这一局按原版打，名单限制整个不生效

@@ -138,3 +138,62 @@ export function openSettlePanel(opts: SettlePanelOptions): void {
   });
   document.body.appendChild(mask);
 }
+
+
+export interface CardChoiceOptions {
+  /** 三个候选：兵种 id + 显示名 + 已有张数（用来提示"再来一张就升级"） */
+  cards: Array<{ id: string; name: string; owned: number; note: string }>;
+  /** 「不选，拿钱」给多少 */
+  money: number;
+  onPick: (id: string) => void;
+  onSkip: () => void;
+}
+
+/**
+ * 战后三选一（2026-11-19）。
+ *
+ * 设计稿里定的是"兵种卡 70% / 战术卡 30% / 永远并列一个不选拿钱"。
+ * 切片先只做**兵种卡 + 不选拿钱**——战术卡要一套一次性效果的落点，
+ * 那是下一步的事，先别把两种东西混在一个面板里。
+ */
+export function openCardChoice(opts: CardChoiceOptions): void {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `
+    <div class="modal rogue-panel">
+      <div class="modal-head">
+        <h2>三选一</h2>
+        <p>三张同名合成一级（每级 +12% 攻血）。</p>
+      </div>
+      <div class="modal-body">
+        <div class="rogue-cards">
+          ${opts.cards
+            .map(
+              (c) => `<button class="rogue-card" data-pick="${esc(c.id)}">
+                <span class="rogue-card-name">${esc(c.name)}</span>
+                <span class="rogue-card-note">${esc(c.note)}</span>
+                <span class="rogue-card-owned">已有 ${c.owned} 张</span>
+              </button>`,
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-act="skip">不选，拿 ${opts.money} 金</button>
+      </div>
+    </div>`;
+  mask.addEventListener('click', (ev) => {
+    const t = ev.target as HTMLElement;
+    const pick = t.closest<HTMLElement>('[data-pick]')?.dataset.pick;
+    if (pick) {
+      mask.remove();
+      opts.onPick(pick);
+      return;
+    }
+    if (t.closest<HTMLElement>('[data-act="skip"]')) {
+      mask.remove();
+      opts.onSkip();
+    }
+  });
+  document.body.appendChild(mask);
+}

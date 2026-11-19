@@ -26,6 +26,7 @@ import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '.
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
 import { incomeOf } from '../../../src/core/rules.ts';
+import { canUseType } from '../../../src/core/draft.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
 export function run() {
@@ -311,6 +312,23 @@ export function run() {
      * 会连带把关卡里 deploy 的骑士/长弓变成"这一局没有这个兵种"而被静默跳过。
      */
     assert.equal(s.unitTypes.knight, undefined, '这个行为本身就是坑，别拿它收窄可造集');
+  });
+
+  test('肉鸽：recruitOnly 只夹"能不能造"，不裁兵种表', () => {
+    const r = validateLevel(SLICE_STAGES[2]!.level); // 第 3 关有长弓、骑士
+    assert.ok(r.ok);
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, level: r.level, recruitOnly: ['militia', 'archer'], noIncome: true } as never,
+      31,
+    );
+    assert.equal(canUseType(s, 'A', 'militia'), true);
+    assert.equal(canUseType(s, 'A', 'knight'), false, '没抽到的兵种不该能造');
+    // 关键：兵种表完整，所以关卡摆的敌人还在
+    assert.ok(s.unitTypes.knight, '兵种表必须完整（否则关卡摆兵会被静默跳过）');
+    assert.ok(s.units.filter((u) => u.owner === 'B').length > 0, '敌人必须还在场上');
+    // 普通对局不受影响
+    const plain = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 32);
+    assert.equal(canUseType(plain, 'A', 'knight'), true);
   });
 
   test('肉鸽：升城市时代价钱递增', () => {

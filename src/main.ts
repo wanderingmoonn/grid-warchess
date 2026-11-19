@@ -28,7 +28,9 @@ import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/r
 import { initRunner, keepPlaying, observe, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
-import { openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
+import { openCardChoice, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
+import { cardLevel, cardsToNext, drawCards } from './core/roguelike/cards.ts';
+import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
@@ -5943,6 +5945,14 @@ function startRogueStage(): void {
    * 正确的落点是"产兵候选列表"那一层（只影响玩家能点什么），
    * 那需要改城市面板，不在这一轮里。
    */
+  /*
+   * **只能造"手上的兵"**（第 3 条）。
+   *
+   * 用 `recruitOnly` 而不是 `enabledUnits`：后者会把兵种表一起裁掉，
+   * 关卡摆兵的骑士/长弓会变成"这一局没有这个兵种"而静默跳过。
+   */
+  const allowed = [...new Set([...rogue.run.roster.map((u) => u.type), ...Object.keys(rogue.run.cards)])];
+  const buildable = allowed.length > 0 ? allowed : ['militia', 'archer'];
   state = createMatch(
     {
       ...DEFAULT_CONFIG,
@@ -5950,6 +5960,7 @@ function startRogueStage(): void {
       startEra: rogue.run.cityEra,
       // 城市与经济单位都不产金：肉鸽的钱只能从战果来
       noIncome: true,
+      recruitOnly: buildable,
     },
     randomSeed(),
     units,
@@ -6048,13 +6059,66 @@ function finishRogueStage(): void {
     left: res.left,
     refund: res.refund,
     halfDone: res.halfDone,
-    onNext:
-      finished >= SLICE_STAGES.length
-        ? () => showRogueEnd()
-        : () => {
-            toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
-            showRunPanel();
-          },
+    onNext: () => {
+      if (finished >= SLICE_STAGES.length) {
+        showRogueEnd();
+        return;
+      }
+      offerRogueCards(() => {
+        toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
+        showRunPanel();
+      });
+    },
+  });
+}
+
+/**
+ * 战后三选一（2026-11-19）。
+ *
+ * 候选池 = 当前城市时代能用的全部战斗兵种（分支那条线暂停了，见 branches.ts 顶部）。
+ * 抽卡不写死随机：同一个 run 的 seed + 节点序号决定三张牌，重开本关不会变成刷奖励。
+ */
+function offerRogueCards(after: () => void): void {
+  if (!rogue) {
+    after();
+    return;
+  }
+  const run = rogue.run; // 后面回调里 rogue 可能被置空，这里先抓住这一份
+  const eraOf = (id: string): number => UNIT_TYPES[id]?.era ?? 1;
+  const pool = Object.values(UNIT_TYPES)
+    .filter((d) => d.category === 'combat' && !d.legacy)
+    .map((d) => d.id);
+  const seed = run.seed + run.node * 7919;
+  const picks = drawCards(pool, run.cards, seed, 3, { cityEra: run.cityEra, eraOf });
+  const cards = picks.map((id) => {
+    const owned = run.cards[id] ?? 0;
+    const toNext = cardsToNext(owned);
+    return {
+      id,
+      name: UNIT_TYPES[id]?.name ?? id,
+      owned,
+      note: `第 ${cardLevel(owned) + 1} 级还差 ${toNext} 张${toNext === 1 ? '（拿了就升）' : ''}`,
+    };
+  });
+  const money = 80;
+  openCardChoice({
+    cards,
+    money,
+    onPick: (id) => {
+      if (!rogue) return;
+      rogue.run.cards[id] = (rogue.run.cards[id] ?? 0) + 1;
+      const lv = cardLevel(rogue.run.cards[id]!);
+      if (rogue.run.cards[id]! % 3 === 0) toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${lv} 级`);
+      rogueSave();
+      after();
+    },
+    onSkip: () => {
+      if (!rogue) return;
+      rogue.run.gold += money;
+      rogueSave();
+      toast(`没要卡，拿走 ${money} 金`);
+      after();
+    },
   });
 }
 
