@@ -1099,95 +1099,276 @@ function fullTidePaint(): Array<[number, number, string]> {
   return paint;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 「骨海」：64×64 的程序化地形
+ *
+ * 手写一格一格的坐标太死板（第一版就是这样，山是长方形、林子是一团一团的）。
+ * 这里改成**按顺序铺**：每一步只做一件事，前一步的结果是后一步的输入——
+ * 和战役地图生成器同一套路子（山脉 → 丘陵 → 森林 → 水 → 路 → 城），
+ * 只是那边的城位算法不适用（它是两家对峙，这里是一家四城）。
+ *
+ * 顺序（2026-11-19 作者定的）：
+ *   1 中间的海 → 2 西北几条南北向山脉 → 3 东西向小山脉 → 4 山边的丘陵
+ *   → 5 丘陵边的森林 → 6 三道堤坝 → 7 砍开山脉修路 → 8 摆城（两家人各四座）
+ *   → 9 零星点缀
+ *
+ * 全程用固定种子的 LCG，同一个 seed 永远同一张图（关卡要能复现、能进存档）。
+ * ══════════════════════════════════════════════════════════════════ */
+
+const BONE_SEA = {
+  w: 64,
+  h: 64,
+  /** 中间那条海的两端 */
+  seaX0: 30,
+  seaX1: 43,
+  /** 海心小岛（成帝碑放这儿） */
+  island: { x0: 35, x1: 38, y0: 27, y1: 29 },
+  /** 三道堤坝的顶端与宽度 */
+  causeways: [
+    { y: 9, height: 2 },
+    { y: 31, height: 3 },
+    { y: 53, height: 2 },
+  ],
+  seed: 20261119,
+} as const;
+
+/** 线性同余：只要确定性，不要质量（和 mapgen 里那个同款） */
+function boneSeaRng(seed: number): () => number {
+  let s = (seed >>> 0) || 1;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
 /**
- * 「骨海」的地形（64×64，2026-11-19）。
+ * 生成「骨海」的地图。
  *
- * 三段式：
- *   · **西侧（0~29）**：两家的地。山脉把它们切成几块，四座城分散在谷地里；
- *   · **中间（30~43）**：海。只有三条堤坝过得去——北（窄）、中（宽）、南（窄），
- *     堤坝由浅流 / 平原 / 沼泽拼成，**陆军能涉水**（浅流在 `passable` 里）；
- *   · **东侧（44~63）**：仙帝的地。平的，几乎没有遮掩。
- *
- * 海里那座小岛（成帝碑）**不接任何堤坝**：陆军上不去，只有飞行单位能落。
- * 这是刻意留的——它是"看得见、够不着"的东西，越靠近越危险（知识污染按视野算半径）。
+ * 返回 `rows` 和**它自己摆的城位**——两件事必须由同一次调用产出，
+ * 否则关卡里的城会和地形对不上（第一版就是手写坐标，改地形时忘了一起改）。
  */
-function boneSeaPaint(): Array<[number, number, string]> {
-  const paint: Array<[number, number, string]> = [];
+export function boneSeaMap(): { rows: string[]; citiesA: MapPoint[]; citiesB: MapPoint[] } {
+  const { w, h } = BONE_SEA;
+  const rng = boneSeaRng(BONE_SEA.seed);
+  const g: string[] = new Array(w * h).fill('.');
+  const at = (x: number, y: number): string => g[y * w + x] ?? '.';
   const put = (x: number, y: number, ch: string): void => {
-    paint.push([x, y, ch]);
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    g[y * w + x] = ch;
+  };
+  /** 这一圈有没有指定地形 */
+  const near = (x: number, y: number, ch: string, r = 1): boolean => {
+    for (let dy = -r; dy <= r; dy += 1) {
+      for (let dx = -r; dx <= r; dx += 1) {
+        if (dx === 0 && dy === 0) continue;
+        if (at(x + dx, y + dy) === ch) return true;
+      }
+    }
+    return false;
   };
 
-  // 中间的海
-  for (let y = 0; y < 64; y += 1) {
-    for (let x = 30; x <= 43; x += 1) put(x, y, '~');
+  // ── 1. 中间的海 ────────────────────────────────────────────────
+  for (let y = 0; y < h; y += 1) {
+    for (let x = BONE_SEA.seaX0; x <= BONE_SEA.seaX1; x += 1) put(x, y, '~');
+  }
+  // 海岸线不是一把直尺：两侧各随机啃掉/长出一点
+  for (let y = 0; y < h; y += 1) {
+    if (rng() < 0.35) put(BONE_SEA.seaX0 - 1, y, '~');
+    if (rng() < 0.35) put(BONE_SEA.seaX1 + 1, y, '~');
   }
 
-  // 三条堤坝：中路过 3 格宽，南北各 2 格
-  for (const [top, height] of [
-    [9, 2],
-    [31, 3],
-    [53, 2],
+  // ── 2. 西侧几条南北向山脉 ──────────────────────────────────────
+  // 每条山脊在走的过程中左右抖动，中间留缺口（后面再决定哪些是路）
+  for (const [baseX, top, bottom] of [
+    [8, 0, 63],
+    [18, 2, 40],
+    [26, 20, 63],
+  ] as Array<[number, number, number]>) {
+    let x = baseX;
+    for (let y = top; y <= bottom; y += 1) {
+      if (rng() < 0.4) x += rng() < 0.5 ? -1 : 1;
+      x = Math.max(1, Math.min(29, x));
+      put(x, y, '^');
+      if (rng() < 0.35) put(x + 1, y, '^');
+    }
+  }
+
+  // ── 3. 东西向的小山脉 ──────────────────────────────────────────
+  for (const [y0, x0, x1] of [
+    [21, 0, 6],
+    [35, 0, 6],
+    [47, 12, 17],
+    [12, 20, 25],
+    [55, 19, 24],
   ] as const) {
-    for (let dy = 0; dy < height; dy += 1) {
-      for (let x = 30; x <= 43; x += 1) {
-        // 两头浅流、中间一段踩实的平原，中间夹一格沼泽
-        const ch = x <= 32 || x >= 41 ? 's' : x === 36 || x === 37 ? 'w' : '.';
-        put(x, top + dy, ch);
+    let y = y0;
+    for (let x = x0; x <= x1; x += 1) {
+      if (rng() < 0.3) y += rng() < 0.5 ? -1 : 1;
+      put(x, y, '^');
+      if (rng() < 0.3) put(x, y + 1, '^');
+    }
+  }
+
+  // ── 4. 山脉旁边的丘陵 ──────────────────────────────────────────
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (at(x, y) !== '.' || x > 29) continue;
+      if (near(x, y, '^', 1) && rng() < 0.55) put(x, y, 'h');
+    }
+  }
+
+  // ── 5. 丘陵旁边的森林 ──────────────────────────────────────────
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (at(x, y) !== '.' || x > 29) continue;
+      if (near(x, y, 'h', 1) && rng() < 0.5) put(x, y, 'f');
+    }
+  }
+
+  // ── 6. 三道堤坝：浅流 → 踩实的平原 → 沼泽 → 平原 → 浅流 ────────
+  for (const cw of BONE_SEA.causeways) {
+    for (let dy = 0; dy < cw.height; dy += 1) {
+      const y = cw.y + dy;
+      for (let x = BONE_SEA.seaX0 - 1; x <= BONE_SEA.seaX1 + 1; x += 1) {
+        if (x <= BONE_SEA.seaX0 + 2 || x >= BONE_SEA.seaX1 - 2) put(x, y, 's');
+        else if (x === 36 || x === 37) put(x, y, 'w');
+        else put(x, y, '.');
       }
     }
   }
 
-  // 海中小岛（成帝碑的家）：不接堤坝
-  for (let y = 27; y <= 29; y += 1) {
-    for (let x = 35; x <= 38; x += 1) put(x, y, '.');
+  // ── 7. 砍开山脉修路 ────────────────────────────────────────────
+  // 每两条山脊之间打通两条横路（南北各一条），三条堤坝各有一条引道接过来
+  for (const y of [6, 16, 27, 38, 50, 60]) {
+    for (let x = 1; x <= 29; x += 1) {
+      if (at(x, y) === '^') put(x, y, '.');
+      if (at(x, y + 1) === '^') put(x, y + 1, '.');
+    }
+  }
+  for (const cw of BONE_SEA.causeways) {
+    const y = cw.y + Math.floor(cw.height / 2);
+    for (let x = 20; x <= 29; x += 1) {
+      if (at(x, y) === '^') put(x, y, '.');
+    }
   }
 
-  // 西侧：山脉把两家的地切成谷地
-  for (const [x0, y0, x1, y1] of [
-    [8, 0, 9, 14], // 北谷的东墙
-    [8, 24, 9, 40], // 中隔（两家之间）
-    [8, 50, 9, 63], // 南谷的东墙
-    [18, 2, 19, 10],
-    [18, 44, 19, 52],
-    [0, 21, 6, 21], // 横向的隔（两家之间的第一道）
-    [0, 35, 6, 35], // 第二道。原来画在 y=47，正好把 B 的城圈死在里面
+  // ── 8. 摆城：两家人各四座，全在西侧 ────────────────────────────
+  /** 2×2 全是平地、且离已有的城够远 */
+  const clear4 = (x: number, y: number, taken: MapPoint[]): boolean => {
+    if (x < 1 || y < 1 || x + 1 > 29 || y + 1 > h - 1) return false;
+    for (const t of taken) if (Math.abs(t.x - x) < 7 && Math.abs(t.y - y) < 7) return false;
+    for (let dy = 0; dy < 2; dy += 1) {
+      for (let dx = 0; dx < 2; dx += 1) if (at(x + dx, y + dy) !== '.') return false;
+    }
+    return true;
+  };
+  /** 在理想位置附近找一个能安城的地方 */
+  const settle = (wantX: number, wantY: number, taken: MapPoint[]): MapPoint | null => {
+    for (let r = 0; r <= 10; r += 1) {
+      for (let dy = -r; dy <= r; dy += 1) {
+        for (let dx = -r; dx <= r; dx += 1) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const x = wantX + dx;
+          const y = wantY + dy;
+          if (clear4(x, y, taken)) return { x, y };
+        }
+      }
+    }
+    return null;
+  };
 
-  ] as const) {
-    for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) put(x, y, '^');
+  const taken: MapPoint[] = [];
+  const place = (wantX: number, wantY: number): MapPoint => {
+    const p = settle(wantX, wantY, taken) ?? { x: 2, y: 2 };
+    taken.push(p);
+    return p;
+  };
+  // A 在北半个谷地、B 在南半个；x 交替放在两条山脊之间
+  const citiesA = [place(2, 3), place(12, 8), place(3, 25), place(13, 24)];
+  const citiesB = [place(2, 42), place(12, 47), place(3, 57), place(13, 56)];
+
+  // 城周围清出一圈空地：城要能出兵、兵要能走出去
+  for (const c of [...citiesA, ...citiesB]) {
+    for (let dy = -1; dy <= 2; dy += 1) {
+      for (let dx = -1; dx <= 2; dx += 1) {
+        const ch = at(c.x + dx, c.y + dy);
+        if (ch === '^' || ch === '~') put(c.x + dx, c.y + dy, '.');
+      }
+    }
   }
 
-  // 西侧：林子和丘陵（给防守方一点遮蔽和卡位）
-  const forest: Array<[number, number]> = [
-    [3, 8], [4, 8], [3, 9], [12, 3], [13, 3], [12, 4],
-    [6, 16], [7, 16], [6, 17], [15, 12], [16, 12], [15, 13],
-    [3, 28], [4, 28], [5, 29], [12, 24], [13, 24], [12, 25],
-    [6, 38], [7, 38], [6, 39], [15, 33], [16, 33],
-    [3, 52], [4, 52], [3, 53], [12, 57], [13, 57], [12, 58],
-    [6, 61], [7, 61], [6, 62], [15, 50], [16, 50],
-  ];
-  for (const [x, y] of forest) put(x, y, 'f');
-
-  const hills: Array<[number, number]> = [
-    [10, 6], [11, 6], [10, 7], [16, 18], [17, 18],
-    [10, 30], [11, 30], [16, 40], [17, 40],
-    [10, 56], [11, 56], [16, 60], [17, 60],
-  ];
-  for (const [x, y] of hills) put(x, y, 'h');
-
-  // 西侧零星沼泽：拖慢行军，但都能绕
-  for (const [x, y] of [[5, 12], [14, 8], [5, 34], [14, 28], [5, 58], [14, 44]] as const) {
-    put(x, y, 'w');
+  // ── 9. 零星点缀（西侧）＋ 东岸刻意平（仙帝不需要遮掩）──────────────
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      if (at(x, y) !== '.' || x > 29) continue;
+      const roll = rng();
+      if (roll < 0.05) put(x, y, 'f');
+      else if (roll < 0.07) put(x, y, 'h');
+      else if (roll < 0.075) put(x, y, 'w');
+    }
+  }
+  // 东岸：稀疏的林丘，保证仙帝的兵能铺开
+  for (let y = 0; y < h; y += 1) {
+    for (let x = BONE_SEA.seaX1 + 2; x < w; x += 1) {
+      const roll = rng();
+      if (roll < 0.06) put(x, y, 'f');
+      else if (roll < 0.09) put(x, y, 'h');
+    }
   }
 
-  // 东侧：平，但也不是一张白纸——零星的林子和丘陵给仙帝一点遮掩
-  const east: Array<[number, number, string]> = [
-    [50, 12, 'f'], [51, 12, 'f'], [50, 13, 'f'], [56, 8, 'h'], [57, 8, 'h'],
-    [50, 40, 'f'], [51, 40, 'f'], [50, 41, 'f'], [55, 48, 'h'], [56, 48, 'h'],
-    [58, 20, 'f'], [59, 20, 'f'], [58, 21, 'f'],
-  ];
-  for (const [x, y, ch] of east) put(x, y, ch);
+  // 海心小岛：先把这一片的海填回来，保证陆军上不去
+  const isl = BONE_SEA.island;
+  for (let y = isl.y0 - 1; y <= isl.y1 + 1; y += 1) {
+    for (let x = isl.x0 - 1; x <= isl.x1 + 1; x += 1) put(x, y, '~');
+  }
+  for (let y = isl.y0; y <= isl.y1; y += 1) {
+    for (let x = isl.x0; x <= isl.x1; x += 1) put(x, y, '.');
+  }
 
-  return paint;
+  // 仙帝的营地：最东边清出一片空地
+  for (let y = 26; y <= 36; y += 1) {
+    for (let x = 50; x <= 62; x += 1) put(x, y, '.');
+  }
+  // 骨灰罐的角落：也清出来（不然 2×2 的罐子放不下）
+  for (let y = 58; y <= 63; y += 1) {
+    for (let x = 57; x <= 63; x += 1) put(x, y, '.');
+  }
+
+  return {
+    rows: Array.from({ length: h }, (_, y) => g.slice(y * w, (y + 1) * w).join('')),
+    citiesA,
+    citiesB,
+  };
+}
+
+/** 骨海的地图与城位（同一份数据，关卡和部署都用它，免得两边对不上） */
+const BONE_SEA_MAP = boneSeaMap();
+
+/**
+ * 从城位派生开局兵：每座城门口一个民兵 + 一个**工匠**，另外第一座城多给一个**炼气士**。
+ *
+ * 2026-11-19 改的两处：
+ *   · 原来第二格放的是 `crew`（建筑队，**第 5 代**，280 金）——开局是青铜时代，
+ *     放一个五代单位等于白送，玩家会觉得"我什么时候能造这个？"（他自己也发现不对）。
+ *     换成同时代同职能的**工匠**（`anc_engineer`，1 代、55 金）。
+ *   · 每方多送**一个炼气士**：这一关的实话是"只有修真的路线能对上仙帝"，
+ *     那就别让玩家自己摸索前 30 回合，开局手上先有一个能练的种子。
+ */
+function boneSeaDeploy(cities: MapPoint[]): Array<{ type: string; x: number; y: number }> {
+  const out: Array<{ type: string; x: number; y: number }> = [];
+  cities.forEach((c, i) => {
+    const ring: Array<[number, number]> = [
+      [c.x, c.y + 2], [c.x + 2, c.y], [c.x - 1, c.y], [c.x, c.y - 1],
+      [c.x + 1, c.y + 2], [c.x - 1, c.y + 1], [c.x + 2, c.y + 1], [c.x + 1, c.y - 1],
+    ];
+    const free = ring.filter(([x, y]) => BONE_SEA_MAP.rows[y]?.[x] === '.');
+    if (free.length < 2) return;
+    out.push({ type: 'militia', x: free[0]![0], y: free[0]![1] });
+    out.push({ type: 'anc_engineer', x: free[1]![0], y: free[1]![1] });
+    // 第一座城多一个炼气士（i === 0），别每座城都塞——那是八个，太厚了
+    if (i === 0 && free[2]) out.push({ type: 'qi-cultivator', x: free[2]![0], y: free[2]![1] });
+  });
+  return out;
 }
 
 export const LEVELS: LevelDef[] = [
@@ -2274,30 +2455,20 @@ export const LEVELS: LevelDef[] = [
     version: LEVEL_VERSION,
     side: true,
     chapter: '黑暗动乱 · 终局',
-    name: '骨海',
+    name: '帝骸渡',
     brief:
-      '64×64，两人合作，各四座城。中间是海，只有三条堤坝；对岸只有仙帝和他的沉眠地，' +
-      '成帝碑立在海心的小岛上、骨灰罐藏在东南角。**杀死尸骸仙帝**就算赢——' +
-      '但罐子还在的话，他会一次次站起来，一次比一次薄。（数值是占位版。）',
+      '64×64，两人合作，各四座城。中间是海，只有三条堤坝；对岸只有尸骸仙帝和他的沉眠地，' +
+      '成帝碑立在海心的小岛上，而**骨灰罐藏在东南角**。' +
+      '目标：杀死尸骸仙帝。但罐子还在的话，他会一次次站起来，一次比一次薄。',
     map: {
       id: 'levelmap:bone-sea',
-      name: '骨海',
+      name: '帝骸渡',
       w: 64,
       h: 64,
-      rows: rowsOf(64, 64, boneSeaPaint()),
-      // 两家各四座城，全在西侧；A 在北半个谷地，B 在南半个
-      citiesA: [
-        { x: 2, y: 4 },
-        { x: 12, y: 8 },
-        { x: 4, y: 16 },
-        { x: 14, y: 20 },
-      ],
-      citiesB: [
-        { x: 2, y: 44 },
-        { x: 12, y: 50 },
-        { x: 4, y: 56 },
-        { x: 14, y: 60 },
-      ],
+      // 地形与城位由 `boneSeaMap()` 一次生成：两边必须同源，否则改地形忘改城就会错位
+      rows: BONE_SEA_MAP.rows,
+      citiesA: BONE_SEA_MAP.citiesA,
+      citiesB: BONE_SEA_MAP.citiesB,
       source: 'builtin',
     },
     seats: {
@@ -2309,27 +2480,9 @@ export const LEVELS: LevelDef[] = [
     setup: { startEra: 1, firstSide: 'A' },
     expansions: { require: ['dark-turmoil', 'cultivation', 'era-arms', 'naval', 'air'] },
     deploy: {
-      A: [
-        { type: 'militia', x: 4, y: 6 },
-        { type: 'militia', x: 5, y: 7 },
-        { type: 'militia', x: 14, y: 10 },
-        { type: 'militia', x: 6, y: 18 },
-        { type: 'crew', x: 3, y: 6 },
-        { type: 'crew', x: 13, y: 10 },
-        { type: 'crew', x: 5, y: 18 },
-        { type: 'crew', x: 15, y: 22 },
-      ],
-      B: [
-        { type: 'militia', x: 4, y: 46 },
-        { type: 'militia', x: 5, y: 47 },
-        { type: 'militia', x: 14, y: 52 },
-        { type: 'militia', x: 6, y: 58 },
-        { type: 'crew', x: 3, y: 46 },
-        { type: 'crew', x: 13, y: 52 },
-        { type: 'crew', x: 5, y: 58 },
-        // 别放进 (15,61)：那是 B 第四座城的城格，兵落不下去（第一版这里少一人）
-        { type: 'crew', x: 17, y: 61 },
-      ],
+      // 开局兵从城位派生（每城一民兵一工兵），不手写坐标
+      A: boneSeaDeploy(BONE_SEA_MAP.citiesA),
+      B: boneSeaDeploy(BONE_SEA_MAP.citiesB),
       C: [
         // 最东边：只有他和沉眠地
         { type: 'slumber-site', x: 58, y: 31 },
@@ -2348,6 +2501,20 @@ export const LEVELS: LevelDef[] = [
         id: 'opens',
         when: { kind: 'turn', at: 1 },
         do: [{ kind: 'say', text: '海那边很安静。安静得不像有活物。' }],
+      },
+      {
+        /*
+         * 这件事必须在开局就说：他倒下了还会从东南角的罐子里爬回来，
+         * 一次比一次薄。不说的话玩家会以为"打一次就完了"，然后被第二次吓一跳。
+         */
+        id: 'urn-hint',
+        when: { kind: 'turn', at: 2 },
+        do: [
+          {
+            kind: 'say',
+            text: '他倒下不是结束——东南角有一只罐子，里面还留着一份他自己。想让他真的死，先砸了那只罐子。',
+          },
+        ],
       },
       {
         id: 'cross',

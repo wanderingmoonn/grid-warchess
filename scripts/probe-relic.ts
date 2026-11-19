@@ -22,6 +22,8 @@ import {
   FUNERARY_URN,
   IMPERIAL_STELE,
   MORTAL_IMMORTAL,
+  SLUMBER,
+  refreshShadow,
 } from '../src/core/dark-turmoil-packs.ts';
 import { realmArmorBase, realmAtkBase, trueDamageForRank, extraAttacksForRank } from '../src/core/cultivation/stats.ts';
 import { totalHpBonusForRank } from '../src/core/cultivation/progression.ts';
@@ -227,6 +229,100 @@ console.log('\n[1c] 黑暗的源头');
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ * 1c2. 出山与返程
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[1c2] 出山与返程');
+{
+  const profile = unitAiProfileOf('emperor-cycle')!;
+  const build = (left: number, outTurns: number, away: boolean) => {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns };
+    em.age = 200 - left;
+    const home = a.mk('home', SLUMBER, 'B', away ? 4 : 10, away ? 10 : 12);
+    em.custom = { ...(em.custom ?? {}), homeX: home.x, homeY: home.y };
+    return { s: a.s, em, profile };
+  };
+
+  // 在外、寿元已经吃够（≥60）→ 回家
+  {
+    const { s, em } = build(65, 10, true);
+    const out = profile.handler(ctxOf(s, em));
+    const mv = out.add?.find((x) => x.action.type === 'MOVE')?.action;
+    check('寿元回到 60 以上：往回走', !!mv, JSON.stringify(out.add));
+  }
+  // 在外超 40 回合、寿元还剩 40（>30）→ 也回家
+  {
+    const { s, em } = build(40, 45, true);
+    const out = profile.handler(ctxOf(s, em));
+    check('在外超 40 回合且还剩 30 以上：也回家', !!out.add?.some((x) => x.action.type === 'MOVE'), JSON.stringify(out.add));
+  }
+  // 在外超 40 回合但寿元只剩 20（<30）→ 还得继续找吃的（不会给"回家"那个 240 分候选）
+  {
+    const { s, em } = build(20, 45, true);
+    const out = profile.handler(ctxOf(s, em));
+    check('快饿死时不算"没吃够"：不返程', !out.add?.some((x) => x.score >= 240), JSON.stringify(out.add));
+  }
+  // 没吃饱、也没到 40 回合 → 继续在外（有敌人就打）
+  {
+    const { s, em } = build(35, 10, true);
+    const prey = { id: 'p', type: 'militia', owner: 'A', x: 10, y: 11, hp: 40, kills: 0, moved: false, acted: false } as Unit;
+    s.units.push(prey);
+    const out = profile.handler(ctxOf(s, em));
+    check('在外没吃饱也没超时：继续打', !!out.add?.some((x) => x.action.type === 'ATTACK'), JSON.stringify(out.add));
+  }
+  // 在沉眠地里 → 不动
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns: 0, homeX: 10, homeY: 11 };
+    em.age = 150;
+    a.mk('home', SLUMBER, 'B', 10, 11);
+    const out = profile.handler(ctxOf(a.s, em));
+    check('在家就待着（不乱跑）', !out.add || out.add.length === 0, JSON.stringify(out.add));
+  }
+
+  // 会跳：暗影跳跃不是"没挂"，是之前他的 profile 里根本没这条候选
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns: 5 };
+    em.age = 150; // 寿元 50：在外面，没吃够，会去追人
+    // 沉眠地要放远：2 格内算"在家"，在家就什么都不做（这条是刻意的）
+    a.mk('home', SLUMBER, 'B', 10, 2);
+    a.mk('prey', 'militia', 'A', 22, 10); // 12 格外：走不过去
+    refreshShadow(a.s);
+    const out = profile.handler(ctxOf(a.s, em));
+    const jump = out.add?.find((x) => x.action.type === 'HERO_SKILL');
+    check('在外面够不着敌人时会暗影跳跃', !!jump, JSON.stringify(out.add));
+  }
+
+  // 回家路上也会跳（省路）
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns: 8 };
+    em.age = 130; // 寿元 70 ≥ 60：该回家了
+    a.mk('home', SLUMBER, 'B', 26, 10); // 16 格外
+    refreshShadow(a.s);
+    const out = profile.handler(ctxOf(a.s, em));
+    check('回家的路上会跳一段', !!out.add?.some((x) => x.action.type === 'HERO_SKILL'), JSON.stringify(out.add));
+  }
+
+  // 词条会记住沉眠地的位置
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    const home = a.mk('home', SLUMBER, 'B', 12, 10);
+    em.custom = { lifespan: 200, dtInit: 1 };
+    const t = beginTurnOf(a.s, 'B');
+    const after = t.units.find((u) => u.id === 'em')!;
+    check('记住了沉眠地的坐标', Number(after.custom?.homeX) === home.x && Number(after.custom?.homeY) === home.y, JSON.stringify(after.custom));
+    check('在沉眠地里"在外回合数"归零', Number(after.custom?.outTurns) === 0, String(after.custom?.outTurns));
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
  * 1d. 两条召唤：黑暗之源 / 衍脉
  * ══════════════════════════════════════════════════════════════════ */
 console.log('\n[1d] 黑暗之源 / 衍脉');
@@ -399,6 +495,31 @@ console.log('\n[5] 红尘仙');
   const after = t.units.find((u) => u.id === 'mi')!;
   check('一上场就记了寿元', typeof after.custom?.lifespan === 'number', JSON.stringify(after.custom));
   check('它已经在老了', (after.age ?? 0) >= 120, String(after.age));
+
+  // 「加速衰老」在面板上看得见（以前只写在回合钩子里，玩家完全不知道它在老）
+  {
+    const lines = DARK_TURMOIL.hooks.getUnitPanelLines!({ state: s, unit: after }).join(' | ');
+    check('面板印出了寿元', lines.includes('寿元：'), lines);
+    check('面板说明"沉眠地外衰老加倍"', lines.includes('+2'), lines);
+  }
+
+  // 在沉眠地里 +1 / 回合，离开 +2
+  {
+    const inside = arena();
+    const e1 = inside.mk('e1', MORTAL_IMMORTAL, 'B', 10, 10);
+    e1.custom = { lifespan: 160, dtInit: 1 };
+    e1.age = 120;
+    inside.mk('sl', 'slumber-site', 'B', 11, 10);
+    const t1 = beginTurnOf(inside.s, 'B');
+    check('沉眠地旁边一回合老 1 岁', (t1.units.find((u) => u.id === 'e1')!.age ?? 0) === 121, String(t1.units.find((u) => u.id === 'e1')!.age));
+
+    const outside = arena();
+    const e2 = outside.mk('e2', MORTAL_IMMORTAL, 'B', 10, 10);
+    e2.custom = { lifespan: 160, dtInit: 1 };
+    e2.age = 120;
+    const t2 = beginTurnOf(outside.s, 'B');
+    check('离开沉眠地一回合老 2 岁', (t2.units.find((u) => u.id === 'e2')!.age ?? 0) === 122, String(t2.units.find((u) => u.id === 'e2')!.age));
+  }
 
   // 寿元耗尽会死
   const old = arena();
