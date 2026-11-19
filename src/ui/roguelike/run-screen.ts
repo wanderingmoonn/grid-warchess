@@ -211,6 +211,11 @@ export interface RestPanelOptions {
   roster: Array<{ type: string; hp: number }>;
   /** 已经抽过几种卡（面板上显示一下） */
   cardKinds: number;
+  /** 城市时代与升下一代的价钱（升城**不占整备次数**） */
+  cityEra: number;
+  upgradeCost: number | null;
+  gold: number;
+  onUpgradeCity: () => void;
   onPick: (kind: 'wall' | 'heal' | 'card') => void;
 }
 
@@ -232,6 +237,14 @@ export function openRestPanel(opts: RestPanelOptions): void {
         <p>停下来喘口气，只能选一件。</p>
       </div>
       <div class="modal-body">
+        <div class="field-hint">
+          城市是 ${opts.cityEra} 代 · 金币 ${opts.gold}
+          ${
+            opts.upgradeCost === null
+              ? '　（已经到顶）'
+              : `　升到 ${opts.cityEra + 1} 代要 ${opts.upgradeCost} 金——**不占这次整备**`
+          }
+        </div>
         <div class="rogue-cards">
           <button class="rogue-card" data-rest="wall">
             <span class="rogue-card-name">加固城墙</span>
@@ -252,9 +265,28 @@ export function openRestPanel(opts: RestPanelOptions): void {
           </button>
         </div>
       </div>
+      <div class="modal-foot">
+        ${
+          opts.upgradeCost !== null
+            ? `<button class="btn ${opts.gold >= opts.upgradeCost ? 'btn-primary' : ''}" data-upgrade-city ${
+                opts.gold >= opts.upgradeCost ? '' : 'disabled'
+              }>升城市：${opts.cityEra} → ${opts.cityEra + 1} 代（${opts.upgradeCost} 金）</button>`
+            : '<span class="field-hint">城市已到顶代</span>'
+        }
+      </div>
     </div>`;
   mask.addEventListener('click', (ev) => {
-    const kind = (ev.target as HTMLElement).closest<HTMLElement>('[data-rest]')?.dataset.rest;
+    const t = ev.target as HTMLElement;
+    /*
+     * 升城**不关面板、不占三选一**（2026-11-19 用户定）：
+     * 它是花钱买成长，和"停下来整备一次"是两件事。
+     */
+    if (t.closest('[data-upgrade-city]')) {
+      const btn = t.closest<HTMLButtonElement>('[data-upgrade-city]')!;
+      if (!btn.disabled) opts.onUpgradeCity();
+      return;
+    }
+    const kind = t.closest<HTMLElement>('[data-rest]')?.dataset.rest;
     if (!kind) return;
     mask.remove();
     opts.onPick(kind as 'wall' | 'heal' | 'card');

@@ -30,6 +30,7 @@ import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
 import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.ts';
+import { cityUpgradeCost } from './core/roguelike/rewards.ts';
 import { cardLevel, cardsToNext, drawCards } from './core/roguelike/cards.ts';
 import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
@@ -6294,13 +6295,30 @@ function maybeRest(after: () => void): void {
   }
   const run = rogue.run;
   const size = citySizeFor(run.wallProgress);
-  openRestPanel({
+  /** 打开整备面板；升城之后要重开一次，把新价钱显示出来 */
+  const show = (): void => openRestPanel({
     wallProgress: run.wallProgress,
     wallSteps: WALL_STEPS,
     citySize: size,
     capacity: cityCapacity(size),
     roster: run.roster,
     cardKinds: Object.keys(run.cards).length,
+    cityEra: run.cityEra,
+    upgradeCost: run.cityEra >= 8 ? null : cityUpgradeCost(run.cityEra),
+    gold: run.gold,
+    /*
+     * 升城**不占整备次数**（2026-11-19 用户定）：它是花钱买成长，
+     * 和"停下来整备一次"是两件事。所以这里不动三选一、也不关面板。
+     */
+    onUpgradeCity: () => {
+      const cost = cityUpgradeCost(run.cityEra);
+      if (run.cityEra >= 8 || run.gold < cost) return;
+      run.gold -= cost;
+      run.cityEra += 1;
+      rogueSave();
+      toast(`城市升到第 ${run.cityEra} 代（-${cost} 金）：卡池与可造兵种跟着换代`);
+      show();
+    },
     onPick: (kind) => {
       if (kind === 'wall') {
         run.wallProgress += 1;
@@ -6325,6 +6343,7 @@ function maybeRest(after: () => void): void {
       }
     },
   });
+  show();
 }
 
 function showRogueEnd(): void {
