@@ -252,3 +252,22 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
   paint();
   document.body.appendChild(mask);
 }
+
+
+/**
+ * 自动上报一份现场（2026-11-19）。
+ *
+ * 给"AI 停摆"这类只在真实环境出现的问题用：看门狗察觉局面长时间不动时，
+ * 直接把当时的状态传上去，开发者从库里就能读，不必让玩家截图或复述。
+ * 与手动反馈共用同一张表，note 前缀 `[auto]` 便于区分。
+ */
+export function autoReport(current: () => GameState, note: string): void {
+  try {
+    const snap = buildSnapshot(current(), { note: `[auto] ${note}`, env: readEnv(), timeline: null });
+    void uploadSnapshot(snap).then((r) => {
+      if (r.ok) console.info('[auto-report]', r.id ? `#${r.id}` : 'ok');
+    });
+  } catch (err) {
+    console.warn('[auto-report] 失败', err);
+  }
+}

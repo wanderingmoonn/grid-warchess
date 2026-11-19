@@ -151,7 +151,7 @@ import { BUILD_VERSION } from './core/build-info.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
-import { openFeedbackPanel } from './ui/feedback.ts';
+import { autoReport, openFeedbackPanel } from './ui/feedback.ts';
 import {
   adoptDecision,
   claimSeat,
@@ -6296,6 +6296,8 @@ document.addEventListener('click', (ev) => {
  */
 let aiWatchSig = '';
 let aiWatchAt = 0;
+let aiWatchKicks = 0;
+let aiWatchUploadAt = 0;
 
 function aiWatchdog(): void {
   if (replay || room || spectating() || aiPaused) return;
@@ -6320,6 +6322,21 @@ function aiWatchdog(): void {
   // 局面确实停在原地：补一脚，并把这件事记下来（下次排查有据可查）
   aiWatchAt = now;
   console.warn('[ai] 看门狗：轮到电脑但局面 1.5s 没动，重新驱动');
+  aiWatchKicks += 1;
+  /*
+   * 补过三次还不动 → **自动上传现场**（2026-11-19）。
+   *
+   * 这类"AI 停住"只在真实运行环境里出现，我这边复现不稳定。
+   * 与其让玩家截图、让我猜，不如让程序在出事的当口把自己传上来：
+   * 快照里带 aiTrace、回合、双方兵与城的血量。60 秒最多传一次，不刷屏。
+   */
+  if (aiWatchKicks >= 3 && now - aiWatchUploadAt > 60000) {
+    aiWatchUploadAt = now;
+    autoReport(
+      () => state,
+      `轮到电脑但局面长时间不动（turn=${state.turn} token=${aiToken}）：${aiTrace.slice(-6).join(' / ')}`,
+    );
+  }
   kickAiIfNeeded();
 }
 
