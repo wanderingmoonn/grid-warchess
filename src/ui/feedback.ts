@@ -207,10 +207,24 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
       void uploadSnapshot(snap).then((res) => {
         busy = false;
         if (res.ok) {
+          /*
+           * 上传成功后**自动把摘要复制到剪贴板**（2026-11-19）。
+           *
+           * 为什么：开发者那头不一定能直接查库（工具不在），
+           * 而玩家最省事的接力方式就是"上传 → 粘贴给我"。
+           * 摘要只含编号/版本/回合/描述，不含整份快照，粘起来不臃肿。
+           */
+          const digest = [
+            res.id ? `#${res.id}` : '#（无编号）',
+            `build=${snap.build}`,
+            `turn=${snap.turns}`,
+            snap.note ? `问题：${snap.note}` : '（没写描述）',
+          ].join(' · ');
+          navigator.clipboard?.writeText(digest).catch(() => {});
           result = res.duplicate
             ? '这条刚刚已经传过了，云端只留一份'
             : res.id
-              ? `已上传并读回 #${res.id}。把这一句连同截图发给开发者，他就能直接定位。`
+              ? `已上传 #${res.id}，摘要已复制到剪贴板，直接粘给开发者就行。`
               : res.note ?? '已上传（云端没回行号，但写入成功）。';
           resultBad = false;
           // 传成功了就把描述清空：下一次通常是另一个问题
