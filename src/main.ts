@@ -9070,7 +9070,18 @@ async function enterRoomFromUrl(code: string): Promise<void> {
      * 那个函数读 `playerCount`；房间若是老版本建的、或关卡声明了别的席位数，
      * 它就会算少，客人明明看到空位也只能被塞进观战。
      */
-    const tableSeats: PlayerId[] = ['A', 'B', 'C', 'D'];
+    /*
+     * **只坐这张桌子真实存在的席位**（2026-11-19 修）。
+     *
+     * 上一版为了绕开"算少了席位"，改成 A~D 全试——结果 2 人房里 B 写失败时
+     * 会一路试到 C/D，把人塞进一个本来不存在的座（用户就这样坐进了 C 席）。
+     * 现在按 `playerCount` 截断：2 人房只有 A、B。
+     */
+    const pc = Number(snapshot.state.config.playerCount ?? 2) || 2;
+    const tableSeats: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(
+      0,
+      Math.max(2, Math.min(4, pc)),
+    );
     const order: PlayerId[] = known
       ? [known.seat, ...tableSeats.filter((x) => x !== known.seat)]
       : tableSeats;
@@ -9084,7 +9095,9 @@ async function enterRoomFromUrl(code: string): Promise<void> {
        * 这一方归电脑，观战者就该去观战位。
        */
       if (isAiSide(snapshot.state, seat)) continue;
-      const result = await claimSeat(code, seat, token);
+      let result = await claimSeat(code, seat, token);
+      // 抢座是竞态：对面刚刷新也可能在写同一列，失败就再试一次
+      if (result !== 'ok') result = await claimSeat(code, seat, token);
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);
         toast(`已进入房间 ${code}，你执${DEFAULT_PLAYER_NAMES[seat]}`);

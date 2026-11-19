@@ -377,8 +377,16 @@ export function openOnlinePanel(host: OnlineHost): void {
          * 一旦它算少了，客人就会"明明有空位却只能观战"。
          * 现在四个座都试，代价只是多几次请求。
          */
-        const allSeats: PlayerId[] = ['A', 'B', 'C', 'D'];
-        const order: PlayerId[] = (mine
+        /*
+         * 只试这张桌子真实存在的席位（2026-11-19）：
+         * 2 人房就是 A/B，别把人塞进 C/D。
+         */
+        const pc = Number(snapshotNow.state.config.playerCount ?? 2) || 2;
+        const allSeats: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(
+          0,
+          Math.max(2, Math.min(4, pc)),
+        );
+        const order: PlayerId[] = (mine && allSeats.includes(mine.seat)
           ? [mine.seat, ...allSeats.filter((x) => x !== mine!.seat)]
           : allSeats
         ).filter((x) => !aiSeats.includes(x));
@@ -386,7 +394,8 @@ export function openOnlinePanel(host: OnlineHost): void {
         let lastErr = '';
         for (const seat of order) {
           try {
-            const r = await claimSeat(code, seat, token);
+            let r = await claimSeat(code, seat, token);
+            if (r !== 'ok') r = await claimSeat(code, seat, token); // 竞态重试一次
             if (r === 'ok') {
               seated = seat;
               break;
