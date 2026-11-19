@@ -62,9 +62,9 @@ const S1: SliceStage = {
     seats: { count: 2, ai: ['B'], cityless: ['B'] },
     deploy: {
       B: [
-        { type: 'militia', x: 12, y: 6 },
-        { type: 'militia', x: 13, y: 8 },
-        { type: 'archer', x: 12, y: 10 },
+        { type: 'militia', x: 9, y: 6 },
+        { type: 'militia', x: 10, y: 8 },
+        { type: 'archer', x: 9, y: 10 },
       ],
     },
     setup: {},
@@ -96,10 +96,10 @@ const S2: SliceStage = {
     seats: { count: 2, ai: ['B'], cityless: ['B'] },
     deploy: {
       B: [
-        { type: 'knight', x: 13, y: 7 },
-        { type: 'militia', x: 11, y: 6 },
-        { type: 'militia', x: 12, y: 9 },
-        { type: 'archer', x: 11, y: 11 },
+        { type: 'knight', x: 10, y: 7 },
+        { type: 'militia', x: 9, y: 6 },
+        { type: 'militia', x: 10, y: 9 },
+        { type: 'archer', x: 9, y: 11 },
       ],
     },
     setup: {},
@@ -130,11 +130,11 @@ const S3: SliceStage = {
     seats: { count: 2, ai: ['B'], cityless: ['B'] },
     deploy: {
       B: [
-        { type: 'knight', x: 13, y: 8 },
-        { type: 'longbow', x: 12, y: 7 },
-        { type: 'longbow', x: 12, y: 9 },
-        { type: 'militia', x: 11, y: 8 },
-        { type: 'archer', x: 10, y: 10 },
+        { type: 'knight', x: 11, y: 8 },
+        { type: 'longbow', x: 10, y: 7 },
+        { type: 'longbow', x: 10, y: 9 },
+        { type: 'militia', x: 9, y: 8 },
+        { type: 'archer', x: 8, y: 10 },
       ],
     },
     setup: {},

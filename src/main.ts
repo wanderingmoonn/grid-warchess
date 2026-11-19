@@ -3910,7 +3910,15 @@ function onBoardClick(e: Event): void {
    * 再点棋盘却被 `godMode` 那段接走（落子/选中），技能永远落不了点。
    * "正在等一个落点"是全局状态，不该被任何模式抢走。
    */
-  if (handoffOpen || state.winner) return;
+  if (handoffOpen) return;
+  if (state.winner) {
+    /*
+     * 肉鸽撤离阶段：引擎每一步都会重新判"我赢"，而这里的判断在 `dispatch`
+     * **之前**——不在这里放行，玩家点了棋盘什么都不会发生（2026-11-19 修）。
+     */
+    if (rogue && rogue.snap.phase === 'evac') keepPlaying(state);
+    else return;
+  }
 
   const coords = coordsFromEvent(e);
 
@@ -6258,6 +6266,15 @@ if (new URLSearchParams(location.search).has('roguedebug')) {
       ),
     hud: (): string => (document.getElementById('rogue-hud')?.textContent ?? '').trim(),
     snap: () => rogue?.snap ?? null,
+    sel: (): string | null => selectedId,
+    mine: (): Array<{ id: string; x: number; y: number }> =>
+      state.units.filter((u) => u.owner === 'A').map((u) => ({ id: u.id, x: u.x, y: u.y })),
+    foes: (): string =>
+      state.units
+        .filter((u) => u.owner !== 'A')
+        .map((u) => `${u.type}@${u.x},${u.y}`)
+        .sort()
+        .join(' '),
   };
 }
 
