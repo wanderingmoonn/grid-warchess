@@ -9023,7 +9023,14 @@ async function enterRoomFromUrl(code: string): Promise<void> {
     const token = known?.token ?? newToken();
     // 自己记着座位就先去抢回原位；没记着（换了设备/清了缓存）就从第一个空座开始试。
     // 三人、四人桌的座位数由这一局的 config 决定，不能再写死 A/B 两个。
-    const tableSeats = seatsOf(snapshot.state);
+    /*
+     * **四个座全试**（2026-11-19）。
+     *
+     * 手机上点邀请链接就是走这条路径。原来只试 `seatsOf(state)` 算出来的座，
+     * 那个函数读 `playerCount`；房间若是老版本建的、或关卡声明了别的席位数，
+     * 它就会算少，客人明明看到空位也只能被塞进观战。
+     */
+    const tableSeats: PlayerId[] = ['A', 'B', 'C', 'D'];
     const order: PlayerId[] = known
       ? [known.seat, ...tableSeats.filter((x) => x !== known.seat)]
       : tableSeats;

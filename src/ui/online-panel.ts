@@ -343,7 +343,6 @@ export function openOnlinePanel(host: OnlineHost): void {
         const mine = saved && !saved.spectator ? saved : null;
         const token = saved?.token ?? newToken();
         // 这张桌子有几个座，由房间里的 config 决定（老房间没有 playerCount = 两人局）
-        const seats = seatsOf(snapshotNow.state);
         /*
          * **电脑席位不给真人坐**（2026-11-18）。
          *
@@ -358,19 +357,40 @@ export function openOnlinePanel(host: OnlineHost): void {
         const aiSeats: PlayerId[] = Array.isArray(snapshotNow.state.config.aiSeats)
           ? (snapshotNow.state.config.aiSeats as PlayerId[])
           : [];
+        /*
+         * **A~D 四个座全试一遍**（2026-11-19）。
+         *
+         * 原来只试 `seatsOf(state)` 算出来的座。那个函数读 `playerCount`，
+         * 而房间可能是老版本建的、或者关卡自己声明了别的席位数——
+         * 一旦它算少了，客人就会"明明有空位却只能观战"。
+         * 现在四个座都试，代价只是多几次请求。
+         */
+        const allSeats: PlayerId[] = ['A', 'B', 'C', 'D'];
         const order: PlayerId[] = (mine
-          ? [mine.seat, ...seats.filter((x) => x !== mine!.seat)]
-          : seats
+          ? [mine.seat, ...allSeats.filter((x) => x !== mine!.seat)]
+          : allSeats
         ).filter((x) => !aiSeats.includes(x));
         let seated: PlayerId | null = null;
+        let lastErr = '';
         for (const seat of order) {
-          if ((await claimSeat(code, seat, token)) === 'ok') {
-            seated = seat;
-            break;
+          try {
+            const r = await claimSeat(code, seat, token);
+            if (r === 'ok') {
+              seated = seat;
+              break;
+            }
+            lastErr = `${seat} 已被占用`;
+          } catch (err) {
+            lastErr = err instanceof Error ? err.message : String(err);
           }
         }
         if (!seated) {
-          // 两个座位都满了——别再拦人，直接转观战
+          /*
+           * 坐不进去时**说清原因**（2026-11-19）。
+           * 之前直接转观战，玩家只会看到"我怎么在看别人下棋"，
+           * 完全不知道是席位满了还是被电脑占着。
+           */
+          error = `没有空席位（${lastErr || '四个座都被占了'}），已切到观战`;
           host.watch(code, snapshotNow);
           close();
           return;
