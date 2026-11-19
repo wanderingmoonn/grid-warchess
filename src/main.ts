@@ -5568,10 +5568,30 @@ async function runAiLoop(): Promise<void> {
      */
     if (aiEmptyTurns >= 1 && now - aiEmptyReportAt > 30000) {
       aiEmptyReportAt = now;
-      autoReport(
-        () => state,
-        `电脑连续 ${aiEmptyTurns} 个回合一个动作都没做。trace: ${aiTrace.slice(-8).join(' / ')}`,
-      );
+      /*
+       * **空转时现场复核一次**（2026-11-19）。
+       *
+       * 只报状态不够——我需要知道"在**这一份**状态上，`aiNextAction` 到底返回什么"。
+       * 之前我在 node 里重建局面复现不出来，差别一定在这份状态里。
+       * 这里直接把它的返回值和关键字段一起写进上报，读库就能比对。
+       */
+      const snapTrace = aiTrace.slice(-8).join(' / ');
+      void aiEngine()
+        .then((e) => {
+          // 预算用引擎里的默认值；取不到就退回一个同形状的对象
+          const budgetLike = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
+          const a = e.aiNextAction(state, budgetLike as never, new Set()) as unknown;
+          autoReport(
+            () => state,
+            `空转复核 aiNextAction=${JSON.stringify(a)} | turn=${state.turn} cur=${state.current} w=${state.w} h=${state.h} units=${state.units.length} od=${JSON.stringify(state.orderDirectives)} | ${snapTrace}`,
+          );
+        })
+        .catch(() => {
+          autoReport(
+            () => state,
+            `空转复核失败（引擎加载异常）| ${snapTrace}`,
+          );
+        });
     }
   } else {
     aiEmptyTurns = 0;
