@@ -14,9 +14,9 @@ import {
   parseRun,
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
-import { CARDS_PER_LEVEL, cardLevel, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
+import { CARDS_PER_LEVEL, cardLevel, cardWeight, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
 import { PER_LEVEL_PCT, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
-import { SETTLE, settleGold } from '../../../src/core/roguelike/rewards.ts';
+import { SETTLE, cityUpgradeCost, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
 import { validateLevel } from '../../../src/core/level.ts';
@@ -25,6 +25,7 @@ import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 export function run() {
   test('肉鸽：新 run 的默认值', () => {
     const r = newRun(123, { allowRestart: true });
+    assert.equal(r.cityEra, 1, '开局是青铜时代');
     assert.equal(r.v, 1);
     assert.equal(r.gold, 0);
     assert.equal(r.totalStages, 3);
@@ -80,6 +81,33 @@ export function run() {
 
     const near = drawCards(pool, { archer: 2 }, 99, 3);
     assert.ok(near.includes('archer'), '差一张就升级的卡应该出现在候选里');
+  });
+
+  test('肉鸽：城市时代限制可抽的兵种，高阶出率更高', () => {
+    const eraOf = (id: string): number => (id === 'a1' ? 1 : id === 'a2' ? 2 : 3);
+    const pool = ['a1', 'a2', 'a3'];
+
+    // 城市只有一代：二三代的卡抽不到
+    const low = drawCards(pool, {}, 5, 2, { cityEra: 1, eraOf });
+    assert.ok(!low.includes('a2') && !low.includes('a3'), `一代城市不该抽到高等兵：${low}`);
+
+    // 城市到三代：只抽 1 个、统计 200 个种子的首个候选（抽 3 个必然全有，测不出权重）
+    let c1 = 0;
+    let c3 = 0;
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const first = drawCards(pool, {}, seed, 1, { cityEra: 3, eraOf })[0];
+      if (first === 'a1') c1 += 1;
+      if (first === 'a3') c3 += 1;
+    }
+    assert.ok(c3 > c1 * 1.2, `三代应该更常见：一代 ${c1} 次 / 三代 ${c3} 次`);
+    // 权重本身也要能单测
+    assert.ok(cardWeight(3, 3, false) > cardWeight(1, 3, false));
+  });
+
+  test('肉鸽：升城市时代价钱递增', () => {
+    assert.ok(cityUpgradeCost(2) > cityUpgradeCost(1));
+    assert.ok(cityUpgradeCost(3) > cityUpgradeCost(2));
+    assert.equal(cityUpgradeCost(1), 140);
   });
 
   test('肉鸽：卡等级按百分比加攻加血', () => {
@@ -175,6 +203,12 @@ export function run() {
     );
     // 60/2 + 60/2 = 60
     assert.equal(r.refund, 30 + 30);
+  });
+
+  test('肉鸽：关卡不再写死时代（时代由 run 决定）', () => {
+    for (const st of SLICE_STAGES) {
+      assert.equal(st.level.setup?.startEra, undefined, `${st.level.name} 不该钉时代`);
+    }
   });
 
   test('肉鸽：三场手写遭遇都能过校验并建出局', () => {

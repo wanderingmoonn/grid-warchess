@@ -36,6 +36,19 @@ export const SETTLE = {
   retreatRate: 0.3,
 } as const;
 
+/**
+ * 升一级城市时代要多少钱。
+ *
+ * 递增而不是定额：时代是**质变**（兵种池整体换代），定额会让"先攒钱直冲三代"
+ * 变成唯一解。递增逼玩家在"升时代 / 练兵 / 修城"之间排队。
+ */
+export const CITY_UPGRADE = { base: 140, step: 90 } as const;
+
+export function cityUpgradeCost(currentEra: number): number {
+  const era = Math.max(1, Math.floor(currentEra));
+  return CITY_UPGRADE.base + CITY_UPGRADE.step * (era - 1);
+}
+
 export function settleGold(input: SettleInput): number {
   const base = SETTLE.base + SETTLE.basePerStage * Math.max(0, input.stageIndex);
   const units = Math.max(0, input.taken) * SETTLE.perUnit;

@@ -42,6 +42,12 @@ export interface RunState {
   restartsUsed: number;
   /** 城墙加固进度：累计 2 次才升一级（兵额 4 → 9） */
   wallProgress: number;
+  /**
+   * 城市时代（1~8）。**这是玩家花钱买来的成长**：整备关里可以升，
+   * 升了之后高阶兵种卡更容易抽到、可上场的兵种更多（2026-11-19 定）。
+   * 关卡不再写死时代，一律用这个值开局。
+   */
+  cityEra: number;
 }
 
 export const RUN_KEY = 'warchess:run:v1';
@@ -66,6 +72,7 @@ export function newRun(seed: number, opts: NewRunOptions): RunState {
     allowRestart: opts.allowRestart,
     restartsUsed: 0,
     wallProgress: 0,
+    cityEra: 1,
   };
 }
 
@@ -86,6 +93,8 @@ export function parseRun(raw: string | null): RunState | null {
     return {
       ...newRun(obj.seed, { allowRestart: obj.allowRestart === true, totalStages: obj.totalStages }),
       ...obj,
+      // 老存档没有这个字段：当成青铜时代（第一幕的默认值）
+      cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       v: 1,
     } as RunState;
   } catch {

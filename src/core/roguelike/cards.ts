@@ -43,34 +43,61 @@ export function rngFrom(seed: number): () => number {
  * 已拥有 2 张的卡**优先出现**（差一张就升级的那种），这是肉鸽的"临门一脚"
  * 体验：玩家总能看到"再来一张就成"的选项。
  */
+export interface DrawOptions {
+  /** 城市时代：高于它的兵种**抽不到**（玩家的兵种池由城市时代决定） */
+  cityEra?: number;
+  /** 兵种 → 时代。默认按原版兵种表查 */
+  eraOf?: (id: string) => number;
+}
+
+/**
+ * **升城市之后，高阶兵种卡出率上升**（2026-11-19 定）。
+ *
+ * 权重规则（写死在这里，方便一眼看懂难度曲线）：
+ *   · 时代 e 的基础权重 = 1 + 0.6 × (e − 1)  → 二代 1.6，三代 2.2……
+ *   · **正好等于当前城市时代**的兵种再 ×1.5 —— 玩家刚升上来，就该先见到这一代的兵；
+ *   · 差一张就升级的卡再 ×2 —— 肉鸽的"临门一脚"体验。
+ *
+ * 不按"抽不到就重抽"实现：那样在城市时代很高时，低阶卡会被反复过滤，
+ * 候选数量不稳定，玩家会觉得三选一有时只有两项。
+ */
+export function cardWeight(era: number, cityEra: number, nearUpgrade: boolean): number {
+  const base = 1 + 0.6 * Math.max(0, era - 1);
+  const frontier = era === cityEra ? 1.5 : 1;
+  return base * frontier * (nearUpgrade ? 2 : 1);
+}
+
 export function drawCards(
   pool: readonly string[],
   owned: Record<string, number>,
   seed: number,
   n = 3,
+  opts: DrawOptions = {},
 ): string[] {
   const rnd = rngFrom(seed);
-  const nearUpgrade = pool.filter((id) => (owned[id] ?? 0) % CARDS_PER_LEVEL === CARDS_PER_LEVEL - 1);
-  const rest = pool.filter((id) => !nearUpgrade.includes(id));
+  const cityEra = opts.cityEra ?? Number.POSITIVE_INFINITY;
+  const eraOf = opts.eraOf ?? (() => 1);
 
-  const shuffle = (list: string[]): string[] => {
-    const a = [...list];
-    for (let i = a.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(rnd() * (i + 1));
-      const tmp = a[i]!;
-      a[i] = a[j]!;
-      a[j] = tmp;
-    }
-    return a;
-  };
+  // 高于城市时代的兵种这一局根本用不上，直接不进池
+  const eligible = pool.filter((id) => eraOf(id) <= cityEra);
+  const isNear = (id: string): boolean => (owned[id] ?? 0) % CARDS_PER_LEVEL === CARDS_PER_LEVEL - 1;
 
   const out: string[] = [];
-  // 最多让一张"差一张升级"的卡进候选，避免三选一全是同质项
-  const nearPick = shuffle(nearUpgrade)[0];
-  if (nearPick) out.push(nearPick);
-  for (const id of shuffle(rest)) {
-    if (out.length >= n) break;
-    if (!out.includes(id)) out.push(id);
+  const left = [...eligible];
+  while (out.length < n && left.length > 0) {
+    const weights = left.map((id) => cardWeight(eraOf(id), cityEra, isNear(id)));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let roll = rnd() * total;
+    let pick = left.length - 1;
+    for (let i = 0; i < left.length; i += 1) {
+      roll -= weights[i]!;
+      if (roll <= 0) {
+        pick = i;
+        break;
+      }
+    }
+    out.push(left[pick]!);
+    left.splice(pick, 1);
   }
-  return out.slice(0, n);
+  return out;
 }

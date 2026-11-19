@@ -67,7 +67,7 @@ const S1: SliceStage = {
         { type: 'archer', x: 12, y: 10 },
       ],
     },
-    setup: { startEra: 1 },
+    setup: {},
   },
 };
 
@@ -102,7 +102,7 @@ const S2: SliceStage = {
         { type: 'archer', x: 11, y: 11 },
       ],
     },
-    setup: { startEra: 2 },
+    setup: {},
   },
 };
 
@@ -137,7 +137,7 @@ const S3: SliceStage = {
         { type: 'archer', x: 10, y: 10 },
       ],
     },
-    setup: { startEra: 2 },
+    setup: {},
   },
 };
 
