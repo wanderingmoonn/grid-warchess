@@ -177,3 +177,29 @@ export async function uploadSnapshot(snap: BugSnapshot): Promise<SnapshotUploadR
 }
 
 export const SNAPSHOT_TABLE = TABLE;
+
+
+/**
+ * 按行号取一条反馈（2026-11-19）。
+ *
+ * 依赖 `sql/warchess_snapshot_get.sql` 里那个 SECURITY DEFINER 函数：
+ * 表本身不给客户端读权限，只有"知道 id"时才拿得到那一条。
+ * 函数不存在时安静返回 null——调用方自己决定怎么提示。
+ */
+export async function fetchSnapshotById(id: number): Promise<{ note: string; build: string; headline: string } | null> {
+  try {
+    const db = (await cloudDatabase()) as unknown as {
+      rpc(name: string, args?: Record<string, unknown>): PromiseLike<{ data?: unknown; error?: unknown }>;
+    };
+    const r = await db.rpc('warchess_snapshot_get', { sid: id });
+    if (r?.error || !r?.data) return null;
+    const row = r.data as { note?: string; build?: string; payload?: { headline?: string } };
+    return {
+      note: row.note ?? '',
+      build: row.build ?? '',
+      headline: row.payload?.headline ?? '',
+    };
+  } catch {
+    return null;
+  }
+}

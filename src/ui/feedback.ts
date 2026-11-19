@@ -24,7 +24,7 @@ import {
   snapshotJson,
   type SnapshotEnv,
 } from '../core/snapshot.ts';
-import { uploadSnapshot } from '../net/snapshots.ts';
+import { fetchSnapshotById, uploadSnapshot } from '../net/snapshots.ts';
 
 function esc(raw: string): string {
   return raw
@@ -112,6 +112,8 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
 
         <div class="modal-foot">
           <button class="btn" data-act="close">关闭</button>
+          <input class="level-say-input" data-look-id placeholder="按编号查看 #" style="width:110px">
+          <button class="btn" data-act="look">查看</button>
           <button class="btn" data-act="copy">复制 JSON</button>
           <button class="btn btn-primary" data-act="upload" ${busy ? 'disabled' : ''}>
             ${busy ? '上传中…' : '上传'}
@@ -161,6 +163,38 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
           window.prompt('复制下面的内容：', text);
         }
         done();
+      });
+      return;
+    }
+    if (act === 'look') {
+      /*
+       * 按编号看一条反馈（2026-11-19）。
+       *
+       * 快照表不给客户端读权限，只有 `warchess_snapshot_get(id)` 这个函数
+       * 能按 id 取单条（见 sql/warchess_snapshot_get.sql）。这条入口的意义：
+       * 玩家上传后拿到 `#12`，直接在这里输入就能看到云端那份内容，
+       * 不用整个 JSON 复制粘贴。
+       */
+      const input = mask.querySelector<HTMLInputElement>('[data-look-id]');
+      const id = Number((input?.value ?? '').replace(/[^0-9]/g, ''));
+      if (!id) {
+        result = '先填编号（上传成功后会显示 #编号）';
+        resultBad = true;
+        paint();
+        return;
+      }
+      result = `正在查 #${id}…`;
+      resultBad = false;
+      paint();
+      void fetchSnapshotById(id).then((row) => {
+        if (!row) {
+          result = `查不到 #${id}：函数没建（先跑 sql/warchess_snapshot_get.sql），或者这条不存在`;
+          resultBad = true;
+        } else {
+          result = `#${id} · ${row.build} · ${row.headline}\n${row.note || '（没有写描述）'}`;
+          resultBad = false;
+        }
+        paint();
       });
       return;
     }
