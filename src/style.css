@@ -10719,3 +10719,14 @@ a.btn {
   color: #2f2b26;
   font-weight: 600;
 }
+
+/* 遗物页：未获得的置灰 */
+.rogue-card.is-locked {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.rogue-card.is-locked:hover {
+  border-color: #d9d3c6;
+  background: #fbf9f4;
+}

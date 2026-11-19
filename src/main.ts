@@ -40,6 +40,7 @@ import {
   cityArmorBonus,
   healsIntake,
   hornFreebies,
+  RELIC_BY_ID,
   skipMoney,
 } from './core/roguelike/relics.ts';
 import { UNIT_TYPES } from './core/config.ts';
@@ -6478,7 +6479,15 @@ function finishRogueStage(): void {
   const res = settleStage(state, rogue.snap, rogueCtx());
   rogue.run.gold += res.gold + res.refund;
   rogue.run.roster = res.taken;
-  if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) rogue.run.relics.push(st.meta.relic);
+  /*
+   * 拿到遗物要**当场说清是什么效果**（2026-11-19）。
+   * 之前只往数组里塞个 id，玩家在界面上看不到任何东西。
+   */
+  if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) {
+    rogue.run.relics.push(st.meta.relic);
+    const def = RELIC_BY_ID[st.meta.relic];
+    if (def) toast(`获得遗物【${def.name}】：${def.blurb}`);
+  }
   const finished = rogue.run.node + 1;
   rogue.run.node = Math.min(finished, SLICE_STAGES.length - 1);
   // 城血要带回下一关（2026-11-19）：不然修城没有意义
