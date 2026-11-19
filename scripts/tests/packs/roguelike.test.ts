@@ -25,6 +25,7 @@ import { initRunner, keepPlaying, observe, settleStage } from '../../../src/core
 import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '../../../src/core/roguelike/enemy-pools.ts';
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
+import { incomeOf } from '../../../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
 export function run() {
@@ -283,6 +284,33 @@ export function run() {
     const res = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, ctx);
     assert.ok(res.taken.length <= 4, '带走人数不能超过兵额');
     assert.ok(res.left.length >= 1);
+  });
+
+  test('肉鸽：noIncome 让城市与经济单位都不产钱', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    const normal = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 21);
+    const dry = createMatch({ ...DEFAULT_CONFIG, level: r.level, noIncome: true } as never, 21);
+    assert.ok(incomeOf(normal, 'A') > 0, '普通对局应该有收入');
+    assert.equal(incomeOf(dry, 'A'), 0, 'noIncome 下必须一分不产');
+  });
+
+  test('肉鸽：enabledUnits 会连兵种表一起裁（所以不能拿它做"只能造卡"）', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, level: r.level, enabledUnits: ['militia', 'archer'] } as never,
+      22,
+    );
+    assert.deepEqual([...s.config.enabledUnits].sort(), ['archer', 'militia']);
+    /*
+     * 关键事实：**兵种表会被一起裁掉**（不是"只是造不出来"）。
+     * 关卡摆兵是按 `state.unitTypes` 查兵种的，所以拿它收窄"可造"，
+     * 会连带把关卡里 deploy 的骑士/长弓变成"这一局没有这个兵种"而被静默跳过。
+     */
+    assert.equal(s.unitTypes.knight, undefined, '这个行为本身就是坑，别拿它收窄可造集');
   });
 
   test('肉鸽：升城市时代价钱递增', () => {

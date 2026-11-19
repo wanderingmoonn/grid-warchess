@@ -44,6 +44,7 @@ import {
   canStandAt,
   cityAt,
   citiesOf,
+  cityTiles,
   cityName,
   distBetweenUnits,
   distToUnit,
@@ -5864,7 +5865,7 @@ function newGameFlow(): void {
  *
  * **三选一、整备、路线选择还没接**——先把 3 关跑通，节奏对不对比面板更重要。
  */
-let rogue: { run: RunState; snap: RunnerSnapshot } | null = null;
+let rogue: { run: RunState; snap: RunnerSnapshot; settled: boolean } | null = null;
 
 function rogueSave(): void {
   if (rogue) localStorage.setItem(RUN_KEY, serializeRun(rogue.run));
@@ -5883,7 +5884,7 @@ function rogueCtx() {
 
 function openRoguelike(): void {
   const saved = parseRun(localStorage.getItem(RUN_KEY));
-  rogue = saved ? { run: saved, snap: initRunner() } : null;
+  rogue = saved ? { run: saved, snap: initRunner(), settled: false } : null;
   showRunPanel();
 }
 
@@ -5897,7 +5898,7 @@ function showRunPanel(): void {
       stageTitle: '还没开始：选一档新开一局',
       onStart: () => {},
       onNewRun: (allowRestart) => {
-        rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner() };
+        rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner(), settled: false };
         rogueSave();
         showRunPanel();
       },
@@ -5913,7 +5914,7 @@ function showRunPanel(): void {
     stageTitle: st.level.name,
     onStart: startRogueStage,
     onNewRun: (allowRestart) => {
-      rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner() };
+      rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner(), settled: false };
       rogueSave();
       showRunPanel();
     },
@@ -5935,11 +5936,60 @@ function startRogueStage(): void {
     return;
   }
   const units = mergeUnits(loadCustomUnits(), compileUnits(rogue.run.cards));
+  /*
+   * 第 3 条（"只能造抽到的卡"）**暂不用 enabledUnits 实现**：
+   * 它会把 `state.unitTypes` 一起裁掉，而关卡摆兵是按这张表查兵种的——
+   * 裁掉 longbow/knight 之后，第 2、3 关的敌人会**静默不出现**。
+   * 正确的落点是"产兵候选列表"那一层（只影响玩家能点什么），
+   * 那需要改城市面板，不在这一轮里。
+   */
   state = createMatch(
-    { ...DEFAULT_CONFIG, level: checked.level, startEra: rogue.run.cityEra },
+    {
+      ...DEFAULT_CONFIG,
+      level: checked.level,
+      startEra: rogue.run.cityEra,
+      // 城市与经济单位都不产金：肉鸽的钱只能从战果来
+      noIncome: true,
+    },
     randomSeed(),
     units,
   );
+  /*
+   * **开局不送经济单位**（第 1 条）：农民/牧民/伐木工在肉鸽里没有意义
+   * （不产钱、还要占兵额）。直接清掉，敌人那边本来就只有战斗兵。
+   */
+  state.units = state.units.filter((u) => {
+    const def = state.unitTypes[u.type];
+    return !def || def.category === 'combat';
+  });
+  /*
+   * 把**上一关带回来的兵**按原 HP 摆进城里（第 1 条的另一半）。
+   * 不摆的话"跨关保留兵力"只是面板上的数字，玩家带回来的东西等于没带。
+   */
+  if (rogue.run.roster.length > 0) {
+    const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
+    const spots = city ? cityTiles(city).slice() : [];
+    const taken = new Set(state.units.map((u) => `${u.x},${u.y}`));
+    let seq = state.nextUnitSeq;
+    for (const r of rogue.run.roster) {
+      const spot = spots.find((t: { x: number; y: number }) => !taken.has(`${t.x},${t.y}`)) ?? null;
+      if (!spot) break;
+      taken.add(`${spot.x},${spot.y}`);
+      const def = state.unitTypes[r.type];
+      state.units.push({
+        id: `u${seq++}`,
+        type: r.type,
+        owner: 'A',
+        x: spot.x,
+        y: spot.y,
+        hp: Math.max(1, Math.min(r.hp, def?.maxHp ?? r.hp)),
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+    }
+    state.nextUnitSeq = seq;
+  }
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
@@ -5948,6 +5998,7 @@ function startRogueStage(): void {
   clearSelection();
   resetRecorder();
   rogue.snap = initRunner();
+  rogue.settled = false;
   saveMatch(state);
   hasRealSave = true;
   render();
@@ -5957,7 +6008,7 @@ function startRogueStage(): void {
 
 /** dispatch 里每走一步之后调：只读局面，推进状态机 */
 function rogueAfterAction(prev: GameState, next: GameState): void {
-  if (!rogue) return;
+  if (!rogue || rogue.settled) return;
   const before = rogue.snap;
   const after = observe(prev, next, before, rogueCtx());
   rogue.snap = after;
@@ -5980,7 +6031,9 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
 }
 
 function finishRogueStage(): void {
-  if (!rogue) return;
+  if (!rogue || rogue.settled) return;
+  // 先置位再干活：结算过程中任何回调都不该再触发一次结算
+  rogue.settled = true;
   const st = stageAt(rogue.run.node);
   const res = settleStage(state, rogue.snap, rogueCtx());
   rogue.run.gold += res.gold + res.refund;
@@ -5995,7 +6048,13 @@ function finishRogueStage(): void {
     left: res.left,
     refund: res.refund,
     halfDone: res.halfDone,
-    onNext: finished >= SLICE_STAGES.length ? () => showRogueEnd() : showRunPanel,
+    onNext:
+      finished >= SLICE_STAGES.length
+        ? () => showRogueEnd()
+        : () => {
+            toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
+            showRunPanel();
+          },
   });
 }
 
