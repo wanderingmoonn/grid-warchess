@@ -5534,10 +5534,38 @@ async function runAiLoop(): Promise<void> {
   // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
   if (pushing) dirty = true;
 
+  /*
+   * **空转计数**（2026-11-19）：电脑这一回合一个动作都没做就交回去。
+   *
+   * 用户报的正是这个现象："我一直按结束回合，AI 依然不行动就结束回合"——
+   * 不是卡死，是每回合空过。这里用"单位的 moved/acted 有没有变"来判断，
+   * 变了就是真做了事，没变就是空转。
+   */
+  const activity = (): string =>
+    state.units
+      .map((u) => `${u.id}:${u.moved ? 1 : 0}${u.acted ? 1 : 0}:${u.hp}:${u.x},${u.y}`)
+      .join('|');
+  const before = activity();
+
   let loops = 0;
   while (token === aiToken && !state.winner && !aiPaused && isAiSide(state, state.current)) {
     loops += 1;
     await runAiTurn(token);
+  }
+
+  if (token === aiToken && !state.winner && activity() === before) {
+    aiLog(`empty-turn rounds=${loops} cur=${state.current} token=${aiToken}`);
+    aiEmptyTurns += 1;
+    const now = Date.now();
+    if (aiEmptyTurns >= 2 && now - aiEmptyReportAt > 60000) {
+      aiEmptyReportAt = now;
+      autoReport(
+        () => state,
+        `电脑连续 ${aiEmptyTurns} 个回合一个动作都没做。trace: ${aiTrace.slice(-8).join(' / ')}`,
+      );
+    }
+  } else {
+    aiEmptyTurns = 0;
   }
   aiLog(
     `loop- token=${token}/${aiToken} rounds=${loops} cur=${state.current} aiSide=${isAiSide(state, state.current)} winner=${state.winner ?? '-'} paused=${aiPaused}`,
@@ -6298,6 +6326,8 @@ let aiWatchSig = '';
 let aiWatchAt = 0;
 let aiWatchKicks = 0;
 let aiWatchUploadAt = 0;
+let aiEmptyTurns = 0;
+let aiEmptyReportAt = 0;
 
 function aiWatchdog(): void {
   if (replay || room || spectating() || aiPaused) return;
