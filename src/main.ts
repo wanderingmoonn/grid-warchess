@@ -6315,8 +6315,20 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
    *   · 整备选了修城 → 这一关开局补满；
    *   · 否则把上一关结束时的城血带过来（不超过上限）。
    */
+  /*
+   * 肉鸽的城血翻倍（2026-11-19 用户定）。
+   *
+   * 理由：三幕九场、城血跨关保留，按普通对局的血量打不到第三幕——
+   * 城在第 4~5 场就见底了。翻倍之后"守城"才有余地，
+   * 修城也从"救命"变成"规划"。
+   *
+   * 顺序很重要：**先翻倍上限，再套用上一关带回来的血量**（那个数已经是翻倍后的刻度）。
+   */
+  const CITY_HP_MULT = 2;
   for (const c of state.cities) {
     if (c.owner !== 'A') continue;
+    c.maxHp *= CITY_HP_MULT;
+    c.hp = c.maxHp;
     if (rogue.run.repairNext) {
       c.hp = c.maxHp;
     } else if (typeof rogue.run.cityHp === 'number') {
