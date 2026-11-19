@@ -56,7 +56,10 @@ drop policy if exists warchess_maps_insert on public.warchess_maps;
 create policy warchess_maps_insert on public.warchess_maps
   for insert with check (
     listed = false
-    and w between 8 and 40 and h between 8 and 40 and length(name) between 1 and 24
+    -- 尺寸上限必须和客户端 MAP_MAX_SIZE（src/core/fixed-maps.ts）一致。
+    -- 2026-11-19：40 → 64，和随机对战/关卡模式齐平；改一边不改另一边 =
+    -- "本地能画、传上去被服务端拒"。
+    and w between 8 and 64 and h between 8 and 64 and length(name) between 1 and 24
   );
 
 grant select, insert on public.warchess_maps to anon, authenticated;
