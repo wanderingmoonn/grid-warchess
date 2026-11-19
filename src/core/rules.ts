@@ -5735,6 +5735,17 @@ function doAttack(
     if (t === 'ground' && air) return { ok: false, reason: '这件武器只能打地面目标' };
   }
 
+  /*
+   * 这支兵愿不愿意打这个目标（「留食」那种纪律）。
+   *
+   * 放在射程判完之后：先确保"打得到"，再问"想不想打"——
+   * 反过来的话，玩家会看到"不打"的理由盖住"够不着"，反而更糊涂。
+   */
+  for (const h of hooksOfUnit(s, attacker)) {
+    const why = h.canAttackTarget?.({ state: s, unit: attacker, target: defender });
+    if (why) return { ok: false, reason: why };
+  }
+
   const atkDef = utype(s, attacker.type);
   const atName = atkDef.name;
   const dfName = utype(s, defender.type).name;
@@ -5976,7 +5987,12 @@ function doAttack(
  * 
  * 注意：这里只负责“破城”，不负责“接管”。接管依然需要派陆军走进废墟。
  */
-export function destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void {
+export function destroyCity(
+  s: GameState,
+  city: City,
+  attackerOwner: PlayerId,
+  byUnit?: Unit,
+): void {
   if (city.ruined) return; // 幂等：已经是废墟就不重复结算
 
   const prevOwner = city.owner;
@@ -5986,6 +6002,18 @@ export function destroyCity(s: GameState, city: City, attackerOwner: PlayerId): 
   city.ruined = true;
   city.hp = 0;
   city.capturedTurn = s.turn;
+
+  /*
+   * 通知"亲手砸开这座城"的那个兵。
+   *
+   * 放在废墟落地之后、守军被挤出去之前：这样能力里的世界已经一致
+   * （城确实是废墟了），而挤出去的单位还有落脚点时就能先改城的状态。
+   */
+  if (byUnit) {
+    for (const h of hooksOfUnit(s, byUnit)) {
+      h.onCityRazed?.({ state: s, unit: byUnit, city, prevOwner });
+    }
+  }
 
   // 城破了，守军不该跟着一起没。把他们挤出城外。
   const tiles = cityTiles(city);
@@ -6144,7 +6172,7 @@ function doSiege(
   }
 
   if (city.hp <= 0) {
-    destroyCity(s, city, attacker.owner);
+    destroyCity(s, city, attacker.owner, attacker);
   }
 
   s.winner = checkWinner(s);

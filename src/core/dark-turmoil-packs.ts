@@ -2034,17 +2034,17 @@ export const BRONZE_GUARD = 'bronze-guard';
 const BREAK_LINEAGE: AbilityDef = {
   id: 'break-lineage',
   name: '断传承',
-  summary: '占下一座城市时，那座城的时代等级下降 1 级（最低到 1 级）。',
+  summary: '把一座城的耐久打到 0（它变成废墟）时，那座城的时代等级下降 1 级（最低 1 级）。',
   group: 'support',
-  valueLabel: () => '占城后时代 -1',
+  valueLabel: () => '破城后时代 -1',
   hooks: {
-    onCityCaptured: ({ state, unit, city }) => {
+    onCityRazed: ({ state, unit, city }) => {
       if (city.era <= 1) return;
       city.era -= 1;
       state.log.push({
         turn: state.turn,
         player: unit.owner,
-        text: `${city.id ? '这座城市' : '这座城市'}的工匠被驱散了——它的时代退回了 ${city.era}。`,
+        text: `城墙塌下去的时候，这座城的时代也退回了 ${city.era} 级。`,
       });
     },
   },
@@ -2073,16 +2073,274 @@ const BRONZE_GUARD_DEF: UnitTypeDef = {
   short: '卫',
   era: 2,
   category: 'combat',
-  cost: 60,
-  move: 3,
-  atk: 12,
-  armor: 6,
-  maxHp: 80,
+  cost: 90,
+  // 高血高甲、走得慢、攻中、暗蚀中、**视野很广**（它是钉子，不是猎手）
+  move: 2,
+  atk: 22,
+  armor: 12,
+  maxHp: 140,
   range: 1,
-  vision: 4,
-  // 仆从听总体指挥（自主分 0）：只有诡异才"自己按倾向走"
+  vision: 9,
+  // 仆从听总体指挥，但有一点自主性（0.45）：诡异才是"全凭本能"
   summonedOnly: true,
-  abilities: ['break-lineage'],
+  aiAutonomy: 0.45,
+  aiProfile: 'servant-advance',
+  abilities: ['break-lineage', 'leave-food', 'shadow-drive'],
+};
+
+/* ── 仆从的公共词条 ─────────────────────────────────────────────── */
+
+/** 「留食」：视野内的敌方经济单位不多时，不许对经济单位下手 */
+export const LEAVE_FOOD_LIMIT = 2;
+
+/**
+ * 「留食」：仙帝要吃东西。
+ *
+ * 所以这些仆从不赶尽杀绝——**视野内的敌方经济单位 ≤ 2 时，干脆不打经济单位**。
+ * 杀掉最后几片产线等于把仙帝的粮仓烧了，那不是忠诚。
+ *
+ * 做在 `canAttackTarget` 上而不是 AI 偏好里：偏好只影响 AI 怎么选，
+ * 玩家手动操作、或者别的单位被命令去打，都绕不过这条——这是纪律，不是口味。
+ */
+const LEAVE_FOOD: AbilityDef = {
+  id: 'leave-food',
+  name: '留食',
+  summary: `视野内的敌方经济单位不多于 ${LEAVE_FOOD_LIMIT} 个时，不会攻击经济单位——那是留给仙帝的食物。`,
+  group: 'attack',
+  valueLabel: () => `视野内经济单位 ≤ ${LEAVE_FOOD_LIMIT} 时不吃`,
+  hooks: {
+    canAttackTarget: ({ state, unit, target }) => {
+      if (state.unitTypes[target.type]?.category !== 'economy') return null;
+      const sight = state.unitTypes[unit.type]?.vision ?? 4;
+      const seen = state.units.filter(
+        (o) =>
+          o.hp > 0 &&
+          o.owner !== unit.owner &&
+          state.unitTypes[o.type]?.category === 'economy' &&
+          Math.abs(o.x - unit.x) + Math.abs(o.y - unit.y) <= sight,
+      ).length;
+      if (seen > LEAVE_FOOD_LIMIT) return null;
+      return `留食：视野里只剩 ${seen} 个经济单位，这一支不肯下口。`;
+    },
+  },
+};
+
+/* ── 卫系：机关傀儡 ─────────────────────────────────────────────── */
+
+export const PUPPET_WRECK = 'puppet-wreck';
+
+/** 残躯能吸多远的暗影 */
+const DRIVE_REACH = 3;
+
+/**
+ * 「暗影驱动」：倒下之后留一具**傀儡残躯**。
+ *
+ * 残躯不是尸体，是"没通电的机关"（见 `WRECK_REVIVE`）：三格内有暗影就吸干它、
+ * 原地半血复活。所以卫系真正的杀法是**先清掉周围的暗影，再砸碎残躯**。
+ */
+const SHADOW_DRIVE: AbilityDef = {
+  id: 'shadow-drive',
+  name: '暗影驱动',
+  summary: `倒下后留下傀儡残躯；残躯 ${DRIVE_REACH} 格内有暗影时，会吸干它并在原地半血复活。`,
+  group: 'defense',
+  valueLabel: () => `残躯 ${DRIVE_REACH} 格吸影复活`,
+  hooks: {
+    onDeath: (c) => {
+      const wreck =
+        spawnAt(c.state, c.api, c.victim.owner, PUPPET_WRECK, c.victim.x, c.victim.y) ??
+        c.api.spawnNear(c.state, c.victim.owner, PUPPET_WRECK, c.victim);
+      if (!wreck) return;
+      // 记下"它原来是谁"——复活时按这个兵种站起来
+      wreck.custom = { ...(wreck.custom ?? {}), origin: c.victim.type };
+      c.state.log.push({ turn: c.state.turn, player: c.victim.owner, text: '机关散了架，剩下一具残躯。' });
+    },
+  },
+};
+
+/**
+ * 「重生」：残躯的回合开始，吸掉三格内的暗影，原地半血站起来。
+ *
+ * 挂在残躯身上而不是"暗影驱动"上：驱动是"怎么死"，这条是"怎么活回来"，
+ * 两者能分开挂——以后想要"不死不活"的机关，只挂前一条就行。
+ */
+const WRECK_REVIVE: AbilityDef = {
+  id: 'wreck-revive',
+  name: '重启',
+  summary: `${DRIVE_REACH} 格内有暗影时，吸干它并原地半血复活成原来的机关。`,
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const origin = self.custom?.origin;
+          if (typeof origin !== 'string' || !state.unitTypes[origin]) return;
+          const shade = state.units
+            .filter(
+              (o) =>
+                o.hp > 0 &&
+                o.type === SHADE &&
+                Math.abs(o.x - self.x) + Math.abs(o.y - self.y) <= DRIVE_REACH,
+            )
+            .sort(
+              (a, b) => Math.abs(a.x - self.x) + Math.abs(a.y - self.y) - (Math.abs(b.x - self.x) + Math.abs(b.y - self.y)),
+            )[0];
+          if (!shade) return;
+          api.killUnit(state, shade, undefined, '暗影被残躯吸干');
+          const at = { x: self.x, y: self.y };
+          api.killUnit(state, self, undefined, '残躯重新启动');
+          api.spawn(state, self.owner, origin, at.x, at.y);
+          const born = state.units.find((o) => o.type === origin && o.x === at.x && o.y === at.y);
+          if (born) born.hp = Math.max(1, Math.ceil((state.unitTypes[origin]?.maxHp ?? 1) / 2));
+          state.log.push({ turn: state.turn, player: self.owner, text: '残躯吸进一团暗影——机关重新站了起来。' });
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「衰鸣」：被打中的敌人陷入「虚弱」。
+ *
+ * 不是伤害型能力——它的价值在于**让下一次交锋更好打**（移动和攻击各降 30%）。
+ */
+const WEAKEN_CRY: AbilityDef = {
+  id: 'weaken-cry',
+  name: '衰鸣',
+  summary: '被它打中的敌人陷入「虚弱」：移动与攻击各降 30%，持续到对方下一个回合结束。',
+  group: 'attack',
+  hooks: {
+    onHit: [
+      {
+        stage: HIT_STAGE.status,
+        apply: (c) => {
+          c.target.status = { ...(c.target.status ?? {}), [WEAKNESS]: 2 };
+          c.touched.push('虚弱');
+        },
+      },
+    ],
+  },
+};
+
+/** 「虚弱」：移动与攻击各降 30% */
+export const WEAKNESS = 'weakness';
+registerStatus({
+  id: WEAKNESS,
+  name: '虚弱',
+  summary: '移动与攻击各降 30%。',
+  modifyMove: (_s, _u, _val, move) => Math.max(1, Math.round(move * 0.7)),
+  modifyAtk: (_s, _u, _val, atk) => Math.max(0, Math.round(atk * 0.7)),
+});
+
+/* ── 卫系三个兵 ─────────────────────────────────────────────────── */
+
+/** 傀儡残躯：一具没通电的机关。不能动、不能打，等着暗影。 */
+const WRECK_DEF: UnitTypeDef = {
+  id: PUPPET_WRECK,
+  name: '傀儡残躯',
+  short: '残',
+  era: 2,
+  category: 'combat',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 30,
+  range: 0,
+  vision: 3,
+  summonedOnly: true,
+  abilities: ['wreck-revive'],
+};
+
+/** 暗影卫：烧暗影的轻甲机关，会跳会飞。 */
+export const SHADOW_GUARD = 'shadow-guard';
+const SHADOW_GUARD_DEF: UnitTypeDef = {
+  id: SHADOW_GUARD,
+  name: '暗影卫',
+  short: '影卫',
+  era: 3,
+  category: 'combat',
+  cost: 120,
+  move: 4,
+  atk: 16,
+  armor: 14,
+  maxHp: 70,
+  range: 3,
+  vision: 6,
+  burst: 2,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 4,
+  aiAutonomy: 0.45,
+  aiProfile: 'servant-advance',
+  abilities: ['break-lineage', 'leave-food', 'shadow-drive'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 号卫：射得远、打得广，还让挨打的人虚下去。 */
+export const HORN_GUARD = 'horn-guard';
+const HORN_GUARD_DEF: UnitTypeDef = {
+  id: HORN_GUARD,
+  name: '号卫',
+  short: '号',
+  era: 3,
+  category: 'combat',
+  cost: 150,
+  move: 3,
+  atk: 30,
+  armor: 8,
+  maxHp: 110,
+  range: 6,
+  vision: 6,
+  splash: 2,
+  summonedOnly: true,
+  aiAutonomy: 0.45,
+  aiProfile: 'servant-advance',
+  abilities: ['break-lineage', 'leave-food', 'shadow-drive', 'weaken-cry'],
+};
+
+/* ── 仆从行为 ───────────────────────────────────────────────────── */
+
+/**
+ * 仆从的"自主性"：**推着走，但不乱吃**。
+ *
+ * 他们的主要行动仍然归总指挥（自主分只有 0.45），这条 profile 只做三件小事：
+ *   · 优先打射程内**非经济**的血少目标（留着产线给仙帝）；
+ *   · 朝最近的**非经济**敌人挪；
+ *   · 不和同类挤在同一格（机关是组装出来的，挤在一起吃一发溅射就全废）。
+ */
+const SERVANT_AI: UnitAiProfile = {
+  id: 'servant-advance',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const eco = (u: Unit): boolean => c.state.unitTypes[u.type]?.category === 'economy';
+
+    const prey = c.foes
+      .filter((f) => dist(f, c.unit) <= range && !eco(f))
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 165 });
+
+    const goal = c.foes.filter((f) => !eco(f)).sort((a, b) => dist(a, c.unit) - dist(b, c.unit))[0];
+    if (!goal) return add.length ? { add } : {};
+    const kin = c.allies.filter((a) => a.id !== c.unit.id && a.hp > 0 && a.type === c.unit.type);
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
+    for (const p of steps(c, Math.max(1, c.def.move)).filter((q) => q.d > 0)) {
+      const crowd = Math.min(...kin.map((k) => dist(k, p)), 3);
+      const score = -dist(p, goal) + crowd * 1.2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (best && dist(best, goal) < dist(c.unit, goal)) {
+      add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 110 });
+    }
+    return add.length ? { add } : {};
+  },
 };
 
 /* ── 三个 profile ───────────────────────────────────────────────── */
@@ -2330,6 +2588,10 @@ for (const a of [
   SHADOW_BREATH,
   BREAK_LINEAGE,
   DULL_WIT,
+  LEAVE_FOOD,
+  SHADOW_DRIVE,
+  WRECK_REVIVE,
+  WEAKEN_CRY,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -2460,10 +2722,18 @@ export const DARK_TURMOIL: Expansion = {
     '## 尸骸仙帝',
     '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
     '## 仆从',
-    '**青铜卫**：尸骸仙帝的追随者里最基础的一种。它**听总体指挥**（和诡异不同，不自己按倾向乱走），' +
-      '所以玩家可以用"它冲哪边"来判断这一波的压力方向。',
-    '它带着「**断传承**」：占下一座城，那座城的时代降一级——它不会接手，只会把城用回旧样子。' +
-      '反过来说，**诡异永远占不了城**（「痴愚」），所以你的城只会丢给仆从，不会丢给那些东西。',
+    '仆从是**追随者**，不是污染物：他们听总体指挥，也有一点自己的判断（会绕开经济单位那种"纪律"）。',
+    '所以和诡异正好相反——**仆从会占城，诡异不会**（见「痴愚」）。',
+    '**断传承**（所有仆从都有）：把一座城的耐久打到 0（它变成废墟）时，那座城的时代降一级。' +
+      '他们不会接手一座城，只会把它用回旧样子。',
+    '**留食**（所有仆从都有）：视野内的敌方经济单位不多于 2 个时，他们不肯打经济单位——那是留给仙帝的食物。',
+    '### 卫系（机关傀儡）',
+    '三只都带「**暗影驱动**」：倒下后留下**傀儡残躯**，残躯三格内有暗影就会吸干它、原地半血复活。' +
+      '所以对付卫系要**先清掉身边的暗影，再砸碎残躯**——只打倒本体是不够的。',
+    '**青铜卫**：高血高甲、走得慢、视野很广。它是钉子，负责堵路和看着你。',
+    '**暗影卫**：血薄甲厚、跑得快、会飞、会暗影跳跃，自带一片暗影领域。它是追人的那个。',
+    '**号卫**：射程极远、溅射很大，被打中的敌人会陷入「**虚弱**」——移动与攻击各降 30%。' +
+      '它不追你，它只是让你走不动、打不疼。',
     '## 不成系的三个',
     '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
       '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
@@ -2495,6 +2765,9 @@ export const DARK_TURMOIL: Expansion = {
     BLACK_COCOON_DEF,
     UNNAMABLE_DEF,
     BRONZE_GUARD_DEF,
+    SHADOW_GUARD_DEF,
+    HORN_GUARD_DEF,
+    WRECK_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -2517,6 +2790,10 @@ export const DARK_TURMOIL: Expansion = {
     SHADOW_BREATH,
     BREAK_LINEAGE,
     DULL_WIT,
+    LEAVE_FOOD,
+    SHADOW_DRIVE,
+    WRECK_REVIVE,
+    WEAKEN_CRY,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -2533,6 +2810,7 @@ export const DARK_TURMOIL: Expansion = {
     LOCUST_AI,
     COCOON_AI,
     UNNAMABLE_AI,
+    SERVANT_AI,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {

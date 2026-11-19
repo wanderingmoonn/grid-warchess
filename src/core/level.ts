@@ -2126,6 +2126,8 @@ export const LEVELS: LevelDef[] = [
         // 仆从：会占城的东西。带两个是为了让「断传承」在实战里看得见
         { type: 'bronze-guard', x: 20, y: 10 },
         { type: 'bronze-guard', x: 20, y: 22 },
+        { type: 'shadow-guard', x: 18, y: 6 },
+        { type: 'horn-guard', x: 19, y: 16 },
       ],
     },
     /*
