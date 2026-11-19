@@ -28,7 +28,8 @@ import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/r
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
-import { openCardChoice, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
+import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
+import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.ts';
 import { cardLevel, cardsToNext, drawCards } from './core/roguelike/cards.ts';
 import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
@@ -6003,6 +6004,8 @@ function startRogueStage(): void {
       // 城市与经济单位都不产金：肉鸽的钱只能从战果来
       noIncome: true,
       recruitOnly: buildable,
+      // 整备关加固过城墙 → 城更大（兵额 4 → 9）
+      citySize: citySizeFor(rogue.run.wallProgress),
     },
     randomSeed(),
     units,
@@ -6136,8 +6139,11 @@ function finishRogueStage(): void {
       }
       try {
         offerRogueCards(() => {
-          toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
-          showRunPanel();
+          // 从第 2 关起，进关前有一次整备
+          maybeRest(() => {
+            toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
+            showRunPanel();
+          });
         });
       } catch (err) {
         /*
@@ -6273,6 +6279,52 @@ if (new URLSearchParams(location.search).has('roguedebug')) {
         .sort()
         .join(' '),
   };
+}
+
+/**
+ * 整备关（2026-11-19）。
+ *
+ * 只在"已经打过一关之后"出现：第一关之前没什么可整备的（花名册是空的）。
+ * 三项各对应一条成长线——兵额（城墙）/ 兵力（回血）/ 兵种强度（卡）。
+ */
+function maybeRest(after: () => void): void {
+  if (!rogue || rogue.run.node === 0) {
+    after();
+    return;
+  }
+  const run = rogue.run;
+  const size = citySizeFor(run.wallProgress);
+  openRestPanel({
+    wallProgress: run.wallProgress,
+    wallSteps: WALL_STEPS,
+    citySize: size,
+    capacity: cityCapacity(size),
+    roster: run.roster,
+    cardKinds: Object.keys(run.cards).length,
+    onPick: (kind) => {
+      if (kind === 'wall') {
+        run.wallProgress += 1;
+        const now = citySizeFor(run.wallProgress);
+        toast(`城墙加固：${now}×${now}，兵额 ${cityCapacity(now)}`);
+        rogueSave();
+        after();
+      } else if (kind === 'heal') {
+        // 花名册按兵种上限回满（HP 跨关保留，所以这是唯一"回血"的入口）
+        run.roster = run.roster.map((u) => ({
+          ...u,
+          hp: UNIT_TYPES[u.type]?.maxHp ?? u.hp,
+        }));
+        toast(`部队修整完毕：${run.roster.length} 人回满血`);
+        rogueSave();
+        after();
+      } else {
+        offerRogueCards(() => {
+          rogueSave();
+          after();
+        });
+      }
+    },
+  });
 }
 
 function showRogueEnd(): void {

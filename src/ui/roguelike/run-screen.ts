@@ -197,3 +197,67 @@ export function openCardChoice(opts: CardChoiceOptions): void {
   });
   document.body.appendChild(mask);
 }
+
+
+export interface RestPanelOptions {
+  /** 城墙加固进度（几次能升一级由 roster.WALL_STEPS 决定） */
+  wallProgress: number;
+  /** 城墙要到第几次才升一级 */
+  wallSteps: number;
+  /** 当前城市边长与兵额 */
+  citySize: number;
+  capacity: number;
+  /** 花名册（用来显示"修整"会回多少血） */
+  roster: Array<{ type: string; hp: number }>;
+  /** 已经抽过几种卡（面板上显示一下） */
+  cardKinds: number;
+  onPick: (kind: 'wall' | 'heal' | 'card') => void;
+}
+
+/**
+ * 整备关（2026-11-19）。
+ *
+ * 三选一，**每项都只有一个方向**：加固城墙（累计两次升一级）/ 修整部队（回满血）/
+ * 升一级兵种卡。为什么是"三选一"而不是全给：整备关是这一 run 里少数几个
+ * "必须放弃点什么"的地方，全给就变成了纯奖励，节奏会塌。
+ */
+export function openRestPanel(opts: RestPanelOptions): void {
+  const wallLeft = opts.wallSteps - (opts.wallProgress % opts.wallSteps);
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `
+    <div class="modal rogue-panel">
+      <div class="modal-head">
+        <h2>整备</h2>
+        <p>停下来喘口气，只能选一件。</p>
+      </div>
+      <div class="modal-body">
+        <div class="rogue-cards">
+          <button class="rogue-card" data-rest="wall">
+            <span class="rogue-card-name">加固城墙</span>
+            <span class="rogue-card-note">再加固 ${wallLeft} 次升一级（兵额 ${opts.capacity} → ${
+              opts.capacity + (opts.citySize * 2 + 1)
+            }）</span>
+            <span class="rogue-card-owned">当前：${opts.citySize}×${opts.citySize} · 已加固 ${opts.wallProgress} 次</span>
+          </button>
+          <button class="rogue-card" data-rest="heal">
+            <span class="rogue-card-name">修整部队</span>
+            <span class="rogue-card-note">花名册里的兵回满血（打完仗都带伤）</span>
+            <span class="rogue-card-owned">带伤：${opts.roster.filter((u) => u.hp > 0).length} 人</span>
+          </button>
+          <button class="rogue-card" data-rest="card">
+            <span class="rogue-card-name">升一级兵种卡</span>
+            <span class="rogue-card-note">抽三张兵种卡挑一张（同名三张 = 升一级）</span>
+            <span class="rogue-card-owned">已抽 ${opts.cardKinds} 种 · 三张同名升一级</span>
+          </button>
+        </div>
+      </div>
+    </div>`;
+  mask.addEventListener('click', (ev) => {
+    const kind = (ev.target as HTMLElement).closest<HTMLElement>('[data-rest]')?.dataset.rest;
+    if (!kind) return;
+    mask.remove();
+    opts.onPick(kind as 'wall' | 'heal' | 'card');
+  });
+  document.body.appendChild(mask);
+}
