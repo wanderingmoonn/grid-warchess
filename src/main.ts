@@ -5560,7 +5560,13 @@ async function runAiLoop(): Promise<void> {
     aiLog(`empty-turn rounds=${loops} cur=${state.current} token=${aiToken}`);
     aiEmptyTurns += 1;
     const now = Date.now();
-    if (aiEmptyTurns >= 2 && now - aiEmptyReportAt > 60000) {
+    /*
+     * 放宽到"第一次空转就上报"（2026-11-19）。
+     *
+     * 原来要连续 2 次才传，而真机上常见的是"空转一次、动一次"交替，
+     * 计数器一直被重置，一次都没传上去——白等了七轮截图。
+     */
+    if (aiEmptyTurns >= 1 && now - aiEmptyReportAt > 30000) {
       aiEmptyReportAt = now;
       autoReport(
         () => state,
