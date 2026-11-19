@@ -1099,6 +1099,97 @@ function fullTidePaint(): Array<[number, number, string]> {
   return paint;
 }
 
+/**
+ * 「骨海」的地形（64×64，2026-11-19）。
+ *
+ * 三段式：
+ *   · **西侧（0~29）**：两家的地。山脉把它们切成几块，四座城分散在谷地里；
+ *   · **中间（30~43）**：海。只有三条堤坝过得去——北（窄）、中（宽）、南（窄），
+ *     堤坝由浅流 / 平原 / 沼泽拼成，**陆军能涉水**（浅流在 `passable` 里）；
+ *   · **东侧（44~63）**：仙帝的地。平的，几乎没有遮掩。
+ *
+ * 海里那座小岛（成帝碑）**不接任何堤坝**：陆军上不去，只有飞行单位能落。
+ * 这是刻意留的——它是"看得见、够不着"的东西，越靠近越危险（知识污染按视野算半径）。
+ */
+function boneSeaPaint(): Array<[number, number, string]> {
+  const paint: Array<[number, number, string]> = [];
+  const put = (x: number, y: number, ch: string): void => {
+    paint.push([x, y, ch]);
+  };
+
+  // 中间的海
+  for (let y = 0; y < 64; y += 1) {
+    for (let x = 30; x <= 43; x += 1) put(x, y, '~');
+  }
+
+  // 三条堤坝：中路过 3 格宽，南北各 2 格
+  for (const [top, height] of [
+    [9, 2],
+    [31, 3],
+    [53, 2],
+  ] as const) {
+    for (let dy = 0; dy < height; dy += 1) {
+      for (let x = 30; x <= 43; x += 1) {
+        // 两头浅流、中间一段踩实的平原，中间夹一格沼泽
+        const ch = x <= 32 || x >= 41 ? 's' : x === 36 || x === 37 ? 'w' : '.';
+        put(x, top + dy, ch);
+      }
+    }
+  }
+
+  // 海中小岛（成帝碑的家）：不接堤坝
+  for (let y = 27; y <= 29; y += 1) {
+    for (let x = 35; x <= 38; x += 1) put(x, y, '.');
+  }
+
+  // 西侧：山脉把两家的地切成谷地
+  for (const [x0, y0, x1, y1] of [
+    [8, 0, 9, 14], // 北谷的东墙
+    [8, 24, 9, 40], // 中隔（两家之间）
+    [8, 50, 9, 63], // 南谷的东墙
+    [18, 2, 19, 10],
+    [18, 44, 19, 52],
+    [0, 21, 6, 21], // 横向的隔（两家之间的第一道）
+    [0, 35, 6, 35], // 第二道。原来画在 y=47，正好把 B 的城圈死在里面
+
+  ] as const) {
+    for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) put(x, y, '^');
+  }
+
+  // 西侧：林子和丘陵（给防守方一点遮蔽和卡位）
+  const forest: Array<[number, number]> = [
+    [3, 8], [4, 8], [3, 9], [12, 3], [13, 3], [12, 4],
+    [6, 16], [7, 16], [6, 17], [15, 12], [16, 12], [15, 13],
+    [3, 28], [4, 28], [5, 29], [12, 24], [13, 24], [12, 25],
+    [6, 38], [7, 38], [6, 39], [15, 33], [16, 33],
+    [3, 52], [4, 52], [3, 53], [12, 57], [13, 57], [12, 58],
+    [6, 61], [7, 61], [6, 62], [15, 50], [16, 50],
+  ];
+  for (const [x, y] of forest) put(x, y, 'f');
+
+  const hills: Array<[number, number]> = [
+    [10, 6], [11, 6], [10, 7], [16, 18], [17, 18],
+    [10, 30], [11, 30], [16, 40], [17, 40],
+    [10, 56], [11, 56], [16, 60], [17, 60],
+  ];
+  for (const [x, y] of hills) put(x, y, 'h');
+
+  // 西侧零星沼泽：拖慢行军，但都能绕
+  for (const [x, y] of [[5, 12], [14, 8], [5, 34], [14, 28], [5, 58], [14, 44]] as const) {
+    put(x, y, 'w');
+  }
+
+  // 东侧：平，但也不是一张白纸——零星的林子和丘陵给仙帝一点遮掩
+  const east: Array<[number, number, string]> = [
+    [50, 12, 'f'], [51, 12, 'f'], [50, 13, 'f'], [56, 8, 'h'], [57, 8, 'h'],
+    [50, 40, 'f'], [51, 40, 'f'], [50, 41, 'f'], [55, 48, 'h'], [56, 48, 'h'],
+    [58, 20, 'f'], [59, 20, 'f'], [58, 21, 'f'],
+  ];
+  for (const [x, y, ch] of east) put(x, y, ch);
+
+  return paint;
+}
+
 export const LEVELS: LevelDef[] = [
   /* ── 玩家关 1：孤城（防守）────────────────────────────────── */
   {
@@ -2162,6 +2253,111 @@ export const LEVELS: LevelDef[] = [
         id: 'one-down',
         when: { kind: 'unitDied', type: 'bone-unnamed' },
         do: [{ kind: 'say', text: '那具拼起来的东西散了。地上的零件还在动。' }],
+      },
+    ],
+  },
+
+  /*
+   * ── 骨海：64×64、两人合作、八座城 ────────────────────────────────
+   *
+   * 作者定的骨架：
+   *   · A / B 两家**同盟**，各四座城，都在西侧；起步**青铜时代**（1 代）；
+   *   · 仙帝在最东边，只有他和沉眠地；成帝碑在海中央的小岛上；
+   *   · 骨灰罐藏在东南角（"藏起来"——因为它才是仙帝能反复回来的原因）；
+   *   · 中间是海，只有三条堤坝过得去。
+   *
+   * 强制打开的四个扩展不是给玩家当拐杖的：前期靠它们活下来（海军过海、空军够到岛），
+   * 后期真正解决问题要靠修真。所以 `require` 里五个一起锁死。
+   */
+  {
+    id: 'level:bone-sea',
+    version: LEVEL_VERSION,
+    side: true,
+    chapter: '黑暗动乱 · 终局',
+    name: '骨海',
+    brief:
+      '64×64，两人合作，各四座城。中间是海，只有三条堤坝；对岸只有仙帝和他的沉眠地，' +
+      '成帝碑立在海心的小岛上、骨灰罐藏在东南角。**杀死尸骸仙帝**就算赢——' +
+      '但罐子还在的话，他会一次次站起来，一次比一次薄。（数值是占位版。）',
+    map: {
+      id: 'levelmap:bone-sea',
+      name: '骨海',
+      w: 64,
+      h: 64,
+      rows: rowsOf(64, 64, boneSeaPaint()),
+      // 两家各四座城，全在西侧；A 在北半个谷地，B 在南半个
+      citiesA: [
+        { x: 2, y: 4 },
+        { x: 12, y: 8 },
+        { x: 4, y: 16 },
+        { x: 14, y: 20 },
+      ],
+      citiesB: [
+        { x: 2, y: 44 },
+        { x: 12, y: 50 },
+        { x: 4, y: 56 },
+        { x: 14, y: 60 },
+      ],
+      source: 'builtin',
+    },
+    seats: {
+      count: 3,
+      ai: ['C'],
+      cityless: ['C'],
+      teams: [['A', 'B'], ['C']],
+    },
+    setup: { startEra: 1, firstSide: 'A' },
+    expansions: { require: ['dark-turmoil', 'cultivation', 'era-arms', 'naval', 'air'] },
+    deploy: {
+      A: [
+        { type: 'militia', x: 4, y: 6 },
+        { type: 'militia', x: 5, y: 7 },
+        { type: 'militia', x: 14, y: 10 },
+        { type: 'militia', x: 6, y: 18 },
+        { type: 'crew', x: 3, y: 6 },
+        { type: 'crew', x: 13, y: 10 },
+        { type: 'crew', x: 5, y: 18 },
+        { type: 'crew', x: 15, y: 22 },
+      ],
+      B: [
+        { type: 'militia', x: 4, y: 46 },
+        { type: 'militia', x: 5, y: 47 },
+        { type: 'militia', x: 14, y: 52 },
+        { type: 'militia', x: 6, y: 58 },
+        { type: 'crew', x: 3, y: 46 },
+        { type: 'crew', x: 13, y: 52 },
+        { type: 'crew', x: 5, y: 58 },
+        // 别放进 (15,61)：那是 B 第四座城的城格，兵落不下去（第一版这里少一人）
+        { type: 'crew', x: 17, y: 61 },
+      ],
+      C: [
+        // 最东边：只有他和沉眠地
+        { type: 'slumber-site', x: 58, y: 31 },
+        { type: 'corpse-emperor', x: 55, y: 31 },
+        // 海心小岛上的碑（陆军上不去，只有飞得到）
+        { type: 'imperial-stele', x: 36, y: 28 },
+        // 东南角藏着的罐子
+        { type: 'funerary-urn', x: 61, y: 61 },
+      ],
+    },
+    goals: [
+      { kind: 'assassinate', winner: 'A', loser: 'C', unitType: 'corpse-emperor', label: '尸骸仙帝', group: 1 },
+    ],
+    events: [
+      {
+        id: 'opens',
+        when: { kind: 'turn', at: 1 },
+        do: [{ kind: 'say', text: '海那边很安静。安静得不像有活物。' }],
+      },
+      {
+        id: 'cross',
+        when: { kind: 'turn', at: 10 },
+        do: [{ kind: 'say', text: '三条堤坝都在退潮时露出来——它们也知道。' }],
+      },
+      {
+        id: 'down',
+        when: { kind: 'unitDied', type: 'corpse-emperor' },
+        do: [{ kind: 'say', text: '他倒下了。但海那边，罐子还开着。' }],
       },
     ],
   },
