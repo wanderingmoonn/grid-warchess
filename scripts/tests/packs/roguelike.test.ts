@@ -21,6 +21,7 @@ import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } fro
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
 import { BRANCHES, BRANCH_MAIN_MUL, branchMul, branchOf, poolOfBranch, unitPack } from '../../../src/core/roguelike/branches.ts';
 import { EXPANSIONS } from '../../../src/core/expansions.ts';
+import { initRunner, keepPlaying, observe, settleStage } from '../../../src/core/roguelike/runner.ts';
 import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '../../../src/core/roguelike/enemy-pools.ts';
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
@@ -192,6 +193,96 @@ export function run() {
       tagsOf: (id) => (id === 'longbow' ? ['forest'] : []),
     });
     assert.ok(tagged.includes('longbow'), '带偏好标签的兵应该更容易出现');
+  });
+
+  test('肉鸽：清空敌人进入撤离，按换手倒计时，到点结束', () => {
+    const st = SLICE_STAGES[0]!;
+    const ctx = {
+      run: newRun(1, { allowRestart: true }),
+      stageIndex: 0,
+      evacTurns: st.meta.evacTurns,
+      expectedTurns: st.meta.expectedTurns,
+      playerSeat: 'A',
+    };
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let state = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 11);
+    let snap = initRunner();
+    assert.equal(snap.phase, 'battle');
+
+    // 敌人清空（直接把 B 的兵拿掉，相当于全灭）
+    const prev = state;
+    state = { ...state, units: state.units.filter((u) => u.owner !== 'B') };
+    snap = observe(prev, state, snap, ctx);
+    assert.equal(snap.phase, 'evac');
+    assert.equal(snap.evacLeft, st.meta.evacTurns);
+    assert.equal(snap.clearedTurn, state.turn);
+
+    // 同一手里再走一步（turn 没变）不该扣倒计时
+    const same = observe(state, { ...state }, snap, ctx);
+    assert.equal(same.evacLeft, snap.evacLeft);
+
+    // 换两手 → 结束
+    let s2 = { ...state, turn: state.turn + 1 };
+    snap = observe(state, s2, snap, ctx);
+    assert.equal(snap.evacLeft, st.meta.evacTurns - 1);
+    s2 = { ...s2, turn: s2.turn + 1 };
+    snap = observe({ ...state, turn: state.turn + 1 }, s2, snap, ctx);
+    assert.equal(snap.phase, 'done');
+
+    // 胜负被按下不表（撤离期间必须还能动）
+    const withWinner = { ...state, winner: 'A' };
+    keepPlaying(withWinner);
+    assert.equal(withWinner.winner, null);
+  });
+
+  test('肉鸽：撤离结算——城内带走、城外折半、兵额上限', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let state = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 11);
+    // 只留两个 A 的兵：一个在城里、一个在远处
+    const city = state.cities.find((c) => c.owner === 'A')!;
+    const inside = { ...state.units.find((u) => u.owner === 'A')!, x: city.x, y: city.y };
+    const outside = { ...state.units.find((u) => u.owner === 'A' && u.id !== inside.id)!, x: 14, y: 14 };
+    state = { ...state, units: [inside, outside], winner: null };
+
+    const ctx = {
+      run: newRun(1, { allowRestart: true }),
+      stageIndex: 0,
+      evacTurns: st.meta.evacTurns,
+      expectedTurns: st.meta.expectedTurns,
+      playerSeat: 'A',
+    };
+    const snap = { phase: 'done' as const, evacLeft: 0, clearedTurn: 3 };
+    const res = settleStage(state, snap, ctx);
+    assert.equal(res.taken.length, 1, '城里的那个应该被带走');
+    assert.equal(res.taken[0]!.type, inside.type);
+    assert.equal(res.left.length, 1, '城外那个带不走');
+    assert.ok(res.refund > 0, '城外的人应该有抚恤');
+    assert.ok(res.gold > 0);
+    assert.equal(res.halfDone, false);
+    // 期望手数是 6，清场在第 3 手 → 提前奖励进账
+    assert.ok(res.gold > res.taken.length * 15, '提前结束应该有额外奖励');
+  });
+
+  test('肉鸽：兵额满了也不让城外人进来', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let state = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 13);
+    const city = state.cities.find((c) => c.owner === 'A')!;
+    const mk = (i: number, x: number, y: number) => ({ ...state.units.find((u) => u.owner === 'A')!, id: `x${i}`, x, y });
+    // 城里塞 6 个（城 2×2 只有 4 格，但站得住——兵额按格子算 4）
+    state = {
+      ...state,
+      units: [mk(1, city.x, city.y), mk(2, city.x + 1, city.y), mk(3, city.x, city.y + 1), mk(4, city.x + 1, city.y + 1), mk(5, 14, 14)],
+      winner: null,
+    };
+    const ctx = { run: newRun(1, { allowRestart: true }), stageIndex: 0, evacTurns: 2, expectedTurns: 6, playerSeat: 'A' };
+    const res = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, ctx);
+    assert.ok(res.taken.length <= 4, '带走人数不能超过兵额');
+    assert.ok(res.left.length >= 1);
   });
 
   test('肉鸽：升城市时代价钱递增', () => {
