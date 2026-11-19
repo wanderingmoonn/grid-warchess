@@ -170,7 +170,8 @@ function buildAll(): SliceStage[] {
           act,
           slot: 3,
           title: boss.name,
-          evacTurns: act === 3 ? 1 : 2,
+          // Boss 战要顶着城打，只给一手撤离等于「没法撤」——统一两回合
+          evacTurns: 2,
           expectedTurns: 8 + act,
           relic: boss.relic,
         },
