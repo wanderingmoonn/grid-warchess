@@ -7,7 +7,7 @@
  */
 
 import { UNIT_TYPES } from '../config.ts';
-import type { UnitTypeDef } from '../types.ts';
+import type { PlayerId, UnitTypeDef } from '../types.ts';
 import { cardLevel } from './cards.ts';
 
 /**
@@ -68,6 +68,14 @@ export function compileUnits(
         ...def,
         id: tid,
         name: `${def.name} +${level}`,
+        /*
+         * **只属于玩家席位**（2026-11-19）。
+         *
+         * 光换 id 不够：`state.unitTypes` 是双方共用的，Boss 有城时它的 AI
+         * 会在同一张表里挑兵，挑到 `spearman~L3` 就造出了你的强化版。
+         * 这个字段让 `canUseType` 能按席位把它们挡在门外。
+         */
+        rogueOwner: 'A' as PlayerId,
         atk: Math.round(def.atk * (1 + PER_LEVEL_PCT.atk * level)),
         maxHp: Math.round(def.maxHp * (1 + PER_LEVEL_PCT.maxHp * level)),
       };

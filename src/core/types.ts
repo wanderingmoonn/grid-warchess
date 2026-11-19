@@ -434,6 +434,13 @@ export interface UnitTypeDef {
   short: string;
   /** 需要城市达到哪个时代才能生产 */
   era: number;
+  /**
+   * 这个兵种只属于某个席位（肉鸽的卡牌强化版，2026-11-19）。
+   *
+   * 兵种表是双方共用的：不标归属的话，Boss 有城时它的 AI 会在同一张表里
+   * 挑到玩家的 `spearman~L3`，造出强化版敌人——用户实机看到过。
+   */
+  rogueOwner?: string;
   /** 战斗单位 / 经济单位 / 建筑 */
   category: UnitCategory;
   /**

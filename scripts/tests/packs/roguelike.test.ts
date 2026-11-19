@@ -446,6 +446,27 @@ export function run() {
     assert.ok(Number.isFinite(out[cardTypeId('militia', 1)]!.atk));
   });
 
+  test('肉鸽：强化兵只属于玩家，敌人既造不到也不被卡池限制', () => {
+    const st = SLICE_STAGES[2]!; // Boss 关：敌人有城，会产兵
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    const units = mergeUnits(undefined, compileUnits({ spearman: 3 }));
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, level: r.level, recruitOnly: [cardTypeId('spearman', 1)] } as never,
+      91,
+      units,
+    );
+    assert.ok(s.unitTypes[cardTypeId('spearman', 1)], '强化版应当在兵种表里');
+    // 玩家能造自己的强化版
+    assert.equal(canUseType(s, 'A', cardTypeId('spearman', 1)), true);
+    // 敌人造不到：那是玩家的兵
+    assert.equal(canUseType(s, 'B', cardTypeId('spearman', 1)), false, '敌人不该能造玩家的强化兵');
+    // 敌人也不该被玩家的卡池限制（Boss 有城，要能正常出兵）
+    assert.equal(canUseType(s, 'B', 'spearman'), true, 'Boss 不该被玩家的卡池卡住');
+    // 玩家自己的原版兵被卡池挡着
+    assert.equal(canUseType(s, 'A', 'spearman'), false);
+  });
+
   test('肉鸽：城血跨关保留，修城下一关补满', () => {
     const run = newRun(1, { allowRestart: true });
     run.cityHp = 9;
