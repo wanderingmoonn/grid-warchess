@@ -11,6 +11,7 @@
  */
 
 import { DEFAULT_PLAYER_NAMES } from '../core/setup.ts';
+import { isAiSide } from '../core/ai-meta.ts';
 import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId } from '../core/types.ts';
 import {
@@ -270,7 +271,17 @@ export function openOnlinePanel(host: OnlineHost): void {
     const state = host.currentState();
     try {
       const token = newToken();
-      const seat = await createRoom(state, state.current, token);
+      /*
+       * **房主固定坐 A**（2026-11-19 修"断开再开始时席位会变"）。
+       *
+       * 原来传的是 `state.current`——那是"轮到谁走"，不是"我是谁"。
+       * 于是房主在哪一回合建房就坐哪一席：这局轮到 B，房主就成了 B，
+       * 重开一次又变回 A，对面看到的席位一直在跳。
+       *
+       * A 归电脑（关卡里的单人对局）时才退到 B。
+       */
+      const mySeat = isAiSide(state, 'A') ? ('B' as const) : ('A' as const);
+      const seat = await createRoom(state, mySeat, token);
       host.enter(seat, {
         code: seat.code,
         state,

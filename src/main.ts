@@ -268,6 +268,19 @@ let pendingDevice: { unitId: string; deviceId: string } | null = null;
 function inviteLink(code: string): string {
   const url = new URL(location.href);
   url.searchParams.set('room', code);
+  /*
+   * **带上席位和令牌**（2026-11-19 修"断开再开始时席位会变"）。
+   *
+   * 原来链接里只有房间码，身份全靠本机 localStorage 里那条记录：
+   * 清了缓存、换了设备、或者两个客户端同时抢座，身份就丢了——
+   * 于是重连之后谁坐哪一席全看谁先点，席位随机互换。
+   * 把 `s` / `t` 写进链接，重连就是**回原位**，不依赖任何本地记录。
+   */
+  const mine = loadSeat(code);
+  if (mine && !mine.spectator) {
+    url.searchParams.set('s', mine.seat);
+    url.searchParams.set('t', mine.token);
+  }
   return url.toString();
 }
 
@@ -3070,8 +3083,19 @@ async function pushDraft(
 /** 把云端快照无提示地装进本机（BP 用；对局中的那次在 pollRoom 里带 toast） */
 function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
+  /*
+   * 进房间 = **采用房主那张棋盘**（2026-11-19）。
+   *
+   * 本地可能正开着自己的局：地盘、地形、单位全都不是一起的。
+   * 之前静默替换，玩家看到的就是"怎么跑到一张不认识的图上了"。
+   * 换了 seed 就明说一句，让人知道自己被同步了，而不是以为出了 bug。
+   */
+  const prevSeed = state.seed;
   dropHeatFlash();
   state = snapshot.state;
+  if (room?.spectator !== true && prevSeed !== state.seed) {
+    toast(`已同步房主的棋局（第 ${state.turn} 回合）`);
+  }
   state.aiControl = undefined;
   state.fog = fog;
   clearSelection();
@@ -6042,10 +6066,26 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
  * 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
  * 只有点了面板里的"开始对局"才会覆盖当前存档。
  */
+
+/**
+ * 换了新的一局：如果正挂着房间，**立刻把新棋局推上去**（2026-11-19）。
+ *
+ * 房间里的 state 只在"结束回合"时提交。房主换了关卡/新开一局之后，
+ * 云端还停着上一张图，客人拉下来就是一张"不知名地图"——
+ * 两侧各自在自己的图上打，谁都不知道对方在打什么。
+ */
+function pushRoomAfterNewMatch(): void {
+  if (!room || room.spectator) return;
+  void submitTurnForce(room.code, state).catch(() => {
+    // 推不上去不影响本地，下一手结束还会再推一次
+  });
+}
+
 function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
     state = createMatch(result.config, result.seed, loadCustomUnits());
+    pushRoomAfterNewMatch();
     /*
      * 托管是**这一局**的临时授权，不该跟着开下一局（2026-11-18）。
      * 不清的话：玩家上一局点过一次"托管"，新开一局自己那一席仍是电脑，
@@ -6877,6 +6917,7 @@ function showRogueEnd(): void {
 function playtestLevel(level: LevelDef): void {
   try {
     state = createMatch({ ...DEFAULT_CONFIG, level }, randomSeed(), loadCustomUnits());
+    pushRoomAfterNewMatch();
     state.aiControl = undefined; // 同上：试玩不该继承上一局的托管
     dropHeatFlash();
     detachRoom();
@@ -8894,12 +8935,24 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       toast(`回到房间 ${code} 的观战视角`);
       return;
     }
-    const token = mine?.token ?? newToken();
+    /*
+     * 链接里带了身份就照它回原位（2026-11-19）：
+     * 即使本机没有记录（换设备、清缓存），也能坐回自己那一席。
+     */
+    const url = new URL(location.href);
+    const urlSeat = url.searchParams.get('s');
+    const urlToken = url.searchParams.get('t');
+    const fromLink =
+      urlSeat && urlToken
+        ? ({ code, seat: urlSeat as PlayerId, token: urlToken } as RoomSeat)
+        : null;
+    const known = fromLink ?? mine;
+    const token = known?.token ?? newToken();
     // 自己记着座位就先去抢回原位；没记着（换了设备/清了缓存）就从第一个空座开始试。
     // 三人、四人桌的座位数由这一局的 config 决定，不能再写死 A/B 两个。
     const tableSeats = seatsOf(snapshot.state);
-    const order: PlayerId[] = mine
-      ? [mine.seat, ...tableSeats.filter((x) => x !== mine.seat)]
+    const order: PlayerId[] = known
+      ? [known.seat, ...tableSeats.filter((x) => x !== known.seat)]
       : tableSeats;
     for (const seat of order) {
       /*
