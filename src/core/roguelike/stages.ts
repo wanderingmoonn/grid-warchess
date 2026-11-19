@@ -68,6 +68,14 @@ const S1: SliceStage = {
       ],
     },
     setup: {},
+    /*
+     * **无城席位必须声明 ai.pressure**（2026-11-19）。
+     *
+     * `aiNextAction` 里有一条：决策层返回空、且这一方没有城时，只有
+     * `level.ai.pressure > 0` 才会走 `pressureAdvance`（主动压上）。
+     * 不声明就是返回 null —— AI 每回合空过，玩家看到"敌人一动不动"。
+     */
+    ai: { pressure: 1 },
   },
 };
 
@@ -103,6 +111,14 @@ const S2: SliceStage = {
       ],
     },
     setup: {},
+    /*
+     * **无城席位必须声明 ai.pressure**（2026-11-19）。
+     *
+     * `aiNextAction` 里有一条：决策层返回空、且这一方没有城时，只有
+     * `level.ai.pressure > 0` 才会走 `pressureAdvance`（主动压上）。
+     * 不声明就是返回 null —— AI 每回合空过，玩家看到"敌人一动不动"。
+     */
+    ai: { pressure: 1 },
   },
 };
 
@@ -139,6 +155,14 @@ const S3: SliceStage = {
       ],
     },
     setup: {},
+    /*
+     * **无城席位必须声明 ai.pressure**（2026-11-19）。
+     *
+     * `aiNextAction` 里有一条：决策层返回空、且这一方没有城时，只有
+     * `level.ai.pressure > 0` 才会走 `pressureAdvance`（主动压上）。
+     * 不声明就是返回 null —— AI 每回合空过，玩家看到"敌人一动不动"。
+     */
+    ai: { pressure: 1 },
   },
 };
 

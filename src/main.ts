@@ -6211,6 +6211,13 @@ function applyRushDirective(): void {
 
 function rogueAfterAction(prev: GameState, next: GameState): void {
   if (!rogue || rogue.settled) return;
+  /*
+   * 兜底：无城席位必须有 ai.pressure，否则 AI 决策层返回空（2026-11-19）。
+   * 关卡校验可能不认识这个字段，所以建局这里再写一次。
+   */
+  if (state.config.level) {
+    state.config.level.ai = { ...(state.config.level.ai ?? {}), pressure: 1 };
+  }
   applyRushDirective(); // 每一手都重发，否则第二回合起敌人就站住了
   const before = rogue.snap;
   const after = observe(prev, next, before, rogueCtx());
