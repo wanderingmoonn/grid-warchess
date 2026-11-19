@@ -26,6 +26,7 @@ import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '.
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
 import { incomeOf } from '../../../src/core/rules.ts';
+import { TACTICS, TACTIC_BY_ID, applyTacticNow } from '../../../src/core/roguelike/tactics.ts';
 import { canUseType } from '../../../src/core/draft.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
@@ -327,6 +328,29 @@ export function run() {
     // 普通对局不受影响
     const plain = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 32);
     assert.equal(canUseType(plain, 'A', 'knight'), true);
+  });
+
+  test('肉鸽：战术卡——补给立刻给钱，空投进背包，修整回满血', () => {
+    assert.equal(TACTICS.length, 3);
+    const run = newRun(1, { allowRestart: true });
+    run.gold = 10;
+    run.roster = [{ type: 'militia', hp: 3, cardLv: 0 }];
+    const maxHp = () => 28;
+
+    applyTacticNow('supply', run, maxHp);
+    assert.equal(run.gold, 130, '补给应该立刻 +120');
+
+    applyTacticNow('airdrop', run, maxHp);
+    assert.deepEqual(run.tactics, ['airdrop'], '空投要留在背包里等下一关');
+
+    applyTacticNow('repair', run, maxHp);
+    assert.equal(run.roster[0]!.hp, 28, '修整应该回满');
+
+    // 背包要能过存档
+    const back = parseRun(serializeRun(run));
+    assert.ok(back);
+    assert.deepEqual(back.tactics, ['airdrop']);
+    assert.ok(TACTIC_BY_ID.supply.name.length > 0);
   });
 
   test('肉鸽：升城市时代价钱递增', () => {

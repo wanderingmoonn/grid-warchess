@@ -31,7 +31,8 @@ import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
 import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.ts';
 import { cityUpgradeCost } from './core/roguelike/rewards.ts';
-import { cardLevel, cardsToNext, drawCards } from './core/roguelike/cards.ts';
+import { cardLevel, cardsToNext, drawCards, rngFrom } from './core/roguelike/cards.ts';
+import { TACTICS, TACTIC_RATE, applyTacticNow } from './core/roguelike/tactics.ts';
 import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
@@ -6175,6 +6176,38 @@ function startRogueStage(): void {
     }
     state.nextUnitSeq = seq;
   }
+  /*
+   * 空投援军：上一关攒的战术卡在这里落地（2026-11-19）。
+   * 不占兵额——它是"临时工"，结算时照样按城内/城外判定。
+   */
+  if (rogue.run.tactics.includes('airdrop')) {
+    rogue.run.tactics = rogue.run.tactics.filter((x) => x !== 'airdrop');
+    const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
+    const spots = city ? cityTiles(city) : [];
+    const taken = new Set(state.units.map((u) => `${u.x},${u.y}`));
+    let seq = state.nextUnitSeq;
+    let placed = 0;
+    for (const s2 of spots) {
+      if (placed >= 2) break;
+      if (taken.has(`${s2.x},${s2.y}`)) continue;
+      const def = state.unitTypes['militia'];
+      state.units.push({
+        id: `u${seq++}`,
+        type: 'militia',
+        owner: 'A',
+        x: s2.x,
+        y: s2.y,
+        hp: def?.maxHp ?? 10,
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+      placed += 1;
+    }
+    state.nextUnitSeq = seq;
+    rogueSave();
+    toast(`空投援军到位：${placed} 个民兵`);
+  }
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
@@ -6347,12 +6380,34 @@ function offerRogueCards(after: () => void): void {
       note: `第 ${cardLevel(owned) + 1} 级还差 ${toNext} 张${toNext === 1 ? '（拿了就升）' : ''}`,
     };
   });
+  /*
+   * 30% 概率把最后一张换成战术卡（2026-11-19）。
+   * 用同一个 seed 派生，重开本关不会刷出不同的组合。
+   */
+  const rollTactic = rngFrom(seed ^ 0x5f3759df)() < TACTIC_RATE;
+  if (rollTactic) {
+    const tactic = TACTICS[Math.floor(rngFrom(seed ^ 0x1a2b3c4d)() * TACTICS.length)]!;
+    cards[cards.length - 1] = {
+      id: `tactic:${tactic.id}`,
+      name: tactic.name,
+      owned: 0,
+      note: tactic.blurb,
+    };
+  }
   const money = 80;
   openCardChoice({
     cards,
     money,
     onPick: (id) => {
       if (!rogue) return;
+      if (id.startsWith('tactic:')) {
+        const tid = id.slice('tactic:'.length) as never;
+        const msg = applyTacticNow(tid, rogue.run, (type) => UNIT_TYPES[type]?.maxHp ?? 10);
+        toast(msg);
+        rogueSave();
+        after();
+        return;
+      }
       rogue.run.cards[id] = (rogue.run.cards[id] ?? 0) + 1;
       const lv = cardLevel(rogue.run.cards[id]!);
       if (rogue.run.cards[id]! % 3 === 0) toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${lv} 级`);

@@ -50,6 +50,8 @@ export interface RunState {
   cityEra: number;
   /** 开局选的主分支（升级路线），决定卡池偏向 */
   branch: string;
+  /** 战术卡背包（只放"下一关才生效"的那种，比如空投援军） */
+  tactics: string[];
 }
 
 export const RUN_KEY = 'warchess:run:v1';
@@ -78,6 +80,7 @@ export function newRun(seed: number, opts: NewRunOptions): RunState {
     wallProgress: 0,
     cityEra: 1,
     branch: opts.branch ?? 'cold',
+    tactics: [],
   };
 }
 
@@ -101,6 +104,7 @@ export function parseRun(raw: string | null): RunState | null {
       // 老存档没有这个字段：当成青铜时代（第一幕的默认值）
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       branch: typeof obj.branch === 'string' ? obj.branch : 'cold',
+      tactics: Array.isArray(obj.tactics) ? (obj.tactics as string[]) : [],
       v: 1,
     } as RunState;
   } catch {
