@@ -33,6 +33,13 @@ import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.t
 import { cityUpgradeCost } from './core/roguelike/rewards.ts';
 import { cardLevel, cardsToNext, drawCards, rngFrom } from './core/roguelike/cards.ts';
 import { TACTICS, TACTIC_RATE, applyTacticNow } from './core/roguelike/tactics.ts';
+import {
+  capacityBonus,
+  cityArmorBonus,
+  healsIntake,
+  hornFreebies,
+  skipMoney,
+} from './core/roguelike/relics.ts';
 import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
@@ -6046,6 +6053,9 @@ function rogueCtx() {
     evacTurns: st.meta.evacTurns,
     expectedTurns: st.meta.expectedTurns,
     playerSeat: 'A' as const,
+    // 遗物：驮马（兵额）/ 军械（带回满血）
+    capacityBonus: capacityBonus(rogue!.run),
+    healIntake: healsIntake(rogue!.run),
   };
 }
 
@@ -6180,15 +6190,22 @@ function startRogueStage(): void {
    * 空投援军：上一关攒的战术卡在这里落地（2026-11-19）。
    * 不占兵额——它是"临时工"，结算时照样按城内/城外判定。
    */
-  if (rogue.run.tactics.includes('airdrop')) {
+  /*
+   * 号角（遗物）：只在第 1 关给一次免费援军（2026-11-19）。
+   * 和空投援军共用同一段落位逻辑，区别只在"从哪来"。
+   */
+  const horn = rogue.run.node === 0 ? hornFreebies(rogue.run) : 0;
+  if (horn > 0 || rogue.run.tactics.includes('airdrop')) {
+    const useAirdrop = rogue.run.tactics.includes('airdrop');
     rogue.run.tactics = rogue.run.tactics.filter((x) => x !== 'airdrop');
     const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
     const spots = city ? cityTiles(city) : [];
     const taken = new Set(state.units.map((u) => `${u.x},${u.y}`));
     let seq = state.nextUnitSeq;
     let placed = 0;
+    const want = Math.max(horn, useAirdrop ? 2 : 0);
     for (const s2 of spots) {
-      if (placed >= 2) break;
+      if (placed >= want) break;
       if (taken.has(`${s2.x},${s2.y}`)) continue;
       const def = state.unitTypes['militia'];
       state.units.push({
@@ -6206,7 +6223,7 @@ function startRogueStage(): void {
     }
     state.nextUnitSeq = seq;
     rogueSave();
-    toast(`空投援军到位：${placed} 个民兵`);
+    toast(`${useAirdrop ? '空投援军' : '号角'}到位：${placed} 个民兵`);
   }
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
@@ -6244,6 +6261,14 @@ function applyRushDirective(): void {
 
 function rogueAfterAction(prev: GameState, next: GameState): void {
   if (!rogue || rogue.settled) return;
+  /*
+   * 遗物「铁壁」：城防 +2（2026-11-19）。城对象在 createMatch 里已经生成，
+   * 这里直接加护甲——规则层读的是 `city.armor`，不另设开关。
+   */
+  const armorBonus = cityArmorBonus(rogue.run);
+  if (armorBonus > 0) {
+    for (const c of state.cities) if (c.owner === 'A') c.armor += armorBonus;
+  }
   /*
    * 兜底：无城席位必须有 ai.pressure，否则 AI 决策层返回空（2026-11-19）。
    * 关卡校验可能不认识这个字段，所以建局这里再写一次。
@@ -6394,7 +6419,7 @@ function offerRogueCards(after: () => void): void {
       note: tactic.blurb,
     };
   }
-  const money = 80;
+  const money = skipMoney(run);
   openCardChoice({
     cards,
     money,

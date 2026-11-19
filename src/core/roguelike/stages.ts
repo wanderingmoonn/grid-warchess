@@ -81,7 +81,7 @@ const S1: SliceStage = {
 
 /** 第 2 关：多一个远程 + 一个骑士，逼你算"要不要冲上去换" */
 const S2: SliceStage = {
-  meta: { title: '巡林队', evacTurns: 2, expectedTurns: 7 },
+  meta: { title: '巡林队', evacTurns: 2, expectedTurns: 7, relic: 'packhorse' },
   level: {
     id: 'level:rogue-s2',
     version: 1,
@@ -124,7 +124,7 @@ const S2: SliceStage = {
 
 /** 第 3 关：守门人，携带固定遗物（打赢必得） */
 const S3: SliceStage = {
-  meta: { title: '守门人', evacTurns: 2, expectedTurns: 8, relic: 'tower' },
+  meta: { title: '守门人', evacTurns: 2, expectedTurns: 8, relic: 'ironwall' },
   level: {
     id: 'level:rogue-s3',
     version: 1,

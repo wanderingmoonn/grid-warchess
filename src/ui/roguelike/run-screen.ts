@@ -7,6 +7,7 @@
 
 import type { RosterUnit, RunState } from '../../core/roguelike/run-state.ts';
 import { cityCapacity, citySizeFor } from '../../core/roguelike/roster.ts';
+import { relicNames } from '../../core/roguelike/relics.ts';
 /** 各面板各写一份，和别的 UI 文件保持一致（没有共享的 util） */
 const esc = (t: string): string =>
   String(t).replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
@@ -42,7 +43,9 @@ export function openRunPanel(opts: RunPanelOptions): void {
           <span class="rogue-chip">金币 <b>${run.gold}</b></span>
           <span class="rogue-chip">兵额 <b>${run.roster.length} / ${cap}</b></span>
           <span class="rogue-chip">城市时代 <b>${run.cityEra}</b></span>
-          <span class="rogue-chip">遗物 <b>${run.relics.length}</b></span>
+          <span class="rogue-chip">遗物 <b>${
+            run.relics.length === 0 ? '无' : relicNames(run).join('、')
+          }</b></span>
           <span class="rogue-chip">重开 <b>${run.allowRestart ? '允许' : '不允许'}</b></span>
         </div>
         ${

@@ -27,6 +27,13 @@ import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
 import { incomeOf } from '../../../src/core/rules.ts';
 import { TACTICS, TACTIC_BY_ID, applyTacticNow } from '../../../src/core/roguelike/tactics.ts';
+import {
+  capacityBonus,
+  cityArmorBonus,
+  healsIntake,
+  hornFreebies,
+  skipMoney,
+} from '../../../src/core/roguelike/relics.ts';
 import { canUseType } from '../../../src/core/draft.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
@@ -351,6 +358,60 @@ export function run() {
     assert.ok(back);
     assert.deepEqual(back.tactics, ['airdrop']);
     assert.ok(TACTIC_BY_ID.supply.name.length > 0);
+  });
+
+  test('肉鸽：遗物真的生效——铁壁/驮马/号角/军械/吝啬鬼', () => {
+    const run = newRun(1, { allowRestart: true });
+    assert.equal(cityArmorBonus(run), 0, '没遗物就是 0');
+    assert.equal(capacityBonus(run), 0);
+    assert.equal(hornFreebies(run), 0);
+    assert.equal(healsIntake(run), false);
+    assert.equal(skipMoney(run), 80);
+
+    run.relics = ['ironwall', 'packhorse', 'horn', 'arsenal', 'miser'];
+    assert.equal(cityArmorBonus(run), 2, '铁壁：城防 +2');
+    assert.equal(capacityBonus(run), 2, '驮马：兵额 +2');
+    assert.equal(hornFreebies(run), 2, '号角：2 个免费民兵');
+    assert.equal(healsIntake(run), true, '军械：带回满血');
+    assert.equal(skipMoney(run), 160, '吝啬鬼：不选拿钱翻倍');
+  });
+
+  test('肉鸽：驮马与军械在撤离结算里生效', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let state = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 41);
+    const city = state.cities.find((c) => c.owner === 'A')!;
+    const mk = (i: number, x: number, y: number, hp: number) => ({
+      ...state.units.find((u) => u.owner === 'A')!,
+      id: `z${i}`,
+      x,
+      y,
+      hp,
+    });
+    // 城里 5 个（超过默认兵额 4）+ 城外 1 个
+    state = {
+      ...state,
+      units: [
+        mk(1, city.x, city.y, 5),
+        mk(2, city.x + 1, city.y, 5),
+        mk(3, city.x, city.y + 1, 5),
+        mk(4, city.x + 1, city.y + 1, 5),
+        mk(5, city.x, city.y, 5),
+        mk(6, 14, 14, 5),
+      ],
+      winner: null,
+    };
+    const base = { run: newRun(1, { allowRestart: true }), stageIndex: 0, evacTurns: 2, expectedTurns: 6, playerSeat: 'A' as const };
+    const plain = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, base);
+    const buffed = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, {
+      ...base,
+      capacityBonus: 2,
+      healIntake: true,
+    });
+    assert.ok(buffed.taken.length > plain.taken.length, '驮马应该多带走几个人');
+    assert.ok(buffed.taken.every((u) => u.hp >= 5), '军械只能加血不能减');
+    assert.ok(buffed.taken.every((u) => typeof u.hp === 'number'));
   });
 
   test('肉鸽：升城市时代价钱递增', () => {

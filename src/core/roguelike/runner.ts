@@ -32,6 +32,10 @@ export interface RunnerCtx {
   expectedTurns: number;
   /** 玩家席位（撤离只看"我的兵有没有进城"） */
   playerSeat: PlayerId;
+  /** 遗物「驮马」：兵额 +N */
+  capacityBonus?: number;
+  /** 遗物「军械」：带回来的兵按上限回满 */
+  healIntake?: boolean;
 }
 
 export interface StageResult {
@@ -157,9 +161,19 @@ export function settleStage(state: GameState, snap: RunnerSnapshot, ctx: RunnerC
     else outside.push(toRoster(u));
   }
 
-  const capacity = cityCapacity(state.config.citySize ?? 2);
+  const capacity = cityCapacity(state.config.citySize ?? 2) + (ctx.capacityBonus ?? 0);
   const valueOf = (u: RosterUnit): number => valueOfUnit(state, u.type);
   const split = settleRoster(inCity, outside, capacity, valueOf);
+  /*
+   * 遗物「军械」：带回来的人按兵种上限回满（2026-11-19）。
+   * 放在 settleRoster 之后，只影响"真的被带走的人"——没带走的不该白回血。
+   */
+  if (ctx.healIntake) {
+    split.taken = split.taken.map((u) => ({
+      ...u,
+      hp: state.unitTypes[u.type]?.maxHp ?? u.hp,
+    }));
+  }
 
   const halfDone = snap.clearedTurn === null;
   const turnsUsed = snap.clearedTurn ?? state.turn;
