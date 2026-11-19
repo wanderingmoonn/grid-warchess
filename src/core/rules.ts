@@ -748,7 +748,23 @@ export function isEliminated(s: GameState, p: PlayerId): boolean {
    * 关卡校验会把这种组合拦住。
    */
   if (isCitylessSeat(s, p)) return unitsOf(s, p).length === 0;
-  return citiesOf(s, p).length === 0;
+
+  /*
+   * 有城席位：**要么还有一座能用的城，要么手上还有人**。
+   *
+   * 2026-11-19 修：以前只看 `citiesOf`，而它把**废墟也算成城**，于是
+   * "城全被砸成废墟 + 兵全灭"这一方会永远停在场上——它既产不出兵，
+   * 也没有单位能走进废墟重建，是一局已经输定但系统不认的僵尸席位。
+   *
+   * 判据的顺序有讲究：
+   *   1. 有一座**没塌**的城 → 活着（哪怕一个兵都没有，还能造）；
+   *   2. 一座城都没有 → 死（和以前一样）；
+   *   3. 全是废墟 → 只有"手上还有人"才可能翻（走进去重建），否则死。
+   */
+  const cities = citiesOf(s, p);
+  if (cities.some((c) => !c.ruined)) return false;
+  if (cities.length === 0) return true;
+  return unitsOf(s, p).length === 0;
 }
 
 /** 还没出局的席位 */
