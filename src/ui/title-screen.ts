@@ -23,6 +23,8 @@ export interface TitleOptions {
   /** 最近一版的一句话（可省） */
   latest?: string;
   onNew: () => void;
+  /** 肉鸽模式（切片）：一路打三关，打完回结算 */
+  onRogue: () => void;
   /** 新手教程：一条三分钟的固定局面，教选兵/移动/攻击/结束回合/攻城 */
   onTutorial: () => void;
   /**
@@ -82,6 +84,8 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       </div>
 
       <div class="title-links">
+        <button data-title="rogue">肉鸽</button>
+        <span>·</span>
         <button data-title="online">联机对战</button>
         <span>·</span>
         <button data-title="manual">规则手册</button>
@@ -131,6 +135,10 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       case 'continue':
         close();
         opts.onContinue();
+        break;
+      case 'rogue':
+        close();
+        opts.onRogue();
         break;
       case 'online':
         close();

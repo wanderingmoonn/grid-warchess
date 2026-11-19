@@ -23,7 +23,12 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { goalText } from './core/level.ts';
+import { goalText, validateLevel } from './core/level.ts';
+import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
+import { initRunner, keepPlaying, observe, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
+import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
+import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
 import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
 import { newHeatCells, visibleHeat } from './core/heat.ts';
@@ -3569,6 +3574,8 @@ function dispatch(action: Action): boolean {
   noteStep(actor, action);
   if (action.type === 'END_TURN') noteTurnEnd();
   noteFinalFrame();
+  // 肉鸽：每走一步看一眼"敌人是否清空 / 撤离倒计时"
+  rogueAfterAction(before, state);
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
@@ -5795,6 +5802,7 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     version: BUILD_VERSION,
     latest: '新：新手教程（约 3 分钟，从首页进）',
     onNew: newGameFlow,
+    onRogue: openRoguelike,
     onTutorial: startTutorial,
     onContinue: () => {
       render();
@@ -5845,6 +5853,158 @@ function newGameFlow(): void {
     toast('新对局开始');
     kickAiIfNeeded();
   });
+}
+
+/**
+ * ── 肉鸽切片控制器（2026-11-19） ──────────────────────────────
+ *
+ * 只做"串起来"这件事：开局 → 打 → 敌人清空后撤离 → 结算 → 下一关。
+ * 规则在 `core/roguelike/*`，面板在 `ui/roguelike/run-screen.ts`，
+ * 这里负责把它们和主循环（dispatch / render / 存档）接上。
+ *
+ * **三选一、整备、路线选择还没接**——先把 3 关跑通，节奏对不对比面板更重要。
+ */
+let rogue: { run: RunState; snap: RunnerSnapshot } | null = null;
+
+function rogueSave(): void {
+  if (rogue) localStorage.setItem(RUN_KEY, serializeRun(rogue.run));
+}
+
+function rogueCtx() {
+  const st = stageAt(rogue!.run.node);
+  return {
+    run: rogue!.run,
+    stageIndex: rogue!.run.node,
+    evacTurns: st.meta.evacTurns,
+    expectedTurns: st.meta.expectedTurns,
+    playerSeat: 'A' as const,
+  };
+}
+
+function openRoguelike(): void {
+  const saved = parseRun(localStorage.getItem(RUN_KEY));
+  rogue = saved ? { run: saved, snap: initRunner() } : null;
+  showRunPanel();
+}
+
+function showRunPanel(): void {
+  if (!rogue) {
+    openRunPanel({
+      run: newRun(randomSeed(), { allowRestart: true }),
+      fresh: true,
+      stageNo: 1,
+      total: SLICE_STAGES.length,
+      stageTitle: '还没开始：选一档新开一局',
+      onStart: () => {},
+      onNewRun: (allowRestart) => {
+        rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner() };
+        rogueSave();
+        showRunPanel();
+      },
+      onClose: () => {},
+    });
+    return;
+  }
+  const st = stageAt(rogue.run.node);
+  openRunPanel({
+    run: rogue.run,
+    stageNo: rogue.run.node + 1,
+    total: SLICE_STAGES.length,
+    stageTitle: st.level.name,
+    onStart: startRogueStage,
+    onNewRun: (allowRestart) => {
+      rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner() };
+      rogueSave();
+      showRunPanel();
+    },
+    onAbandon: () => {
+      localStorage.removeItem(RUN_KEY);
+      rogue = null;
+      showRunPanel();
+    },
+    onClose: () => {},
+  });
+}
+
+function startRogueStage(): void {
+  if (!rogue) return;
+  const st = stageAt(rogue.run.node);
+  const checked = validateLevel(st.level);
+  if (!checked.ok) {
+    toast(`这一关的数据有问题：${checked.errors[0] ?? '未知'}`);
+    return;
+  }
+  const units = mergeUnits(loadCustomUnits(), compileUnits(rogue.run.cards));
+  state = createMatch(
+    { ...DEFAULT_CONFIG, level: checked.level, startEra: rogue.run.cityEra },
+    randomSeed(),
+    units,
+  );
+  state.aiControl = undefined;
+  document.querySelector('.title-screen')?.remove();
+  dropHeatFlash();
+  detachRoom();
+  resetZoom();
+  clearSelection();
+  resetRecorder();
+  rogue.snap = initRunner();
+  saveMatch(state);
+  hasRealSave = true;
+  render();
+  toast(`肉鸽 第 ${rogue.run.node + 1}/${SLICE_STAGES.length} 关：${st.level.name}`);
+  kickAiIfNeeded();
+}
+
+/** dispatch 里每走一步之后调：只读局面，推进状态机 */
+function rogueAfterAction(prev: GameState, next: GameState): void {
+  if (!rogue) return;
+  const before = rogue.snap;
+  const after = observe(prev, next, before, rogueCtx());
+  rogue.snap = after;
+  if (after.phase === before.phase && after.evacLeft === before.evacLeft) return;
+
+  if (after.phase !== before.phase) {
+    if (after.phase === 'evac') {
+      keepPlaying(state);
+      toast(`敌人清空！还有 ${after.evacLeft} 手把兵带回城（只有城里的能带走）`);
+      render();
+    } else if (after.phase === 'done') {
+      finishRogueStage();
+    }
+  } else if (after.phase === 'evac') {
+    // 撤离中扣了一手
+    keepPlaying(state);
+    toast(`撤离：还剩 ${after.evacLeft} 手`);
+    render();
+  }
+}
+
+function finishRogueStage(): void {
+  if (!rogue) return;
+  const st = stageAt(rogue.run.node);
+  const res = settleStage(state, rogue.snap, rogueCtx());
+  rogue.run.gold += res.gold + res.refund;
+  rogue.run.roster = res.taken;
+  if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) rogue.run.relics.push(st.meta.relic);
+  const finished = rogue.run.node + 1;
+  rogue.run.node = Math.min(finished, SLICE_STAGES.length - 1);
+  rogueSave();
+  openSettlePanel({
+    gold: res.gold + res.refund,
+    taken: res.taken,
+    left: res.left,
+    refund: res.refund,
+    halfDone: res.halfDone,
+    onNext: finished >= SLICE_STAGES.length ? () => showRogueEnd() : showRunPanel,
+  });
+}
+
+function showRogueEnd(): void {
+  const gold = rogue?.run.gold ?? 0;
+  toast(`切片跑完了：三关结束，剩 ${gold} 金。这一局到此为止（后续会加幕与 Boss）。`);
+  localStorage.removeItem(RUN_KEY);
+  rogue = null;
+  showTitle();
 }
 
 /**

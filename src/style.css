@@ -10647,3 +10647,27 @@ a.btn {
 /* 支线里的一卷：标题 + 这一卷的关卡 */
 .side-chapter { margin: 10px 0 14px; }
 .side-chapter .field-label { margin-bottom: 6px; }
+
+/* 肉鸽面板（切片） */
+.rogue-panel {
+  width: min(560px, 100%);
+}
+
+.rogue-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.rogue-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #efece5;
+  color: #554f45;
+  font-size: 13px;
+}
+
+.rogue-chip b {
+  color: #2f2b26;
+}
