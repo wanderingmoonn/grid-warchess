@@ -15,7 +15,7 @@ import {
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
 import { CARDS_PER_LEVEL, cardLevel, cardWeight, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
-import { PER_LEVEL_PCT, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
+import { PER_LEVEL_PCT, cardTypeId, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
 import { SETTLE, cityUpgradeCost, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
@@ -438,12 +438,12 @@ export function run() {
   test('肉鸽：卡每级 +25%，且真的改到攻击/血量', () => {
     const base = UNIT_TYPES.militia!;
     const out = compileUnits({ militia: 3 });
-    assert.equal(out.militia!.atk, Math.round(base.atk * 1.25), '一级应当 +25% 攻');
-    assert.equal(out.militia!.maxHp, Math.round(base.maxHp * 1.25), '一级应当 +25% 血');
-    const lv2 = compileUnits({ militia: 6 });
-    assert.equal(lv2.militia!.atk, Math.round(base.atk * 1.5), '两级 +50%');
-    assert.ok(out.militia!.atk > base.atk, '数字必须真的变大，不能是 NaN');
-    assert.ok(Number.isFinite(out.militia!.atk));
+    assert.equal(out[cardTypeId('militia', 1)]!.atk, Math.round(base.atk * 1.25), '一级应当 +25% 攻');
+    assert.equal(out[cardTypeId('militia', 1)]!.maxHp, Math.round(base.maxHp * 1.25), '一级应当 +25% 血');
+    const six = compileUnits({ militia: 6 });
+    assert.equal(six[cardTypeId('militia', 2)]!.atk, Math.round(base.atk * 1.5), '两级 +50%');
+    assert.ok(out[cardTypeId('militia', 1)]!.atk > base.atk, '数字必须真的变大，不能是 NaN');
+    assert.ok(Number.isFinite(out[cardTypeId('militia', 1)]!.atk));
   });
 
   test('肉鸽：城血跨关保留，修城下一关补满', () => {
@@ -472,16 +472,19 @@ export function run() {
     };
     // 6 张 = 2 级
     const table = compileUnits({ archer: 6, militia: 3 }, base);
-    assert.equal(table.archer.atk, Math.round(11 * (1 + PER_LEVEL_PCT.atk * 2)));
-    assert.equal(table.archer.maxHp, Math.round(24 * (1 + PER_LEVEL_PCT.maxHp * 2)));
-    assert.ok(table.archer.atk > 11 && table.archer.maxHp > 24);
-    assert.equal(table.militia, undefined, '基础表里没有的兵种不该被凭空造出来');
+    const a2 = table[cardTypeId('archer', 2)]!;
+    assert.equal(a2.atk, Math.round(11 * (1 + PER_LEVEL_PCT.atk * 2)));
+    assert.equal(a2.maxHp, Math.round(24 * (1 + PER_LEVEL_PCT.maxHp * 2)));
+    assert.ok(a2.atk > 11 && a2.maxHp > 24);
+    // 原 id 不能被覆盖（否则敌人的同名兵也会变强）
+    assert.equal(table.archer, undefined, '不许覆盖基础兵种');
+    assert.equal(table[cardTypeId('militia', 1)], undefined, '基础表里没有的兵种不该被凭空造出来');
   });
 
   test('肉鸽：百分比加成随等级线性且不翻倍', () => {
     const base = { cheap: { id: 'cheap', atk: 4, maxHp: 10 } };
-    const lv1 = compileUnits({ cheap: 3 }, base).cheap;
-    const lv3 = compileUnits({ cheap: 9 }, base).cheap;
+    const lv1 = compileUnits({ cheap: 3 }, base)[cardTypeId('cheap', 1)];
+    const lv3 = compileUnits({ cheap: 9 }, base)[cardTypeId('cheap', 3)];
     assert.equal(lv1.atk, Math.round(4 * (1 + PER_LEVEL_PCT.atk)));
     assert.ok(lv3.atk > lv1.atk);
     // 3 级也不该翻倍（12% × 3 = 36%）
