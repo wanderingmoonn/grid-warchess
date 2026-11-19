@@ -5557,7 +5557,10 @@ async function runAiLoop(): Promise<void> {
   }
 
   if (token === aiToken && !state.winner && activity() === before) {
-    aiLog(`empty-turn rounds=${loops} cur=${state.current} token=${aiToken}`);
+    const aiSideSeat = (state.config.aiSeats ?? []).find((p) =>
+      state.units.some((u) => u.owner === p),
+    ) ?? state.current;
+    aiLog(`empty-turn rounds=${loops} cur=${state.current} ai=${aiSideSeat} token=${aiToken}`);
     aiEmptyTurns += 1;
     const now = Date.now();
     /*
@@ -5580,7 +5583,15 @@ async function runAiLoop(): Promise<void> {
         .then((e) => {
           // 预算用引擎里的默认值；取不到就退回一个同形状的对象
           const budgetLike = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
-          const a = e.aiNextAction(state, budgetLike as never, new Set()) as unknown;
+          /*
+           * **必须把 current 切回电脑那一席再问**（2026-11-19 修正）。
+           *
+           * `aiNextAction` 没有席位参数，它读 `state.current`。空转复核是在
+           * 交棒之后跑的，那时 current 已经回到玩家，于是问出来的是**玩家的决策**
+           * ——上次那条 `RECRUIT c1` 就是这么来的，是测量错误，不是 AI 的病。
+           */
+          const probe = { ...state, current: aiSideSeat } as typeof state;
+          const a = e.aiNextAction(probe, budgetLike as never, new Set()) as unknown;
           autoReport(
             () => state,
             `空转复核 aiNextAction=${JSON.stringify(a)} | turn=${state.turn} cur=${state.current} w=${state.w} h=${state.h} units=${state.units.length} od=${JSON.stringify(state.orderDirectives)} | ${snapTrace}`,
