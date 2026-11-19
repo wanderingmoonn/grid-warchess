@@ -48,6 +48,8 @@ export interface RunState {
    * 关卡不再写死时代，一律用这个值开局。
    */
   cityEra: number;
+  /** 开局选的主分支（升级路线），决定卡池偏向 */
+  branch: import('./branches.ts').Branch;
 }
 
 export const RUN_KEY = 'warchess:run:v1';
@@ -55,6 +57,8 @@ export const RUN_KEY = 'warchess:run:v1';
 export interface NewRunOptions {
   allowRestart: boolean;
   totalStages?: number;
+  /** 开局选的升级路线；不传就是步战 */
+  branch?: import('./branches.ts').Branch;
 }
 
 export function newRun(seed: number, opts: NewRunOptions): RunState {
@@ -73,6 +77,7 @@ export function newRun(seed: number, opts: NewRunOptions): RunState {
     restartsUsed: 0,
     wallProgress: 0,
     cityEra: 1,
+    branch: opts.branch ?? 'infantry',
   };
 }
 
@@ -95,6 +100,7 @@ export function parseRun(raw: string | null): RunState | null {
       ...obj,
       // 老存档没有这个字段：当成青铜时代（第一幕的默认值）
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
+      branch: (obj.branch ?? 'infantry') as RunState['branch'],
       v: 1,
     } as RunState;
   } catch {

@@ -5,6 +5,8 @@
  * 效果是**整个兵种变强**（不是多一张手牌），所以三张才够一次质变。
  */
 
+import { branchMul } from './branches.ts';
+
 /** 抽到几张算一级 */
 export const CARDS_PER_LEVEL = 3;
 
@@ -48,6 +50,8 @@ export interface DrawOptions {
   cityEra?: number;
   /** 兵种 → 时代。默认按原版兵种表查 */
   eraOf?: (id: string) => number;
+  /** 主分支：属于它的卡权重 ×3（见 branches.ts），其余分支 ×1 */
+  branch?: import('./branches.ts').Branch;
 }
 
 /**
@@ -84,8 +88,9 @@ export function drawCards(
 
   const out: string[] = [];
   const left = [...eligible];
+  const mulOf = (id: string): number => (opts.branch ? branchMul(id, opts.branch) : 1);
   while (out.length < n && left.length > 0) {
-    const weights = left.map((id) => cardWeight(eraOf(id), cityEra, isNear(id)));
+    const weights = left.map((id) => cardWeight(eraOf(id), cityEra, isNear(id)) * mulOf(id));
     const total = weights.reduce((a, b) => a + b, 0);
     let roll = rnd() * total;
     let pick = left.length - 1;

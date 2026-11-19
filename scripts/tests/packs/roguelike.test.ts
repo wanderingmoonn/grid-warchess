@@ -19,6 +19,8 @@ import { PER_LEVEL_PCT, compileUnits, mergeUnits } from '../../../src/core/rogue
 import { SETTLE, cityUpgradeCost, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
+import { BRANCHES, BRANCH_MAIN_MUL, branchMul, branchOf, groupByBranch } from '../../../src/core/roguelike/branches.ts';
+import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
@@ -26,6 +28,7 @@ export function run() {
   test('肉鸽：新 run 的默认值', () => {
     const r = newRun(123, { allowRestart: true });
     assert.equal(r.cityEra, 1, '开局是青铜时代');
+    assert.equal(r.branch, 'infantry', '默认分支是步战');
     assert.equal(r.v, 1);
     assert.equal(r.gold, 0);
     assert.equal(r.totalStages, 3);
@@ -102,6 +105,44 @@ export function run() {
     assert.ok(c3 > c1 * 1.2, `三代应该更常见：一代 ${c1} 次 / 三代 ${c3} 次`);
     // 权重本身也要能单测
     assert.ok(cardWeight(3, 3, false) > cardWeight(1, 3, false));
+  });
+
+  test('肉鸽：每个战斗兵种都归到唯一分支，经济/建筑不参与', () => {
+    const ids = Object.keys(UNIT_TYPES);
+    const combat = ids.filter((id) => UNIT_TYPES[id]!.category === 'combat');
+    assert.ok(combat.length > 10, '基础表里的战斗兵种太少，测试可能没读到表');
+    for (const id of combat) {
+      const b = branchOf(id);
+      assert.ok(b, `${id} 没有分支`);
+      assert.ok(BRANCHES.some((x) => x.id === b), `${id} 的分支 ${b} 不在名单里`);
+    }
+    const econ = ids.find((id) => UNIT_TYPES[id]!.category !== 'combat');
+    if (econ) assert.equal(branchOf(econ), null, '经济/建筑不该算战斗分支');
+
+    const grouped = groupByBranch(ids);
+    const total = Object.values(grouped).reduce((a, b) => a + b.length, 0);
+    assert.equal(total, combat.length, '分组总数必须等于战斗兵种数（不重不漏）');
+    assert.ok(grouped.infantry.length > 0 && grouped.ranged.length > 0, '步战与远程应各有兵');
+  });
+
+  test('肉鸽：主分支的卡权重 ×3，抽卡明显偏向主分支', () => {
+    assert.equal(BRANCH_MAIN_MUL, 3);
+    const ids = Object.keys(UNIT_TYPES).filter((id) => UNIT_TYPES[id]!.category === 'combat');
+    const g = groupByBranch(ids);
+    const main = g.ranged.length > 0 ? 'ranged' : 'infantry';
+    for (const id of ids) {
+      const expect = branchOf(id) === main ? BRANCH_MAIN_MUL : 1;
+      assert.equal(branchMul(id, main), expect);
+    }
+    assert.equal(branchMul(ids[0]!, undefined), 1, '没选分支时不该加权');
+
+    // 只抽 1 个、统计 200 个种子：主分支应占多数
+    let mains = 0;
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const pick = drawCards(ids, {}, seed, 1, { branch: main })[0];
+      if (pick && branchOf(pick) === main) mains += 1;
+    }
+    assert.ok(mains > 100, `主分支应占多数，实际 ${mains}/200`);
   });
 
   test('肉鸽：升城市时代价钱递增', () => {
