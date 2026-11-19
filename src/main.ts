@@ -5514,6 +5514,7 @@ const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
  */
 async function runAiLoop(): Promise<void> {
   const token = ++aiToken;
+  aiLog(`loop+ token=${token} cur=${state.current}`);
   clearSelection();
 
   /*
@@ -5533,9 +5534,14 @@ async function runAiLoop(): Promise<void> {
   // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
   if (pushing) dirty = true;
 
+  let loops = 0;
   while (token === aiToken && !state.winner && !aiPaused && isAiSide(state, state.current)) {
+    loops += 1;
     await runAiTurn(token);
   }
+  aiLog(
+    `loop- token=${token}/${aiToken} rounds=${loops} cur=${state.current} aiSide=${isAiSide(state, state.current)} winner=${state.winner ?? '-'} paused=${aiPaused}`,
+  );
 
   /*
    * 电脑这一轮走完，**强制**推上去（不带乐观锁）。
@@ -6097,6 +6103,24 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
   if (after.phase === 'evac') keepPlaying(state);
   if (after.phase === before.phase && after.evacLeft === before.evacLeft) return;
 
+  /*
+   * **输了要当场收尾**（2026-11-19）。
+   *
+   * 追踪日志显示：敌人把玩家打光之后 `winner=B`，引擎从此拒绝一切动作
+   * （`applyAction` 第一句就是"对局已结束"），而肉鸽这边**没有任何终局处理**——
+   * 不弹面板、不提示，玩家只会看到"敌人不动了、点什么都没反应"。
+   * 这就是"挂机几十回合敌军不进攻"的真实成因。
+   */
+  if (next.winner && next.winner !== 'A') {
+    rogue.settled = true;
+    localStorage.removeItem(RUN_KEY);
+    const g = rogue.run.gold;
+    rogue = null;
+    syncRogueHud();
+    toast(`这一局结束了：你的兵打光了（剩 ${g} 金）。肉鸽的 run 到这里为止。`);
+    showTitle();
+    return;
+  }
   if (after.phase !== before.phase) {
     if (after.phase === 'evac') {
       keepPlaying(state);
@@ -6250,6 +6274,47 @@ document.addEventListener('click', (ev) => {
 });
 
 /*
+ * **AI 看门狗**（2026-11-19）。
+ *
+ * 真机上复现过：第 12 回合轮到电脑，敌人走了一两步之后**再也没人驱动**——
+ * `aiBusy` 为真只是"轮到电脑"的派生值，没有任何东西会再去叫醒循环，
+ * 于是整局停在那里（玩家看到的就是"敌人不进攻"，而自己还能结束回合）。
+ *
+ * 判据只看一件事：**轮到电脑 + 局面在 1.5 秒内毫无变化**。变了就说明循环在跑，
+ * 不动才补一脚。不碰 AI 决策本身，只保证"它有机会走"。
+ */
+let aiWatchSig = '';
+let aiWatchAt = 0;
+
+function aiWatchdog(): void {
+  if (replay || room || spectating() || aiPaused) return;
+  if (!isAiSide(state, state.current)) {
+    aiWatchSig = '';
+    return;
+  }
+  const sig = [
+    state.turn,
+    state.current,
+    state.units.length,
+    state.units.reduce((n, u) => n + (u.moved ? 1 : 0) + (u.acted ? 1 : 0), 0),
+    state.winner ?? '-',
+  ].join('|');
+  const now = Date.now();
+  if (sig !== aiWatchSig) {
+    aiWatchSig = sig;
+    aiWatchAt = now;
+    return;
+  }
+  if (now - aiWatchAt < 1500) return;
+  // 局面确实停在原地：补一脚，并把这件事记下来（下次排查有据可查）
+  aiWatchAt = now;
+  console.warn('[ai] 看门狗：轮到电脑但局面 1.5s 没动，重新驱动');
+  kickAiIfNeeded();
+}
+
+setInterval(aiWatchdog, 500);
+
+/*
  * 肉鸽调试钩子：只在 `?roguedebug=1` 下挂到 window（2026-11-19）。
  * 用途：撤离/下一关这条链跨 4 个模态面板，无头浏览器要能把整条链跑完。
  */
@@ -6271,6 +6336,10 @@ if (new URLSearchParams(location.search).has('roguedebug')) {
     hud: (): string => (document.getElementById('rogue-hud')?.textContent ?? '').trim(),
     snap: () => rogue?.snap ?? null,
     sel: (): string | null => selectedId,
+    /** AI 调度链的门：卡住时看这四个值就知道断在哪 */
+    aiTrace: (): string[] => aiTrace.slice(-14),
+    ai: (): string =>
+      `busy=${aiBusy()} paused=${aiPaused} token=${aiToken} current=${state.current} turn=${state.turn}`,
     mine: (): Array<{ id: string; x: number; y: number }> =>
       state.units.filter((u) => u.owner === 'A').map((u) => ({ id: u.id, x: u.x, y: u.y })),
     foes: (): string =>
@@ -6464,7 +6533,17 @@ function exitTutorial(): void {
 }
 
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
+/** AI 调度追踪：只留最近 40 条，排查"轮到电脑却不动"用 */
+const aiTrace: string[] = [];
+function aiLog(msg: string): void {
+  aiTrace.push(msg);
+  if (aiTrace.length > 40) aiTrace.shift();
+}
+
 function kickAiIfNeeded(): void {
+  aiLog(
+    `kick watching=${watching()} aiSide=${isAiSide(state, state.current)} winner=${state.winner ?? '-'} token=${aiToken} paused=${aiPaused}`,
+  );
   aiPaused = false;
   // 观战位只跟着快照看，本地不驱 AI（见 runAiLoop 顶部那段）
   if (watching()) return;
