@@ -220,17 +220,24 @@ export function run() {
     assert.equal(snap.evacLeft, st.meta.evacTurns);
     assert.equal(snap.clearedTurn, state.turn);
 
-    // 同一手里再走一步（turn 没变）不该扣倒计时
+    // 同一手里再走一步（回合没换手）不该扣倒计时
     const same = observe(state, { ...state }, snap, ctx);
     assert.equal(same.evacLeft, snap.evacLeft);
 
-    // 换两手 → 结束
-    let s2 = { ...state, turn: state.turn + 1 };
-    snap = observe(state, s2, snap, ctx);
+    // 敌人回合空转**不许烧倒计时**：这是"动一下就结算"的成因
+    const foeTurn = { ...state, turn: state.turn + 1, current: 'B' as const };
+    const noBurn = observe({ ...state, current: 'B' as const }, foeTurn, snap, ctx);
+    assert.equal(noBurn.evacLeft, snap.evacLeft, '敌人回合不该扣撤离时间');
+
+    // 玩家回合开始才扣：两次"轮到玩家"→ 用光
+    const myTurn1 = { ...state, turn: state.turn + 2, current: 'A' as const };
+    snap = observe(foeTurn, myTurn1, snap, ctx);
     assert.equal(snap.evacLeft, st.meta.evacTurns - 1);
-    s2 = { ...s2, turn: s2.turn + 1 };
-    snap = observe({ ...state, turn: state.turn + 1 }, s2, snap, ctx);
-    assert.equal(snap.phase, 'done');
+
+    const foeTurn2 = { ...myTurn1, turn: myTurn1.turn + 1, current: 'B' as const };
+    const myTurn2 = { ...myTurn1, turn: myTurn1.turn + 2, current: 'A' as const };
+    snap = observe(foeTurn2, myTurn2, snap, ctx);
+    assert.equal(snap.phase, 'done', '两个玩家回合之后才结束');
 
     // 胜负被按下不表（撤离期间必须还能动）
     const withWinner = { ...state, winner: 'A' };

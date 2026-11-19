@@ -97,8 +97,15 @@ export function observe(
     return snap;
   }
 
-  // evac：只在换手时扣
-  if (next.turn === prev.turn) return snap;
+  /*
+   * 只在**轮到玩家**时扣倒计时（2026-11-19 修）。
+   *
+   * 原来按"换手"扣，结果是敌人被清空后它的回合空转（没兵可动，引擎自己
+   * 结束回合），一个来回就烧掉两手——玩家动一下就直接结算，等于没有撤离时间。
+   * 现在按"玩家回合开始的次数"算：写 2 就是玩家真能走两个回合。
+   */
+  const myTurnStarted = next.current === ctx.playerSeat && prev.current !== ctx.playerSeat;
+  if (!myTurnStarted) return snap;
   const left = snap.evacLeft - 1;
   return left <= 0 ? { ...snap, phase: 'done', evacLeft: 0 } : { ...snap, evacLeft: left };
 }

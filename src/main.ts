@@ -6003,6 +6003,21 @@ function startRogueStage(): void {
     }
     state.nextUnitSeq = seq;
   }
+  /*
+   * **敌人要主动打过来**（2026-11-19 用户反馈"还得自己去找架打"）。
+   *
+   * 无城席位（肉鸽里的敌人小队）没有产线、没有城，AI 默认没有进攻动机，
+   * 开局就原地待着。这里给所有敌方席位下发 rush 指令——用的是引擎自己的
+   * 关卡指令（`orderDirectives`，和关卡事件里的 doctrine 动作同一套），
+   * 不碰 AI 估值。
+   */
+  const foeSeats = [...new Set(state.units.filter((u) => u.owner !== 'A').map((u) => u.owner))];
+  if (foeSeats.length > 0) {
+    state.orderDirectives = {
+      ...(state.orderDirectives ?? {}),
+      ...Object.fromEntries(foeSeats.map((seat) => [seat, { strategy: 'rush' as const }])),
+    };
+  }
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
