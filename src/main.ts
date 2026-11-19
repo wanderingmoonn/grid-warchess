@@ -5792,6 +5792,27 @@ async function runAiTurn(
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
     const before = state;
+    /*
+     * **守卫：不许往别人的城里造兵**（2026-11-19）。
+     *
+     * 现场证据（自动上报 #12）：无城席位 B 的决策是
+     * `{"type":"RECRUIT","cityId":"c1"}`，而 c1 是**玩家 A 的城**。
+     * 这个动作必然被规则拒绝，AI 收不到"为什么不行"，于是这一回合
+     * 只剩空转——外部看到的就是"电脑一回合什么都不做"。
+     *
+     * 这里提前拦掉：不和规则层打架，只是把非法目标当成"这条不可行"，
+     * 让它继续去找移动/攻击。属于兜底，不是修复根因（根因在 ai.ts 的目标选取）。
+     */
+    if (action.type === 'RECRUIT' && 'cityId' in action && action.cityId) {
+      const target = state.cities.find((c) => c.id === action.cityId);
+      if (!target || target.owner !== player) {
+        aiLog(`guard recruit ${action.cityId} owner=${target?.owner ?? '?'} → 跳过`);
+        rejected.add(engine.aiActionKey(action));
+        await sleep(0);
+        continue;
+      }
+    }
+
     const result = applyAction(state, action);
     if (!result.ok) {
       /*
