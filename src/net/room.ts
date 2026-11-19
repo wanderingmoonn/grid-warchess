@@ -276,6 +276,14 @@ export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
     const rpc = await rpcDb.rpc('warchess_room_get', { code: code.toUpperCase() });
     if (!rpc.error && rpc.data) {
       const row = rpc.data as Row;
+      /*
+       * **回执校验**（2026-11-19）。
+       *
+       * 用户报过"房间号输错了，却进到另一个莫名其妙的房间"。
+       * 不管中间是网关、缓存还是别的东西把别的一行塞了回来，
+       * 这里只认一件事：**拿到的 code 必须就是我要的那个**。不一致就当没找到。
+       */
+      if (String(row.code ?? '').toUpperCase() !== code.toUpperCase()) return null;
       const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
       return toSnapshot({ ...row, state });
     }
@@ -287,6 +295,7 @@ export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
   // 服务端是 jsonb 列，SDK 会直接反序列化成对象；个别环境会退回字符串
   const row = data as Row | null;
   if (!row) return null;
+  if (String(row.code ?? '').toUpperCase() !== code.toUpperCase()) return null;
   const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
   return toSnapshot({ ...row, state });
 }

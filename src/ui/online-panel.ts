@@ -347,7 +347,17 @@ export function openOnlinePanel(host: OnlineHost): void {
     try {
       const snapshotNow = await fetchRoom(code);
       if (!snapshotNow) {
+        /*
+         * **查不到就清掉旧快照**（2026-11-19）。
+         *
+         * 面板上会残留上一次成功读取的房间信息（座位状态、观战按钮），
+         * 玩家输了错的房间号、看到报错，却还能点到上一个房间的"进入/观战"，
+         * 表现就是"输错号也进了个莫名其妙的房间"。
+         */
+        snapshot = null;
         error = `没有找到代码为 ${code} 的房间`;
+        paint();
+        return;
       } else {
         // 优先回到自己原来的席位（靠本机存的令牌），否则坐空位。
         // 观战记录不能拿来抢座：那条记录里的 seat 是占位用的 'A'，不是真的坐过 A。
