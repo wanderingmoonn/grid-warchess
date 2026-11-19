@@ -17,10 +17,10 @@ import { cardLevel } from './cards.ts';
  * 越到后期越像"没升"。按比例之后每一级对任何兵种都是同样分量的质变，
  * 数值也就不用跟着兵种表一路重调。
  *
- * 取整用 `Math.round`：低于 0.5 的增量会被舍掉，所以 1 级对极其便宜的兵可能看不出差别
- * ——这是刻意的，卡牌不该让 5 攻的杂兵翻倍。
+ * 取整用 `Math.round`。**2026-11-19 从 12% 提到 25%**：12% 对民兵（atk 11）只有 1 点，
+ * 四舍五入之后面板几乎看不出变化，玩家会以为"合成没生效"。
  */
-export const PER_LEVEL_PCT = { atk: 0.12, maxHp: 0.12 } as const;
+export const PER_LEVEL_PCT = { atk: 0.25, maxHp: 0.25 } as const;
 
 /**
  * @param counts 卡 id → 抽到的张数

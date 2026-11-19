@@ -52,6 +52,10 @@ export interface RunState {
   branch: string;
   /** 战术卡背包（只放"下一关才生效"的那种，比如空投援军） */
   tactics: string[];
+  /** 修城墙：下一关城市血量上限 +N（城每关重建，"回血"只能这么落地） */
+  cityHpBonus: number;
+  /** 免费建造次数：每抽到一张兵种卡送一次，下一关造兵免单 */
+  freeBuilds: number;
 }
 
 export const RUN_KEY = 'warchess:run:v1';
@@ -81,6 +85,8 @@ export function newRun(seed: number, opts: NewRunOptions): RunState {
     cityEra: 1,
     branch: opts.branch ?? 'cold',
     tactics: [],
+    cityHpBonus: 0,
+    freeBuilds: 0,
   };
 }
 
@@ -105,6 +111,8 @@ export function parseRun(raw: string | null): RunState | null {
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       branch: typeof obj.branch === 'string' ? obj.branch : 'cold',
       tactics: Array.isArray(obj.tactics) ? (obj.tactics as string[]) : [],
+      cityHpBonus: typeof obj.cityHpBonus === 'number' ? obj.cityHpBonus : 0,
+      freeBuilds: typeof obj.freeBuilds === 'number' ? obj.freeBuilds : 0,
       v: 1,
     } as RunState;
   } catch {

@@ -43,6 +43,7 @@ export function openRunPanel(opts: RunPanelOptions): void {
           <span class="rogue-chip">金币 <b>${run.gold}</b></span>
           <span class="rogue-chip">兵额 <b>${run.roster.length} / ${cap}</b></span>
           <span class="rogue-chip">城市时代 <b>${run.cityEra}</b></span>
+          <span class="rogue-chip">免费建造 <b>${run.freeBuilds}</b></span>
           <span class="rogue-chip">遗物 <b>${
             run.relics.length === 0 ? '无' : relicNames(run).join('、')
           }</b></span>
@@ -214,12 +215,14 @@ export interface RestPanelOptions {
   roster: Array<{ type: string; hp: number }>;
   /** 已经抽过几种卡（面板上显示一下） */
   cardKinds: number;
+  /** 已经修过多少次城（血量加成） */
+  cityHpBonus: number;
   /** 城市时代与升下一代的价钱（升城**不占整备次数**） */
   cityEra: number;
   upgradeCost: number | null;
   gold: number;
   onUpgradeCity: () => void;
-  onPick: (kind: 'wall' | 'heal' | 'card') => void;
+  onPick: (kind: 'wall' | 'repairCity' | 'card') => void;
 }
 
 /**
@@ -256,15 +259,15 @@ export function openRestPanel(opts: RestPanelOptions): void {
             }）</span>
             <span class="rogue-card-owned">当前：${opts.citySize}×${opts.citySize} · 已加固 ${opts.wallProgress} 次</span>
           </button>
-          <button class="rogue-card" data-rest="heal">
-            <span class="rogue-card-name">修整部队</span>
-            <span class="rogue-card-note">花名册里的兵回满血（打完仗都带伤）</span>
-            <span class="rogue-card-owned">带伤：${opts.roster.filter((u) => u.hp > 0).length} 人</span>
+          <button class="rogue-card" data-rest="repairCity">
+            <span class="rogue-card-name">修城</span>
+            <span class="rogue-card-note">下一关城市血量上限 +10（城每关重建，所以修的是"城墙本身"）</span>
+            <span class="rogue-card-owned">已修：+${opts.cityHpBonus} 血</span>
           </button>
           <button class="rogue-card" data-rest="card">
             <span class="rogue-card-name">升一级兵种卡</span>
-            <span class="rogue-card-note">抽三张兵种卡挑一张（同名三张 = 升一级）</span>
-            <span class="rogue-card-owned">已抽 ${opts.cardKinds} 种 · 三张同名升一级</span>
+            <span class="rogue-card-note">直接给一张已有的卡 +1 级（等于一次补满三张）</span>
+            <span class="rogue-card-owned">已抽 ${opts.cardKinds} 种</span>
           </button>
         </div>
       </div>
@@ -292,7 +295,7 @@ export function openRestPanel(opts: RestPanelOptions): void {
     const kind = t.closest<HTMLElement>('[data-rest]')?.dataset.rest;
     if (!kind) return;
     mask.remove();
-    opts.onPick(kind as 'wall' | 'heal' | 'card');
+    opts.onPick(kind as 'wall' | 'repairCity' | 'card');
   });
   document.body.appendChild(mask);
 }

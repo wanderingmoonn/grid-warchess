@@ -435,6 +435,27 @@ export function run() {
     assert.equal(res2.state.winner, 'A', '没开关时清场即判胜，老行为不变');
   });
 
+  test('肉鸽：卡每级 +25%，且真的改到攻击/血量', () => {
+    const base = UNIT_TYPES.militia!;
+    const out = compileUnits({ militia: 3 });
+    assert.equal(out.militia!.atk, Math.round(base.atk * 1.25), '一级应当 +25% 攻');
+    assert.equal(out.militia!.maxHp, Math.round(base.maxHp * 1.25), '一级应当 +25% 血');
+    const lv2 = compileUnits({ militia: 6 });
+    assert.equal(lv2.militia!.atk, Math.round(base.atk * 1.5), '两级 +50%');
+    assert.ok(out.militia!.atk > base.atk, '数字必须真的变大，不能是 NaN');
+    assert.ok(Number.isFinite(out.militia!.atk));
+  });
+
+  test('肉鸽：修城与免费建造能过存档', () => {
+    const run = newRun(1, { allowRestart: true });
+    run.cityHpBonus = 20;
+    run.freeBuilds = 2;
+    const back = parseRun(serializeRun(run));
+    assert.ok(back);
+    assert.equal(back.cityHpBonus, 20);
+    assert.equal(back.freeBuilds, 2);
+  });
+
   test('肉鸽：升城市时代价钱递增', () => {
     assert.ok(cityUpgradeCost(2) > cityUpgradeCost(1));
     assert.ok(cityUpgradeCost(3) > cityUpgradeCost(2));

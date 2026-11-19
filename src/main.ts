@@ -5878,6 +5878,21 @@ async function runAiTurn(
      * 撤离倒计时按"轮到玩家"扣，而"轮到玩家"这一下发生在 **AI 走完之后**——
      * 只在 dispatch 里观察的话永远看不到，倒计时卡住不动。
      */
+    /*
+     * 免费建造次数（2026-11-19 补）：抽到兵种卡会送一次，用来抵扣下一次造兵的钱。
+     * 做法是"先照常付钱、成功后把这一笔退还"——不动规则层的扣费逻辑，
+     * 也不会出现"钱不够但免单"的怪状态。
+     */
+    if (action.type === 'RECRUIT' && rogue && !rogue.settled && rogue.run.freeBuilds > 0) {
+      const cost = state.unitTypes[action.unitType]?.cost ?? 0;
+      if (cost > 0) {
+        state.players.A.gold += cost;
+        rogue.run.freeBuilds -= 1;
+        rogueSave();
+        toast(`免费建造：省下 ${cost} 金（还剩 ${rogue.run.freeBuilds} 次）`);
+        render();
+      }
+    }
     rogueAfterAction(before, state);
     noteHpDrops(before, state);
     noteStrikeFlash(before, state);
@@ -6292,6 +6307,17 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
    * 遗物「铁壁」：城防 +2（2026-11-19）。城对象在 createMatch 里已经生成，
    * 这里直接加护甲——规则层读的是 `city.armor`，不另设开关。
    */
+  /*
+   * 整备关修过的城：血量上限 +N（2026-11-19）。
+   * 城是每关新造的，所以"修城"落在上限上——修过一次，之后每关都更耐打。
+   */
+  if (rogue.run.cityHpBonus > 0) {
+    for (const c of state.cities) {
+      if (c.owner !== 'A') continue;
+      c.maxHp += rogue.run.cityHpBonus;
+      c.hp += rogue.run.cityHpBonus;
+    }
+  }
   const armorBonus = cityArmorBonus(rogue.run);
   if (armorBonus > 0) {
     for (const c of state.cities) if (c.owner === 'A') c.armor += armorBonus;
@@ -6467,8 +6493,20 @@ function offerRogueCards(after: () => void): void {
         return;
       }
       rogue.run.cards[id] = (rogue.run.cards[id] ?? 0) + 1;
+      // 每抽一张兵种卡送一次免费建造（2026-11-19 补：原来只有卡、没有建造优惠）
+      rogue.run.freeBuilds += 1;
       const lv = cardLevel(rogue.run.cards[id]!);
-      if (rogue.run.cards[id]! % 3 === 0) toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${lv} 级`);
+      if (rogue.run.cards[id]! % 3 === 0) {
+        const d = UNIT_TYPES[id];
+        const pct = 25 * lv;
+        toast(
+          `${d?.name ?? id} 升到 ${lv} 级（攻 ${d ? Math.round(d.atk * (1 + 0.25 * lv)) : '?'} · 血 ${
+            d ? Math.round(d.maxHp * (1 + 0.25 * lv)) : '?'
+          }，+${pct}%）· 免费建造 +1`,
+        );
+      } else {
+        toast(`拿到 ${UNIT_TYPES[id]?.name ?? id} · 免费建造 +1`);
+      }
       rogueSave();
       after();
     },
@@ -6645,6 +6683,7 @@ function maybeRest(after: () => void): void {
     capacity: cityCapacity(size),
     roster: run.roster,
     cardKinds: Object.keys(run.cards).length,
+    cityHpBonus: run.cityHpBonus,
     cityEra: run.cityEra,
     upgradeCost: run.cityEra >= 8 ? null : cityUpgradeCost(run.cityEra),
     gold: run.gold,
@@ -6668,19 +6707,54 @@ function maybeRest(after: () => void): void {
         toast(`城墙加固：${now}×${now}，兵额 ${cityCapacity(now)}`);
         rogueSave();
         after();
-      } else if (kind === 'heal') {
-        // 花名册按兵种上限回满（HP 跨关保留，所以这是唯一"回血"的入口）
-        run.roster = run.roster.map((u) => ({
-          ...u,
-          hp: UNIT_TYPES[u.type]?.maxHp ?? u.hp,
-        }));
-        toast(`部队修整完毕：${run.roster.length} 人回满血`);
+      } else if (kind === 'repairCity') {
+        /*
+         * 修城（2026-11-19 用户纠正：整备该修的是**城**，不是部队）。
+         *
+         * 城每关重建，所以"回血"落不到下一关——能落地的是**血量上限 +10**：
+         * 城墙本身修厚了，之后每一关的城都更耐打。
+         */
+        run.cityHpBonus += 10;
+        toast(`修城完成：之后每关城市血量上限 +${run.cityHpBonus}`);
         rogueSave();
         after();
       } else {
-        offerRogueCards(() => {
-          rogueSave();
-          after();
+        /*
+         * 整备的「升一级兵种卡」= 直接补满一级（2026-11-19 用户指出：
+         * 三选一只能拿一张，永远凑不够三张，这一项等于废的）。
+         * 所以这里列的是**已拥有的卡**，选中就 +3 张。
+         */
+        const owned = Object.keys(run.cards);
+        if (owned.length === 0) {
+          toast('还没有任何兵种卡，先在三选一里拿一张');
+          show();
+          return;
+        }
+        openCardChoice({
+          cards: owned.slice(0, 3).map((id) => {
+            const lv = cardLevel(run.cards[id] ?? 0);
+            const d = UNIT_TYPES[id];
+            return {
+              id,
+              name: d?.name ?? id,
+              owned: run.cards[id] ?? 0,
+              note: `直接升到 ${lv + 1} 级：攻 ${d ? Math.round(d.atk * (1 + 0.25 * lv)) : '?'}→${
+                d ? Math.round(d.atk * (1 + 0.25 * (lv + 1))) : '?'
+              } · 血 ${d ? Math.round(d.maxHp * (1 + 0.25 * lv)) : '?'}→${
+                d ? Math.round(d.maxHp * (1 + 0.25 * (lv + 1))) : '?'
+              }`,
+            };
+          }),
+          money: 0,
+          onPick: (id) => {
+            run.cards[id] = (run.cards[id] ?? 0) + 3;
+            toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${cardLevel(run.cards[id]!)} 级`);
+            rogueSave();
+            after();
+          },
+          onSkip: () => {
+            show();
+          },
         });
       }
     },
