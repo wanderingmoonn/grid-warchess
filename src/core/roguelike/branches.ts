@@ -27,7 +27,7 @@ export const BRANCHES: readonly BranchMeta[] = [
   { id: 'infantry', name: '步战', blurb: '便宜、能站住，靠数量和人换', startable: true },
   { id: 'ranged', name: '远程', blurb: '先手、怕近身，需要有人挡在前面', startable: true },
   { id: 'mobile', name: '机动', blurb: '跑得快，抢位置和拆后排', startable: true },
-  { id: 'heavy', name: '重装', blurb: '破甲与攻城，慢但硬', startable: true },
+  { id: 'heavy', name: '攻城', blurb: '拆城、破甲，慢但硬', startable: true },
   { id: 'air', name: '空中', blurb: '越过地形，被对空克制', startable: true },
   { id: 'naval', name: '水师', blurb: '只在水上有效，切片里不开放', startable: false },
 ];
@@ -38,7 +38,13 @@ export const BRANCH_OVERRIDE: Record<string, Branch> = {
   catapult: 'heavy',
 };
 
-const HEAVY_ABILITIES = new Set(['siege-master', 'shield-wall', 'armor-pierce']);
+/**
+ * 只把**攻城器械**单独拎出来。
+ *
+ * 第一版把盾墙/破甲的近战也算"重装"，结果基础表里只剩 militia 一个"步战"分支——
+ * 分支不能空着，否则那条路线开局就没牌可抽。盾墙长矛兵本来就是步战。
+ */
+const SIEGE_ABILITY = 'siege-master';
 
 /** 一个兵种属于哪条分支。经济/建筑类不算战斗分支，返回 null */
 export function branchOf(id: string, def: UnitTypeDef | undefined = UNIT_TYPES[id]): Branch | null {
@@ -49,10 +55,19 @@ export function branchOf(id: string, def: UnitTypeDef | undefined = UNIT_TYPES[i
   if (def.category !== 'combat') return null;
 
   const abilities = def.abilities ?? [];
+  /*
+   * 判定顺序很重要（2026-11-19 修过一次）：
+   *   ① 水域 / 空中 → 直接定，属性再怎么像也不看；
+   *   ② **攻城器械**先于射程：投石车/臼炮射程 2~3，本质是重装不是弓手；
+   *   ③ **射程 ≥2 先于"破甲/盾墙"**：十字弩射程 3、带破甲，它属于远程。
+   *      第一版把能力判在射程前面，结果所有带破甲的远程都掉进了重装；
+   *   ④ 剩下的近战才按能力/移动分：盾墙破甲=重装，跑得动=机动，其余=步战。
+   */
   if (def.domain === 'water') return 'naval';
   if (def.layer === 'air' || def.flight === true || abilities.includes('fly-over')) return 'air';
-  if (abilities.some((a) => HEAVY_ABILITIES.has(a))) return 'heavy';
+  if (abilities.includes(SIEGE_ABILITY)) return 'heavy';
   if (def.range >= 2) return 'ranged';
+
   if (def.move >= 3) return 'mobile';
   return 'infantry';
 }
