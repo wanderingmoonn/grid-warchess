@@ -23,6 +23,8 @@ import {
   IMPERIAL_STELE,
   MORTAL_IMMORTAL,
 } from '../src/core/dark-turmoil-packs.ts';
+import { realmArmorBase, realmAtkBase, trueDamageForRank, extraAttacksForRank } from '../src/core/cultivation/stats.ts';
+import { totalHpBonusForRank } from '../src/core/cultivation/progression.ts';
 import { unitAiProfileOf } from '../src/core/unit-ai.ts';
 import type { UnitAiCtx } from '../src/core/expansions.ts';
 import type { GameState, PlayerId, Unit } from '../src/core/types.ts';
@@ -109,6 +111,21 @@ const beginTurnOf = (s: GameState, side: PlayerId): GameState => {
 
 console.log('「不好分类」三件探针\n');
 
+/**
+ * 九级 / 八级修士的"总账"——**现算的，不抄数字**。
+ *
+ * 基准兵种是炼气士（攻 10 / 甲 0 / 血 20 / 射 1 / 移 2 / 1 段）。
+ * 修真包改公式时，这里的期望值会跟着走——这正是要的：
+ * "对标某级修士"这件事不能靠一次手工抄写，否则修真包一调就失真。
+ */
+const cultivatorTotals = (rank: number) => ({
+  atk: 10 + realmAtkBase(rank),
+  armor: 0 + realmArmorBase(rank),
+  hp: 20 + totalHpBonusForRank(rank),
+  true: trueDamageForRank(rank),
+  attacks: 1 + extraAttacksForRank(rank),
+});
+
 /* ══════════════════════════════════════════════════════════════════
  * 1. 三件本体
  * ══════════════════════════════════════════════════════════════════ */
@@ -128,6 +145,44 @@ console.log('[1] 三件本体');
   check('红尘仙是战斗单位', mi.category === 'combat');
   check('红尘仙带暗蚀', (mi.abilities ?? []).includes('shadow-erosion'));
   check('红尘仙比子嗣更强', mi.maxHp > (s.unitTypes['offspring']?.maxHp ?? 0) && mi.atk > (s.unitTypes['offspring']?.atk ?? 0));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 1b. 对标：仙帝 > 九级修士，红尘仙 ≈ 八级修士
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[1b] 对标修士');
+{
+  const { s } = arena();
+  const r9 = cultivatorTotals(9);
+  const r8 = cultivatorTotals(8);
+  const em = s.unitTypes[EMPEROR]!;
+  const mi = s.unitTypes[MORTAL_IMMORTAL]!;
+  const erosionOf = (id: string): number => {
+    const u = { id: 'x', type: id, owner: 'B', x: 1, y: 1, hp: 1, kills: 0, moved: false, acted: false } as Unit;
+    const line = DARK_TURMOIL.hooks.getUnitPanelLines!({ state: s, unit: u }).find((t) => t.startsWith('暗蚀'));
+    return Number(/(\d+)/.exec(line ?? '')?.[1] ?? 0);
+  };
+
+  console.log(`    九级修士：攻 ${r9.atk} · 甲 ${r9.armor} · 血 ${r9.hp} · 真伤 ${r9.true} · ${r9.attacks} 段`);
+  console.log(`    仙帝：    攻 ${em.atk} · 甲 ${em.armor} · 血 ${em.maxHp} · 暗蚀 ${erosionOf(EMPEROR)} · ${em.burst ?? 1} 段`);
+  console.log(`    八级修士：攻 ${r8.atk} · 甲 ${r8.armor} · 血 ${r8.hp} · 真伤 ${r8.true} · ${r8.attacks} 段`);
+  console.log(`    红尘仙：  攻 ${mi.atk} · 甲 ${mi.armor} · 血 ${mi.maxHp} · 暗蚀 ${erosionOf(MORTAL_IMMORTAL)} · ${mi.burst ?? 1} 段`);
+
+  check(`仙帝血 ${em.maxHp} > 九级修士 ${r9.hp}`, em.maxHp > r9.hp);
+  check(`仙帝攻 ${em.atk} > 九级修士 ${r9.atk}`, em.atk > r9.atk);
+  check(`仙帝甲 ${em.armor} > 九级修士 ${r9.armor}`, em.armor > r9.armor);
+  check(`仙帝暗蚀 ${erosionOf(EMPEROR)} > 九级真伤 ${r9.true}`, erosionOf(EMPEROR) > r9.true);
+  check(`仙帝段数 ${em.burst ?? 1} ≥ 九级 ${r9.attacks}`, (em.burst ?? 1) >= r9.attacks);
+
+  check(`红尘仙血 ${mi.maxHp} 对齐八级 ${r8.hp}`, mi.maxHp === r8.hp, String(mi.maxHp));
+  check(`红尘仙攻 ${mi.atk} 对齐八级 ${r8.atk}`, mi.atk === r8.atk, String(mi.atk));
+  check(`红尘仙甲 ${mi.armor} 对齐八级 ${r8.armor}`, mi.armor === r8.armor, String(mi.armor));
+  check(`红尘仙暗蚀 ${erosionOf(MORTAL_IMMORTAL)} 对齐八级真伤 ${r8.true}`, erosionOf(MORTAL_IMMORTAL) === r8.true);
+  check(`红尘仙段数 ${mi.burst ?? 1} 对齐八级 ${r8.attacks}`, (mi.burst ?? 1) === r8.attacks);
+
+  // 魔法段是奇想包的东西，这两个都不该有
+  check('仙帝没有魔法段', !(em.magicAtk ?? 0));
+  check('红尘仙没有魔法段', !(mi.magicAtk ?? 0));
 }
 
 /* ══════════════════════════════════════════════════════════════════

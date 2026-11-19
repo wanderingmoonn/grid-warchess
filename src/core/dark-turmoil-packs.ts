@@ -93,9 +93,19 @@ function lifespanWords(left: number): string {
 /**
  * 尸骸仙帝。
  *
- * 数值是"九级修士之上"的量级：九级修士的境界加成大约是攻 +257、甲 +119、
- * 真伤 66、每回合 5 段攻击。这里不去复刻那套公式（它不是修士兵种，
- * 复刻了也会随修真包改数值漂移），直接给一组更高的固定值。
+ * 数值按"**九级修士之上**"重调（2026-11-19，作者指出原值根本不够看）。
+ *
+ * 基准（现算的，不是抄的）：一个九级炼气士 = 基础 10 攻 / 0 甲 / 20 血
+ * + 境界加成 攻 257 / 甲 119 / 血 9976 / 真元 66 / 射 +4 / 移 +3 / 5 段 / 溅射 2。
+ * 也就是 **攻 267 · 甲 119 · 血 9996 · 真伤 66 · 5 段**。
+ *
+ * 所以这里每一项都要在上面那组之上：攻 340 / 甲 140 / 血 12000 / 暗蚀 80 / 6 段。
+ * **唯一的例外是移动力 3**（九级修士是 5）——那是它刻意的弱点：
+ * 追不上你，但它射程 6，你也别指望跑得掉。
+ *
+ * 不去复刻修士那套公式：它本来就不是修士兵种，复刻了也会随修真包改数值漂移。
+ *
+ * 魔法段（`magicAtk`）已经删掉，120 点并进暗蚀——魔法段是奇想包的东西，这个包不借。
  *
  * 造价写这么高不是让它能造（`summonedOnly` 挡死产线），是给 AI 估值用的：
  * AI 会据此认为"这东西极贵、不能随便送"。
@@ -108,14 +118,16 @@ const EMPEROR_DEF: UnitTypeDef = {
   category: 'combat',
   cost: 2400,
   move: 3,
-  atk: 300,
-  armor: 130,
-  maxHp: 1600,
-  range: 5,
+  atk: 340,
+  armor: 140,
+  maxHp: 12000,
+  range: 6,
   vision: 9,
-  magicAtk: 120,
-  magicRes: 25,
+  burst: 5,
+  splash: 2,
   summonedOnly: true,
+  shadowRadius: 6,
+  abilities: ['shadow-erosion'],
   skills: [
     {
       id: 'devour',
@@ -317,7 +329,9 @@ const EROSION_BY_TYPE: Record<string, number> = {
   // 裔系里只有子嗣带暗蚀（作者：它"同时拥有真元和暗蚀"）。
   // 眷属/后裔不写：写了也没用——没有「暗蚀」这条能力，那个数不会被读到。
   offspring: 20,
-  'mortal-immortal': 25,
+  'mortal-immortal': 50,
+  // 仙帝：原 magicAtk 120 指的是同一段伤害，改成暗蚀后取 80
+  'corpse-emperor': 80,
 };
 
 function erosionOf(u: Unit): number {
@@ -3028,7 +3042,13 @@ const STELE_DEF: UnitTypeDef = {
   abilities: ['knowledge-pollution'],
 };
 
-/** 红尘仙：八级修士的水准，和仙帝一样会老。 */
+/**
+ * 红尘仙：**对标八级修士**（2026-11-19 重调）。
+ *
+ * 八级炼气士 = 基础 + 境界加成 攻 143 / 甲 89 / 血 3928 / 真元 50 / 射 +4 / 移 +2 / 4 段 / 溅射 2
+ * → **攻 153 · 甲 89 · 血 3948 · 真伤 50 · 4 段**。
+ * 这里逐项照抄那组数，所以它和"练到八级的修士"是同一把尺子量出来的。
+ */
 const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
   id: MORTAL_IMMORTAL,
   name: '红尘仙',
@@ -3036,12 +3056,14 @@ const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
   era: 4,
   category: 'combat',
   cost: 0,
-  move: 3,
-  atk: 80,
-  armor: 24,
-  maxHp: 400,
-  range: 4,
-  vision: 7,
+  move: 4,
+  atk: 153,
+  armor: 89,
+  maxHp: 3948,
+  range: 5,
+  vision: 9,
+  burst: 4,
+  splash: 2,
   summonedOnly: true,
   shadowRadius: 3,
   aiAutonomy: 0.6,
