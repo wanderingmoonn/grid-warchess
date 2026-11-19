@@ -17710,6 +17710,38 @@ test('行动权按座位环转，出局的座位被跳过', () => {
   assert.equal(hasQuit(s, 'B'), true);
 });
 
+test('出局判定：城全成废墟 + 兵全灭才算输，只剩废墟但还有人就不算', () => {
+  const s = freshMulti(2);
+  const citiesOfB = s.cities.filter((c) => c.owner === 'B');
+  assert.ok(citiesOfB.length > 0, '前置：B 应该有城');
+
+  // 1）城还在（没塌）→ 哪怕一个兵都没有，也还活着（还能造）
+  s.units = s.units.filter((u) => u.owner !== 'B');
+  assert.equal(isEliminated(s, 'B'), false, '有完好的城就不该出局');
+
+  // 2）城全塌了、兵也全没了 → 必输（既造不了兵，也没人能走进废墟重建）
+  for (const c of citiesOfB) {
+    c.ruined = true;
+    c.hp = 0;
+  }
+  assert.equal(isEliminated(s, 'B'), true, '城全成废墟且兵全灭必须判出局');
+
+  // 3）城全塌了，但手上还有一个兵 → 还活着（他能走进去重建）
+  const spot = { x: 1, y: 1 };
+  s.units.push({
+    id: 'survivor',
+    type: 'militia',
+    owner: 'B',
+    x: spot.x,
+    y: spot.y,
+    hp: 40,
+    kills: 0,
+    moved: false,
+    acted: false,
+  });
+  assert.equal(isEliminated(s, 'B'), false, '只剩废墟但还有人，不该判出局');
+});
+
 test('四人局走完一圈：A→B→C→D→A，行动序号跟着涨四次', () => {
   let s = freshMulti(4);
   const seen: PlayerId[] = [];

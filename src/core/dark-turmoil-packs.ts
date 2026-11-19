@@ -2043,7 +2043,8 @@ const UNNAMABLE_DEF: UnitTypeDef = {
   shadowRadius: 6,
   aiAutonomy: 1,
   aiProfile: 'unnamable-stalk',
-  abilities: ['shadow-erosion', 'unnamable-formless', 'shadow-breath', 'dull-wit'],
+  // 2026-11-19：它自己也是"黑暗的产物"，所以自己也带「黑暗之源」
+  abilities: ['shadow-erosion', 'unnamable-formless', 'shadow-breath', 'dull-wit', 'dark-source'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -2926,16 +2927,57 @@ const DESCEND_KINDLE = heirSummon({
   max: 2,
 });
 
-/** 「黑暗之源」：每 3 回合爬出一只黑蝗（上限 3）。仙帝与骨灰罐共有。 */
-const DARK_SOURCE = heirSummon({
+/**
+ * 「黑暗之源」：每 3 回合爬出**一只黑蝗 + 一个诡异**（每种上限 3）。
+ *
+ * 2026-11-19 改：原来只出黑蝗，而且"诡异"（`unnamable`）在场上根本没有来源——
+ * 那只怪是玩家只能从关卡里遇到的孤儿。现在它是这条词条的产物之一：
+ * **黑暗在哪儿都能长出这两样东西**，仙帝、骨灰罐、以及诡异自己都带着它。
+ *
+ * 两种单位各自封顶（按**这一方场上**该类活着的数量算），所以一个源头最多养出
+ * 3 只黑蝗 + 3 个诡异；三个源头共享这几个名额，不会叠加到 9 只。
+ */
+const DARK_SOURCE: AbilityDef = {
   id: 'dark-source',
   name: '黑暗之源',
-  summary: `每 3 个自己的回合爬出一只黑蝗（上限 3 只）。`,
-  every: 3,
-  type: BLACK_LOCUST,
-  max: 3,
-  key: 'locustIn',
-});
+  summary: '每 3 个自己的回合爬出一只黑蝗和一个诡异（每种上限 3）。',
+  group: 'support',
+  valueLabel: () => '每 3 回合：黑蝗 + 诡异',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const left = Number(self.custom?.locustIn ?? 3) - 1;
+          if (left > 0) {
+            self.custom = { ...(self.custom ?? {}), locustIn: left };
+            return;
+          }
+          let born = 0;
+          for (const [type, max] of [
+            [BLACK_LOCUST, 3],
+            [UNNAMABLE, 3],
+          ] as const) {
+            const alive = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && u.type === type).length;
+            if (alive >= max) continue;
+            const spot = freeNear(state, self, type, api);
+            if (!spot) continue;
+            api.spawn(state, self.owner, type, spot.x, spot.y);
+            born += 1;
+          }
+          if (born > 0) {
+            self.custom = { ...(self.custom ?? {}), locustIn: 3 };
+            state.log.push({ turn: state.turn, player: self.owner, text: '黑暗里又爬出了东西。' });
+          } else {
+            // 两边都满了（或者没地方站）：过一回合再看
+            self.custom = { ...(self.custom ?? {}), locustIn: 1 };
+          }
+        },
+      },
+    ],
+  },
+};
 
 /** 「衍脉」：每回合生一个子嗣（上限 2）。仙帝与骨灰罐共有——这条是它们"最贵"的地方。 */
 const LINEAGE_WELL = heirSummon({
