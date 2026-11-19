@@ -47,6 +47,8 @@ export interface OnlineHost {
   describe(): string;
   /** 放弃当前这局，去开一局新的（关卡/对局面板） */
   newGame(): void;
+  /** 建房前整理这一局（普通对局要把电脑关掉，否则 B 席是"电脑的座"，真人坐不进去） */
+  prepareRoom(): GameState;
 }
 
 export function openOnlinePanel(host: OnlineHost): void {
@@ -280,7 +282,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     busy = true;
     error = '';
     paint();
-    const state = host.currentState();
+    const state = host.prepareRoom();
     try {
       const token = newToken();
       /*

@@ -5259,6 +5259,28 @@ function handleAction(act: string, el: HTMLElement): void {
           return `第 ${state.turn} 回合 · ${state.w}×${state.h} · ${lv ? `关卡「${lv}」` : '普通对局'} · 我 ${mine} 兵 ${cv} 城`;
         },
         newGame: () => newGameFlow(),
+        prepareRoom: () => {
+          /*
+           * **建房前把电脑关掉**（2026-11-19）。
+           *
+           * 默认对局是"人打电脑"（`aiOpponent: true`）。如果就这样挂到网上，
+           * B 席会被认成"电脑的座位"——入座逻辑（11-16 那次修的）不允许真人坐进去，
+           * 于是朋友点进来一个座都没有，被降级成观战，**看到的还是他自己本机那块棋盘**。
+           *
+           * 玩家看到的就是"别人进我的房间，结果是一张莫名其妙的图"。
+           * 关卡（`config.level`）不动：那里的电脑席位可能是关卡设计的一部分（比如 C 席）。
+           */
+          if (!state.config.level && state.config.aiOpponent) {
+            state = {
+              ...state,
+              config: { ...state.config, aiOpponent: false, aiSeats: [] },
+              aiControl: undefined,
+            };
+            refreshMemory(state);
+            render();
+          }
+          return state;
+        },
       });
       return;
     }
