@@ -175,6 +175,7 @@ import {
   submitDraft,
   submitTurn,
   submitTurnForce,
+  RoomRequestGate,
   type RoomSeat,
   type RoomSnapshot,
 } from './net/room.ts';
@@ -269,18 +270,14 @@ function inviteLink(code: string): string {
   const url = new URL(location.href);
   url.searchParams.set('room', code);
   /*
-   * **带上席位和令牌**（2026-11-19 修"断开再开始时席位会变"）。
+   * 邀请链接只带房间码，绝不在 URL 里复制自己的席位令牌。
    *
-   * 原来链接里只有房间码，身份全靠本机 localStorage 里那条记录：
-   * 清了缓存、换了设备、或者两个客户端同时抢座，身份就丢了——
-   * 于是重连之后谁坐哪一席全看谁先点，席位随机互换。
-   * 把 `s` / `t` 写进链接，重连就是**回原位**，不依赖任何本地记录。
+   * 2026-11-19 之前这里附带 s/t，房主把选卡邀请发给客人后，客人会拿着同一
+   * 个令牌坐进同一席：两端都执 A，B 仍为空。旧链接的回座参数仍由入房逻辑
+   * 兼容读取，但新生成的公开邀请不再携带任何私人身份。
    */
-  const mine = loadSeat(code);
-  if (mine && !mine.spectator) {
-    url.searchParams.set('s', mine.seat);
-    url.searchParams.set('t', mine.token);
-  }
+  url.searchParams.delete('s');
+  url.searchParams.delete('t');
   return url.toString();
 }
 
@@ -1022,6 +1019,16 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+const roomRequests = new RoomRequestGate();
+/** 所有房间写入都走这层：让在途旧轮询失效，避免旧响应回滚新回合。 */
+async function withRoomWrite<T>(write: () => Promise<T>): Promise<T> {
+  roomRequests.beginWrite();
+  try {
+    return await write();
+  } finally {
+    roomRequests.endWrite();
+  }
+}
 /** 诊断用：进房以来成功提交过几次（?debug=1 里看） */
 let pushOkCount = 0;
 /** 诊断用：最近一次拉到云端快照的时刻与它的 updated_at */
@@ -1081,6 +1088,7 @@ function resumeRoom(): boolean {
     const seat = loadSeat(code);
     if (!seat) return false;
     room = seat;
+    roomRequests.invalidate();
     setSaveScope(code);
     const draft = loadMatch();
     if (draft) state = draft;
@@ -3063,7 +3071,7 @@ async function pushDraft(
   draftBusy = true;
   try {
     for (let attempt = 0; attempt < 4; attempt++) {
-      const ok = await submitDraft(seat.code, state, prevSeq);
+      const ok = await withRoomWrite(() => submitDraft(seat.code, state, prevSeq));
       if (ok) {
         dirty = false;
         draftStuck = false;
@@ -3710,22 +3718,20 @@ function dispatch(action: Action): boolean {
        * 所以挂在 `.then()` 上：提交成功 → 再驱动电脑。
        */
       /*
-       * 房间里**有电脑**的时候用强制提交（2026-11-16）。
-       *
-       * 带乐观锁的写法在这里会静默失败：`prevTurn` 是"我以为云端停在几"，
-       * 而这局里云端还会被电脑那一轮推着前进，一旦对不上 `.eq('turn', …)`
-       * 就一行也更新不到——房主本地照样打，观战端永远停在上一帧。
-       * 带 AI 的房间里只有本机会写，不存在合法的并发冲突，所以直接覆盖。
+       * 只有单真人 + AI 的房间才允许强制覆盖：这种局只有本机会写。
+       * 多真人合作房仍必须走乐观锁，否则两个真人同时提交会互相覆盖。
        */
-      const done = anyAiSide(state)
-        ? submitTurnForce(room.code, state).then((ok) => {
+      const singleWriter = seatsOf(state).filter((p) => !isAiSide(state, p)).length <= 1;
+      const activeRoom = room;
+      const done = anyAiSide(state) && singleWriter
+        ? withRoomWrite(() => submitTurnForce(activeRoom.code, state)).then((ok) => {
             if (ok) {
               dirty = false;
               pushOkCount += 1;
               render();
             }
           })
-        : pushTurn(room, prevTurn);
+        : pushTurn(activeRoom, prevTurn);
       /*
        * **不管提交成没成功，都要把电脑点起来**（2026-11-16）。
        *
@@ -5243,7 +5249,7 @@ function handleAction(act: string, el: HTMLElement): void {
         currentState: () => state,
         room: () => room,
         enter: (seat, snapshot) => applyRoom(seat, snapshot),
-        watch: (code, snapshot) => watchRoom(code, snapshot),
+        watch: (code, snapshot, notice) => watchRoom(code, snapshot, notice),
         leave: () => leaveRoom(),
         describe: () => {
           /*
@@ -5261,25 +5267,11 @@ function handleAction(act: string, el: HTMLElement): void {
         newGame: () => newGameFlow(),
         prepareRoom: (mode) => {
           /*
-           * **建房 = 一局全新的对局**（2026-11-19）。
-           *
-           * 原来建房上传的是"房主本机这一局"：可能挂着上次的关卡存档、
-           * 可能是 AI 局、可能每方两座城——客人进来看到的自然是"莫名其妙的地图"。
-           * 所有联机的怪问题（席位、怪图、观战）都是这一条派生的。
-           *
-           * 现在默认按**标准双人局**现造一局：12×12、双方各一城、无电脑、先手 A。
-           * 房主真想用自己那局，得显式选 `current`。
+           * 建房先在内存里准备状态，云端创建成功后 applyRoom 才切换本机对局。
+           * 不提前改写全局 state、不挂起自动存档：创建失败时本机那局原样保留。
            */
           if (mode === 'standard') {
-            /*
-             * **挂起自动存档**（2026-11-19）。
-             *
-             * 这一局只是"拿来开房间用的"，不该覆盖本机那个未完成的存档——
-             * 否则玩家点一次"创建房间"，回去就再也接不上自己那局了。
-             * 进房之后 `applyRoom` 会切到房间作用域并解除挂起。
-             */
-            suspendSaves(true);
-            state = createMatch(
+            return createMatch(
               {
                 ...DEFAULT_CONFIG,
                 size: 12,
@@ -5292,30 +5284,15 @@ function handleAction(act: string, el: HTMLElement): void {
               randomSeed(),
               loadCustomUnits(),
             );
-            refreshMemory(state);
-            clearSelection();
-            render();
-            return state;
           }
-          
-          /*
-           * **建房前把电脑关掉**（2026-11-19）。
-           *
-           * 默认对局是"人打电脑"（`aiOpponent: true`）。如果就这样挂到网上，
-           * B 席会被认成"电脑的座位"——入座逻辑（11-16 那次修的）不允许真人坐进去，
-           * 于是朋友点进来一个座都没有，被降级成观战，**看到的还是他自己本机那块棋盘**。
-           *
-           * 玩家看到的就是"别人进我的房间，结果是一张莫名其妙的图"。
-           * 关卡（`config.level`）不动：那里的电脑席位可能是关卡设计的一部分（比如 C 席）。
-           */
+
+          /* 普通 AI 局建房时，给真人的 B 席留出位置；关卡自带的 AI 席位保留。 */
           if (!state.config.level && state.config.aiOpponent) {
-            state = {
+            return {
               ...state,
               config: { ...state.config, aiOpponent: false, aiSeats: [] },
               aiControl: undefined,
             };
-            refreshMemory(state);
-            render();
           }
           return state;
         },
@@ -5780,8 +5757,9 @@ async function runAiLoop(): Promise<void> {
    * 电脑这一方只有本机会写，不存在合法的并发冲突，所以可以放心覆盖。
    */
   if (pushing && room) {
+    const activeRoom = room;
     try {
-      const ok = await submitTurnForce(room.code, state);
+      const ok = await withRoomWrite(() => submitTurnForce(activeRoom.code, state));
       if (ok) {
         dirty = false;
         pushOkCount += 1;
@@ -6185,8 +6163,9 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
  * 两侧各自在自己的图上打，谁都不知道对方在打什么。
  */
 function pushRoomAfterNewMatch(): void {
-  if (!room || room.spectator) return;
-  void submitTurnForce(room.code, state).catch(() => {
+  const activeRoom = room;
+  if (!activeRoom || activeRoom.spectator) return;
+  void withRoomWrite(() => submitTurnForce(activeRoom.code, state)).catch(() => {
     // 推不上去不影响本地，下一手结束还会再推一次
   });
 }
@@ -8714,6 +8693,7 @@ function peersAllSeated(snapshot: RoomSnapshot, me: PlayerId): boolean {
 
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
+  roomRequests.invalidate();
   room = seat;
   peerSeated = seat.spectator === true ? true : peersAllSeated(snapshot, seat.seat);
   saveSeat(seat);
@@ -8783,6 +8763,7 @@ function leaveRoom(): void {
 /** 只断开房间、不载入本机对局：换局或导入存档时用 */
 function detachRoom(): void {
   if (!room) return;
+  roomRequests.invalidate();
   window.clearInterval(roomTimer);
   roomTimer = 0;
   window.clearInterval(presenceTimer);
@@ -8798,7 +8779,7 @@ function detachRoom(): void {
 /** 提交这一回合。expectedTurn 是提交前本机的回合数，用来发现"两边同时提交" */
 async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): Promise<void> {
   try {
-    const ok = await submitTurn(seat.code, state, expectedTurn);
+    const ok = await withRoomWrite(() => submitTurn(seat.code, state, expectedTurn));
     if (!ok) {
       toast('云端已经是别的回合了（可能对面也提交过），点「联机 → 刷新状态」看一眼');
       return;
@@ -8905,9 +8886,10 @@ async function pollRoom(): Promise<void> {
   // 参谋部正在批量执行：这时云端的 turn 还是旧的，拉回来就是把刚走的一步抹掉
   if (commanderRunning) return;
 
+  const ticket = roomRequests.beginPoll();
   try {
     const snapshot = await fetchRoom(seat.code);
-    if (!snapshot || room?.code !== seat.code) return;
+    if (!snapshot || room?.code !== seat.code || !roomRequests.canApply(ticket)) return;
     lastSnapAt = Date.now();
     lastSnapUpdated = snapshot.updatedAt;
     lastSnapHead = `code=${snapshot.code} turn=${snapshot.turn} current=${snapshot.current}`;
@@ -8963,8 +8945,9 @@ async function pollRoom(): Promise<void> {
         turn: snapshot.turn,
         current: snapshot.current,
         winner: snapshot.state.winner ?? null,
+        seed: snapshot.state.seed,
       },
-      { turn: state.turn, current: state.current, winner: state.winner ?? null },
+      { turn: state.turn, current: state.current, winner: state.winner ?? null, seed: state.seed },
       { seat: seat.seat, spectator: seat.spectator === true, draft: dirty },
     );
     if (!decision.take) {
@@ -9082,7 +9065,7 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       0,
       Math.max(2, Math.min(4, pc)),
     );
-    const order: PlayerId[] = known
+    const order: PlayerId[] = known && tableSeats.includes(known.seat)
       ? [known.seat, ...tableSeats.filter((x) => x !== known.seat)]
       : tableSeats;
     for (const seat of order) {
@@ -9112,8 +9095,9 @@ async function enterRoomFromUrl(code: string): Promise<void> {
 }
 
 /** 以观战身份进入一个房间：不占座、不写云端，只看 */
-function watchRoom(code: string, snapshot: RoomSnapshot): void {
+function watchRoom(code: string, snapshot: RoomSnapshot, notice?: string): void {
   applyRoom({ code, seat: 'A', token: newToken(), spectator: true }, snapshot);
+  if (notice) toast(notice);
 }
 
 // ---------- 房间聊天 ----------

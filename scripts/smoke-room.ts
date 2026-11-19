@@ -31,7 +31,11 @@ if (!first) throw new Error('建完立刻读不到，写入有问题');
 console.log('初始', { turn: first.turn, current: first.current, units: first.state.units.length, seats: first.seats });
 if (first.current !== 'A' || first.state.units.length !== state.units.length) throw new Error('初始状态不对');
 
-console.log('B 抢座', await claimSeat(seat.code, 'B', tokenB));
+const claimB = await claimSeat(seat.code, 'B', tokenB);
+console.log('B 抢座', claimB);
+if (claimB !== 'ok') throw new Error(`B 抢座失败：${claimB}`);
+const seated = await fetchRoom(seat.code);
+if (!seated || seated.seats.B !== tokenB) throw new Error('B 席回执里没有 B 的令牌，不能算入座成功');
 const againA = await claimSeat(seat.code, 'A', tokenB);
 console.log('B 想抢 A 的座', againA);
 if (againA !== 'taken') throw new Error('席位没挡住');
@@ -44,7 +48,9 @@ const moved = state.units.find((u) => u.owner === 'A' && u.type === 'militia');
 if (moved) moved.hp = Math.max(1, moved.hp - 3); // 造一个可见的变化
 const ended = applyAction(state, { type: 'END_TURN' });
 if (!ended.ok) throw new Error(ended.reason);
-console.log('提交', await submitTurn(seat.code, ended.state, prevTurn));
+const submitted = await submitTurn(seat.code, ended.state, prevTurn);
+console.log('提交', submitted);
+if (!submitted) throw new Error('A 的回合没有提交成功');
 
 const second = await fetchRoom(seat.code);
 console.log('提交后', { turn: second?.turn, current: second?.current });

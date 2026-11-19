@@ -178,7 +178,7 @@ import {
   timelineSummary,
 } from '../src/core/timeline.ts';
 import { normalizeCampaign } from '../src/net/campaign.ts';
-import { adoptDecision } from '../src/net/room.ts';
+import { adoptDecision, RoomRequestGate } from '../src/net/room.ts';
 import {
   CHAT_MAX_LEN,
   ChatFeed,
@@ -14844,6 +14844,36 @@ test('隐匿改充能：一池 3 发、每回合最多一次、每 2 个自己�
   round();
   assert.equal(view().charge, 1, '两个自己的回合回一发');
   assert.equal(view().ready, true, '回上一发就该能放');
+});
+
+test('联机轮询：旧响应、写入期间响应、换房后的响应都不能覆盖新状态', () => {
+  const gate = new RoomRequestGate();
+  const oldPoll = gate.beginPoll();
+  const newPoll = gate.beginPoll();
+  assert.equal(gate.canApply(oldPoll), false, '后发起的轮询已经取代旧轮询');
+  assert.equal(gate.canApply(newPoll), true, '最新轮询可以采纳');
+
+  gate.beginWrite();
+  assert.equal(gate.canApply(newPoll), false, '提交期间的轮询不能采纳');
+  gate.endWrite();
+  assert.equal(gate.canApply(newPoll), false, '提交开始后，之前发出的响应仍然作废');
+
+  const afterWrite = gate.beginPoll();
+  assert.equal(gate.canApply(afterWrite), true, '提交完成后的新轮询可以采纳');
+  gate.invalidate();
+  assert.equal(gate.canApply(afterWrite), false, '进房/退房后旧响应作废');
+});
+
+test('联机换局：回合和行动方没变，只要棋盘种子变了也必须同步', () => {
+  const remote = { turn: 1, current: 'A' as const, winner: null, seed: 222 };
+  const local = { turn: 1, current: 'A' as const, winner: null, seed: 111 };
+  assert.equal(adoptDecision(remote, local, { seat: 'B' }).take, true);
+  assert.equal(
+    adoptDecision(remote, local, { seat: 'B', draft: true }).take,
+    true,
+    '房间已经换局，旧棋盘上的本地草稿不能阻止同步',
+  );
+  assert.equal(adoptDecision(remote, local, { seat: 'A', spectator: true }).take, true);
 });
 
 test('投降同步：云端说终局了，本机就算没轮到自己、还有草稿也要装进来', () => {

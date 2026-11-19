@@ -34,7 +34,7 @@ export interface OnlineHost {
   /** 进入房间：把云端那一局装进本地 */
   enter(seat: RoomSeat, snapshot: RoomSnapshot): void;
   /** 以观战身份进入：不占座、不写云端，只看（两个席位都有人的时候用） */
-  watch(code: string, snapshot: RoomSnapshot): void;
+  watch(code: string, snapshot: RoomSnapshot, notice?: string): void;
   /** 退出房间，回到本机对局 */
   leave(): void;
   /**
@@ -247,7 +247,7 @@ export function openOnlinePanel(host: OnlineHost): void {
             </div>
             <div class="field-hint">
               ${snap ? (allSeated ? '人都到齐了。' : `还有 ${emptySeats.length} 个席位空着。`) : ''}
-              ${isWatcher ? '观战位不占座，多几个人同时看也不会互相挤掉。' : '换设备时，重新打开邀请链接就能回到你自己的席位。'}
+              ${isWatcher ? '观战位不占座，多几个人同时看也不会互相挤掉。' : '同一浏览器刷新会回到原席；新浏览器会安排到空席，不会复制房主身份。'}
             </div>
           </section>
 
@@ -347,95 +347,55 @@ export function openOnlinePanel(host: OnlineHost): void {
     try {
       const snapshotNow = await fetchRoom(code);
       if (!snapshotNow) {
-        /*
-         * **查不到就清掉旧快照**（2026-11-19）。
-         *
-         * 面板上会残留上一次成功读取的房间信息（座位状态、观战按钮），
-         * 玩家输了错的房间号、看到报错，却还能点到上一个房间的"进入/观战"，
-         * 表现就是"输错号也进了个莫名其妙的房间"。
-         */
         snapshot = null;
         error = `没有找到代码为 ${code} 的房间`;
-        paint();
         return;
-      } else {
-        // 优先回到自己原来的席位（靠本机存的令牌），否则坐空位。
-        // 观战记录不能拿来抢座：那条记录里的 seat 是占位用的 'A'，不是真的坐过 A。
-        const saved = loadSeat(code);
-        const mine = saved && !saved.spectator ? saved : null;
-        const token = saved?.token ?? newToken();
-        // 这张桌子有几个座，由房间里的 config 决定（老房间没有 playerCount = 两人局）
-        /*
-         * **电脑席位不给真人坐**（2026-11-18）。
-         *
-         * 关卡用 `config.aiSeats` 声明"这一席是电脑"（比如 `["C"]`）。原来这里
-         * 只按"空着就坐"来抢座，于是退出再进一次的人可能坐进 AI 那一席——
-         * 一坐下 `aiControl` 就把它变成真人操作，原本该由电脑打的一方从此不动，
-         * 看上去就是"联机把关卡玩坏了"。
-         *
-         * 现在：先按原席位/席位顺序找**非电脑**的空位；一个都没有就转观战，
-         * 而不是把电脑的席位抢过来。
-         */
-        const aiSeats: PlayerId[] = Array.isArray(snapshotNow.state.config.aiSeats)
-          ? (snapshotNow.state.config.aiSeats as PlayerId[])
-          : [];
-        /*
-         * **A~D 四个座全试一遍**（2026-11-19）。
-         *
-         * 原来只试 `seatsOf(state)` 算出来的座。那个函数读 `playerCount`，
-         * 而房间可能是老版本建的、或者关卡自己声明了别的席位数——
-         * 一旦它算少了，客人就会"明明有空位却只能观战"。
-         * 现在四个座都试，代价只是多几次请求。
-         */
-        /*
-         * 只试这张桌子真实存在的席位（2026-11-19）：
-         * 2 人房就是 A/B，别把人塞进 C/D。
-         */
-        const pc = Number(snapshotNow.state.config.playerCount ?? 2) || 2;
-        const allSeats: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(
-          0,
-          Math.max(2, Math.min(4, pc)),
-        );
-        const order: PlayerId[] = (mine && allSeats.includes(mine.seat)
-          ? [mine.seat, ...allSeats.filter((x) => x !== mine!.seat)]
-          : allSeats
-        ).filter((x) => !aiSeats.includes(x));
-        let seated: PlayerId | null = null;
-        let lastErr = '';
-        for (const seat of order) {
-          try {
-            let r = await claimSeat(code, seat, token);
-            if (r !== 'ok') r = await claimSeat(code, seat, token); // 竞态重试一次
-            if (r === 'ok') {
-              seated = seat;
-              break;
-            }
-            lastErr = `${seat} 已被占用`;
-          } catch (err) {
-            lastErr = err instanceof Error ? err.message : String(err);
-          }
+      }
+
+      // 优先回到自己原来的席位；观战记录里的 A 只是视角占位，不能拿来抢座。
+      const saved = loadSeat(code);
+      const mine = saved && !saved.spectator ? saved : null;
+      const token = saved?.token ?? newToken();
+      const aiSeats: PlayerId[] = Array.isArray(snapshotNow.state.config.aiSeats)
+        ? (snapshotNow.state.config.aiSeats as PlayerId[])
+        : [];
+      const pc = Number(snapshotNow.state.config.playerCount ?? 2) || 2;
+      const allSeats: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(
+        0,
+        Math.max(2, Math.min(4, pc)),
+      );
+      const order: PlayerId[] = (mine && allSeats.includes(mine.seat)
+        ? [mine.seat, ...allSeats.filter((x) => x !== mine!.seat)]
+        : allSeats
+      ).filter((x) => !aiSeats.includes(x));
+      let seated: PlayerId | null = null;
+      let lastTaken: PlayerId | null = null;
+      for (const seat of order) {
+        // taken 才继续找下一席；网络/权限异常必须停止并报告，不能伪装成满员。
+        let r = await claimSeat(code, seat, token);
+        if (r !== 'ok') r = await claimSeat(code, seat, token);
+        if (r === 'ok') {
+          seated = seat;
+          break;
         }
-        if (!seated) {
-          /*
-           * 坐不进去时**说清原因**（2026-11-19）。
-           * 之前直接转观战，玩家只会看到"我怎么在看别人下棋"，
-           * 完全不知道是席位满了还是被电脑占着。
-           */
-          error = `没有空席位（${lastErr || '四个座都被占了'}），已切到观战`;
-          host.watch(code, snapshotNow);
-          close();
-          return;
-        }
-        host.enter({ code, seat: seated, token }, snapshotNow);
+        lastTaken = seat;
+      }
+      if (!seated) {
+        const reason = lastTaken ? `${lastTaken} 等席位已被占用` : '没有可入座的真人席位';
+        host.watch(code, snapshotNow, `没有空席位（${reason}），已切到观战`);
         close();
         return;
       }
+      host.enter({ code, seat: seated, token }, snapshotNow);
+      close();
     } catch (err) {
-      error = err instanceof Error ? err.message : '进入失败';
+      error = `进入失败：${err instanceof Error ? err.message : '网络或云端权限异常'}。请重试，不会自动转成观战。`;
       void runProbe();
+    } finally {
+      // 所有提前 return 都必须解除 busy；否则输错一次代码，面板就永久锁死。
+      busy = false;
+      if (!closed) paint();
     }
-    busy = false;
-    if (!closed) paint();
   };
 
   /** 只看：不抢座，任何房间只要存在就能进去看 */
