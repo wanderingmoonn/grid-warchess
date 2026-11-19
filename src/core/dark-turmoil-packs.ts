@@ -314,6 +314,9 @@ const EROSION_BY_TYPE: Record<string, number> = {
   'black-locust': 3,
   'black-cocoon': 8,
   unnamable: 10,
+  // 裔系里只有子嗣带暗蚀（作者：它"同时拥有真元和暗蚀"）。
+  // 眷属/后裔不写：写了也没用——没有「暗蚀」这条能力，那个数不会被读到。
+  offspring: 20,
 };
 
 function erosionOf(u: Unit): number {
@@ -2637,8 +2640,14 @@ const WITHDRAW_TURNS = 10;
 /** 看到时代 ≤ 这个数的敌城就撤 */
 const WITHDRAW_ERA = 3;
 
-/** 仆系与卫系的全部兵种——眷属"归附"时按这个名单挑最少的那种 */
-const SERVANT_TYPES = [BRONZE_GUARD, SHADOW_GUARD, HORN_GUARD, PUPPET_MASTER, SOUL_HOOKER, BLOOD_MEDIC];
+/**
+ * 眷属「归附」时认的名单：**只有仆系那三种**。
+ *
+ * 2026-11-19 作者纠正：原来我把卫系三只也算进来了，于是"场上仆从越多等得越久"
+ * 会被卫系虚高的数字拖长，而且它会变成青铜卫那种机关——那不是"归附"，是"降级"。
+ * 眷属是仆系的候补，只补仆系。
+ */
+const COURT_TYPES = [PUPPET_MASTER, SOUL_HOOKER, BLOOD_MEDIC];
 
 /**
  * 「避城」：看到弱的城就撤，撤十回合再回来。
@@ -2703,7 +2712,7 @@ const SCORN_CITY: AbilityDef = {
 const KINDRED_CONVERT: AbilityDef = {
   id: 'kindred-convert',
   name: '归附',
-  summary: '在场上待够回合后变成一名仆从（仆从越多等得越久；变成场上最少的那种）。',
+  summary: '在场上待够回合后变成一名**仆系**单位（场上仆系越多等得越久；变成三种里最少的那种）。',
   group: 'support',
   valueLabel: () => '待够就变仆从',
   hooks: {
@@ -2712,7 +2721,7 @@ const KINDRED_CONVERT: AbilityDef = {
         stage: TURN_START.summon,
         apply: (c) => {
           const { state, self } = c;
-          const servants = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && SERVANT_TYPES.includes(u.type));
+          const servants = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && COURT_TYPES.includes(u.type));
           const need = 2 + servants.length;
           const waited = Number(self.custom?.waited ?? 0) + 1;
           if (waited < need) {
@@ -2720,9 +2729,9 @@ const KINDRED_CONVERT: AbilityDef = {
             return;
           }
           // 挑场上最少的那种仆从；一样多就按名单顺序
-          let pick = SERVANT_TYPES[0]!;
+          let pick = COURT_TYPES[0]!;
           let fewest = Infinity;
-          for (const t of SERVANT_TYPES) {
+          for (const t of COURT_TYPES) {
             const n = servants.filter((u) => u.type === t).length;
             if (n < fewest) {
               fewest = n;
@@ -2844,9 +2853,11 @@ const OFFSPRING_DEF: UnitTypeDef = {
   maxHp: 180,
   range: 4,
   vision: 8,
-  // "拥有真元"：真元是修士境界系统的产物，子嗣不是修士，所以用**魔法段**
-  // （同样是"无视护甲的固定一段"）来表达，不去动境界那条线。
-  magicAtk: 20,
+  /*
+   * "同时拥有真元和暗蚀"（2026-11-19 作者定的落法）：
+   * 真元做不了（那是修士境界系统的产物），**魔法段也不行**——那是奇想包的污染核心，
+   * 这个包不该借。所以这一段直接**并进暗蚀**：它的暗蚀值是全包最高的。
+   */
   flight: true,
   layer: 'air',
   summonedOnly: true,
@@ -2859,6 +2870,7 @@ const OFFSPRING_DEF: UnitTypeDef = {
     'heir-withdraw',
     'scorn-city',
     'heir-summon-offspring',
+    'shadow-erosion',
   ],
   skills: [SHADOW_STEP_SKILL],
 };
@@ -3393,8 +3405,7 @@ export const DARK_TURMOIL: Expansion = {
     '**眷属**：「**归附**」——在场上待够就变成一名仆从。仆从越多等得越久（2 + 仆从数），' +
       '一个都没有时两回合就变；变成场上**最少**的那一种。',
     '**后裔**：「**传裔**」——每 3 回合生一个眷属（上限 2）。',
-    '**子嗣**：「**衍嗣**」——每 2 回合生一个后裔（上限 2）。它会飞，且同时带暗蚀与一段' +
-      '无视护甲的魔法伤害。',
+    '**子嗣**：「**衍嗣**」——每 2 回合生一个后裔（上限 2）。它会飞，暗蚀极重（全包最高）。',
     '## 不成系的三个',
     '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
       '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',

@@ -13,12 +13,15 @@
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { applyAction } from '../src/core/rules.ts';
 import {
+  BLOOD_MEDIC,
   BRONZE_GUARD,
   DARK_TURMOIL,
   DESCENDANT,
   KINDRED,
   OFFSPRING,
+  PUPPET_MASTER,
   SLUMBER,
+  SOUL_HOOKER,
 } from '../src/core/dark-turmoil-packs.ts';
 import { unitAiProfileOf } from '../src/core/unit-ai.ts';
 import { abilityApi } from '../src/core/rules.ts';
@@ -137,7 +140,18 @@ console.log('[1] 裔系三只');
     }
   }
   check('子嗣会飞', s.unitTypes[OFFSPRING]?.flight === true);
-  check('子嗣有魔法段（"真元"用这个表达）', (s.unitTypes[OFFSPRING]?.magicAtk ?? 0) > 0);
+  // 真元做不了、魔法段也不该借（那是奇想包的污染核心）→ 并进暗蚀
+  check('子嗣不再有魔法段', !(s.unitTypes[OFFSPRING]?.magicAtk ?? 0));
+  check('子嗣挂了「暗蚀」', (s.unitTypes[OFFSPRING]?.abilities ?? []).includes('shadow-erosion'));
+  const erosionLine = (id: string): number => {
+    const u = { id: 'x', type: id, owner: 'B', x: 1, y: 1, hp: 1, kills: 0, moved: false, acted: false } as Unit;
+    const line = DARK_TURMOIL.hooks.getUnitPanelLines!({ state: s, unit: u }).find((t) => t.startsWith('暗蚀'));
+    return Number(/(\d+)/.exec(line ?? '')?.[1] ?? 0);
+  };
+  check(
+    `子嗣的暗蚀很重（${erosionLine(OFFSPRING)} 点）`,
+    erosionLine(OFFSPRING) >= 20 && erosionLine(KINDRED) === 0 && erosionLine(DESCENDANT) === 0,
+  );
   check('裔系最弱的一只也比仆系基础强一点', (s.unitTypes[KINDRED]?.maxHp ?? 0) >= (s.unitTypes[BRONZE_GUARD]?.maxHp ?? 0) - 40);
 }
 
@@ -197,20 +211,34 @@ console.log('\n[4] 归附');
   cur = beginTurnOf(cur, 'B');
   const changed = cur.units.find((u) => u.id === 'kid')!;
   check('第 2 回合变成仆从', changed.type !== KINDRED, changed.type);
-  check('变的是青铜卫（场上没有任何仆从时按名单第一个）', changed.type === BRONZE_GUARD, changed.type);
+  check('变的是傀儡师（场上没有仆系时按名单第一个）', changed.type === PUPPET_MASTER, changed.type);
 
-  // 场上仆从多：要等更久
+  // 场上仆系多：要等更久
   const many = arena({ cityEra: 6 });
   many.mk('kid', KINDRED, 'B', 2, 2);
-  many.mk('s1', BRONZE_GUARD, 'B', 4, 2);
-  many.mk('s2', BRONZE_GUARD, 'B', 4, 4);
-  many.mk('s3', BRONZE_GUARD, 'B', 6, 2);
+  many.mk('s1', PUPPET_MASTER, 'B', 4, 2);
+  many.mk('s2', SOUL_HOOKER, 'B', 4, 4);
+  many.mk('s3', BLOOD_MEDIC, 'B', 6, 2);
   let cur2 = many.s;
   for (let i = 0; i < 2; i += 1) cur2 = beginTurnOf(cur2, 'B');
-  check('场上 3 个仆从时：2 回合还不够（要 5 回合）', cur2.units.find((u) => u.id === 'kid')!.type === KINDRED);
+  check('场上 3 个仆系时：2 回合还不够（要 5 回合）', cur2.units.find((u) => u.id === 'kid')!.type === KINDRED);
   for (let i = 0; i < 3; i += 1) cur2 = beginTurnOf(cur2, 'B');
   const late = cur2.units.find((u) => u.id === 'kid')!;
-  check('第 5 回合才变，而且变的是最少的那种', late.type !== KINDRED, late.type);
+  check('第 5 回合才变', late.type !== KINDRED, late.type);
+  check('变的只能是仆系三种之一', [PUPPET_MASTER, SOUL_HOOKER, BLOOD_MEDIC].includes(late.type), late.type);
+
+  // 卫系**不**计入：场上摆一堆卫系，等待时间不变
+  const guards = arena({ cityEra: 6 });
+  guards.mk('kid', KINDRED, 'B', 2, 2);
+  for (let i = 0; i < 4; i += 1) guards.mk(`g${i}`, BRONZE_GUARD, 'B', 4 + i, 6);
+  let cur3 = guards.s;
+  cur3 = beginTurnOf(cur3, 'B');
+  cur3 = beginTurnOf(cur3, 'B');
+  check(
+    '卫系不算"仆从"：两回合照样变',
+    cur3.units.find((u) => u.id === 'kid')!.type !== KINDRED,
+    cur3.units.find((u) => u.id === 'kid')!.type,
+  );
 }
 
 /* ══════════════════════════════════════════════════════════════════
