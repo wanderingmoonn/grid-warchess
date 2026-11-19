@@ -220,6 +220,20 @@ const SLUMBER_DEF: UnitTypeDef = {
  * 换到的寿元直接加在 `custom.lifespan` 上。加寿元不会让它变年轻，
  * 只是让它"还能再撑几年"——所以年龄只增不减，杀得再多也只是续命。
  */
+/**
+ * 「吞噬」的黑名单：这三样是仙帝自己的来历，不是食物。
+ *
+ *   · 骨灰罐 —— 他最初就是从这里面爬出来的；
+ *   · 成帝碑 —— 他成道的地方；
+ *   · 沉眠地 —— 他歇脚的地方（吃了它，自己也没地方睡了）。
+ *
+ * 写在函数里而不是模块顶层常量：这三个 id 定义在本文件靠后的段落，
+ * 顶层建 Set 会撞上 TDZ。
+ */
+function isDevourBanned(type: string): boolean {
+  return type === FUNERARY_URN || type === IMPERIAL_STELE || type === SLUMBER;
+}
+
 registerSkillEffect('soul-devour', (c) => {
   const t = c.target;
   if (!t) {
@@ -234,6 +248,11 @@ registerSkillEffect('soul-devour', (c) => {
   if (!victim) {
     c.result.ok = false;
     c.result.reason = '那一格没有可以吞的同伴';
+    return;
+  }
+  if (isDevourBanned(victim.type)) {
+    c.result.ok = false;
+    c.result.reason = '那不是食物——它吞不掉自己的过去。';
     return;
   }
   const name = c.state.unitTypes[victim.type]?.name ?? victim.type;
@@ -266,7 +285,7 @@ registerSkillAi('soul-devour', (c) => {
 
   const reach = c.skill.radius ?? 2;
   const candidates = c.allies
-    .filter((a) => a.id !== c.unit.id && a.hp > 0 && dist(a, c.unit) <= reach)
+    .filter((a) => a.id !== c.unit.id && a.hp > 0 && dist(a, c.unit) <= reach && !isDevourBanned(a.type))
     // 境界低的先吃；同境界吃便宜的（省得先吃掉主力）
     .sort((a, b) => {
       const ra = Number(a.custom?.rank ?? 0);
