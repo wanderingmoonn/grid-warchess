@@ -797,6 +797,25 @@ export interface AbilityHooks {
   siegeLoot?: (c: SiegeLootCtx) => void;
   /** 魔法段倍率（属性精研·暗） */
   magicMul?: (c: MagicCtx) => number;
+  /**
+   * 能不能把这座**废墟**占下来。返回非空字符串 = 不能，内容原样给玩家看。
+   *
+   * 加在能力层而不是核心的 `if (type === ...)` 里：核心只负责"问一遍挂了这条能力的兵"，
+   * 至于"为什么不能"是「痴愚」那种词条自己的事。
+   */
+  canCaptureCity?: (c: { state: GameState; unit: Unit; city: City }) => string | null;
+  /**
+   * 刚刚占下一座城（废墟重建完成、已经易手之后）。
+   *
+   * 想在城市易手这件事上做文章的扩展（比如「断传承」让城的时代降一级）
+   * 都挂这里——核心仍然只有一处易手点，不做特例。
+   */
+  onCityCaptured?: (c: {
+    state: GameState;
+    unit: Unit;
+    city: City;
+    prevOwner: PlayerId;
+  }) => void;
   /** 自己回合开始（见 TURN_START） */
   onTurnStart?: Staged<TurnStartCtx>[];
   /**

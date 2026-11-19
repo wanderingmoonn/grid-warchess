@@ -5526,6 +5526,16 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     if (s.players[unit.owner].gold < price) {
       return { ok: false, reason: `接管这座废墟要 ${price} 金重建，金币不够` };
     }
+    /*
+     * 再问一遍**这个兵**能不能占城——「痴愚」那种词条会在这里说不。
+     *
+     * 放在"动之前"：不然它走到一半被拒，会停在废墟上却不算占下来，
+     * 那种中间态没人说得清。理由字符串直接给玩家看（能力自己写）。
+     */
+    for (const h of hooksOfUnit(s, unit)) {
+      const why = h.canCaptureCity?.({ state: s, unit, city: destCity });
+      if (why) return { ok: false, reason: why };
+    }
   }
 
   unit.x = x;
@@ -5571,6 +5581,10 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     destCity.hp = Math.max(1, Math.ceil(destCity.maxHp * CITY.captureHpRatio));
     destCity.capturedTurn = s.turn;
     pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`, true);
+    // 易手之后通知能力（「断传承」在这里把城的时代打回一级）
+    for (const h of hooksOfUnit(s, unit)) {
+      h.onCityCaptured?.({ state: s, unit, city: destCity, prevOwner: prevOwner ?? destCity.owner });
+    }
     s.winner = checkWinner(s);
     // 这是全代码里**唯一**一处城市易手，所以"丢掉最后一座城"也只可能发生在这里
     retireLostSeat(s, prevOwner);

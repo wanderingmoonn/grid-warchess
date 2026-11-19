@@ -521,7 +521,7 @@ const SHADOW_BEAST_DEF: UnitTypeDef = {
    * 现在影系三兵人人都有侵蚀，但**只有影主能生出暗影**——
    * 之前"暗影生蚀影、蚀影又生暗影"把血系"自己繁殖"的特点抢走了。
    */
-  abilities: ['shadow-erosion', 'shadow-possess'],
+  abilities: ['shadow-erosion', 'shadow-possess', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -557,7 +557,7 @@ const SHADE_DEF: UnitTypeDef = {
   shadowRadius: 2,
   aiAutonomy: 1,
   aiProfile: 'shade-spread',
-  abilities: ['shadow-erosion', 'shadow-possess'],
+  abilities: ['shadow-erosion', 'shadow-possess', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -589,7 +589,7 @@ const SHADOW_LORD_DEF: UnitTypeDef = {
   aiAutonomy: 1,
   aiProfile: 'shadow-lord-kite',
   // 影主也带「暗影侵蚀」：它自己打死的也要站起来
-  abilities: ['shadow-erosion', 'shadow-spawn', 'shadow-possess'],
+  abilities: ['shadow-erosion', 'shadow-spawn', 'shadow-possess', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -1160,7 +1160,7 @@ const BLOOD_POOL_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'blood-pool-seek',
-  abilities: ['blood-clot', 'blood-infect'],
+  abilities: ['blood-clot', 'blood-infect', 'dull-wit'],
 };
 
 /** 血肉：一团活着的死肉。慢、近战、血厚甲高，会吸血。 */
@@ -1184,7 +1184,7 @@ const FLESH_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'flesh-away-core',
-  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-erosion'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-erosion', 'dull-wit'],
 };
 
 /** 血核：血肉结晶。慢、中近程、溅射大、会增生。 */
@@ -1207,7 +1207,7 @@ const BLOOD_CORE_DEF: UnitTypeDef = {
   shadowRadius: 4,
   aiAutonomy: 1,
   aiProfile: 'blood-core-deep',
-  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'blood-grow', 'shadow-erosion'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'blood-grow', 'shadow-erosion', 'dull-wit'],
 };
 
 /* ── 结算：化血长出淤血、血核增生 ───────────────────────────────── */
@@ -1616,7 +1616,7 @@ const BONE_SKELETON_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'bone-seek-flesh',
-  abilities: ['blood-clot', 'shadow-possess', 'shadow-spawn', 'bone-seek-body'],
+  abilities: ['blood-clot', 'shadow-possess', 'shadow-spawn', 'bone-seek-body', 'dull-wit'],
 };
 
 /** 尸骸：拼装物。中程、溅射 1、会吞暗影长成不详、死了还掉零件。 */
@@ -1638,7 +1638,7 @@ const BONE_CORPSE_DEF: UnitTypeDef = {
   shadowRadius: 3,
   aiAutonomy: 1,
   aiProfile: 'corpse-toward-shade',
-  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-possess', 'bone-airborne', 'bone-assemble', 'bone-revive'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-possess', 'bone-airborne', 'bone-assemble', 'bone-revive', 'dull-wit'],
 };
 
 /** 不详：残次品。会飞、会跳、杀了东西还要现场拼出一支小队。 */
@@ -1668,7 +1668,7 @@ const BONE_UNNAMED_DEF: UnitTypeDef = {
   shadowRadius: 5,
   aiAutonomy: 1,
   aiProfile: 'unnamed-toward-emperor',
-  abilities: ['shadow-spawn', 'blood-infect', 'blood-siphon', 'bone-airborne', 'bone-transmute', 'bone-dissolve'],
+  abilities: ['shadow-spawn', 'blood-infect', 'blood-siphon', 'bone-airborne', 'bone-transmute', 'bone-dissolve', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -1962,7 +1962,7 @@ const BLACK_LOCUST_DEF: UnitTypeDef = {
   shadowRadius: 0,
   aiAutonomy: 1,
   aiProfile: 'locust-swarm',
-  abilities: ['shadow-erosion', 'blood-siphon', 'locust-breed', 'locust-cocoon'],
+  abilities: ['shadow-erosion', 'blood-siphon', 'locust-breed', 'locust-cocoon', 'dull-wit'],
 };
 
 /** 黑茧：黑暗结晶，不会动的炮台。血厚甲高，等着升华。 */
@@ -1984,7 +1984,7 @@ const BLACK_COCOON_DEF: UnitTypeDef = {
   shadowRadius: 6,
   aiAutonomy: 1,
   aiProfile: 'cocoon-nearest',
-  abilities: ['shadow-erosion', 'blood-siphon', 'cocoon-ascend'],
+  abilities: ['shadow-erosion', 'blood-siphon', 'cocoon-ascend', 'dull-wit'],
 };
 
 /** 诡异：不可言说之物。看不见、跳得远、打完就跑。 */
@@ -2007,8 +2007,82 @@ const UNNAMABLE_DEF: UnitTypeDef = {
   shadowRadius: 6,
   aiAutonomy: 1,
   aiProfile: 'unnamable-stalk',
-  abilities: ['shadow-erosion', 'unnamable-formless', 'shadow-breath'],
+  abilities: ['shadow-erosion', 'unnamable-formless', 'shadow-breath', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * 九、仆从（2026-11-19）
+ *
+ * 剧情上：**诡异**是尸骸仙帝掉下来的污染物，自己会扩散；
+ * **仆从**是他的追随者——听总体指挥，也有自己的脑子。
+ *
+ * 这个包现在只有一个占位单位「青铜卫」，作用是**把城市相关的两条词条跑通**：
+ *   · 断传承：占下一座城，那座城的时代降一级；
+ *   · 痴愚（挂在所有诡异身上）：不认城市，进不了废墟、占不了城。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const BRONZE_GUARD = 'bronze-guard';
+
+/**
+ * 「断传承」：占下一座废墟，那座城的时代降一级。
+ *
+ * 它不会"接手"一座城，只会把城用回旧样子——所以攻下越高级的地方，
+ * 掉得越明显。这条挂 `onCityCaptured`：核心的易手点只有一个，
+ * 这里只是"易手之后多做一件事"，不动核心判定。
+ */
+const BREAK_LINEAGE: AbilityDef = {
+  id: 'break-lineage',
+  name: '断传承',
+  summary: '占下一座城市时，那座城的时代等级下降 1 级（最低到 1 级）。',
+  group: 'support',
+  valueLabel: () => '占城后时代 -1',
+  hooks: {
+    onCityCaptured: ({ state, unit, city }) => {
+      if (city.era <= 1) return;
+      city.era -= 1;
+      state.log.push({
+        turn: state.turn,
+        player: unit.owner,
+        text: `${city.id ? '这座城市' : '这座城市'}的工匠被驱散了——它的时代退回了 ${city.era}。`,
+      });
+    },
+  },
+};
+
+/**
+ * 「痴愚」：不认城市。
+ *
+ * 它不是"攻城弱"，而是**根本不理解城市是什么**：废墟在它眼里就是一堆石头，
+ * 走进去也不会接手。所以这条只拦"入驻废墟"这一个动作，别的都不管。
+ */
+const DULL_WIT: AbilityDef = {
+  id: 'dull-wit',
+  name: '痴愚',
+  summary: '不明白城市是什么：不会进驻废墟、也不会占领城市。',
+  group: 'move',
+  hooks: {
+    canCaptureCity: () => '痴愚：它不明白一座城是什么。',
+  },
+};
+
+/** 青铜卫：最基础的仆从。占位用，数值没细调。 */
+const BRONZE_GUARD_DEF: UnitTypeDef = {
+  id: BRONZE_GUARD,
+  name: '青铜卫',
+  short: '卫',
+  era: 2,
+  category: 'combat',
+  cost: 60,
+  move: 3,
+  atk: 12,
+  armor: 6,
+  maxHp: 80,
+  range: 1,
+  vision: 4,
+  // 仆从听总体指挥（自主分 0）：只有诡异才"自己按倾向走"
+  summonedOnly: true,
+  abilities: ['break-lineage'],
 };
 
 /* ── 三个 profile ───────────────────────────────────────────────── */
@@ -2254,6 +2328,8 @@ for (const a of [
   COCOON_ASCEND,
   UNNAMABLE_FORM,
   SHADOW_BREATH,
+  BREAK_LINEAGE,
+  DULL_WIT,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -2383,6 +2459,11 @@ export const DARK_TURMOIL: Expansion = {
     '**不详**：朝**尸骸仙帝**走，但到 4 格就停下不再靠近；看不见仙帝时沉进暗影最深处。',
     '## 尸骸仙帝',
     '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
+    '## 仆从',
+    '**青铜卫**：尸骸仙帝的追随者里最基础的一种。它**听总体指挥**（和诡异不同，不自己按倾向乱走），' +
+      '所以玩家可以用"它冲哪边"来判断这一波的压力方向。',
+    '它带着「**断传承**」：占下一座城，那座城的时代降一级——它不会接手，只会把城用回旧样子。' +
+      '反过来说，**诡异永远占不了城**（「痴愚」），所以你的城只会丢给仆从，不会丢给那些东西。',
     '## 不成系的三个',
     '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
       '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
@@ -2413,6 +2494,7 @@ export const DARK_TURMOIL: Expansion = {
     BLACK_LOCUST_DEF,
     BLACK_COCOON_DEF,
     UNNAMABLE_DEF,
+    BRONZE_GUARD_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -2433,6 +2515,8 @@ export const DARK_TURMOIL: Expansion = {
     COCOON_ASCEND,
     UNNAMABLE_FORM,
     SHADOW_BREATH,
+    BREAK_LINEAGE,
+    DULL_WIT,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。

@@ -2123,6 +2123,9 @@ export const LEVELS: LevelDef[] = [
         { type: 'black-locust', x: 29, y: 12 },
         { type: 'black-locust', x: 29, y: 13 },
         { type: 'unnamable', x: 26, y: 21 },
+        // 仆从：会占城的东西。带两个是为了让「断传承」在实战里看得见
+        { type: 'bronze-guard', x: 20, y: 10 },
+        { type: 'bronze-guard', x: 20, y: 22 },
       ],
     },
     /*
