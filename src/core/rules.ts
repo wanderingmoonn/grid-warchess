@@ -5536,6 +5536,16 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     if (s.players[unit.owner].gold < price) {
       return { ok: false, reason: `接管这座废墟要 ${price} 金重建，金币不够` };
     }
+    /*
+     * 再问一遍**这个兵**能不能占城——「痴愚」那种词条会在这里说不。
+     *
+     * 放在"动之前"：不然它走到一半被拒，会停在废墟上却不算占下来，
+     * 那种中间态没人说得清。理由字符串直接给玩家看（能力自己写）。
+     */
+    for (const h of hooksOfUnit(s, unit)) {
+      const why = h.canCaptureCity?.({ state: s, unit, city: destCity });
+      if (why) return { ok: false, reason: why };
+    }
   }
 
   unit.x = x;
@@ -5581,6 +5591,10 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
     destCity.hp = Math.max(1, Math.ceil(destCity.maxHp * CITY.captureHpRatio));
     destCity.capturedTurn = s.turn;
     pushLog(s, unit.owner, `入驻废墟，支付 ${price} 金重建，${cityName(destCity)} 归你`, true);
+    // 易手之后通知能力（「断传承」在这里把城的时代打回一级）
+    for (const h of hooksOfUnit(s, unit)) {
+      h.onCityCaptured?.({ state: s, unit, city: destCity, prevOwner: prevOwner ?? destCity.owner });
+    }
     s.winner = checkWinner(s);
     // 这是全代码里**唯一**一处城市易手，所以"丢掉最后一座城"也只可能发生在这里
     retireLostSeat(s, prevOwner);
@@ -5729,6 +5743,17 @@ function doAttack(
     const air = isAirborne(s, defender);
     if (t === 'air' && !air) return { ok: false, reason: '这件武器只能打空中目标' };
     if (t === 'ground' && air) return { ok: false, reason: '这件武器只能打地面目标' };
+  }
+
+  /*
+   * 这支兵愿不愿意打这个目标（「留食」那种纪律）。
+   *
+   * 放在射程判完之后：先确保"打得到"，再问"想不想打"——
+   * 反过来的话，玩家会看到"不打"的理由盖住"够不着"，反而更糊涂。
+   */
+  for (const h of hooksOfUnit(s, attacker)) {
+    const why = h.canAttackTarget?.({ state: s, unit: attacker, target: defender });
+    if (why) return { ok: false, reason: why };
   }
 
   const atkDef = utype(s, attacker.type);
@@ -5972,7 +5997,12 @@ function doAttack(
  * 
  * 注意：这里只负责“破城”，不负责“接管”。接管依然需要派陆军走进废墟。
  */
-export function destroyCity(s: GameState, city: City, attackerOwner: PlayerId): void {
+export function destroyCity(
+  s: GameState,
+  city: City,
+  attackerOwner: PlayerId,
+  byUnit?: Unit,
+): void {
   if (city.ruined) return; // 幂等：已经是废墟就不重复结算
 
   const prevOwner = city.owner;
@@ -5982,6 +6012,18 @@ export function destroyCity(s: GameState, city: City, attackerOwner: PlayerId): 
   city.ruined = true;
   city.hp = 0;
   city.capturedTurn = s.turn;
+
+  /*
+   * 通知"亲手砸开这座城"的那个兵。
+   *
+   * 放在废墟落地之后、守军被挤出去之前：这样能力里的世界已经一致
+   * （城确实是废墟了），而挤出去的单位还有落脚点时就能先改城的状态。
+   */
+  if (byUnit) {
+    for (const h of hooksOfUnit(s, byUnit)) {
+      h.onCityRazed?.({ state: s, unit: byUnit, city, prevOwner });
+    }
+  }
 
   // 城破了，守军不该跟着一起没。把他们挤出城外。
   const tiles = cityTiles(city);
@@ -6140,7 +6182,7 @@ function doSiege(
   }
 
   if (city.hp <= 0) {
-    destroyCity(s, city, attacker.owner);
+    destroyCity(s, city, attacker.owner, attacker);
   }
 
   s.winner = checkWinner(s);
@@ -8317,6 +8359,7 @@ function doEndTurn(s: GameState): ActionResult {
         hurtUnit(s, u, amount, { attrition: true });
       },
       log: (p, text) => pushLog(s, p, text),
+      api: abilityApi,
     });
   }
   /*

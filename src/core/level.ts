@@ -2123,6 +2123,19 @@ export const LEVELS: LevelDef[] = [
         { type: 'black-locust', x: 29, y: 12 },
         { type: 'black-locust', x: 29, y: 13 },
         { type: 'unnamable', x: 26, y: 21 },
+        // 仆从：会占城的东西。带两个是为了让「断传承」在实战里看得见
+        { type: 'bronze-guard', x: 20, y: 10 },
+        { type: 'bronze-guard', x: 20, y: 22 },
+        { type: 'shadow-guard', x: 18, y: 6 },
+        { type: 'horn-guard', x: 19, y: 16 },
+        // 仆系：会造兵、会拉人、会（带毒地）治疗
+        { type: 'puppet-master', x: 22, y: 13 },
+        { type: 'soul-hooker', x: 19, y: 25 },
+        { type: 'blood-medic', x: 22, y: 8 },
+        // 裔系：仙帝的直系——看到弱城会撤
+        { type: 'offspring', x: 24, y: 20 },
+        { type: 'descendant', x: 25, y: 9 },
+        { type: 'kindred', x: 23, y: 26 },
       ],
     },
     /*

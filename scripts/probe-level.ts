@@ -22,6 +22,7 @@ import { isAiSide } from '../src/core/ai-meta.ts';
 import { applyAction, canStandAt, isEliminated, runLevelEvents } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch, startGoldFor } from '../src/core/setup.ts';
 import { allLevels, demoLevels, levelById, playableLevels, sideLevels, storyLevels, validateLevel } from '../src/core/level.ts';
+import { MAP_MAX_SIZE, MAP_MIN_SIZE, validateFixedMap } from '../src/core/fixed-maps.ts';
 import { lintLevel } from '../src/core/level-lint.ts';
 import { buildReplay } from '../src/core/replay-file.ts';
 import type { Action, GameState, MatchConfig } from '../src/core/types.ts';
@@ -1449,6 +1450,41 @@ console.log('');
     events: [{ id: 'e1', when: { kind: 'turn', at: 1 }, do: [{ kind: 'branch', when: { kind: 'turn', at: 1 }, then: [] }] }],
   });
   check(!empty.ok, '空分支被校验拦下', empty.ok ? '' : (empty.errors[0]?.slice(0, 40) ?? ''));
+
+  /*
+   * 图幅上限（2026-11-19：40 → 64）。
+   *
+   * 这条守的是**三处同步**：客户端常量、画布里的输入上限、云端的 RLS 约束。
+   * 前两处读同一个常量，第三处在 sql/ 里手写——所以这里至少把客户端这半钉住，
+   * 免得哪天又有人在画布里手写一个 40。
+   */
+  {
+    const grid = (n: number): string[] => Array.from({ length: n }, () => '.'.repeat(n));
+    const big = validateFixedMap({
+      id: 'map:probe-64',
+      name: '六十四格',
+      w: 64,
+      h: 64,
+      rows: grid(64),
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 58, y: 58 }],
+      source: 'builtin',
+    });
+    check(big.ok, `${MAP_MAX_SIZE}×${MAP_MAX_SIZE} 的图能过校验`, big.ok ? '' : big.errors[0]);
+
+    const tooBig = validateFixedMap({
+      id: 'map:probe-65',
+      name: '六十五格',
+      w: 65,
+      h: 65,
+      rows: grid(65),
+      citiesA: [{ x: 1, y: 1 }],
+      citiesB: [{ x: 58, y: 58 }],
+      source: 'builtin',
+    });
+    check(!tooBig.ok, '超上限的图仍然被拦', tooBig.ok ? '居然过了' : '');
+    check(MAP_MIN_SIZE === 8, '最小尺寸没被动过', String(MAP_MIN_SIZE));
+  }
 }
 
 /* ------------------------------------------------------------------ */

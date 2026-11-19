@@ -93,13 +93,34 @@ function lifespanWords(left: number): string {
 /**
  * 尸骸仙帝。
  *
- * 数值是"九级修士之上"的量级：九级修士的境界加成大约是攻 +257、甲 +119、
- * 真伤 66、每回合 5 段攻击。这里不去复刻那套公式（它不是修士兵种，
- * 复刻了也会随修真包改数值漂移），直接给一组更高的固定值。
+ * 数值按"**九级修士之上**"重调（2026-11-19，作者指出原值根本不够看）。
+ *
+ * 基准（现算的，不是抄的）：一个九级炼气士 = 基础 10 攻 / 0 甲 / 20 血
+ * + 境界加成 攻 257 / 甲 119 / 血 9976 / 真元 66 / 射 +4 / 移 +3 / 5 段 / 溅射 2。
+ * 也就是 **攻 267 · 甲 119 · 血 9996 · 真伤 66 · 5 段**。
+ *
+ * 所以这里每一项都要在上面那组之上：攻 340 / 甲 140 / 血 12000 / 暗蚀 80 / 6 段。
+ * **唯一的例外是移动力 3**（九级修士是 5）——那是它刻意的弱点：
+ * 追不上你，但它射程 6，你也别指望跑得掉。
+ *
+ * 不去复刻修士那套公式：它本来就不是修士兵种，复刻了也会随修真包改数值漂移。
+ *
+ * 魔法段（`magicAtk`）已经删掉，120 点并进暗蚀——魔法段是奇想包的东西，这个包不借。
  *
  * 造价写这么高不是让它能造（`summonedOnly` 挡死产线），是给 AI 估值用的：
  * AI 会据此认为"这东西极贵、不能随便送"。
  */
+const SHADOW_STEP_SKILL = {
+  id: 'shadow-step',
+  name: '暗影跳跃',
+  summary: '瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。',
+  effect: 'shadow-step',
+  targeting: 'point' as const,
+  radius: 40,
+  multiCast: false,
+  cooldown: 1,
+};
+
 const EMPEROR_DEF: UnitTypeDef = {
   id: EMPEROR,
   name: '尸骸仙帝',
@@ -108,15 +129,42 @@ const EMPEROR_DEF: UnitTypeDef = {
   category: 'combat',
   cost: 2400,
   move: 3,
-  atk: 300,
-  armor: 130,
-  maxHp: 1600,
-  range: 5,
+  atk: 340,
+  armor: 140,
+  maxHp: 12000,
+  range: 6,
   vision: 9,
-  magicAtk: 120,
-  magicRes: 25,
+  burst: 5,
+  splash: 2,
+  // 黑暗的源头：它自己就在空中、投下 8 格暗影
+  flight: true,
+  layer: 'air',
   summonedOnly: true,
+  shadowRadius: 8,
+  /*
+   * 2026-11-19 作者给的全套词条——"作为黑暗的源头，不能只有白板"。
+   * 这一串等于把三系的核心机制全挂在一个兵身上：自己繁殖（化影/黑暗之源/衍脉）、
+   * 杀什么长什么（暗影侵蚀/侵染/点化）、越打越厚（化血/增生/汲取）、
+   * 还能把人往黑暗里拽（勾魂）、破城断传承。
+   * 只有走修真路线练到高层，才有和它对线的资格。
+   */
+  abilities: [
+    'shadow-erosion',
+    'blood-clot',
+    'soul-hook',
+    'shadow-spawn',
+    'blood-infect',
+    'shadow-possess',
+    'break-lineage',
+    'blood-siphon',
+    'dull-wit',
+    'blood-grow',
+    'bone-transmute',
+    'dark-source',
+    'lineage-well',
+  ],
   skills: [
+    SHADOW_STEP_SKILL,
     {
       id: 'devour',
       name: '吞噬',
@@ -124,11 +172,9 @@ const EMPEROR_DEF: UnitTypeDef = {
         '吞下一个**自己人**，用它的生机换自己的寿元。不耗灵力、没有冷却，' +
         '因为这是它续命的本能，不是战术选择。',
       effect: 'soul-devour',
-      // 选点式：玩家（或者 AI）点一个同伴所在的格子
       targeting: 'point',
       radius: 2,
       power: 1,
-      // 一回合可以吃好几个：它饿起来是没有节制的（每个仍算一个动作）
       multiCast: true,
     },
   ],
@@ -314,6 +360,12 @@ const EROSION_BY_TYPE: Record<string, number> = {
   'black-locust': 3,
   'black-cocoon': 8,
   unnamable: 10,
+  // 裔系里只有子嗣带暗蚀（作者：它"同时拥有真元和暗蚀"）。
+  // 眷属/后裔不写：写了也没用——没有「暗蚀」这条能力，那个数不会被读到。
+  offspring: 20,
+  'mortal-immortal': 50,
+  // 仙帝：原 magicAtk 120 指的是同一段伤害，改成暗蚀后取 80
+  'corpse-emperor': 80,
 };
 
 function erosionOf(u: Unit): number {
@@ -479,17 +531,6 @@ registerSkillEffect('shadow-step', (c) => {
   c.result.log = `暗影跳跃：${from} → ${t.x},${t.y}`;
 });
 
-const SHADOW_STEP_SKILL = {
-  id: 'shadow-step',
-  name: '暗影跳跃',
-  summary: '瞬间移动到任意一个暗影格子。走完可以跳、跳完还能走，但攻击之后就不行了。',
-  effect: 'shadow-step',
-  targeting: 'point' as const,
-  radius: 40,
-  multiCast: false,
-  cooldown: 1,
-};
-
 /* ── 三个兵 ─────────────────────────────────────────────────────── */
 
 /**
@@ -520,7 +561,7 @@ const SHADOW_BEAST_DEF: UnitTypeDef = {
    * 现在影系三兵人人都有侵蚀，但**只有影主能生出暗影**——
    * 之前"暗影生蚀影、蚀影又生暗影"把血系"自己繁殖"的特点抢走了。
    */
-  abilities: ['shadow-erosion', 'shadow-possess'],
+  abilities: ['shadow-erosion', 'shadow-possess', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -556,7 +597,7 @@ const SHADE_DEF: UnitTypeDef = {
   shadowRadius: 2,
   aiAutonomy: 1,
   aiProfile: 'shade-spread',
-  abilities: ['shadow-erosion', 'shadow-possess'],
+  abilities: ['shadow-erosion', 'shadow-possess', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -588,7 +629,7 @@ const SHADOW_LORD_DEF: UnitTypeDef = {
   aiAutonomy: 1,
   aiProfile: 'shadow-lord-kite',
   // 影主也带「暗影侵蚀」：它自己打死的也要站起来
-  abilities: ['shadow-erosion', 'shadow-spawn', 'shadow-possess'],
+  abilities: ['shadow-erosion', 'shadow-spawn', 'shadow-possess', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -1157,7 +1198,7 @@ const BLOOD_POOL_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'blood-pool-seek',
-  abilities: ['blood-clot', 'blood-infect'],
+  abilities: ['blood-clot', 'blood-infect', 'dull-wit'],
 };
 
 /** 血肉：一团活着的死肉。慢、近战、血厚甲高，会吸血。 */
@@ -1181,7 +1222,7 @@ const FLESH_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'flesh-away-core',
-  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-erosion'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-erosion', 'dull-wit'],
 };
 
 /** 血核：血肉结晶。慢、中近程、溅射大、会增生。 */
@@ -1204,7 +1245,7 @@ const BLOOD_CORE_DEF: UnitTypeDef = {
   shadowRadius: 4,
   aiAutonomy: 1,
   aiProfile: 'blood-core-deep',
-  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'blood-grow', 'shadow-erosion'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'blood-grow', 'shadow-erosion', 'dull-wit'],
 };
 
 /* ── 结算：化血长出淤血、血核增生 ───────────────────────────────── */
@@ -1613,7 +1654,7 @@ const BONE_SKELETON_DEF: UnitTypeDef = {
   shadowRadius: 1,
   aiAutonomy: 1,
   aiProfile: 'bone-seek-flesh',
-  abilities: ['blood-clot', 'shadow-possess', 'shadow-spawn', 'bone-seek-body'],
+  abilities: ['blood-clot', 'shadow-possess', 'shadow-spawn', 'bone-seek-body', 'dull-wit'],
 };
 
 /** 尸骸：拼装物。中程、溅射 1、会吞暗影长成不详、死了还掉零件。 */
@@ -1635,7 +1676,7 @@ const BONE_CORPSE_DEF: UnitTypeDef = {
   shadowRadius: 3,
   aiAutonomy: 1,
   aiProfile: 'corpse-toward-shade',
-  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-possess', 'bone-airborne', 'bone-assemble', 'bone-revive'],
+  abilities: ['blood-clot', 'blood-infect', 'blood-siphon', 'shadow-possess', 'bone-airborne', 'bone-assemble', 'bone-revive', 'dull-wit'],
 };
 
 /** 不详：残次品。会飞、会跳、杀了东西还要现场拼出一支小队。 */
@@ -1665,7 +1706,7 @@ const BONE_UNNAMED_DEF: UnitTypeDef = {
   shadowRadius: 5,
   aiAutonomy: 1,
   aiProfile: 'unnamed-toward-emperor',
-  abilities: ['shadow-spawn', 'blood-infect', 'blood-siphon', 'bone-airborne', 'bone-transmute', 'bone-dissolve'],
+  abilities: ['shadow-spawn', 'blood-infect', 'blood-siphon', 'bone-airborne', 'bone-transmute', 'bone-dissolve', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
 };
 
@@ -1837,6 +1878,35 @@ const COCOON_ASCEND: AbilityDef = {
   },
 };
 
+/** 「暗影呼吸」每回合回多少血 */
+export const BREATH_HEAL = 6;
+
+/**
+ * 「暗影呼吸」：每回合开始回一点血。
+ *
+ * 它自己就在暗影里，回血是"回到自己的介质中去"——不看地形、不要求站住不动，
+ * 和核心的「休整」（要求上回合没动没打）区别就在这。
+ */
+const SHADOW_BREATH: AbilityDef = {
+  id: 'shadow-breath',
+  name: '暗影呼吸',
+  summary: `每回合开始回复 ${BREATH_HEAL} 点生命。`,
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          if (!c.healable) return;
+          const max = c.api.maxHpOf(c.state, c.self);
+          if (c.self.hp >= max) return;
+          c.self.hp = Math.min(max, c.self.hp + BREATH_HEAL);
+        },
+      },
+    ],
+  },
+};
+
 /**
  * 「无形」：不可言说之物，**相邻也看不见**；攻击之后才现形。
  *
@@ -1856,7 +1926,6 @@ const UNNAMABLE_FORM: AbilityDef = {
   name: '无形',
   summary: '看不见，也无法被相邻发现；出手后现形。只有被它打过的敌人才打得中它。',
   group: 'move',
-  valueLabel: () => '打过的才打得中',
   hooks: {
     hidden: (c) => !c.self.acted,
     // 打中谁，谁就"看见"它一回合
@@ -1915,8 +1984,9 @@ const BLACK_LOCUST_DEF: UnitTypeDef = {
   cost: 60,
   move: 5,
   atk: 1,
-  armor: 4,
-  maxHp: 20,
+  // 4 → 2、20 → 14（2026-11-19 作者：黑蝗太耐打了，它该是"一把就能捏死、但永远捏不完"）
+  armor: 2,
+  maxHp: 14,
   range: 1,
   vision: 4,
   burst: 3,
@@ -1928,7 +1998,7 @@ const BLACK_LOCUST_DEF: UnitTypeDef = {
   shadowRadius: 0,
   aiAutonomy: 1,
   aiProfile: 'locust-swarm',
-  abilities: ['shadow-erosion', 'blood-siphon', 'locust-breed', 'locust-cocoon'],
+  abilities: ['shadow-erosion', 'blood-siphon', 'locust-breed', 'locust-cocoon', 'dull-wit'],
 };
 
 /** 黑茧：黑暗结晶，不会动的炮台。血厚甲高，等着升华。 */
@@ -1950,7 +2020,7 @@ const BLACK_COCOON_DEF: UnitTypeDef = {
   shadowRadius: 6,
   aiAutonomy: 1,
   aiProfile: 'cocoon-nearest',
-  abilities: ['shadow-erosion', 'blood-siphon', 'cocoon-ascend'],
+  abilities: ['shadow-erosion', 'blood-siphon', 'cocoon-ascend', 'dull-wit'],
 };
 
 /** 诡异：不可言说之物。看不见、跳得远、打完就跑。 */
@@ -1973,8 +2043,1269 @@ const UNNAMABLE_DEF: UnitTypeDef = {
   shadowRadius: 6,
   aiAutonomy: 1,
   aiProfile: 'unnamable-stalk',
-  abilities: ['shadow-erosion', 'unnamable-formless'],
+  abilities: ['shadow-erosion', 'unnamable-formless', 'shadow-breath', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * 九、仆从（2026-11-19）
+ *
+ * 剧情上：**诡异**是尸骸仙帝掉下来的污染物，自己会扩散；
+ * **仆从**是他的追随者——听总体指挥，也有自己的脑子。
+ *
+ * 这个包现在只有一个占位单位「青铜卫」，作用是**把城市相关的两条词条跑通**：
+ *   · 断传承：占下一座城，那座城的时代降一级；
+ *   · 痴愚（挂在所有诡异身上）：不认城市，进不了废墟、占不了城。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const BRONZE_GUARD = 'bronze-guard';
+
+/**
+ * 「断传承」：占下一座废墟，那座城的时代降一级。
+ *
+ * 它不会"接手"一座城，只会把城用回旧样子——所以攻下越高级的地方，
+ * 掉得越明显。这条挂 `onCityCaptured`：核心的易手点只有一个，
+ * 这里只是"易手之后多做一件事"，不动核心判定。
+ */
+const BREAK_LINEAGE: AbilityDef = {
+  id: 'break-lineage',
+  name: '断传承',
+  summary: '把一座城的耐久打到 0（它变成废墟）时，那座城的时代等级下降 1 级（最低 1 级）。',
+  group: 'support',
+  hooks: {
+    onCityRazed: ({ state, unit, city }) => {
+      if (city.era <= 1) return;
+      city.era -= 1;
+      state.log.push({
+        turn: state.turn,
+        player: unit.owner,
+        text: `城墙塌下去的时候，这座城的时代也退回了 ${city.era} 级。`,
+      });
+    },
+  },
+};
+
+/**
+ * 「痴愚」：不认城市。
+ *
+ * 它不是"攻城弱"，而是**根本不理解城市是什么**：废墟在它眼里就是一堆石头，
+ * 走进去也不会接手。所以这条只拦"入驻废墟"这一个动作，别的都不管。
+ */
+const DULL_WIT: AbilityDef = {
+  id: 'dull-wit',
+  name: '痴愚',
+  summary: '不明白城市是什么：不会进驻废墟、也不会占领城市。',
+  group: 'move',
+  hooks: {
+    canCaptureCity: () => '痴愚：它不明白一座城是什么。',
+  },
+};
+
+/** 青铜卫：最基础的仆从。占位用，数值没细调。 */
+const BRONZE_GUARD_DEF: UnitTypeDef = {
+  id: BRONZE_GUARD,
+  name: '青铜卫',
+  short: '卫',
+  era: 2,
+  category: 'combat',
+  cost: 90,
+  // 高血高甲、走得慢、攻中、暗蚀中、**视野很广**（它是钉子，不是猎手）
+  move: 2,
+  atk: 22,
+  armor: 12,
+  maxHp: 140,
+  range: 1,
+  vision: 9,
+  // 仆从听总体指挥，但有一点自主性（0.45）：诡异才是"全凭本能"
+  summonedOnly: true,
+  aiAutonomy: 0.45,
+  aiProfile: 'servant-advance',
+  abilities: ['break-lineage', 'leave-food', 'shadow-drive'],
+};
+
+/* ── 仆从的公共词条 ─────────────────────────────────────────────── */
+
+/** 「留食」：视野内的敌方经济单位不多时，不许对经济单位下手 */
+export const LEAVE_FOOD_LIMIT = 2;
+
+/**
+ * 「留食」：仙帝要吃东西。
+ *
+ * 所以这些仆从不赶尽杀绝——**视野内的敌方经济单位 ≤ 2 时，干脆不打经济单位**。
+ * 杀掉最后几片产线等于把仙帝的粮仓烧了，那不是忠诚。
+ *
+ * 做在 `canAttackTarget` 上而不是 AI 偏好里：偏好只影响 AI 怎么选，
+ * 玩家手动操作、或者别的单位被命令去打，都绕不过这条——这是纪律，不是口味。
+ */
+const LEAVE_FOOD: AbilityDef = {
+  id: 'leave-food',
+  name: '留食',
+  summary: `视野内的敌方经济单位不多于 ${LEAVE_FOOD_LIMIT} 个时，不会攻击经济单位——那是留给仙帝的食物。`,
+  group: 'attack',
+  hooks: {
+    canAttackTarget: ({ state, unit, target }) => {
+      if (state.unitTypes[target.type]?.category !== 'economy') return null;
+      const sight = state.unitTypes[unit.type]?.vision ?? 4;
+      const seen = state.units.filter(
+        (o) =>
+          o.hp > 0 &&
+          o.owner !== unit.owner &&
+          state.unitTypes[o.type]?.category === 'economy' &&
+          Math.abs(o.x - unit.x) + Math.abs(o.y - unit.y) <= sight,
+      ).length;
+      if (seen > LEAVE_FOOD_LIMIT) return null;
+      return `留食：视野里只剩 ${seen} 个经济单位，这一支不肯下口。`;
+    },
+  },
+};
+
+/* ── 卫系：机关傀儡 ─────────────────────────────────────────────── */
+
+export const PUPPET_WRECK = 'puppet-wreck';
+
+/** 残躯能吸多远的暗影 */
+const DRIVE_REACH = 3;
+
+/**
+ * 「暗影驱动」：倒下之后留一具**傀儡残躯**。
+ *
+ * 残躯不是尸体，是"没通电的机关"（见 `WRECK_REVIVE`）：三格内有暗影就吸干它、
+ * 原地半血复活。所以卫系真正的杀法是**先清掉周围的暗影，再砸碎残躯**。
+ */
+const SHADOW_DRIVE: AbilityDef = {
+  id: 'shadow-drive',
+  name: '暗影驱动',
+  summary: `倒下后留下傀儡残躯；残躯 ${DRIVE_REACH} 格内有暗影时，会吸干它并在原地半血复活。`,
+  group: 'defense',
+  hooks: {
+    onDeath: (c) => {
+      const wreck =
+        spawnAt(c.state, c.api, c.victim.owner, PUPPET_WRECK, c.victim.x, c.victim.y) ??
+        c.api.spawnNear(c.state, c.victim.owner, PUPPET_WRECK, c.victim);
+      if (!wreck) return;
+      // 记下"它原来是谁"——复活时按这个兵种站起来
+      wreck.custom = { ...(wreck.custom ?? {}), origin: c.victim.type };
+      c.state.log.push({ turn: c.state.turn, player: c.victim.owner, text: '机关散了架，剩下一具残躯。' });
+    },
+  },
+};
+
+/**
+ * 「重生」：残躯的回合开始，吸掉三格内的暗影，原地半血站起来。
+ *
+ * 挂在残躯身上而不是"暗影驱动"上：驱动是"怎么死"，这条是"怎么活回来"，
+ * 两者能分开挂——以后想要"不死不活"的机关，只挂前一条就行。
+ */
+const WRECK_REVIVE: AbilityDef = {
+  id: 'wreck-revive',
+  name: '重启',
+  summary: `${DRIVE_REACH} 格内有暗影时，吸干它并原地半血复活成原来的机关。`,
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const origin = self.custom?.origin;
+          if (typeof origin !== 'string' || !state.unitTypes[origin]) return;
+          const shade = state.units
+            .filter(
+              (o) =>
+                o.hp > 0 &&
+                o.type === SHADE &&
+                Math.abs(o.x - self.x) + Math.abs(o.y - self.y) <= DRIVE_REACH,
+            )
+            .sort(
+              (a, b) => Math.abs(a.x - self.x) + Math.abs(a.y - self.y) - (Math.abs(b.x - self.x) + Math.abs(b.y - self.y)),
+            )[0];
+          if (!shade) return;
+          api.killUnit(state, shade, undefined, '暗影被残躯吸干');
+          const at = { x: self.x, y: self.y };
+          api.killUnit(state, self, undefined, '残躯重新启动');
+          api.spawn(state, self.owner, origin, at.x, at.y);
+          const born = state.units.find((o) => o.type === origin && o.x === at.x && o.y === at.y);
+          if (born) born.hp = Math.max(1, Math.ceil((state.unitTypes[origin]?.maxHp ?? 1) / 2));
+          state.log.push({ turn: state.turn, player: self.owner, text: '残躯吸进一团暗影——机关重新站了起来。' });
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「衰鸣」：被打中的敌人陷入「虚弱」。
+ *
+ * 不是伤害型能力——它的价值在于**让下一次交锋更好打**（移动和攻击各降 30%）。
+ */
+const WEAKEN_CRY: AbilityDef = {
+  id: 'weaken-cry',
+  name: '衰鸣',
+  summary: '被它打中的敌人陷入「虚弱」：移动与攻击各降 30%，持续到对方下一个回合结束。',
+  group: 'attack',
+  hooks: {
+    onHit: [
+      {
+        stage: HIT_STAGE.status,
+        apply: (c) => {
+          c.target.status = { ...(c.target.status ?? {}), [WEAKNESS]: 2 };
+          c.touched.push('虚弱');
+        },
+      },
+    ],
+  },
+};
+
+/** 「虚弱」：移动与攻击各降 30% */
+export const WEAKNESS = 'weakness';
+registerStatus({
+  id: WEAKNESS,
+  name: '虚弱',
+  summary: '移动与攻击各降 30%。',
+  modifyMove: (_s, _u, _val, move) => Math.max(1, Math.round(move * 0.7)),
+  modifyAtk: (_s, _u, _val, atk) => Math.max(0, Math.round(atk * 0.7)),
+});
+
+/* ── 卫系三个兵 ─────────────────────────────────────────────────── */
+
+/** 傀儡残躯：一具没通电的机关。不能动、不能打，等着暗影。 */
+const WRECK_DEF: UnitTypeDef = {
+  id: PUPPET_WRECK,
+  name: '傀儡残躯',
+  short: '残',
+  era: 2,
+  category: 'combat',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 4,
+  maxHp: 30,
+  range: 0,
+  vision: 3,
+  summonedOnly: true,
+  abilities: ['wreck-revive'],
+};
+
+/** 暗影卫：烧暗影的轻甲机关，会跳会飞。 */
+export const SHADOW_GUARD = 'shadow-guard';
+const SHADOW_GUARD_DEF: UnitTypeDef = {
+  id: SHADOW_GUARD,
+  name: '暗影卫',
+  short: '影卫',
+  era: 3,
+  category: 'combat',
+  cost: 120,
+  move: 4,
+  atk: 16,
+  armor: 14,
+  maxHp: 70,
+  range: 3,
+  vision: 6,
+  burst: 2,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 4,
+  aiAutonomy: 0.45,
+  aiProfile: 'servant-advance',
+  abilities: ['break-lineage', 'leave-food', 'shadow-drive'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 号卫：射得远、打得广，还让挨打的人虚下去。 */
+export const HORN_GUARD = 'horn-guard';
+const HORN_GUARD_DEF: UnitTypeDef = {
+  id: HORN_GUARD,
+  name: '号卫',
+  short: '号',
+  era: 3,
+  category: 'combat',
+  cost: 150,
+  move: 3,
+  atk: 30,
+  armor: 8,
+  maxHp: 110,
+  range: 6,
+  vision: 6,
+  splash: 2,
+  summonedOnly: true,
+  aiAutonomy: 0.45,
+  aiProfile: 'servant-advance',
+  abilities: ['break-lineage', 'leave-food', 'shadow-drive', 'weaken-cry'],
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * 十、仆系（2026-11-19）
+ *
+ * 和卫系的分工：卫系是"钉在原地的机关"，仆系是"会干活的追随者"。
+ * 三只各有各的活，共同点是**听指挥 + 不往人堆里扎**：
+ *   敌方成群的时候往后站；但只要有人摸到仙帝（或裔系）旁边，这一条立刻作废。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const PUPPET_MASTER = 'puppet-master';
+export const SOUL_HOOKER = 'soul-hooker';
+export const BLOOD_MEDIC = 'blood-medic';
+
+/** 「傀儡制造」：每隔几个自己的回合造一个 */
+const CRAFT_EVERY = 3;
+/** 每种傀儡最多几个 */
+const CRAFT_MAX = 2;
+/** 傀儡的出场顺序——作者定的 */
+const CRAFT_ORDER = [BRONZE_GUARD, SHADOW_GUARD, HORN_GUARD];
+/** 「勾魂」的作用半径（"较大"） */
+const SOUL_RADIUS = 6;
+/** 「增生光环」的作用半径 */
+const AURA_RADIUS = 3;
+/** 一次最多治疗多少（"有数值上限"） */
+const AURA_CAP = 12;
+/** 影蚀之血超过最大生命的这个比例就死 */
+const CORRUPT_RATIO = 0.3;
+
+/** 是不是"该护着的人"：仙帝本人，或者裔系（id 前缀） */
+const isWard = (u: Unit): boolean => u.type === EMPEROR || u.type.startsWith('heir-');
+
+/**
+ * 「傀儡制造」：每 3 个自己的回合，按 青铜卫 → 暗影卫 → 号卫 的顺序造一个。
+ *
+ * 每种最多 2 个；某一种满了就跳过它看下一种；全都满就不造。
+ * 记忆点在 `custom` 上（下一个该造谁 + 还有几回合），所以它不需要额外状态。
+ */
+const PUPPET_CRAFT: AbilityDef = {
+  id: 'puppet-craft',
+  name: '傀儡制造',
+  summary: `每 ${CRAFT_EVERY} 个自己的回合造一个傀儡（青铜卫 → 暗影卫 → 号卫，每种最多 ${CRAFT_MAX} 个）。`,
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const left = Number(self.custom?.craftIn ?? CRAFT_EVERY) - 1;
+          if (left > 0) {
+            self.custom = { ...(self.custom ?? {}), craftIn: left };
+            return;
+          }
+          const start = Number(self.custom?.craftNext ?? 0);
+          for (let i = 0; i < CRAFT_ORDER.length; i += 1) {
+            const idx = (start + i) % CRAFT_ORDER.length;
+            const type = CRAFT_ORDER[idx]!;
+            const alive = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && u.type === type).length;
+            if (alive >= CRAFT_MAX) continue;
+            const spot = freeNear(state, self, type, api);
+            if (!spot) break;
+            api.spawn(state, self.owner, type, spot.x, spot.y);
+            self.custom = {
+              ...(self.custom ?? {}),
+              craftNext: (idx + 1) % CRAFT_ORDER.length,
+              craftIn: CRAFT_EVERY,
+            };
+            state.log.push({
+              turn: state.turn,
+              player: self.owner,
+              text: `傀儡师拼出一具${state.unitTypes[type]?.name ?? '傀儡'}。`,
+            });
+            return;
+          }
+          // 全满了：过一回合再试（别把计数器归零，否则要等很久）
+          self.custom = { ...(self.custom ?? {}), craftIn: 1 };
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「暗影潜行」：**只在暗影领域里**藏得住。
+ *
+ * 出了黑雾就现形；出手也现形。相邻会被发现是引擎的通用规矩（`isHiddenFrom`
+ * 里"贴脸就能看见"那一段），不用在这里再写一遍。
+ */
+const SHADOW_STALK: AbilityDef = {
+  id: 'shadow-stalk',
+  name: '暗影潜行',
+  summary: '在暗影领域内藏形：只有在出手之后、或者被贴到相邻时才会暴露。',
+  group: 'move',
+  hooks: {
+    hidden: (c) => !c.self.acted && inShadowCell(c.state, c.self.x, c.self.y, c.self.board),
+  },
+};
+
+/**
+ * 「勾魂」：大半径内，任何单位在**自己的回合末**只要还有余力，就会被拽向暗影深处。
+ *
+ * 不分敌我——这是它最麻烦的地方：你站在它附近，自己的兵也会被拖走。
+ * "还有余力"按 `moved` 算（这回合没挪过 = 还有移动力）。
+ */
+const SOUL_HOOK: AbilityDef = {
+  id: 'soul-hook',
+  name: '勾魂',
+  summary: `${SOUL_RADIUS} 格内，任何单位在自己回合结束时若还没移动过，会被拉向暗影最深处。`,
+  group: 'support',
+};
+
+/**
+ * 「勾魂」的实际效果：把刚结束回合那一方**还没动过**的单位，往暗影最深处挪。
+ *
+ * 为什么写在扩展层而不是词条自己身上：它要影响**别的单位**（包括敌人），
+ * 而能力钩子只会在"挂着这条能力的那个兵"身上跑。所以词条只声明存在，
+ * 真正拉人由这里统一做。
+ */
+function pullSouls(state: GameState, player: PlayerId, api: AbilityApi): void {
+  const hookers = state.units.filter((u) => u.hp > 0 && api.hasAbility(state, u, 'soul-hook'));
+  if (hookers.length === 0) return;
+  for (const u of state.units) {
+    if (u.owner !== player || u.hp <= 0 || u.moved) continue;
+    if (!hookers.some((h) => Math.abs(h.x - u.x) + Math.abs(h.y - u.y) <= SOUL_RADIUS && h.id !== u.id)) continue;
+    const deep = deepestShadow(state, u);
+    if (!deep) continue;
+    const steps = state.unitTypes[u.type]?.move ?? 1;
+    let moved = 0;
+    for (let i = 0; i < steps; i += 1) {
+      const here = Math.abs(u.x - deep.x) + Math.abs(u.y - deep.y);
+      let best: { x: number; y: number } | null = null;
+      let bestD = here;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = u.x + dx;
+        const ny = u.y + dy;
+        if (!api.canStandAt(state, nx, ny, u.type)) continue;
+        const d = Math.abs(nx - deep.x) + Math.abs(ny - deep.y);
+        if (d < bestD) {
+          bestD = d;
+          best = { x: nx, y: ny };
+        }
+      }
+      if (!best) break;
+      u.x = best.x;
+      u.y = best.y;
+      moved += 1;
+    }
+    if (moved > 0) {
+      u.moved = true;
+      state.log.push({ turn: state.turn, player: u.owner, text: `${state.unitTypes[u.type]?.name ?? '它'}被什么牵着，往黑暗里走了几步。` });
+    }
+  }
+}
+
+/**
+ * 「影蚀之血」的阈值判定：超过上限比例就死，化成一团血肉 + 一团暗影。
+ *
+ * 抽成函数是因为它有两个调用点（光环治疗后、受伤净化后不会触发，但写在一处更稳）。
+ */
+function corruptDeath(state: GameState, unit: Unit, api: AbilityApi): boolean {
+  const max = state.unitTypes[unit.type]?.maxHp ?? 1;
+  const blood = Number(unit.custom?.shadowBlood ?? 0);
+  if (blood <= max * CORRUPT_RATIO) return false;
+  const at = { x: unit.x, y: unit.y };
+  api.killUnit(state, unit, undefined, '受污染的血积满了');
+  api.spawnNear(state, unit.owner, FLESH, { ...unit, x: at.x, y: at.y } as Unit);
+  api.spawnNear(state, unit.owner, SHADE, { ...unit, x: at.x, y: at.y } as Unit);
+  state.log.push({ turn: state.turn, player: unit.owner, text: '影蚀之血漫了出来——那个人化成了血肉和暗影。' });
+  return true;
+}
+
+/**
+ * 「增生光环」：范围内不分敌我，治疗"已失去血量的一半"，但一次有上限。
+ *
+ * 代价是**用受污染的血在治**：治多少，就在那人身上积多少「影蚀之血」；
+ * 积过最大生命的三成，人就没了（化成血肉 + 暗影）。
+ * 挨打会把这份污染冲淡（见扩展的 `onUnitDamaged`），所以"先打一顿再治"是能救人的。
+ */
+const BLOOD_AURA: AbilityDef = {
+  id: 'blood-aura',
+  name: '增生光环',
+  summary: `${AURA_RADIUS} 格内不分敌我治疗"已失去血量的一半"（一次最多 ${AURA_CAP} 点），并在被治疗者身上积累等量「影蚀之血」。`,
+  group: 'support',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.aura,
+        apply: (c) => {
+          const { state, self, api } = c;
+          for (const u of state.units) {
+            if (u.hp <= 0) continue;
+            if (Math.abs(u.x - self.x) + Math.abs(u.y - self.y) > AURA_RADIUS) continue;
+            const max = state.unitTypes[u.type]?.maxHp ?? 0;
+            const missing = max - u.hp;
+            if (missing <= 0) continue;
+            const heal = Math.min(AURA_CAP, Math.floor(missing / 2));
+            if (heal <= 0) continue;
+            u.hp += heal;
+            u.custom = { ...(u.custom ?? {}), shadowBlood: Number(u.custom?.shadowBlood ?? 0) + heal };
+            if (corruptDeath(state, u, api)) continue;
+          }
+        },
+      },
+    ],
+  },
+};
+
+/* ── 仆系三个兵 ─────────────────────────────────────────────────── */
+
+/** 傀儡师：自己不弱，但活是傀儡干的。 */
+const PUPPET_MASTER_DEF: UnitTypeDef = {
+  id: PUPPET_MASTER,
+  name: '傀儡师',
+  short: '傀',
+  era: 3,
+  category: 'combat',
+  cost: 200,
+  move: 2,
+  atk: 18,
+  armor: 8,
+  maxHp: 100,
+  range: 2,
+  vision: 6,
+  summonedOnly: true,
+  aiAutonomy: 0.35,
+  aiProfile: 'servant-hang-back',
+  abilities: ['break-lineage', 'leave-food', 'puppet-craft'],
+};
+
+/** 勾魂使：会飞会跳，藏在黑雾里拽人。 */
+const SOUL_HOOKER_DEF: UnitTypeDef = {
+  id: SOUL_HOOKER,
+  name: '勾魂使',
+  short: '勾',
+  era: 3,
+  category: 'combat',
+  cost: 220,
+  move: 4,
+  atk: 20,
+  armor: 8,
+  maxHp: 80,
+  range: 3,
+  vision: 7,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 5,
+  aiAutonomy: 0.35,
+  aiProfile: 'servant-hang-back',
+  abilities: ['break-lineage', 'leave-food', 'shadow-stalk', 'soul-hook'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 血医：用受污染的血救人。 */
+const BLOOD_MEDIC_DEF: UnitTypeDef = {
+  id: BLOOD_MEDIC,
+  name: '血医',
+  short: '医',
+  era: 3,
+  category: 'combat',
+  cost: 180,
+  move: 3,
+  atk: 10,
+  armor: 6,
+  maxHp: 90,
+  range: 2,
+  vision: 5,
+  summonedOnly: true,
+  aiAutonomy: 0.35,
+  aiProfile: 'servant-hang-back',
+  abilities: ['break-lineage', 'leave-food', 'blood-aura'],
+};
+
+/* ── 仆系行为 ───────────────────────────────────────────────────── */
+
+/**
+ * 「不往人堆里扎」：这是仆系的共同纪律。
+ *
+ * 但有一条例外——**有人摸到仙帝（或裔系）旁边时，这条立刻作废**：
+ * 那时候它们会直接扑上去。所以"逼近仙帝"是能解掉这个龟缩的。
+ */
+const SERVANT_HANG_BACK: UnitAiProfile = {
+  id: 'servant-hang-back',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const eco = (u: Unit): boolean => c.state.unitTypes[u.type]?.category === 'economy';
+
+    // 护的人被贴上了？那就没有"往后站"这回事了
+    const wards = c.allies.filter((a) => a.hp > 0 && isWard(a));
+    const threatened = wards.some((w) => c.foes.some((f) => dist(f, w) <= 3));
+
+    if (!threatened) {
+      // 找"最挤的那一团"：以每个敌人为中心，数 2 格内有几个敌人
+      let worst: { x: number; y: number; n: number } | null = null;
+      for (const f of c.foes) {
+        const n = c.foes.filter((o) => dist(o, f) <= 2).length;
+        if (!worst || n > worst.n) worst = { x: f.x, y: f.y, n };
+      }
+      if (worst && worst.n >= 3 && dist(c.unit, worst) <= 3) {
+        const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+        let best: { x: number; y: number } | null = null;
+        let bestD = dist(c.unit, worst);
+        for (const p of tiles) if (dist(p, worst) > bestD) (bestD = dist(p, worst)), (best = p);
+        if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 115 });
+      }
+    }
+
+    // 常规：打射程内非经济的血少目标
+    const prey = c.foes
+      .filter((f) => dist(f, c.unit) <= range && !eco(f))
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: threatened ? 180 : 160 });
+
+    return add.length ? { add } : {};
+  },
+};
+
+/* ══════════════════════════════════════════════════════════════════
+ * 十一、裔系（2026-11-19）
+ *
+ * 仙帝的直系血脉：眷属 → 后裔 → 子嗣，一层比一层强，也一层比一层"认家"。
+ * 共同点：**看到弱小的城就撤**——它们不是来抢地盘的，是来巡视的。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const KINDRED = 'kindred';
+export const DESCENDANT = 'descendant';
+export const OFFSPRING = 'offspring';
+
+/** 撤离期多长（自己的回合数） */
+const WITHDRAW_TURNS = 10;
+/** 看到时代 ≤ 这个数的敌城就撤 */
+const WITHDRAW_ERA = 3;
+
+/**
+ * 眷属「归附」时认的名单：**只有仆系那三种**。
+ *
+ * 2026-11-19 作者纠正：原来我把卫系三只也算进来了，于是"场上仆从越多等得越久"
+ * 会被卫系虚高的数字拖长，而且它会变成青铜卫那种机关——那不是"归附"，是"降级"。
+ * 眷属是仆系的候补，只补仆系。
+ */
+const COURT_TYPES = [PUPPET_MASTER, SOUL_HOOKER, BLOOD_MEDIC];
+
+/**
+ * 「避城」：看到弱的城就撤，撤十回合再回来。
+ *
+ * 为什么这么设计（作者）：裔系不是来抢地盘的，是来**巡视**的。
+ * 一座城退到 3 代以下，说明这里已经没什么可收的了——它们会退回沉眠地附近，
+ * 或者干脆沉进暗影里等着。十回合后照旧出来走一圈。
+ *
+ * 这条也给了玩家一个反向的活路：**把城打残、让它掉级，能换来十回合的安宁**。
+ */
+const HEIR_WITHDRAW: AbilityDef = {
+  id: 'heir-withdraw',
+  name: '避城',
+  summary: `看到时代 ≤ ${WITHDRAW_ERA} 的敌方城市就撤离 ${WITHDRAW_TURNS} 个回合，退回沉眠地附近或暗影深处。`,
+  group: 'move',
+  valueLabel: () => `见弱城撤离 ${WITHDRAW_TURNS} 回合`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          const { state, self } = c;
+          const until = Number(self.custom?.retreatUntil ?? 0);
+          if (until > state.turn) return; // 还在撤
+          if (until > 0) self.custom = { ...(self.custom ?? {}), retreatUntil: 0 };
+          const sight = state.unitTypes[self.type]?.vision ?? 5;
+          const weak = state.cities.find(
+            (city) =>
+              !city.ruined &&
+              city.owner !== self.owner &&
+              city.era <= WITHDRAW_ERA &&
+              Math.abs(city.x - self.x) + Math.abs(city.y - self.y) <= sight,
+          );
+          if (!weak) return;
+          self.custom = { ...(self.custom ?? {}), retreatUntil: state.turn + WITHDRAW_TURNS };
+          state.log.push({
+            turn: state.turn,
+            player: self.owner,
+            text: `那一族的天塌了。${state.unitTypes[self.type]?.name ?? '它'}不再往这边来。`,
+          });
+        },
+      },
+    ],
+  },
+};
+
+/** 「不据城」：裔系不占人类的废墟——它们不屑，也不愿意。 */
+const SCORN_CITY: AbilityDef = {
+  id: 'scorn-city',
+  name: '不据城',
+  summary: '不屑于占据人类的城市废墟：不会进驻废墟、也不会占领城市。',
+  group: 'move',
+  hooks: { canCaptureCity: () => '不据城：裔系不屑于占据一堆石头。' },
+};
+
+/**
+ * 「归附」：眷属在场上待够了，就**变成一名仆从**。
+ *
+ * 待多久看"家里有多少仆从"：**仆从越多，越慢**（2 + 仆从数）。一个都没有时 2 回合就变——
+ * 那时候它得赶紧去补个缺。变谁看"哪种最少"，所以它会自动补齐短板。
+ */
+const KINDRED_CONVERT: AbilityDef = {
+  id: 'kindred-convert',
+  name: '归附',
+  summary: '在场上待够回合后变成一名**仆系**单位（场上仆系越多等得越久；变成三种里最少的那种）。',
+  group: 'support',
+  valueLabel: () => '待够就变仆从',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self } = c;
+          const servants = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && COURT_TYPES.includes(u.type));
+          const need = 2 + servants.length;
+          const waited = Number(self.custom?.waited ?? 0) + 1;
+          if (waited < need) {
+            self.custom = { ...(self.custom ?? {}), waited };
+            return;
+          }
+          // 挑场上最少的那种仆从；一样多就按名单顺序
+          let pick = COURT_TYPES[0]!;
+          let fewest = Infinity;
+          for (const t of COURT_TYPES) {
+            const n = servants.filter((u) => u.type === t).length;
+            if (n < fewest) {
+              fewest = n;
+              pick = t;
+            }
+          }
+          transform(self, pick, state);
+          self.custom = { ...(self.custom ?? {}), waited: 0 };
+          state.log.push({
+            turn: state.turn,
+            player: self.owner,
+            text: `${state.unitTypes[pick]?.name ?? '仆从'}的队伍里多了一个人——它原来是个眷属。`,
+          });
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「衍嗣」/「传裔」/「黑暗之源」共用的召唤：每 N 个自己的回合召一个，封顶 M。
+ *
+ * `key` 是计时器存在 `custom` 里的字段名。**必须能分开**：同一个兵身上挂两条召唤时
+ * （仙帝既有「黑暗之源」又有「衍脉」），共用一个键会让两条互相偷计时器。
+ */
+function heirSummon(o: {
+  id: string;
+  name: string;
+  summary: string;
+  every: number;
+  type: string;
+  max: number;
+  key?: string;
+}): AbilityDef {
+  const key = o.key ?? 'spawnIn';
+  return {
+    id: o.id,
+    name: o.name,
+    summary: o.summary,
+    group: 'support',
+    valueLabel: () => `每 ${o.every} 回合一个，上限 ${o.max}`,
+    hooks: {
+      onTurnStart: [
+        {
+          stage: TURN_START.summon,
+          apply: (c) => {
+            const { state, self, api } = c;
+            const alive = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && u.type === o.type).length;
+            if (alive >= o.max) return;
+            const left = Number(self.custom?.[key] ?? o.every) - 1;
+            if (left > 0) {
+              self.custom = { ...(self.custom ?? {}), [key]: left };
+              return;
+            }
+            const spot = freeNear(state, self, o.type, api);
+            if (!spot) {
+              self.custom = { ...(self.custom ?? {}), [key]: 1 };
+              return;
+            }
+            api.spawn(state, self.owner, o.type, spot.x, spot.y);
+            self.custom = { ...(self.custom ?? {}), [key]: o.every };
+            state.log.push({ turn: state.turn, player: self.owner, text: `${o.name}：又添了一个。` });
+          },
+        },
+      ],
+    },
+  };
+}
+
+/* ── 裔系三个兵 ─────────────────────────────────────────────────── */
+
+/** 眷属：比后裔弱一层，和仆系基础数值相当。 */
+const KINDRED_DEF: UnitTypeDef = {
+  id: KINDRED,
+  name: '眷属',
+  short: '眷',
+  era: 4,
+  category: 'combat',
+  cost: 120,
+  move: 3,
+  atk: 18,
+  armor: 8,
+  maxHp: 100,
+  range: 2,
+  vision: 6,
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 0.25,
+  aiProfile: 'heir-order',
+  abilities: ['break-lineage', 'leave-food', 'heir-withdraw', 'scorn-city', 'kindred-convert'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 后裔：比子嗣弱一层，会生出眷属。 */
+const DESCENDANT_DEF: UnitTypeDef = {
+  id: DESCENDANT,
+  name: '后裔',
+  short: '裔',
+  era: 4,
+  category: 'combat',
+  cost: 200,
+  move: 3,
+  atk: 26,
+  armor: 10,
+  maxHp: 130,
+  range: 3,
+  vision: 7,
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 0.25,
+  aiProfile: 'heir-order',
+  abilities: [
+    'break-lineage',
+    'leave-food',
+    'heir-withdraw',
+    'scorn-city',
+    'heir-summon-descendant',
+  ],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 子嗣：全方位的强，会飞，会生后裔。 */
+const OFFSPRING_DEF: UnitTypeDef = {
+  id: OFFSPRING,
+  name: '子嗣',
+  short: '嗣',
+  era: 4,
+  category: 'combat',
+  cost: 320,
+  move: 3,
+  atk: 40,
+  armor: 14,
+  maxHp: 180,
+  range: 4,
+  vision: 8,
+  /*
+   * "同时拥有真元和暗蚀"（2026-11-19 作者定的落法）：
+   * 真元做不了（那是修士境界系统的产物），**魔法段也不行**——那是奇想包的污染核心，
+   * 这个包不该借。所以这一段直接**并进暗蚀**：它的暗蚀值是全包最高的。
+   */
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 1,
+  aiAutonomy: 0.25,
+  aiProfile: 'heir-order',
+  abilities: [
+    'break-lineage',
+    'leave-food',
+    'heir-withdraw',
+    'scorn-city',
+    'heir-summon-offspring',
+    'shadow-erosion',
+  ],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 「传裔」：后裔每 3 回合生一个眷属（上限 2） */
+const DESCEND_KINDLE = heirSummon({
+  id: 'heir-summon-descendant',
+  name: '传裔',
+  summary: '每 3 个自己的回合生出一个眷属（上限 2 个）。',
+  every: 3,
+  type: KINDRED,
+  max: 2,
+});
+
+/** 「黑暗之源」：每 3 回合爬出一只黑蝗（上限 3）。仙帝与骨灰罐共有。 */
+const DARK_SOURCE = heirSummon({
+  id: 'dark-source',
+  name: '黑暗之源',
+  summary: `每 3 个自己的回合爬出一只黑蝗（上限 3 只）。`,
+  every: 3,
+  type: BLACK_LOCUST,
+  max: 3,
+  key: 'locustIn',
+});
+
+/** 「衍脉」：每回合生一个子嗣（上限 2）。仙帝与骨灰罐共有——这条是它们"最贵"的地方。 */
+const LINEAGE_WELL = heirSummon({
+  id: 'lineage-well',
+  name: '衍脉',
+  summary: '每个自己的回合生出一个子嗣（上限 2 个）。',
+  every: 1,
+  type: OFFSPRING,
+  max: 2,
+  key: 'heirIn',
+});
+
+/** 「衍嗣」：子嗣每 2 回合生一个后裔（上限 2） */
+const OFFSPRING_BEAR = heirSummon({
+  id: 'heir-summon-offspring',
+  name: '衍嗣',
+  summary: '每 2 个自己的回合生出一个后裔（上限 2 个）。',
+  every: 2,
+  type: DESCENDANT,
+  max: 2,
+});
+
+/* ══════════════════════════════════════════════════════════════════
+ * 十二、"不好分类"的三件（2026-11-19）
+ *
+ * 两座建筑 + 一个强者。它们在剧情上是仙帝这条线的前因与后果：
+ *   骨灰罐 → 仙帝（腐化的来源，也是他一次次回来的地方）
+ *   成帝碑 → 知识污染（谁靠近都会变成诡异，只有修士能"读"它）
+ *   红尘仙 → 读过碑、或者熬到寿元将尽的那一类存在
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const FUNERARY_URN = 'funerary-urn';
+export const IMPERIAL_STELE = 'imperial-stele';
+export const MORTAL_IMMORTAL = 'mortal-immortal';
+
+/** 复活后生命上限低于这个数就再也回不来了 */
+const TRANSCEND_FLOOR = 200;
+/** 碑文的影响半径 = 该单位视野 × 这个比例（向上取整） */
+const STELE_VISION_RATIO = 0.5;
+/** 读过碑之后几回合死 */
+const STELE_DOOM_TURNS = 3;
+/** 「仙帝凝视」持续几回合 */
+const STELE_BUFF_TURNS = 2;
+/** 能免疫"知识污染"、也有资格去读碑的境界 */
+const STELE_RANK_GATE = 6;
+/** 「仙帝凝视」 */
+export const IMPERIAL_GAZE = 'imperial-gaze';
+
+registerStatus({
+  id: IMPERIAL_GAZE,
+  name: '仙帝凝视',
+  summary: '读过碑文的人：境界 +1，但三回合后必死。',
+});
+
+/**
+ * 「超脱」：仙帝倒下时，骨灰罐把他再拉回来一次——**代价是一次比一次弱**。
+ *
+ * 年龄清零、寿元减半、生命上限减半；下一次再死，就在这个基础上再减半。
+ * 生命上限跌到 200 以下时，罐子也就空了（`TRANSCEND_FLOOR`）。
+ *
+ * 记在骨灰罐的 `custom.revives` 上：一次超脱 +1，所以第 n 次复活的
+ * 生命上限是 `基础 / 2^n`。
+ */
+const TRANSCEND: AbilityDef = {
+  id: 'transcend',
+  name: '超脱',
+  summary: '尸骸仙帝倒下时，在罐边以 0 岁、寿元减半、生命上限减半的状态复活；上限跌破底线后不再复活。',
+  group: 'support',
+  valueLabel: () => '仙帝倒下就拉回来（每次更弱）',
+};
+
+/**
+ * 「知识污染」：靠近碑的东西会**直接变成诡异**。
+ *
+ * 半径按"看的那个人"算：`ceil(视野 / 2)`。所以眼睛越尖的越早中招——
+ * 这是一条反直觉但说得通的规则：你看得越远，越先读懂它。
+ *
+ * 6 级以上的修士免疫（他们能"读"，而不是被读）。
+ */
+const KNOWLEDGE_POLLUTION: AbilityDef = {
+  id: 'knowledge-pollution',
+  name: '知识污染',
+  summary: `视野一半内的敌人都变成 1 不详 + 2 黑蝗；${STELE_RANK_GATE} 级以上的修士免疫。`,
+  group: 'attack',
+  valueLabel: () => `视野 1/2 内污染`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.support,
+        apply: (c) => {
+          const { state, self, api } = c;
+          for (const u of [...state.units]) {
+            if (u.hp <= 0 || u.owner === self.owner) continue;
+            if ((Number(u.custom?.rank ?? 0)) >= STELE_RANK_GATE) continue;
+            const sight = state.unitTypes[u.type]?.vision ?? 4;
+            const reach = Math.ceil(sight * STELE_VISION_RATIO);
+            if (Math.abs(u.x - self.x) + Math.abs(u.y - self.y) > reach) continue;
+            const at = { x: u.x, y: u.y };
+            api.killUnit(state, u, undefined, '读了不该读的东西');
+            api.spawnNear(state, self.owner, BONE_UNNAMED, { ...u, x: at.x, y: at.y } as Unit);
+            for (let i = 0; i < 2; i += 1) {
+              api.spawnNear(state, self.owner, BLACK_LOCUST, { ...u, x: at.x, y: at.y } as Unit);
+            }
+            state.log.push({ turn: state.turn, player: u.owner, text: '它读懂了碑上的字——然后就不成形状了。' });
+          }
+        },
+      },
+    ],
+  },
+};
+
+/** 尘封的岁数：仙帝/红尘仙都会老，红尘仙没资格吃同伴，所以只能更频繁地出山 */
+const MORTAL_LIFESPAN = 160;
+
+/* ── 三件东西本体 ───────────────────────────────────────────────── */
+
+/** 骨灰罐：两万血、两千甲，不会动也不会打。它只是在那里。 */
+const URN_DEF: UnitTypeDef = {
+  id: FUNERARY_URN,
+  name: '骨灰罐',
+  short: '罐',
+  era: 1,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 2000,
+  maxHp: 20000,
+  range: 0,
+  vision: 3,
+  summonedOnly: true,
+  shadowRadius: 10,
+  // 罐子不只是遗物：它自己也在往黑暗里吐东西（黑暗之源 + 衍脉）
+  abilities: ['transcend', 'dark-source', 'lineage-well'],
+};
+
+/** 成帝碑：碑文本身就是武器。 */
+const STELE_DEF: UnitTypeDef = {
+  id: IMPERIAL_STELE,
+  name: '成帝碑',
+  short: '碑',
+  era: 1,
+  category: 'building',
+  cost: 0,
+  move: 0,
+  atk: 0,
+  armor: 200,
+  maxHp: 5000,
+  range: 0,
+  vision: 4,
+  summonedOnly: true,
+  shadowRadius: 3,
+  abilities: ['knowledge-pollution'],
+};
+
+/**
+ * 红尘仙：**对标八级修士**（2026-11-19 重调）。
+ *
+ * 八级炼气士 = 基础 + 境界加成 攻 143 / 甲 89 / 血 3928 / 真元 50 / 射 +4 / 移 +2 / 4 段 / 溅射 2
+ * → **攻 153 · 甲 89 · 血 3948 · 真伤 50 · 4 段**。
+ * 这里逐项照抄那组数，所以它和"练到八级的修士"是同一把尺子量出来的。
+ */
+const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
+  id: MORTAL_IMMORTAL,
+  name: '红尘仙',
+  short: '尘',
+  era: 4,
+  category: 'combat',
+  cost: 0,
+  move: 4,
+  atk: 153,
+  armor: 89,
+  maxHp: 3948,
+  range: 5,
+  vision: 9,
+  burst: 4,
+  splash: 2,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 3,
+  aiAutonomy: 0.6,
+  aiProfile: 'mortal-immortal-harvest',
+  // 2026-11-19 作者给的一套：飞、跳、化血、暗影侵蚀、断传承、痴愚
+  abilities: ['shadow-erosion', 'blood-clot', 'shadow-possess', 'break-lineage', 'dull-wit'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 红尘仙的暗蚀 */
+// （加进 EROSION_BY_TYPE 的见下面那张表）
+
+/* ── 红尘仙的老死与出山 ─────────────────────────────────────────── */
+
+/**
+ * 红尘仙：和仙帝一样会老，但**没资格吃同伴**，所以只能更频繁地出山。
+ *
+ * 出山条件（任一）：
+ *   · 自己剩下的寿元不多（`STARVE_LEFT`，和仙帝同一个刻度）；
+ *   · 仙帝已经在出山了（同场上没有沉眠中的仙帝）。
+ *
+ * 平时就缩在沉眠地附近——`inSlumber` 那个判定直接复用。
+ */
+function tickMortals(state: GameState, player: PlayerId, api: AbilityApi): void {
+  for (const u of state.units) {
+    if (u.owner !== player || u.type !== MORTAL_IMMORTAL || u.hp <= 0) continue;
+    if (u.custom?.dtInit !== 1) {
+      u.custom = { ...(u.custom ?? {}), lifespan: MORTAL_LIFESPAN, dtInit: 1, rank: 8 };
+      if ((u.age ?? 0) <= 1) u.age = 120;
+    }
+    if (!inSlumber(state, u)) u.age = (u.age ?? 0) + 1;
+    if ((u.age ?? 0) > (lifespanOf(u) ?? MORTAL_LIFESPAN)) {
+      api.killUnit(state, u, undefined, '红尘仙寿元耗尽，散作尘埃');
+    }
+  }
+}
+
+/** 读过碑的人：三回合到了就死，尸体会站起一名红尘仙 */
+function tickDoomed(state: GameState, api: AbilityApi): void {
+  for (const u of [...state.units]) {
+    if (u.hp <= 0) continue;
+    const at = Number(u.custom?.doomAt ?? 0);
+    if (!at || at > state.turn) continue;
+    const owner = (u.custom?.steleOwner ?? u.owner) as PlayerId;
+    api.killUnit(state, u, undefined, '读碑的人走了');
+    const born = api.spawnNear(state, owner, MORTAL_IMMORTAL, u);
+    if (born) born.custom = { ...(born.custom ?? {}), lifespan: MORTAL_LIFESPAN, dtInit: 1, rank: 8 };
+    state.log.push({ turn: state.turn, player: owner, text: '他倒下的地方站起来一个人——红尘里又多了一位。' });
+  }
+}
+
+/** 红尘仙该不该出山 */
+function mortalIsOut(state: GameState, u: Unit): boolean {
+  const left = (lifespanOf(u) ?? MORTAL_LIFESPAN) - (u.age ?? 0);
+  if (left <= STARVE_LEFT) return true;
+  const emperor = state.units.find((o) => o.owner === u.owner && o.type === EMPEROR && o.hp > 0);
+  return !!emperor && !inSlumber(state, emperor);
+}
+
+/**
+ * 红尘仙：出山就收割，没出山就缩在沉眠地附近。
+ *
+ * 不打同族（这是仙帝的特权），所以它的目标永远是敌人。
+ */
+const MORTAL_IMMORTAL_AI: UnitAiProfile = {
+  id: 'mortal-immortal-harvest',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 4;
+    const out = mortalIsOut(c.state, c.unit);
+
+    const prey = c.foes
+      .filter((f) => dist(f, c.unit) <= range)
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (prey && out) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 185 });
+
+    if (out) {
+      const goal = c.foes.sort((a, b) => dist(a, c.unit) - dist(b, c.unit))[0];
+      if (goal) {
+        const walk = steps(c, Math.max(1, c.def.move))
+          .filter((p) => p.d > 0)
+          .sort((a, b) => dist(a, goal) - dist(b, goal))[0];
+        if (walk && dist(walk, goal) < dist(c.unit, goal)) {
+          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 150 });
+        }
+      }
+      return add.length ? { add } : {};
+    }
+
+    // 没出山：缩回沉眠地附近
+    const slumber = c.allies.find((a) => a.type === SLUMBER && a.hp > 0);
+    if (!slumber) return add.length ? { add } : {};
+    const walk = steps(c, Math.max(1, c.def.move))
+      .filter((p) => p.d > 0)
+      .sort((a, b) => dist(a, slumber) - dist(b, slumber))[0];
+    if (walk && dist(walk, slumber) < dist(c.unit, slumber)) {
+      add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 140 });
+    }
+    return add.length ? { add } : {};
+  },
+};
+
+/* ── 裔系行为 ───────────────────────────────────────────────────── */
+
+/**
+ * 裔系：**平时听指挥往前走，撤离期往家里退**。
+ *
+ * "听指挥"靠 `aiAutonomy` 只有 0.25——大部分行动由总体 AI 决定；
+ * 这条 profile 只在撤离期说话（分数 220，压得住其它走位）。
+ */
+const HEIR_ORDER: UnitAiProfile = {
+  id: 'heir-order',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const { state } = c;
+    const until = Number(c.unit.custom?.retreatUntil ?? 0);
+    if (until <= state.turn) return {};
+
+    /*
+     * 撤离目标按优先级挑：
+     *   1. 沉眠地（"回到仙帝身边待命"——最符合剧情）；
+     *   2. 暗影最深处（没有沉眠地就沉进黑暗）；
+     *   3. 都不是自己站着的地方时才会用；否则退而求其次——**离那座弱城远一点**。
+     *
+     * 第三条是必要的兜底：裔系自己只投下 1 格暗影，站在空地上时"最深处"就是脚下，
+     * 不给兜底的话它会站在原地"撤离"，看起来像卡住了。
+     */
+    const slumber = c.allies.find((a) => a.type === SLUMBER && a.hp > 0);
+    const deep = deepestShadow(state, c.unit);
+    const weakCity = state.cities.find((city) => !city.ruined && city.owner !== c.unit.owner && city.era <= WITHDRAW_ERA);
+    let goal: { x: number; y: number } | null = slumber ?? null;
+    if (!goal && deep && (deep.x !== c.unit.x || deep.y !== c.unit.y)) goal = deep;
+
+    const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    if (goal) {
+      const gap = dist(c.unit, goal);
+      const walk = tiles.sort((a, b) => dist(a, goal!) - dist(b, goal!))[0];
+      if (walk && dist(walk, goal) < gap) {
+        return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 220 }] };
+      }
+      return {};
+    }
+    if (weakCity) {
+      let best: { x: number; y: number } | null = null;
+      let bestD = dist(c.unit, weakCity);
+      for (const p of tiles) if (dist(p, weakCity) > bestD) (bestD = dist(p, weakCity)), (best = p);
+      if (best) return { add: [{ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 220 }] };
+    }
+    return {};
+  },
+};
+
+/* ── 仆从行为 ───────────────────────────────────────────────────── */
+
+/**
+ * 仆从的"自主性"：**推着走，但不乱吃**。
+ *
+ * 他们的主要行动仍然归总指挥（自主分只有 0.45），这条 profile 只做三件小事：
+ *   · 优先打射程内**非经济**的血少目标（留着产线给仙帝）；
+ *   · 朝最近的**非经济**敌人挪；
+ *   · 不和同类挤在同一格（机关是组装出来的，挤在一起吃一发溅射就全废）。
+ */
+const SERVANT_AI: UnitAiProfile = {
+  id: 'servant-advance',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const eco = (u: Unit): boolean => c.state.unitTypes[u.type]?.category === 'economy';
+
+    const prey = c.foes
+      .filter((f) => dist(f, c.unit) <= range && !eco(f))
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 165 });
+
+    const goal = c.foes.filter((f) => !eco(f)).sort((a, b) => dist(a, c.unit) - dist(b, c.unit))[0];
+    if (!goal) return add.length ? { add } : {};
+    const kin = c.allies.filter((a) => a.id !== c.unit.id && a.hp > 0 && a.type === c.unit.type);
+    let best: { x: number; y: number } | null = null;
+    let bestScore = -Infinity;
+    for (const p of steps(c, Math.max(1, c.def.move)).filter((q) => q.d > 0)) {
+      const crowd = Math.min(...kin.map((k) => dist(k, p)), 3);
+      const score = -dist(p, goal) + crowd * 1.2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    if (best && dist(best, goal) < dist(c.unit, goal)) {
+      add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 110 });
+    }
+    return add.length ? { add } : {};
+  },
 };
 
 /* ── 三个 profile ───────────────────────────────────────────────── */
@@ -1996,15 +3327,21 @@ const LOCUST_AI: UnitAiProfile = {
       .sort((a, b) => (c.state.unitTypes[b.type]?.armor ?? 0) - (c.state.unitTypes[a.type]?.armor ?? 0))[0];
     if (hard) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: hard.id }, score: 150 });
 
-    // 走位：偏好暗影格，同时离"打人疼的"远一点
+    /*
+     * 走位：偏好暗影格、离"打人疼的"远一点，**并且离黑茧远一点**
+     * （2026-11-19 作者加的）。理由很实：黑茧旁边是"该结茧的地方"，
+     * 一群黑蝗围着一颗茧只会被玩家一发溅射一起清掉——散开才铺得开。
+     */
     const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+    const cocoons = c.allies.filter((a) => a.type === BLACK_COCOON && a.hp > 0);
     let best: { x: number; y: number } | null = null;
     let bestScore = -Infinity;
     for (const p of tiles) {
       const inShadow = inShadowCell(c.state, p.x, p.y, c.unit.board) ? 6 : 0;
       const strong = c.foes.filter((f) => (c.state.unitTypes[f.type]?.atk ?? 0) >= 30);
       const safe = Math.min(...strong.map((f) => dist(f, p)), 8);
-      const score = inShadow + safe * 0.8;
+      const awayCocoon = Math.min(...cocoons.map((k) => dist(k, p)), 6);
+      const score = inShadow + safe * 0.8 + awayCocoon * 0.9;
       if (score > bestScore) {
         bestScore = score;
         best = p;
@@ -2040,23 +3377,38 @@ const UNNAMABLE_AI: UnitAiProfile = {
     const add: UnitAiCandidate[] = [];
     const range = c.def.range ?? 3;
 
-    const prey = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
-    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 175 });
+    /*
+     * 血量越低越"往暗影里躲"，而且会**放弃攻击**（2026-11-19 作者）。
+     *
+     * 分界点定在一半血：过线之后它只做一件事——找最深的暗影钻进去，
+     * 而且越虚越急（`pull` 从 150 涨到 230，压得住大部分走位候选）。
+     * 配合「暗影呼吸」，它躲进去几回合就能回上来，再出来收人头——
+     * 这一整段就是它"打不死"的来源，也是玩家该追进去的理由。
+     */
+    const maxHp = c.def.maxHp || 1;
+    const ratio = Math.max(0, Math.min(1, c.unit.hp / maxHp));
+    const wounded = ratio <= 0.5;
+
+    if (!wounded) {
+      const prey = c.foes.filter((f) => dist(f, c.unit) <= range).sort((a, b) => a.hp - b.hp)[0];
+      if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: 175 });
+    }
 
     const deep = deepestShadow(c.state, c.unit);
     if (deep && (deep.x !== c.unit.x || deep.y !== c.unit.y)) {
       const gap = dist(c.unit, deep);
+      const pull = wounded ? 150 + Math.round((1 - ratio) * 80) : 120;
       if (canStep(c) && gap > Math.max(1, c.def.move) + 2) {
         add.push({
           action: { type: 'HERO_SKILL', unitId: c.unit.id, skillId: 'shadow-step', targetX: deep.x, targetY: deep.y },
-          score: 140,
+          score: pull + 20,
         });
       } else {
         const walk = steps(c, Math.max(1, c.def.move))
           .filter((p) => p.d > 0)
           .sort((a, b) => dist(a, deep) - dist(b, deep))[0];
         if (walk && dist(walk, deep) < gap) {
-          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: 120 });
+          add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: walk.x, y: walk.y }, score: pull });
         }
       }
     }
@@ -2198,8 +3550,117 @@ for (const a of [
   LOCUST_COCOON,
   COCOON_ASCEND,
   UNNAMABLE_FORM,
+  SHADOW_BREATH,
+  BREAK_LINEAGE,
+  DULL_WIT,
+  LEAVE_FOOD,
+  SHADOW_DRIVE,
+  WRECK_REVIVE,
+  WEAKEN_CRY,
+  PUPPET_CRAFT,
+  SHADOW_STALK,
+  SOUL_HOOK,
+  BLOOD_AURA,
+  HEIR_WITHDRAW,
+  SCORN_CITY,
+  KINDRED_CONVERT,
+  DESCEND_KINDLE,
+  OFFSPRING_BEAR,
+  TRANSCEND,
+  KNOWLEDGE_POLLUTION,
+  DARK_SOURCE,
+  LINEAGE_WELL,
 ]) {
   PACK_ABILITIES.set(a.id, a);
+}
+
+/**
+ * 规则书里那张关系图（2026-11-19）。
+ *
+ * 为什么要有它：试玩的时候没人搞明白这十二只谁把谁变出来——
+ * 光读文字要来回翻三节。这里四条横链（影 / 血 / 骨 / 零散），
+ * **箭头就是"变成"**，交叉的地方用虚线框标出来。
+ *
+ * 用内联 SVG 而不是图片文件：规则书要能单文件分发、能打印、能跟着主题走。
+ */
+const TURMOIL_DIAGRAM = '<svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" ' +
+  'font-family="ui-sans-serif, system-ui, -apple-system, PingFang SC, Microsoft YaHei, sans-serif">' +
+  '<defs>' +
+  '<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+  '<path d="M0,0 L10,5 L0,10 z" fill="#8a8278"/></marker>' +
+  '<marker id="arw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+  '<path d="M0,0 L10,5 L0,10 z" fill="#b9b1a0"/></marker>' +
+  '</defs>' +
+
+  '<text x="8" y="16" font-size="12" fill="#6b6459">箭头 = “变成” · 虚线 = 跨系列 / 不是同类</text>' +
+
+  // ── 影 lane ──
+  '<text x="8" y="66" font-size="15" font-weight="600" fill="#3f5878">影</text>' +
+  '<text x="8" y="84" font-size="11" fill="#9a9287">暗影领域</text>' +
+  box(96, 34, '影主', '化影：每 4 回合两团') +
+  box(316, 34, '暗影', '看不见的猎手') +
+  box(536, 34, '蚀影', '影子里的伏击者') +
+  arrow(246, 62, 316, '化影') +
+  arrow(466, 62, 536, '击杀') +
+
+  // ── 血 lane ──
+  '<text x="8" y="162" font-size="15" font-weight="600" fill="#b8433a">血</text>' +
+  '<text x="8" y="180" font-size="11" fill="#9a9287">越打越多</text>' +
+  box(96, 130, '血核', '增生：满血剥血肉') +
+  box(316, 130, '血肉', '汲取 · 侵染') +
+  box(536, 130, '淤血', '化血：伤害攒够') +
+  arrow(246, 158, 316, '增生') +
+  arrow(466, 158, 536, '化血·长出') +
+
+  // ── 骨 lane ──
+  '<text x="8" y="258" font-size="15" font-weight="600" fill="#8a7b5a">骨</text>' +
+  '<text x="8" y="276" font-size="11" fill="#9a9287">会拼装</text>' +
+  box(96, 226, '骸骨', '找血肉') +
+  box(316, 226, '尸骸', '找暗影') +
+  box(536, 226, '不详', '朝仙帝走，4 格停') +
+  arrow(246, 254, 316, '寻躯·吞血肉') +
+  arrow(466, 254, 536, '复苏·吞暗影') +
+
+  // ── 零散 lane ──
+  '<text x="8" y="354" font-size="15" font-weight="600" fill="#6b6459">零散</text>' +
+  '<text x="8" y="372" font-size="11" fill="#9a9287">不成一支</text>' +
+  box(96, 322, '黑蝗', '繁殖：一回合翻一倍') +
+  box(316, 322, '黑茧', '不会动的炮台') +
+  '<rect x="536" y="322" width="150" height="56" rx="7" fill="#faf8f4" stroke="#b9b1a0" stroke-dasharray="5 4"/>' +
+  '<text x="611" y="347" font-size="14" text-anchor="middle" fill="#6b6459">影主 / 血核</text>' +
+  '<text x="611" y="364" font-size="11" text-anchor="middle" fill="#9a9287">（变成它们的头）</text>' +
+  arrow(246, 350, 316, '结茧') +
+  '<line x1="466" y1="350" x2="536" y2="350" stroke="#b9b1a0" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arw2)"/>' +
+  '<text x="501" y="342" font-size="10" text-anchor="middle" fill="#9a9287">升华</text>' +
+
+  // ── 诡异：独立 ──
+  '<rect x="96" y="402" width="590" height="42" rx="7" fill="#faf8f4" stroke="#b9b1a0" stroke-dasharray="5 4"/>' +
+  '<text x="110" y="428" font-size="14" fill="#6b6459">诡异</text>' +
+  '<text x="158" y="428" font-size="12" fill="#6b6459">不属于任何一支：看不见、跳得远，只有被它打过的人才打得中它</text>' +
+
+  // ── 两条容易搞混的规则 ──
+  '<text x="96" y="470" font-size="12" fill="#2b2823">' +
+  '<tspan font-weight="600">尸体归谁：</tspan>暗影杀 → 蚀影 · 血系杀 → 血肉 · 骨系「拼装 / 解离」→ 骸骨 + 淤血 + 暗影</text>' +
+  '<text x="96" y="490" font-size="12" fill="#2b2823">' +
+  '<tspan font-weight="600">变形要停一回合：</tspan>寻躯 / 复苏 / 升华都会让对方原地一回合不动——那一回合是下手的机会</text>' +
+  '</svg>';
+
+/** 图里的一格：白底圆角框 + 名字 + 一行小注 */
+function box(x: number, y: number, name: string, note: string): string {
+  return (
+    `<rect x="${x}" y="${y}" width="150" height="56" rx="7" fill="#ffffff" stroke="#ddd6c8"/>` +
+    `<text x="${x + 75}" y="${y + 25}" font-size="14" text-anchor="middle" fill="#2b2823">${name}</text>` +
+    `<text x="${x + 75}" y="${y + 43}" font-size="11" text-anchor="middle" fill="#9a9287">${note}</text>`
+  );
+}
+
+/** 两个框之间的一支箭头（带标签） */
+function arrow(fromX: number, y: number, toX: number, label: string): string {
+  const mid = (fromX + toX) / 2;
+  return (
+    `<line x1="${fromX}" y1="${y}" x2="${toX}" y2="${y}" stroke="#8a8278" stroke-width="2" marker-end="url(#arw)"/>` +
+    `<text x="${mid}" y="${y - 6}" font-size="11" text-anchor="middle" fill="#6b6459">${label}</text>`
+  );
 }
 
 export const DARK_TURMOIL: Expansion = {
@@ -2215,6 +3676,7 @@ export const DARK_TURMOIL: Expansion = {
    * 决定的。玩家在战场上只能看到"它往那边走了"，看不到"它为什么往那边走"——
    * 不给一份书面说明，这套东西就是不可学习的。
    */
+
   manualNotes: [
     /*
      * 以 `## ` 开关的一条是**小节标题**（规则书会拿它做锚点和导航），
@@ -2237,13 +3699,58 @@ export const DARK_TURMOIL: Expansion = {
     '**不详**：朝**尸骸仙帝**走，但到 4 格就停下不再靠近；看不见仙帝时沉进暗影最深处。',
     '## 尸骸仙帝',
     '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
+    '## 仆从',
+    '仆从是**追随者**，不是污染物：他们听总体指挥，也有一点自己的判断（会绕开经济单位那种"纪律"）。',
+    '所以和诡异正好相反——**仆从会占城，诡异不会**（见「痴愚」）。',
+    '**断传承**（所有仆从都有）：把一座城的耐久打到 0（它变成废墟）时，那座城的时代降一级。' +
+      '他们不会接手一座城，只会把它用回旧样子。',
+    '**留食**（所有仆从都有）：视野内的敌方经济单位不多于 2 个时，他们不肯打经济单位——那是留给仙帝的食物。',
+    '### 卫系（机关傀儡）',
+    '三只都带「**暗影驱动**」：倒下后留下**傀儡残躯**，残躯三格内有暗影就会吸干它、原地半血复活。' +
+      '所以对付卫系要**先清掉身边的暗影，再砸碎残躯**——只打倒本体是不够的。',
+    '**青铜卫**：高血高甲、走得慢、视野很广。它是钉子，负责堵路和看着你。',
+    '**暗影卫**：血薄甲厚、跑得快、会飞、会暗影跳跃，自带一片暗影领域。它是追人的那个。',
+    '**号卫**：射程极远、溅射很大，被打中的敌人会陷入「**虚弱**」——移动与攻击各降 30%。' +
+      '它不追你，它只是让你走不动、打不疼。',
+    '### 仆系（干活的追随者）',
+    '三只都不往人堆里扎：**敌人成群时会往后站**。但只要有人摸到仙帝（或裔系）旁边，' +
+      '这条纪律立刻作废——它们会直接扑上来。所以"贴近仙帝"是解掉它们龟缩的办法。',
+    '**傀儡师**：每 3 个自己的回合造一具傀儡（青铜卫 → 暗影卫 → 号卫，每种最多 2 具，满了跳过）。' +
+      '它自己不算弱，但真正的价值在那些傀儡上——**先杀它，还是先清傀儡**是个选择。',
+    '**勾魂使**：会飞、会跳；「**暗影潜行**」让它只在暗影里藏形（出手或贴身才暴露）；' +
+      '「**勾魂**」会让 6 格内**任何单位**（不分敌我）在自己回合结束时被拽向暗影深处——' +
+      '你站在它附近，自己的兵也会被拖走。',
+    '**血医**：「**增生光环**」治疗 3 格内不分敌我的单位（已失去血量的一半，一次最多 12 点），' +
+      '但治多少就在那人身上积多少「**影蚀之血**」；积过最大生命的三成，人就化成血肉与暗影。' +
+      '挨打会把这份污染冲淡——所以"先打一顿再治"才是救人。',
+    '### 裔系（仙帝的直系）',
+    '**避城**（三只都有）：看到**时代 ≤ 3 的敌方城市**就撤离 10 个回合——退回沉眠地附近、' +
+      '或者沉进暗影最深处。十回合后照旧出来巡视。所以**把城打残**能换来一阵安宁。',
+    '**不据城**（三只都有）：不屑于占据人类的废墟。',
+    '三只都带暗影跳跃、都投下 1 格暗影。',
+    '**眷属**：「**归附**」——在场上待够就变成一名仆从。仆从越多等得越久（2 + 仆从数），' +
+      '一个都没有时两回合就变；变成场上**最少**的那一种。',
+    '**后裔**：「**传裔**」——每 3 回合生一个眷属（上限 2）。',
+    '**子嗣**：「**衍嗣**」——每 2 回合生一个后裔（上限 2）。它会飞，暗蚀极重（全包最高）。',
+    '### 不好分类的三件',
+    '**骨灰罐**：两万血、两千甲的罐子，不会动也不会打。它只有一个作用——「**超脱**」：' +
+      '尸骸仙帝倒下时，在罐边以 0 岁、寿元减半、生命上限减半的状态复活。' +
+      '每死一次就更薄一层，生命上限跌到 200 以下就再也回不来了。',
+    '**成帝碑**：碑上的字会传染。「**知识污染**」：视野一半以内（`ceil(视野/2)`）的敌人' +
+      '立刻变成 1 个不详 + 2 只黑蝗；6 级以上的修士免疫。',
+    '6 级以上的修士可以**主动**贴着碑「**阅读碑文**」：境界 +1、获得两回合「仙帝凝视」，' +
+      '但三回合后必死，尸体会原地站起一名**红尘仙**。所以这是一条用命换时间的路。',
+    '**红尘仙**：八级修士的水准，和仙帝一样会老。它不像仙帝那样能吃同伴，所以出山更频繁；' +
+      '平时缩在沉眠地附近，寿元将尽或者仙帝出山时，它也跟着出来收割。',
     '## 不成系的三个',
-    '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人；咬**护甲最厚**的。它自己的暗影只有脚下那一格，' +
-      '所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
+    '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
+      '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
     '**黑茧**：不会动，打**射程内最近**的。两格内出现暗影或血肉，它会化开把自己烧掉，' +
       '把那只催成影主或血核。',
-    '**诡异**：看不见、也发现不了，只在出手之后现形；射程内**补刀血最少**的，没有目标就沉进暗影最深处。',
+    '**诡异**：看不见、也发现不了，只在出手之后现形；射程内**补刀血最少**的。' +
+      '每回合自己回一点血；**血掉到一半以下就会放弃攻击**，一头钻回暗影最深处——越虚躲得越急。',
   ],
+  manualDiagram: TURMOIL_DIAGRAM,
   blurb: '一位会老死的仙帝，和它为了续命掀起的浩劫。',
   summary:
     '剧情向扩展：尸骸仙帝（远超九级修士，但**有寿元**）会定期出山清洗天地换取寿元，' +
@@ -2265,6 +3772,19 @@ export const DARK_TURMOIL: Expansion = {
     BLACK_LOCUST_DEF,
     BLACK_COCOON_DEF,
     UNNAMABLE_DEF,
+    BRONZE_GUARD_DEF,
+    SHADOW_GUARD_DEF,
+    HORN_GUARD_DEF,
+    WRECK_DEF,
+    PUPPET_MASTER_DEF,
+    SOUL_HOOKER_DEF,
+    BLOOD_MEDIC_DEF,
+    KINDRED_DEF,
+    DESCENDANT_DEF,
+    OFFSPRING_DEF,
+    URN_DEF,
+    STELE_DEF,
+    MORTAL_IMMORTAL_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -2284,6 +3804,26 @@ export const DARK_TURMOIL: Expansion = {
     LOCUST_COCOON,
     COCOON_ASCEND,
     UNNAMABLE_FORM,
+    SHADOW_BREATH,
+    BREAK_LINEAGE,
+    DULL_WIT,
+    LEAVE_FOOD,
+    SHADOW_DRIVE,
+    WRECK_REVIVE,
+    WEAKEN_CRY,
+    PUPPET_CRAFT,
+    SHADOW_STALK,
+    SOUL_HOOK,
+    BLOOD_AURA,
+    HEIR_WITHDRAW,
+    SCORN_CITY,
+    KINDRED_CONVERT,
+    DESCEND_KINDLE,
+    OFFSPRING_BEAR,
+    TRANSCEND,
+    KNOWLEDGE_POLLUTION,
+    DARK_SOURCE,
+    LINEAGE_WELL,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -2300,10 +3840,16 @@ export const DARK_TURMOIL: Expansion = {
     LOCUST_AI,
     COCOON_AI,
     UNNAMABLE_AI,
+    SERVANT_AI,
+    SERVANT_HANG_BACK,
+    HEIR_ORDER,
+    MORTAL_IMMORTAL_AI,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
       tickEmperor(state, player, api);
+      tickMortals(state, player, api);
+      tickDoomed(state, api);
       freezeForming(state, player);
     },
     /*
@@ -2330,7 +3876,35 @@ export const DARK_TURMOIL: Expansion = {
         : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
-    onTurnEnd: ({ state, player }) => {
+    /**
+     * 「超脱」：仙帝倒下时，骨灰罐把他再拉回来一次——一次比一次弱。
+     *
+     * 写在扩展的 onUnitKilled 里而不是能力上：能力钩子只会在"挂载者"身上跑，
+     * 而这里要等的是**另一个单位**（仙帝）的死讯。
+     */
+    onUnitKilled: ({ state, api, victim }) => {
+      if (victim.type !== EMPEROR) return;
+      const urn = state.units.find((u) => u.owner === victim.owner && u.type === FUNERARY_URN && u.hp > 0);
+      if (!urn) return;
+      const revives = Number(urn.custom?.revives ?? 0);
+      const baseMax = state.unitTypes[EMPEROR]?.maxHp ?? 1;
+      const newMax = Math.floor(baseMax / 2 ** (revives + 1));
+      if (newMax < TRANSCEND_FLOOR) return;
+      const born = api.spawnNear(state, victim.owner, EMPEROR, urn);
+      if (!born) return;
+      const life = Math.max(1, Math.floor((lifespanOf(victim) ?? LIFESPAN) / 2));
+      born.age = 0;
+      born.custom = { ...(born.custom ?? {}), lifespan: life, dtInit: 1 };
+      born.maxHpBonus = newMax - baseMax;
+      born.hp = newMax;
+      urn.custom = { ...(urn.custom ?? {}), revives: revives + 1 };
+      state.log.push({
+        turn: state.turn,
+        player: victim.owner,
+        text: '罐子里有什么东西动了一下——他又站起来了，比上一次更薄。',
+      });
+    },
+    onTurnEnd: ({ state, player, api }) => {
       /*
        * 先完成上一回合的凝结，再重铺暗影。
        *
@@ -2338,7 +3912,47 @@ export const DARK_TURMOIL: Expansion = {
        * 所以"这一回合刚标记的 formTo"不会被当场完成——它得等下一回合。
        */
       completeForming(state, player);
+      pullSouls(state, player, api);
       refreshShadow(state);
+    },
+    /**
+     * 「阅读碑文」：**只有 6 级以上的修士**才会看到这个按钮。
+     *
+     * 这不是"看一眼就变强"的免费午餐：境界 +1、拿两回合「仙帝凝视」，
+     * 代价是三回合后必死，而且尸体会站起一名红尘仙。所以它是一条"用命换时间"的路。
+     */
+    unitActions: ({ state, unit }) => {
+      if (Number(unit.custom?.rank ?? 0) < STELE_RANK_GATE) return [];
+      if (unit.custom?.doomAt) return [];
+      const stele = state.units.find(
+        (u) => u.type === IMPERIAL_STELE && u.hp > 0 && Math.abs(u.x - unit.x) + Math.abs(u.y - unit.y) <= 1,
+      );
+      if (!stele) return [];
+      return [
+        {
+          id: 'read-stele',
+          label: '阅读碑文',
+          group: '碑文',
+          detail: '境界 +1、获得「仙帝凝视」；三回合后必死，尸体会站起一名红尘仙。',
+        },
+      ];
+    },
+    onUnitAction: ({ state, unit, actionId }) => {
+      if (actionId !== 'read-stele') return null;
+      const stele = state.units.find(
+        (u) => u.type === IMPERIAL_STELE && u.hp > 0 && Math.abs(u.x - unit.x) + Math.abs(u.y - unit.y) <= 1,
+      );
+      if (!stele) return '碑不在旁边了';
+      if (Number(unit.custom?.rank ?? 0) < STELE_RANK_GATE) return '境界不够，读了只会变成那些东西';
+      unit.custom = {
+        ...(unit.custom ?? {}),
+        rank: Number(unit.custom?.rank ?? 0) + 1,
+        doomAt: state.turn + STELE_DOOM_TURNS,
+        steleOwner: stele.owner,
+      };
+      unit.status = { ...(unit.status ?? {}), [IMPERIAL_GAZE]: STELE_BUFF_TURNS };
+      state.log.push({ turn: state.turn, player: unit.owner, text: '它读完了碑上的最后一行。' });
+      return null;
     },
     /**
      * 棋盘上的「暗影」视图。
@@ -2398,6 +4012,13 @@ export const DARK_TURMOIL: Expansion = {
       // 化血当前攒了多少（只在真的攒过时印，免得每行都挂个 0/80）
       const blood = Number(unit.custom?.blood ?? 0);
       if (blood > 0) lines.push(`已累计的血：${Math.round(blood)} / ${CLOT_DAMAGE}`);
+
+      // 影蚀之血：任何单位都可能被血医治出这个计数，所以不看兵种
+      const corrupt = Number(unit.custom?.shadowBlood ?? 0);
+      if (corrupt > 0) {
+        const max = def?.maxHp ?? 1;
+        lines.push(`影蚀之血：${Math.round(corrupt)} / ${Math.round(max * CORRUPT_RATIO)}（满了就死）`);
+      }
 
       if (isEmperor(unit)) {
         lines.push(`寿元：${lifespanWords(yearsLeft(unit))}`);

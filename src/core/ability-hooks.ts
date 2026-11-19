@@ -797,6 +797,47 @@ export interface AbilityHooks {
   siegeLoot?: (c: SiegeLootCtx) => void;
   /** 魔法段倍率（属性精研·暗） */
   magicMul?: (c: MagicCtx) => number;
+  /**
+   * 能不能把这座**废墟**占下来。返回非空字符串 = 不能，内容原样给玩家看。
+   *
+   * 加在能力层而不是核心的 `if (type === ...)` 里：核心只负责"问一遍挂了这条能力的兵"，
+   * 至于"为什么不能"是「痴愚」那种词条自己的事。
+   */
+  canCaptureCity?: (c: { state: GameState; unit: Unit; city: City }) => string | null;
+  /**
+   * 能不能打这个目标。返回非空字符串 = 不能，内容原样给玩家看。
+   *
+   * 和 `canCaptureCity` 同一套路：核心只负责问，**"为什么不打"由能力自己说**。
+   * 用来表达"这支兵不愿意打某类目标"这种纪律（比如仆从留食物给仙帝）。
+   */
+  canAttackTarget?: (c: { state: GameState; unit: Unit; target: Unit }) => string | null;
+  /**
+   * 刚刚占下一座城（废墟重建完成、已经易手之后）。
+   *
+   * 想在城市易手这件事上做文章的扩展（比如「断传承」让城的时代降一级）
+   * 都挂这里——核心仍然只有一处易手点，不做特例。
+   */
+  onCityCaptured?: (c: {
+    state: GameState;
+    unit: Unit;
+    city: City;
+    prevOwner: PlayerId;
+  }) => void;
+  /**
+   * 亲手把一座城的耐久打到 0（它刚变成废墟的那一刻）。
+   *
+   * 和 `onCityCaptured` 是两件事：**破城**是把墙打塌，**占领**是走进去接管。
+   * 「断传承」要的是前者——它砸的不是"谁家的城"，是"那座城本身"。
+   *
+   * 只有**亲手砸开**才算：没有具体单位的那种破城（剑气、陨石这类由 `abilityApi`
+   * 直接调的）不触发——"仆从砸开的城会退步"这件事得有个砸的人。
+   */
+  onCityRazed?: (c: {
+    state: GameState;
+    unit: Unit;
+    city: City;
+    prevOwner: PlayerId;
+  }) => void;
   /** 自己回合开始（见 TURN_START） */
   onTurnStart?: Staged<TurnStartCtx>[];
   /**
