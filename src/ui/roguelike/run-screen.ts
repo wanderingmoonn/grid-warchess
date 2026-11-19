@@ -215,8 +215,8 @@ export interface RestPanelOptions {
   roster: Array<{ type: string; hp: number }>;
   /** 已经抽过几种卡（面板上显示一下） */
   cardKinds: number;
-  /** 已经修过多少次城（血量加成） */
-  cityHpBonus: number;
+  /** 上一关结束时的城血（0 = 第一关，按满血算） */
+  cityHp: number;
   /** 城市时代与升下一代的价钱（升城**不占整备次数**） */
   cityEra: number;
   upgradeCost: number | null;
@@ -261,8 +261,8 @@ export function openRestPanel(opts: RestPanelOptions): void {
           </button>
           <button class="rogue-card" data-rest="repairCity">
             <span class="rogue-card-name">修城</span>
-            <span class="rogue-card-note">下一关城市血量上限 +10（城每关重建，所以修的是"城墙本身"）</span>
-            <span class="rogue-card-owned">已修：+${opts.cityHpBonus} 血</span>
+            <span class="rogue-card-note">下一关开局城市回满血（城血跨关保留，打完仗是带着伤进下一关的）</span>
+            <span class="rogue-card-owned">当前城血：${opts.cityHp > 0 ? opts.cityHp : '满'}</span>
           </button>
           <button class="rogue-card" data-rest="card">
             <span class="rogue-card-name">升一级兵种卡</span>

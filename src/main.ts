@@ -6308,16 +6308,22 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
    * 这里直接加护甲——规则层读的是 `city.armor`，不另设开关。
    */
   /*
-   * 整备关修过的城：血量上限 +N（2026-11-19）。
-   * 城是每关新造的，所以"修城"落在上限上——修过一次，之后每关都更耐打。
+   * 城的血跨关保留（2026-11-19）。
+   *
+   * 之前每关 `createMatch` 都造一座**满血新城**，等于"城自动修满"，
+   * 于是整备里的"修城"没有落点。现在：
+   *   · 整备选了修城 → 这一关开局补满；
+   *   · 否则把上一关结束时的城血带过来（不超过上限）。
    */
-  if (rogue.run.cityHpBonus > 0) {
-    for (const c of state.cities) {
-      if (c.owner !== 'A') continue;
-      c.maxHp += rogue.run.cityHpBonus;
-      c.hp += rogue.run.cityHpBonus;
+  for (const c of state.cities) {
+    if (c.owner !== 'A') continue;
+    if (rogue.run.repairNext) {
+      c.hp = c.maxHp;
+    } else if (typeof rogue.run.cityHp === 'number') {
+      c.hp = Math.max(1, Math.min(c.maxHp, rogue.run.cityHp));
     }
   }
+  if (rogue.run.repairNext) rogue.run.repairNext = false;
   const armorBonus = cityArmorBonus(rogue.run);
   if (armorBonus > 0) {
     for (const c of state.cities) if (c.owner === 'A') c.armor += armorBonus;
@@ -6400,6 +6406,9 @@ function finishRogueStage(): void {
   if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) rogue.run.relics.push(st.meta.relic);
   const finished = rogue.run.node + 1;
   rogue.run.node = Math.min(finished, SLICE_STAGES.length - 1);
+  // 城血要带回下一关（2026-11-19）：不然修城没有意义
+  const ownCity = state.cities.find((c) => c.owner === 'A');
+  if (ownCity) rogue.run.cityHp = Math.max(1, ownCity.hp);
   rogueSave();
   syncRogueHud();
   openSettlePanel({
@@ -6683,7 +6692,7 @@ function maybeRest(after: () => void): void {
     capacity: cityCapacity(size),
     roster: run.roster,
     cardKinds: Object.keys(run.cards).length,
-    cityHpBonus: run.cityHpBonus,
+    cityHp: run.cityHp ?? 0,
     cityEra: run.cityEra,
     upgradeCost: run.cityEra >= 8 ? null : cityUpgradeCost(run.cityEra),
     gold: run.gold,
@@ -6714,8 +6723,8 @@ function maybeRest(after: () => void): void {
          * 城每关重建，所以"回血"落不到下一关——能落地的是**血量上限 +10**：
          * 城墙本身修厚了，之后每一关的城都更耐打。
          */
-        run.cityHpBonus += 10;
-        toast(`修城完成：之后每关城市血量上限 +${run.cityHpBonus}`);
+        run.repairNext = true;
+        toast('修城完成：下一关开局城市回满血');
         rogueSave();
         after();
       } else {

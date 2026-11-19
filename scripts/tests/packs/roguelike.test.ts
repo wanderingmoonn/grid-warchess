@@ -446,14 +446,18 @@ export function run() {
     assert.ok(Number.isFinite(out.militia!.atk));
   });
 
-  test('肉鸽：修城与免费建造能过存档', () => {
+  test('肉鸽：城血跨关保留，修城下一关补满', () => {
     const run = newRun(1, { allowRestart: true });
-    run.cityHpBonus = 20;
+    run.cityHp = 9;
     run.freeBuilds = 2;
     const back = parseRun(serializeRun(run));
     assert.ok(back);
-    assert.equal(back.cityHpBonus, 20);
+    assert.equal(back.cityHp, 9, '城血要过存档');
     assert.equal(back.freeBuilds, 2);
+    assert.equal(back.repairNext, false);
+
+    run.repairNext = true;
+    assert.equal(parseRun(serializeRun(run))!.repairNext, true, '修城标记要过存档');
   });
 
   test('肉鸽：升城市时代价钱递增', () => {
