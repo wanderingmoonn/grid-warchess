@@ -51,7 +51,7 @@ export interface DrawOptions {
   /** 兵种 → 时代。默认按原版兵种表查 */
   eraOf?: (id: string) => number;
   /** 主分支：属于它的卡权重 ×3（见 branches.ts），其余分支 ×1 */
-  branch?: import('./branches.ts').Branch;
+  branch?: string;
 }
 
 /**
