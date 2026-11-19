@@ -21,6 +21,7 @@ import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } fro
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
 import { BRANCHES, BRANCH_MAIN_MUL, branchMul, branchOf, poolOfBranch, unitPack } from '../../../src/core/roguelike/branches.ts';
 import { EXPANSIONS } from '../../../src/core/expansions.ts';
+import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '../../../src/core/roguelike/enemy-pools.ts';
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
@@ -153,6 +154,44 @@ export function run() {
       if (pick && branchOf(pick)?.id === 'cold') mains += 1;
     }
     assert.ok(mains > 50, `主分支应占多数，实际 ${mains}/100`);
+  });
+
+  test('肉鸽：前几场弱怪池、后几场强怪池', () => {
+    assert.equal(WEAK_RATIO, 0.6);
+    // 3 场：0、1 弱，2 强
+    assert.equal(poolForStage(0, 3), 'weak');
+    assert.equal(poolForStage(1, 3), 'weak');
+    assert.equal(poolForStage(2, 3), 'strong');
+    // 9 场：前 5 弱
+    assert.equal(poolForStage(4, 9), 'weak');
+    assert.equal(poolForStage(5, 9), 'strong');
+    // 单场 run 也不能一上来就是强池
+    assert.equal(poolForStage(0, 1), 'weak');
+
+    assert.ok(poolUnits('weak').length >= 3, '弱池太薄');
+    assert.ok(poolUnits('strong').length >= 3, '强池太薄');
+    for (const id of [...ENEMY_POOLS.weak, ...ENEMY_POOLS.strong]) {
+      assert.ok(UNIT_TYPES[id], `池子里的 ${id} 在兵种表里不存在`);
+    }
+  });
+
+  test('肉鸽：敌人抽取确定性，且不会整队同型', () => {
+    const pool = poolUnits('strong');
+    const a = pickEnemies(pool, { count: 4, seed: 77 });
+    const b = pickEnemies(pool, { count: 4, seed: 77 });
+    assert.deepEqual(a, b, '同 seed 必须抽到同一队');
+    assert.equal(a.length, 4);
+    for (const id of a) assert.ok(pool.includes(id));
+    assert.ok(new Set(a).size >= 2, `四个敌人不该全同型：${a}`);
+
+    // 地图标签命中偏好的兵权重更高
+    const tagged = pickEnemies(pool, {
+      count: 6,
+      seed: 5,
+      arenaTags: ['forest'],
+      tagsOf: (id) => (id === 'longbow' ? ['forest'] : []),
+    });
+    assert.ok(tagged.includes('longbow'), '带偏好标签的兵应该更容易出现');
   });
 
   test('肉鸽：升城市时代价钱递增', () => {
