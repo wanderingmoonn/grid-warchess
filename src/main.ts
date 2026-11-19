@@ -5259,7 +5259,45 @@ function handleAction(act: string, el: HTMLElement): void {
           return `第 ${state.turn} 回合 · ${state.w}×${state.h} · ${lv ? `关卡「${lv}」` : '普通对局'} · 我 ${mine} 兵 ${cv} 城`;
         },
         newGame: () => newGameFlow(),
-        prepareRoom: () => {
+        prepareRoom: (mode) => {
+          /*
+           * **建房 = 一局全新的对局**（2026-11-19）。
+           *
+           * 原来建房上传的是"房主本机这一局"：可能挂着上次的关卡存档、
+           * 可能是 AI 局、可能每方两座城——客人进来看到的自然是"莫名其妙的地图"。
+           * 所有联机的怪问题（席位、怪图、观战）都是这一条派生的。
+           *
+           * 现在默认按**标准双人局**现造一局：12×12、双方各一城、无电脑、先手 A。
+           * 房主真想用自己那局，得显式选 `current`。
+           */
+          if (mode === 'standard') {
+            /*
+             * **挂起自动存档**（2026-11-19）。
+             *
+             * 这一局只是"拿来开房间用的"，不该覆盖本机那个未完成的存档——
+             * 否则玩家点一次"创建房间"，回去就再也接不上自己那局了。
+             * 进房之后 `applyRoom` 会切到房间作用域并解除挂起。
+             */
+            suspendSaves(true);
+            state = createMatch(
+              {
+                ...DEFAULT_CONFIG,
+                size: 12,
+                playerCount: 2,
+                aiOpponent: false,
+                aiSeats: [],
+                level: undefined,
+                godMode: false,
+              } as typeof DEFAULT_CONFIG,
+              randomSeed(),
+              loadCustomUnits(),
+            );
+            refreshMemory(state);
+            clearSelection();
+            render();
+            return state;
+          }
+          
           /*
            * **建房前把电脑关掉**（2026-11-19）。
            *
@@ -8705,6 +8743,8 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   aiToken += 1;
   aiPaused = false;
   dirty = false;
+  // 房间作用域已经切好，可以恢复自动存档了
+  suspendSaves(false);
   closeHandoff();
   // 换了一局就是换了一张图：上一局放大到 3× 拖着看的位置，到这一局毫无意义
   resetZoom();

@@ -48,7 +48,7 @@ export interface OnlineHost {
   /** 放弃当前这局，去开一局新的（关卡/对局面板） */
   newGame(): void;
   /** 建房前整理这一局（普通对局要把电脑关掉，否则 B 席是"电脑的座"，真人坐不进去） */
-  prepareRoom(): GameState;
+  prepareRoom(mode: 'standard' | 'current'): GameState;
 }
 
 export function openOnlinePanel(host: OnlineHost): void {
@@ -146,7 +146,10 @@ export function openOnlinePanel(host: OnlineHost): void {
               </div>
               <div class="online-current">当前这局：<b>${escapeHtml(host.describe())}</b></div>
               <button class="btn btn-primary btn-block" data-act="create" ${busy ? 'disabled' : ''}>
-                ${busy ? '正在创建…' : '创建房间'}
+                ${busy ? '正在创建…' : '创建房间（标准双人局 12×12）'}
+              </button>
+              <button class="btn btn-block" data-act="create-current" ${busy ? 'disabled' : ''}>
+                用上面这局建房（房主自己挑的图/关卡）
               </button>
               <button class="btn btn-block" data-act="new-game">不是这局——去开一局新的</button>
             </section>
@@ -278,11 +281,20 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (!closed) paint();
   };
 
-  const doCreate = async () => {
+  /** 建房模式：standard = 现造一局标准双人局；current = 用房主本机这局 */
+  let busyMode: 'standard' | 'current' = 'standard';
+
+  const doCreate = async (mode: 'standard' | 'current' = 'standard') => {
+    busyMode = mode;
     busy = true;
     error = '';
     paint();
-    const state = host.prepareRoom();
+    /*
+     * 默认**现造一局标准双人局**（2026-11-19）。
+     * 用本机那局要显式选——否则房间里装的可能是上次的关卡存档，
+     * 客人进来就是一张谁都没打算打的图。
+     */
+    const state = host.prepareRoom(busyMode ?? 'standard');
     try {
       const token = newToken();
       /*
@@ -445,7 +457,8 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (!act) return;
 
     if (act === 'close') close();
-    if (act === 'create') void doCreate();
+    if (act === 'create') void doCreate('standard');
+    if (act === 'create-current') void doCreate('current');
     if (act === 'join') void doJoin();
     if (act === 'watch') void doWatch();
     if (act === 'refresh') void refresh();
