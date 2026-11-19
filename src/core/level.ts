@@ -2128,6 +2128,10 @@ export const LEVELS: LevelDef[] = [
         { type: 'bronze-guard', x: 20, y: 22 },
         { type: 'shadow-guard', x: 18, y: 6 },
         { type: 'horn-guard', x: 19, y: 16 },
+        // 仆系：会造兵、会拉人、会（带毒地）治疗
+        { type: 'puppet-master', x: 22, y: 13 },
+        { type: 'soul-hooker', x: 19, y: 25 },
+        { type: 'blood-medic', x: 22, y: 8 },
       ],
     },
     /*

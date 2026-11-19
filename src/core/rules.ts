@@ -8349,6 +8349,7 @@ function doEndTurn(s: GameState): ActionResult {
         hurtUnit(s, u, amount, { attrition: true });
       },
       log: (p, text) => pushLog(s, p, text),
+      api: abilityApi,
     });
   }
   /*

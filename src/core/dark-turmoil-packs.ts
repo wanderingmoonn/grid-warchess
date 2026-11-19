@@ -2301,6 +2301,326 @@ const HORN_GUARD_DEF: UnitTypeDef = {
   abilities: ['break-lineage', 'leave-food', 'shadow-drive', 'weaken-cry'],
 };
 
+/* ══════════════════════════════════════════════════════════════════
+ * 十、仆系（2026-11-19）
+ *
+ * 和卫系的分工：卫系是"钉在原地的机关"，仆系是"会干活的追随者"。
+ * 三只各有各的活，共同点是**听指挥 + 不往人堆里扎**：
+ *   敌方成群的时候往后站；但只要有人摸到仙帝（或裔系）旁边，这一条立刻作废。
+ * ══════════════════════════════════════════════════════════════════ */
+
+export const PUPPET_MASTER = 'puppet-master';
+export const SOUL_HOOKER = 'soul-hooker';
+export const BLOOD_MEDIC = 'blood-medic';
+
+/** 「傀儡制造」：每隔几个自己的回合造一个 */
+const CRAFT_EVERY = 3;
+/** 每种傀儡最多几个 */
+const CRAFT_MAX = 2;
+/** 傀儡的出场顺序——作者定的 */
+const CRAFT_ORDER = [BRONZE_GUARD, SHADOW_GUARD, HORN_GUARD];
+/** 「勾魂」的作用半径（"较大"） */
+const SOUL_RADIUS = 6;
+/** 「增生光环」的作用半径 */
+const AURA_RADIUS = 3;
+/** 一次最多治疗多少（"有数值上限"） */
+const AURA_CAP = 12;
+/** 影蚀之血超过最大生命的这个比例就死 */
+const CORRUPT_RATIO = 0.3;
+
+/** 是不是"该护着的人"：仙帝本人，或者裔系（id 前缀） */
+const isWard = (u: Unit): boolean => u.type === EMPEROR || u.type.startsWith('heir-');
+
+/**
+ * 「傀儡制造」：每 3 个自己的回合，按 青铜卫 → 暗影卫 → 号卫 的顺序造一个。
+ *
+ * 每种最多 2 个；某一种满了就跳过它看下一种；全都满就不造。
+ * 记忆点在 `custom` 上（下一个该造谁 + 还有几回合），所以它不需要额外状态。
+ */
+const PUPPET_CRAFT: AbilityDef = {
+  id: 'puppet-craft',
+  name: '傀儡制造',
+  summary: `每 ${CRAFT_EVERY} 个自己的回合造一个傀儡（青铜卫 → 暗影卫 → 号卫，每种最多 ${CRAFT_MAX} 个）。`,
+  group: 'support',
+  valueLabel: () => `每 ${CRAFT_EVERY} 回合一个，每种 ≤ ${CRAFT_MAX}`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.summon,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const left = Number(self.custom?.craftIn ?? CRAFT_EVERY) - 1;
+          if (left > 0) {
+            self.custom = { ...(self.custom ?? {}), craftIn: left };
+            return;
+          }
+          const start = Number(self.custom?.craftNext ?? 0);
+          for (let i = 0; i < CRAFT_ORDER.length; i += 1) {
+            const idx = (start + i) % CRAFT_ORDER.length;
+            const type = CRAFT_ORDER[idx]!;
+            const alive = state.units.filter((u) => u.owner === self.owner && u.hp > 0 && u.type === type).length;
+            if (alive >= CRAFT_MAX) continue;
+            const spot = freeNear(state, self, type, api);
+            if (!spot) break;
+            api.spawn(state, self.owner, type, spot.x, spot.y);
+            self.custom = {
+              ...(self.custom ?? {}),
+              craftNext: (idx + 1) % CRAFT_ORDER.length,
+              craftIn: CRAFT_EVERY,
+            };
+            state.log.push({
+              turn: state.turn,
+              player: self.owner,
+              text: `傀儡师拼出一具${state.unitTypes[type]?.name ?? '傀儡'}。`,
+            });
+            return;
+          }
+          // 全满了：过一回合再试（别把计数器归零，否则要等很久）
+          self.custom = { ...(self.custom ?? {}), craftIn: 1 };
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 「暗影潜行」：**只在暗影领域里**藏得住。
+ *
+ * 出了黑雾就现形；出手也现形。相邻会被发现是引擎的通用规矩（`isHiddenFrom`
+ * 里"贴脸就能看见"那一段），不用在这里再写一遍。
+ */
+const SHADOW_STALK: AbilityDef = {
+  id: 'shadow-stalk',
+  name: '暗影潜行',
+  summary: '在暗影领域内藏形：只有在出手之后、或者被贴到相邻时才会暴露。',
+  group: 'move',
+  hooks: {
+    hidden: (c) => !c.self.acted && inShadowCell(c.state, c.self.x, c.self.y, c.self.board),
+  },
+};
+
+/**
+ * 「勾魂」：大半径内，任何单位在**自己的回合末**只要还有余力，就会被拽向暗影深处。
+ *
+ * 不分敌我——这是它最麻烦的地方：你站在它附近，自己的兵也会被拖走。
+ * "还有余力"按 `moved` 算（这回合没挪过 = 还有移动力）。
+ */
+const SOUL_HOOK: AbilityDef = {
+  id: 'soul-hook',
+  name: '勾魂',
+  summary: `${SOUL_RADIUS} 格内，任何单位在自己回合结束时若还没移动过，会被拉向暗影最深处。`,
+  group: 'support',
+  valueLabel: () => `${SOUL_RADIUS} 格拉人`,
+};
+
+/**
+ * 「勾魂」的实际效果：把刚结束回合那一方**还没动过**的单位，往暗影最深处挪。
+ *
+ * 为什么写在扩展层而不是词条自己身上：它要影响**别的单位**（包括敌人），
+ * 而能力钩子只会在"挂着这条能力的那个兵"身上跑。所以词条只声明存在，
+ * 真正拉人由这里统一做。
+ */
+function pullSouls(state: GameState, player: PlayerId, api: AbilityApi): void {
+  const hookers = state.units.filter((u) => u.hp > 0 && api.hasAbility(state, u, 'soul-hook'));
+  if (hookers.length === 0) return;
+  for (const u of state.units) {
+    if (u.owner !== player || u.hp <= 0 || u.moved) continue;
+    if (!hookers.some((h) => Math.abs(h.x - u.x) + Math.abs(h.y - u.y) <= SOUL_RADIUS && h.id !== u.id)) continue;
+    const deep = deepestShadow(state, u);
+    if (!deep) continue;
+    const steps = state.unitTypes[u.type]?.move ?? 1;
+    let moved = 0;
+    for (let i = 0; i < steps; i += 1) {
+      const here = Math.abs(u.x - deep.x) + Math.abs(u.y - deep.y);
+      let best: { x: number; y: number } | null = null;
+      let bestD = here;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = u.x + dx;
+        const ny = u.y + dy;
+        if (!api.canStandAt(state, nx, ny, u.type)) continue;
+        const d = Math.abs(nx - deep.x) + Math.abs(ny - deep.y);
+        if (d < bestD) {
+          bestD = d;
+          best = { x: nx, y: ny };
+        }
+      }
+      if (!best) break;
+      u.x = best.x;
+      u.y = best.y;
+      moved += 1;
+    }
+    if (moved > 0) {
+      u.moved = true;
+      state.log.push({ turn: state.turn, player: u.owner, text: `${state.unitTypes[u.type]?.name ?? '它'}被什么牵着，往黑暗里走了几步。` });
+    }
+  }
+}
+
+/**
+ * 「影蚀之血」的阈值判定：超过上限比例就死，化成一团血肉 + 一团暗影。
+ *
+ * 抽成函数是因为它有两个调用点（光环治疗后、受伤净化后不会触发，但写在一处更稳）。
+ */
+function corruptDeath(state: GameState, unit: Unit, api: AbilityApi): boolean {
+  const max = state.unitTypes[unit.type]?.maxHp ?? 1;
+  const blood = Number(unit.custom?.shadowBlood ?? 0);
+  if (blood <= max * CORRUPT_RATIO) return false;
+  const at = { x: unit.x, y: unit.y };
+  api.killUnit(state, unit, undefined, '受污染的血积满了');
+  api.spawnNear(state, unit.owner, FLESH, { ...unit, x: at.x, y: at.y } as Unit);
+  api.spawnNear(state, unit.owner, SHADE, { ...unit, x: at.x, y: at.y } as Unit);
+  state.log.push({ turn: state.turn, player: unit.owner, text: '影蚀之血漫了出来——那个人化成了血肉和暗影。' });
+  return true;
+}
+
+/**
+ * 「增生光环」：范围内不分敌我，治疗"已失去血量的一半"，但一次有上限。
+ *
+ * 代价是**用受污染的血在治**：治多少，就在那人身上积多少「影蚀之血」；
+ * 积过最大生命的三成，人就没了（化成血肉 + 暗影）。
+ * 挨打会把这份污染冲淡（见扩展的 `onUnitDamaged`），所以"先打一顿再治"是能救人的。
+ */
+const BLOOD_AURA: AbilityDef = {
+  id: 'blood-aura',
+  name: '增生光环',
+  summary: `${AURA_RADIUS} 格内不分敌我治疗"已失去血量的一半"（一次最多 ${AURA_CAP} 点），并在被治疗者身上积累等量「影蚀之血」。`,
+  group: 'support',
+  valueLabel: () => `${AURA_RADIUS} 格治疗 · 上限 ${AURA_CAP}`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.aura,
+        apply: (c) => {
+          const { state, self, api } = c;
+          for (const u of state.units) {
+            if (u.hp <= 0) continue;
+            if (Math.abs(u.x - self.x) + Math.abs(u.y - self.y) > AURA_RADIUS) continue;
+            const max = state.unitTypes[u.type]?.maxHp ?? 0;
+            const missing = max - u.hp;
+            if (missing <= 0) continue;
+            const heal = Math.min(AURA_CAP, Math.floor(missing / 2));
+            if (heal <= 0) continue;
+            u.hp += heal;
+            u.custom = { ...(u.custom ?? {}), shadowBlood: Number(u.custom?.shadowBlood ?? 0) + heal };
+            if (corruptDeath(state, u, api)) continue;
+          }
+        },
+      },
+    ],
+  },
+};
+
+/* ── 仆系三个兵 ─────────────────────────────────────────────────── */
+
+/** 傀儡师：自己不弱，但活是傀儡干的。 */
+const PUPPET_MASTER_DEF: UnitTypeDef = {
+  id: PUPPET_MASTER,
+  name: '傀儡师',
+  short: '傀',
+  era: 3,
+  category: 'combat',
+  cost: 200,
+  move: 2,
+  atk: 18,
+  armor: 8,
+  maxHp: 100,
+  range: 2,
+  vision: 6,
+  summonedOnly: true,
+  aiAutonomy: 0.35,
+  aiProfile: 'servant-hang-back',
+  abilities: ['break-lineage', 'leave-food', 'puppet-craft'],
+};
+
+/** 勾魂使：会飞会跳，藏在黑雾里拽人。 */
+const SOUL_HOOKER_DEF: UnitTypeDef = {
+  id: SOUL_HOOKER,
+  name: '勾魂使',
+  short: '勾',
+  era: 3,
+  category: 'combat',
+  cost: 220,
+  move: 4,
+  atk: 20,
+  armor: 8,
+  maxHp: 80,
+  range: 3,
+  vision: 7,
+  flight: true,
+  layer: 'air',
+  summonedOnly: true,
+  shadowRadius: 5,
+  aiAutonomy: 0.35,
+  aiProfile: 'servant-hang-back',
+  abilities: ['break-lineage', 'leave-food', 'shadow-stalk', 'soul-hook'],
+  skills: [SHADOW_STEP_SKILL],
+};
+
+/** 血医：用受污染的血救人。 */
+const BLOOD_MEDIC_DEF: UnitTypeDef = {
+  id: BLOOD_MEDIC,
+  name: '血医',
+  short: '医',
+  era: 3,
+  category: 'combat',
+  cost: 180,
+  move: 3,
+  atk: 10,
+  armor: 6,
+  maxHp: 90,
+  range: 2,
+  vision: 5,
+  summonedOnly: true,
+  aiAutonomy: 0.35,
+  aiProfile: 'servant-hang-back',
+  abilities: ['break-lineage', 'leave-food', 'blood-aura'],
+};
+
+/* ── 仆系行为 ───────────────────────────────────────────────────── */
+
+/**
+ * 「不往人堆里扎」：这是仆系的共同纪律。
+ *
+ * 但有一条例外——**有人摸到仙帝（或裔系）旁边时，这条立刻作废**：
+ * 那时候它们会直接扑上去。所以"逼近仙帝"是能解掉这个龟缩的。
+ */
+const SERVANT_HANG_BACK: UnitAiProfile = {
+  id: 'servant-hang-back',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const eco = (u: Unit): boolean => c.state.unitTypes[u.type]?.category === 'economy';
+
+    // 护的人被贴上了？那就没有"往后站"这回事了
+    const wards = c.allies.filter((a) => a.hp > 0 && isWard(a));
+    const threatened = wards.some((w) => c.foes.some((f) => dist(f, w) <= 3));
+
+    if (!threatened) {
+      // 找"最挤的那一团"：以每个敌人为中心，数 2 格内有几个敌人
+      let worst: { x: number; y: number; n: number } | null = null;
+      for (const f of c.foes) {
+        const n = c.foes.filter((o) => dist(o, f) <= 2).length;
+        if (!worst || n > worst.n) worst = { x: f.x, y: f.y, n };
+      }
+      if (worst && worst.n >= 3 && dist(c.unit, worst) <= 3) {
+        const tiles = steps(c, Math.max(1, c.def.move)).filter((p) => p.d > 0);
+        let best: { x: number; y: number } | null = null;
+        let bestD = dist(c.unit, worst);
+        for (const p of tiles) if (dist(p, worst) > bestD) (bestD = dist(p, worst)), (best = p);
+        if (best) add.push({ action: { type: 'MOVE', unitId: c.unit.id, x: best.x, y: best.y }, score: 115 });
+      }
+    }
+
+    // 常规：打射程内非经济的血少目标
+    const prey = c.foes
+      .filter((f) => dist(f, c.unit) <= range && !eco(f))
+      .sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: c.unit.id, targetId: prey.id }, score: threatened ? 180 : 160 });
+
+    return add.length ? { add } : {};
+  },
+};
+
 /* ── 仆从行为 ───────────────────────────────────────────────────── */
 
 /**
@@ -2592,6 +2912,10 @@ for (const a of [
   SHADOW_DRIVE,
   WRECK_REVIVE,
   WEAKEN_CRY,
+  PUPPET_CRAFT,
+  SHADOW_STALK,
+  SOUL_HOOK,
+  BLOOD_AURA,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -2734,6 +3058,17 @@ export const DARK_TURMOIL: Expansion = {
     '**暗影卫**：血薄甲厚、跑得快、会飞、会暗影跳跃，自带一片暗影领域。它是追人的那个。',
     '**号卫**：射程极远、溅射很大，被打中的敌人会陷入「**虚弱**」——移动与攻击各降 30%。' +
       '它不追你，它只是让你走不动、打不疼。',
+    '### 仆系（干活的追随者）',
+    '三只都不往人堆里扎：**敌人成群时会往后站**。但只要有人摸到仙帝（或裔系）旁边，' +
+      '这条纪律立刻作废——它们会直接扑上来。所以"贴近仙帝"是解掉它们龟缩的办法。',
+    '**傀儡师**：每 3 个自己的回合造一具傀儡（青铜卫 → 暗影卫 → 号卫，每种最多 2 具，满了跳过）。' +
+      '它自己不算弱，但真正的价值在那些傀儡上——**先杀它，还是先清傀儡**是个选择。',
+    '**勾魂使**：会飞、会跳；「**暗影潜行**」让它只在暗影里藏形（出手或贴身才暴露）；' +
+      '「**勾魂**」会让 6 格内**任何单位**（不分敌我）在自己回合结束时被拽向暗影深处——' +
+      '你站在它附近，自己的兵也会被拖走。',
+    '**血医**：「**增生光环**」治疗 3 格内不分敌我的单位（已失去血量的一半，一次最多 12 点），' +
+      '但治多少就在那人身上积多少「**影蚀之血**」；积过最大生命的三成，人就化成血肉与暗影。' +
+      '挨打会把这份污染冲淡——所以"先打一顿再治"才是救人。',
     '## 不成系的三个',
     '**黑蝗**：往**暗影里钻**、躲开攻击力高的敌人、也**离黑茧远一点**；咬**护甲最厚**的。' +
       '它自己的暗影只有脚下那一格，所以只能靠同类挤成一片才铺得开——聚够两只就会繁殖，四周全是同类时干脆结茧。',
@@ -2768,6 +3103,9 @@ export const DARK_TURMOIL: Expansion = {
     SHADOW_GUARD_DEF,
     HORN_GUARD_DEF,
     WRECK_DEF,
+    PUPPET_MASTER_DEF,
+    SOUL_HOOKER_DEF,
+    BLOOD_MEDIC_DEF,
   ],
   abilities: [
     EROSION_ABILITY,
@@ -2794,6 +3132,10 @@ export const DARK_TURMOIL: Expansion = {
     SHADOW_DRIVE,
     WRECK_REVIVE,
     WEAKEN_CRY,
+    PUPPET_CRAFT,
+    SHADOW_STALK,
+    SOUL_HOOK,
+    BLOOD_AURA,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -2811,6 +3153,7 @@ export const DARK_TURMOIL: Expansion = {
     COCOON_AI,
     UNNAMABLE_AI,
     SERVANT_AI,
+    SERVANT_HANG_BACK,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
@@ -2841,7 +3184,7 @@ export const DARK_TURMOIL: Expansion = {
         : range,
     // 开局铺一次，之后每回合末重铺（诡异是这回合才走过去的，下一回合才生效）
     onMatchStart: ({ state }) => refreshShadow(state),
-    onTurnEnd: ({ state, player }) => {
+    onTurnEnd: ({ state, player, api }) => {
       /*
        * 先完成上一回合的凝结，再重铺暗影。
        *
@@ -2849,6 +3192,7 @@ export const DARK_TURMOIL: Expansion = {
        * 所以"这一回合刚标记的 formTo"不会被当场完成——它得等下一回合。
        */
       completeForming(state, player);
+      pullSouls(state, player, api);
       refreshShadow(state);
     },
     /**
@@ -2909,6 +3253,13 @@ export const DARK_TURMOIL: Expansion = {
       // 化血当前攒了多少（只在真的攒过时印，免得每行都挂个 0/80）
       const blood = Number(unit.custom?.blood ?? 0);
       if (blood > 0) lines.push(`已累计的血：${Math.round(blood)} / ${CLOT_DAMAGE}`);
+
+      // 影蚀之血：任何单位都可能被血医治出这个计数，所以不看兵种
+      const corrupt = Number(unit.custom?.shadowBlood ?? 0);
+      if (corrupt > 0) {
+        const max = def?.maxHp ?? 1;
+        lines.push(`影蚀之血：${Math.round(corrupt)} / ${Math.round(max * CORRUPT_RATIO)}（满了就死）`);
+      }
 
       if (isEmperor(unit)) {
         lines.push(`寿元：${lifespanWords(yearsLeft(unit))}`);
