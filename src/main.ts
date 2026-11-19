@@ -1685,6 +1685,9 @@ function renderDebugHud(): void {
     `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
     `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
     `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
+    // 最近两条 AI 调度痕迹：排查"电脑不行动"时截图就能读到（2026-11-19）
+    `ai: ${aiTrace.slice(-2).join(' | ') || '(无)'}`,
+    `empty=${aiEmptyTurns} 单位=${state.units.length} 城=${state.cities.map((c) => `${c.owner}:${c.hp}`).join(',')}`,
     `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
       ` 拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'} 远端=${lastSnapHead || '-'}`,
   ].join('\n');
