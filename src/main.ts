@@ -6008,18 +6008,24 @@ function startRogueStage(): void {
     units,
   );
   /*
-   * **开局不送经济单位**（第 1 条）：农民/牧民/伐木工在肉鸽里没有意义
-   * （不产钱、还要占兵额）。直接清掉，敌人那边本来就只有战斗兵。
+   * **只有"手上没人"时才发初始兵**（2026-11-19 用户点名的第 5 条）。
+   *
+   * `createMatch` 会给没写 deploy 的席位自动撒一队开局兵（3 个战斗兵 + 2 个经济单位）。
+   * 原来我只删了经济单位，于是**每一关都凭空多出 3 个兵**——玩家从上一关辛苦带回来的
+   * 兵反倒成了"额外附加"，兵额、保留兵力这些设计全被稀释。
+   *
+   * 现在的规则：
+   *   · 花名册非空 → 清掉自动兵，**只摆花名册**（第 2 关起就该是这样）；
+   *   · 花名册为空 → 保留自动兵当"紧急征召"（第一关，或全灭后重开），
+   *     但仍然删掉经济单位（肉鸽里不产钱）。
    */
+  const hasRoster = rogue.run.roster.length > 0;
   state.units = state.units.filter((u) => {
+    if (u.owner === 'A' && hasRoster) return false; // 有花名册：一个默认兵都不要
     const def = state.unitTypes[u.type];
-    return !def || def.category === 'combat';
+    return !def || def.category === 'combat'; // 否则也至少删掉经济单位
   });
-  /*
-   * 把**上一关带回来的兵**按原 HP 摆进城里（第 1 条的另一半）。
-   * 不摆的话"跨关保留兵力"只是面板上的数字，玩家带回来的东西等于没带。
-   */
-  if (rogue.run.roster.length > 0) {
+  if (hasRoster) {
     const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
     const spots = city ? cityTiles(city).slice() : [];
     const taken = new Set(state.units.map((u) => `${u.x},${u.y}`));
@@ -6043,15 +6049,6 @@ function startRogueStage(): void {
     }
     state.nextUnitSeq = seq;
   }
-  /*
-   * **敌人要主动打过来**（2026-11-19 用户反馈"还得自己去找架打"）。
-   *
-   * 无城席位（肉鸽里的敌人小队）没有产线、没有城，AI 默认没有进攻动机，
-   * 开局就原地待着。这里给所有敌方席位下发 rush 指令——用的是引擎自己的
-   * 关卡指令（`orderDirectives`，和关卡事件里的 doctrine 动作同一套），
-   * 不碰 AI 估值。
-   */
-  applyRushDirective();
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
