@@ -1425,6 +1425,79 @@ console.log('');
 }
 
 /* ------------------------------------------------------------------ */
+/* 区域伤害动作（2026-11-19）                                          */
+/* ------------------------------------------------------------------ */
+
+{
+  const base = allLevels().find((l) => l.id === 'level:probe-flat')!;
+  const zone = { x0: 2, y0: 2, x1: 4, y1: 4 };
+  const mk = (events: unknown[]) =>
+    validateLevel({ ...structuredClone(base), id: 'level:tmp-dmg', name: '伤害探针', events });
+
+  const boom = (amount: number, extra: Record<string, unknown> = {}) =>
+    mk([
+      {
+        id: 'boom',
+        when: { kind: 'turn', at: 1 },
+        do: [
+          { kind: 'spawn', owner: 'B', units: [{ type: 'militia', x: 3, y: 3 }] },
+          { kind: 'damage', zone, amount, ...extra },
+        ],
+      },
+      { id: 'after', when: { kind: 'unitDied', owner: 'B' }, do: [{ kind: 'say', text: '炸死了' }] },
+    ]);
+
+  const hitOne = (lv: { ok: boolean; level?: unknown }) => {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: lv.level as never }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    return r.ok ? r.state : st;
+  };
+
+  const fatal = boom(9999, { ignoreArmor: true });
+  check(fatal.ok, '区域伤害能通过校验', fatal.ok ? '' : fatal.errors[0]);
+  if (fatal.ok) {
+    const st = hitOne(fatal);
+    // 只看区域内：这一关别处可能还有 B 家的民兵（关卡自带的），不能拿"还有没有民兵"当判据
+    check(
+      !st.units.some((u) => u.x >= 2 && u.x <= 4 && u.y >= 2 && u.y <= 4),
+      '区域内的兵被打死并移出场',
+      st.units
+        .filter((u) => u.x >= 2 && u.x <= 4 && u.y >= 2 && u.y <= 4)
+        .map((u) => `${u.type}@${u.x},${u.y}`)
+        .join(' / '),
+    );
+    check(
+      st.log.some((l) => l.text === '炸死了'),
+      '同一批里 `unitDied` 能看到事件造成的死亡',
+      st.log.map((l) => l.text).slice(-3).join(' / '),
+    );
+  }
+
+  const light = boom(3, { ignoreArmor: true });
+  if (light.ok) {
+    const st = hitOne(light);
+    const u = st.units.find((x) => x.owner === 'B' && x.type === 'militia');
+    check(!!u, '无视护甲的小伤害不该打死它');
+    check(!!u && u.hp > 0, '兵还在场');
+  }
+
+  // 经过护甲与无视护甲：同一次伤害，有甲的那边掉得不会更多
+  const mkHp = (ignore: boolean) => {
+    const lv = boom(4, ignore ? { ignoreArmor: true } : {});
+    return lv.ok ? hitOne(lv) : null;
+  };
+  const noArmor = mkHp(true);
+  const withArmor = mkHp(false);
+  if (noArmor && withArmor) {
+    const a = noArmor.units.find((x) => x.owner === 'B' && x.type === 'militia');
+    const b = withArmor.units.find((x) => x.owner === 'B' && x.type === 'militia');
+    if (a && b) {
+      check(a.hp <= b.hp, '无视护甲打得不会更少', `无视 ${a.hp} / 有甲 ${b.hp}`);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
 

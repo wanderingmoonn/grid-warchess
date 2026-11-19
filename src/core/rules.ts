@@ -4888,6 +4888,51 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo, ctx: Ev
     }
     return;
   }
+  if (act.kind === 'damage') {
+    /*
+     * 区域伤害（2026-11-19）。
+     *
+     * 走的是现成的两个口子，不自己算血：
+     *   · 经过护甲 → `hurtPhysical`（甲先减，全被吃掉时它自己会写一条私有战报）；
+     *   · 无视护甲 → `hurtUnit`（它就是"已经算好的伤害"，不减甲）。
+     *
+     * 每一段都**重新筛一次**活着的兵：上一段可能已经把人打死了，
+     * 而 `s.units` 在 `killUnit` 之后已经变了。
+     */
+    const z = act.zone;
+    const x0 = Math.min(z.x0, z.x1);
+    const x1 = Math.max(z.x0, z.x1);
+    const y0 = Math.min(z.y0, z.y1);
+    const y1 = Math.max(z.y0, z.y1);
+    const rounds = act.times ?? 1;
+    for (let round = 0; round < rounds; round += 1) {
+      const victims = s.units.filter(
+        (u) =>
+          u.hp > 0 &&
+          u.x >= x0 &&
+          u.x <= x1 &&
+          u.y >= y0 &&
+          u.y <= y1 &&
+          (!act.owner || u.owner === act.owner),
+      );
+      if (victims.length === 0) break;
+      for (const u of victims) {
+        if (u.hp <= 0) continue;
+        const name = utype(s, u.type).name;
+        if (act.ignoreArmor) {
+          hurtUnit(s, u, act.amount, { logText: `${name} 受到 ${act.amount} 点伤害`, kind: 'event' });
+        } else {
+          hurtPhysical(s, u, act.amount, { logText: `${name} 受到 ${act.amount} 点伤害` });
+        }
+        if (u.hp <= 0) {
+          killUnit(s, u, undefined, `${name} 被击毁`);
+          // 记进这一手的差量：同一批里靠 `unitDied` 触发的其他事件能看到
+          ctx.died.push(u);
+        }
+      }
+    }
+    return;
+  }
   if (act.kind === 'say') {
     /*
      * 旁白写进战报，**公开**（`open`）——这一关发生的事双方都该看到。
