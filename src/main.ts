@@ -25,7 +25,7 @@ import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, validateLevel } from './core/level.ts';
 import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
-import { initRunner, keepPlaying, observe, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
+import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
 import { openCardChoice, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
@@ -3514,6 +3514,14 @@ function dropHeatFlash(): void {
 }
 
 function dispatch(action: Action): boolean {
+  /*
+   * 肉鸽撤离阶段：**每个动作入口都要先把胜负按下**（2026-11-19）。
+   *
+   * 引擎每走一步都会重新判一次胜负，而敌人已经清空 → 每一步都判"我赢"，
+   * 于是下一步 `applyAction` 直接返回"对局已结束"，倒计时、走兵、结束回合
+   * 全军覆没（实测：turn 停在 1、current 停在 A、evacLeft 一直 2）。
+   */
+  if (rogue && rogue.snap.phase === 'evac') keepPlaying(state);
   // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
   if (replay) {
     toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -3579,6 +3587,17 @@ function dispatch(action: Action): boolean {
   noteFinalFrame();
   // 肉鸽：每走一步看一眼"敌人是否清空 / 撤离倒计时"
   rogueAfterAction(before, state);
+  if (action.type === 'END_TURN' && rogue && !rogue.settled && rogue.snap.phase === 'evac') {
+    const before2 = rogue.snap;
+    rogue.snap = onPlayerEndTurn(rogue.snap, rogueCtx());
+    if (rogue.snap.phase !== before2.phase) {
+      finishRogueStage();
+    } else {
+      keepPlaying(state);
+      toast(`撤离：还剩 ${rogue.snap.evacLeft} 手`);
+      render();
+    }
+  }
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
@@ -5692,6 +5711,13 @@ async function runAiTurn(
     rejected.clear();
 
     state = result.state;
+    /*
+     * 肉鸽：AI 循环里也要喂状态机（2026-11-19 修）。
+     *
+     * 撤离倒计时按"轮到玩家"扣，而"轮到玩家"这一下发生在 **AI 走完之后**——
+     * 只在 dispatch 里观察的话永远看不到，倒计时卡住不动。
+     */
+    rogueAfterAction(before, state);
     noteHpDrops(before, state);
     noteStrikeFlash(before, state);
     noteStep(actor, action);
@@ -5754,9 +5780,15 @@ async function runAiTurn(
    * 后面全部对不上。补上之后，日志才是一份能重放的完整动作序列。
    */
   const endActor = state.current;
+  const beforeEnd = state;
   const end = applyAction(state, { type: 'END_TURN' });
   if (end.ok) {
     state = end.state;
+    /*
+     * 敌人没兵时它一条动作都没有，循环里那个钩子永远不会触发——
+     * 而"轮到玩家"恰好就是这一次结束回合造成的（2026-11-19 修）。
+     */
+    rogueAfterAction(beforeEnd, state);
     noteStep(endActor, { type: 'END_TURN' });
   }
   if (end.ok) noteTurnEnd();
@@ -6011,13 +6043,7 @@ function startRogueStage(): void {
    * 关卡指令（`orderDirectives`，和关卡事件里的 doctrine 动作同一套），
    * 不碰 AI 估值。
    */
-  const foeSeats = [...new Set(state.units.filter((u) => u.owner !== 'A').map((u) => u.owner))];
-  if (foeSeats.length > 0) {
-    state.orderDirectives = {
-      ...(state.orderDirectives ?? {}),
-      ...Object.fromEntries(foeSeats.map((seat) => [seat, { strategy: 'rush' as const }])),
-    };
-  }
+  applyRushDirective();
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
@@ -6036,11 +6062,30 @@ function startRogueStage(): void {
 }
 
 /** dispatch 里每走一步之后调：只读局面，推进状态机 */
+/**
+ * 给所有敌方席位下发"主动进攻"。
+ *
+ * **每一手都要重发**（2026-11-19 修）：`orderDirectives` 是"这一回合的打法"，
+ * AI 用掉之后会清空，所以只在开局发一次的话，第二回合起敌人又原地待着了
+ * ——用户看到的"进攻意图只有第一回合"就是这么来的。
+ */
+function applyRushDirective(): void {
+  const foeSeats = [...new Set(state.units.filter((u) => u.owner !== 'A').map((u) => u.owner))];
+  if (foeSeats.length === 0) return;
+  state.orderDirectives = {
+    ...(state.orderDirectives ?? {}),
+    ...Object.fromEntries(foeSeats.map((seat) => [seat, { strategy: 'rush' as const }])),
+  };
+}
+
 function rogueAfterAction(prev: GameState, next: GameState): void {
   if (!rogue || rogue.settled) return;
+  applyRushDirective(); // 每一手都重发，否则第二回合起敌人就站住了
   const before = rogue.snap;
   const after = observe(prev, next, before, rogueCtx());
   rogue.snap = after;
+  // 撤离期间每一步都可能被引擎重新判胜，见到就抹掉
+  if (after.phase === 'evac') keepPlaying(state);
   if (after.phase === before.phase && after.evacLeft === before.evacLeft) return;
 
   if (after.phase !== before.phase) {
@@ -6176,6 +6221,44 @@ function syncRogueHud(): void {
     document.body.appendChild(el);
   }
   el.textContent = `肉鸽 ${Math.min(rogue.run.node + 1, total)}/${total} · 下一关`;
+}
+
+/*
+ * 「下一关」常驻按钮的点击委托（2026-11-19 补）。
+ *
+ * 上一版只创建了按钮、**没绑事件**——点下去毫无反应，用户直接撞上。
+ * 用 document 级委托，面板在不在、挂在谁身上都不影响。
+ */
+document.addEventListener('click', (ev) => {
+  const hit = (ev.target as HTMLElement | null)?.closest?.('[data-rogue-open]');
+  if (!hit) return;
+  ev.preventDefault();
+  console.info('[rogue] 点击常驻入口');
+  showRunPanel();
+});
+
+/*
+ * 肉鸽调试钩子：只在 `?roguedebug=1` 下挂到 window（2026-11-19）。
+ * 用途：撤离/下一关这条链跨 4 个模态面板，无头浏览器要能把整条链跑完。
+ */
+if (new URLSearchParams(location.search).has('roguedebug')) {
+  (window as unknown as Record<string, unknown>).__rogueTest = {
+    state: () => state,
+    run: () => rogue,
+    clearFoes: (): number => {
+      const before = state.units.length;
+      state.units = state.units.filter((u) => u.owner === 'A');
+      render();
+      return before - state.units.length;
+    },
+    act: (action: unknown): boolean => dispatch(action as never),
+    panels: (): string[] =>
+      [...document.querySelectorAll('.modal-mask')].map((m) =>
+        (m.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 70),
+      ),
+    hud: (): string => (document.getElementById('rogue-hud')?.textContent ?? '').trim(),
+    snap: () => rogue?.snap ?? null,
+  };
 }
 
 function showRogueEnd(): void {

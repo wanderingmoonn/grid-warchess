@@ -80,7 +80,7 @@ function foesOf(state: GameState, seat: PlayerId): number {
  * 按行动数扣会让倒计时凭空变短。
  */
 export function observe(
-  prev: GameState,
+  _prev: GameState,
   next: GameState,
   snap: RunnerSnapshot,
   ctx: RunnerCtx,
@@ -98,14 +98,25 @@ export function observe(
   }
 
   /*
-   * 只在**轮到玩家**时扣倒计时（2026-11-19 修）。
+   * 撤离倒计时**不在这里扣**（2026-11-19 第三次修）。
    *
-   * 原来按"换手"扣，结果是敌人被清空后它的回合空转（没兵可动，引擎自己
-   * 结束回合），一个来回就烧掉两手——玩家动一下就直接结算，等于没有撤离时间。
-   * 现在按"玩家回合开始的次数"算：写 2 就是玩家真能走两个回合。
+   * 试过两种信号都不成立：
+   *   · 按 `turn` 变化 → 敌人被清空后它的回合空转，一个来回烧掉两手；
+   *   · 按 `current` 回到玩家 → 敌人没兵时引擎直接把回合跳回玩家，
+   *     `current` 从头到尾都是 A，信号根本不出现（实测 evacLeft 卡在 2）。
+   * 现在改成**玩家每按一次"结束回合"扣一手**（见 `onPlayerEndTurn`），
+   * 这才是"写 2 就真能走两个回合"的字面意思。
    */
-  const myTurnStarted = next.current === ctx.playerSeat && prev.current !== ctx.playerSeat;
-  if (!myTurnStarted) return snap;
+  return snap;
+}
+
+/**
+ * 玩家结束了自己的一回合：撤离倒计时 -1，到 0 就结束。
+ *
+ * 只认玩家自己的动作，不猜状态变化——敌人有没有兵、引擎跳不跳回合都不影响。
+ */
+export function onPlayerEndTurn(snap: RunnerSnapshot, _ctx: RunnerCtx): RunnerSnapshot {
+  if (snap.phase !== 'evac') return snap;
   const left = snap.evacLeft - 1;
   return left <= 0 ? { ...snap, phase: 'done', evacLeft: 0 } : { ...snap, evacLeft: left };
 }

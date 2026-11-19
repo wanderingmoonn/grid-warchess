@@ -21,7 +21,7 @@ import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } fro
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
 import { BRANCHES, BRANCH_MAIN_MUL, branchMul, branchOf, poolOfBranch, unitPack } from '../../../src/core/roguelike/branches.ts';
 import { EXPANSIONS } from '../../../src/core/expansions.ts';
-import { initRunner, keepPlaying, observe, settleStage } from '../../../src/core/roguelike/runner.ts';
+import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage } from '../../../src/core/roguelike/runner.ts';
 import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '../../../src/core/roguelike/enemy-pools.ts';
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
@@ -224,20 +224,11 @@ export function run() {
     const same = observe(state, { ...state }, snap, ctx);
     assert.equal(same.evacLeft, snap.evacLeft);
 
-    // 敌人回合空转**不许烧倒计时**：这是"动一下就结算"的成因
-    const foeTurn = { ...state, turn: state.turn + 1, current: 'B' as const };
-    const noBurn = observe({ ...state, current: 'B' as const }, foeTurn, snap, ctx);
-    assert.equal(noBurn.evacLeft, snap.evacLeft, '敌人回合不该扣撤离时间');
-
-    // 玩家回合开始才扣：两次"轮到玩家"→ 用光
-    const myTurn1 = { ...state, turn: state.turn + 2, current: 'A' as const };
-    snap = observe(foeTurn, myTurn1, snap, ctx);
-    assert.equal(snap.evacLeft, st.meta.evacTurns - 1);
-
-    const foeTurn2 = { ...myTurn1, turn: myTurn1.turn + 1, current: 'B' as const };
-    const myTurn2 = { ...myTurn1, turn: myTurn1.turn + 2, current: 'A' as const };
-    snap = observe(foeTurn2, myTurn2, snap, ctx);
-    assert.equal(snap.phase, 'done', '两个玩家回合之后才结束');
+    // 倒计时只认"玩家结束回合"，不猜状态变化
+    const same2 = onPlayerEndTurn(snap, ctx);
+    assert.equal(same2.evacLeft, st.meta.evacTurns - 1, '结束一回合扣一手');
+    const doneSnap = onPlayerEndTurn(same2, ctx);
+    assert.equal(doneSnap.phase, 'done', '第二回合结束就该结算');
 
     // 胜负被按下不表（撤离期间必须还能动）
     const withWinner = { ...state, winner: 'A' };
