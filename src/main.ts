@@ -5887,10 +5887,12 @@ function rogueCtx() {
 function openRoguelike(): void {
   const saved = parseRun(localStorage.getItem(RUN_KEY));
   rogue = saved ? { run: saved, snap: initRunner(), settled: false } : null;
+  syncRogueHud();
   showRunPanel();
 }
 
 function showRunPanel(): void {
+  console.info('[rogue] 打开关卡面板', rogue ? `node=${rogue.run.node}` : 'no-run');
   if (!rogue) {
     openRunPanel({
       run: newRun(randomSeed(), { allowRestart: true }),
@@ -6014,6 +6016,7 @@ function startRogueStage(): void {
   hasRealSave = true;
   render();
   toast(`肉鸽 第 ${rogue.run.node + 1}/${SLICE_STAGES.length} 关：${st.level.name}`);
+  syncRogueHud();
   kickAiIfNeeded();
 }
 
@@ -6043,6 +6046,7 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
 
 function finishRogueStage(): void {
   if (!rogue || rogue.settled) return;
+  console.info('[rogue] 结算开始');
   // 先置位再干活：结算过程中任何回调都不该再触发一次结算
   rogue.settled = true;
   const st = stageAt(rogue.run.node);
@@ -6053,6 +6057,7 @@ function finishRogueStage(): void {
   const finished = rogue.run.node + 1;
   rogue.run.node = Math.min(finished, SLICE_STAGES.length - 1);
   rogueSave();
+  syncRogueHud();
   openSettlePanel({
     gold: res.gold + res.refund,
     taken: res.taken,
@@ -6064,10 +6069,21 @@ function finishRogueStage(): void {
         showRogueEnd();
         return;
       }
-      offerRogueCards(() => {
-        toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
+      try {
+        offerRogueCards(() => {
+          toast(`下一关：${stageAt(rogue!.run.node).level.name}`);
+          showRunPanel();
+        });
+      } catch (err) {
+        /*
+         * 三选一挂了也不能让整条链断掉（2026-11-19）：
+         * 原来的写法里这里抛错就是"面板消失、什么都不弹"，
+         * 玩家看到的就是"打完一关就没下文了"。出错也要能进下一关。
+         */
+        console.error('[rogue] 三选一失败', err);
+        toast('三选一出错，先跳过（看控制台）');
         showRunPanel();
-      });
+      }
     },
   });
 }
@@ -6083,6 +6099,7 @@ function offerRogueCards(after: () => void): void {
     after();
     return;
   }
+  console.info('[rogue] 打开三选一');
   const run = rogue.run; // 后面回调里 rogue 可能被置空，这里先抓住这一份
   const eraOf = (id: string): number => UNIT_TYPES[id]?.era ?? 1;
   const pool = Object.values(UNIT_TYPES)
@@ -6122,11 +6139,36 @@ function offerRogueCards(after: () => void): void {
   });
 }
 
+/**
+ * 顶栏的肉鸽状态条（2026-11-19）。
+ *
+ * 为什么需要：结算/三选一都是模态面板，**一旦某个面板没弹出来或被关掉，
+ * 玩家就再也找不到回下一关的入口**（用户实机反馈"杀光敌军弹结算，然后呢"）。
+ * 只要还在 run 里，顶栏就一直挂一个「肉鸽 1/3 · 下一关」，点它就能回到面板。
+ */
+function syncRogueHud(): void {
+  const total = SLICE_STAGES.length;
+  let el = document.getElementById('rogue-hud') as HTMLButtonElement | null;
+  if (!rogue) {
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('button');
+    el.id = 'rogue-hud';
+    el.className = 'btn btn-sm rogue-hud';
+    el.setAttribute('data-rogue-open', '');
+    document.body.appendChild(el);
+  }
+  el.textContent = `肉鸽 ${Math.min(rogue.run.node + 1, total)}/${total} · 下一关`;
+}
+
 function showRogueEnd(): void {
   const gold = rogue?.run.gold ?? 0;
   toast(`切片跑完了：三关结束，剩 ${gold} 金。这一局到此为止（后续会加幕与 Boss）。`);
   localStorage.removeItem(RUN_KEY);
   rogue = null;
+  syncRogueHud();
   showTitle();
 }
 

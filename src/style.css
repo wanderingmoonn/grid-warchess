@@ -10706,3 +10706,16 @@ a.btn {
   font-size: 12px;
   color: #6b6357;
 }
+
+/* 肉鸽：常驻的"下一关"入口（面板被关掉也能回来） */
+.rogue-hud {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 60;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  background: #e8c96a;
+  border: 1px solid #c9a83f;
+  color: #2f2b26;
+  font-weight: 600;
+}
