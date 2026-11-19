@@ -41,14 +41,63 @@ export const SLUMBER = 'slumber-site';
 const DEVOUR_LIFESPAN = 10;
 /** 出生时的寿元（占位值，调的时候改这里） */
 const LIFESPAN = 200;
-/** 出生时的年龄：一上来就快死了，否则"黑暗动乱"没有紧迫感 */
-const START_AGE = 178;
+/*
+ * 登场年龄现在写在 `AGING` 那张表里（和寿元放在一起），因为它已经不是"全局一个数"：
+ * 仙帝 140 / 200，红尘仙 120 / 160。
+ *
+ * 2026-11-19 那次调的是仙帝：原来 178（只剩 22 年），玩家连修真的门都没摸到，
+ * 他就自己老死了——压迫感变成了"没戏"。现在剩 60 年，在沉眠地里每回合 +1，
+ * 出山才 +2。**想让玩家更宽裕就往上调这个数**，它是这一关唯一的"倒计时旋钮"。
+ */
 /** 在沉眠地几格内算"在休整" */
 const SLUMBER_RADIUS = 2;
 /** 剩余寿元低于这个数才考虑吃同伴 */
 const STARVE_LEFT = 8;
 /** 周围（这个格数内）敌人少于这个数，就算"不够吃" */
 const STARVE_FOES = 2;
+/** 出山之后，寿元回到这个数就回去（"吃到够用"） */
+const HARVEST_HOME_LEFT = 60;
+/** 在外最多待这么多回合，之后就算没吃够也往家走 */
+const HARVEST_MAX_OUT = 40;
+/** 但寿元低于这个数就不算"没吃够"——那时候它还得继续找吃的 */
+const HARVEST_HUNGRY_LEFT = 30;
+
+/**
+ * 「出山」：仙帝的来去循环。
+ *
+ * 两件事：**记住沉眠地在哪**，以及**什么时候该回去**。
+ *
+ * 回去的判据（作者给的，两条任一成立）：
+ *   · 寿元吃掉够用了（回到 `HARVEST_HOME_LEFT`）；
+ *   · 在外超过 `HARVEST_MAX_OUT` 个回合、且寿元还在 `HARVEST_HUNGRY_LEFT` 以上
+ *     ——"没吃够也得回去了"。
+ *
+ * 注意第三条的用意：寿元已经掉到 30 以下时**不算没吃够**，它还得继续找吃的。
+ * 所以这个兵不是"出门 40 回合必回家"，而是"40 回合后，只要不是快饿死就回家"。
+ *
+ * 没有这条之前它出山就一路往西，永远不回来——玩家顶不住，剧本也散架了。
+ */
+const EMPEROR_CYCLE: AbilityDef = {
+  id: 'emperor-cycle',
+  name: '出山',
+  summary: `寿元回到 ${HARVEST_HOME_LEFT} 就回沉眠地；在外超过 ${HARVEST_MAX_OUT} 回合且寿元还在 ${HARVEST_HUNGRY_LEFT} 以上，也会回去。`,
+  group: 'support',
+  valueLabel: () => `寿元 ≥ ${HARVEST_HOME_LEFT} 就回巢`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          const { state, self } = c;
+          const home = state.units.find((u) => u.owner === self.owner && u.type === SLUMBER && u.hp > 0);
+          if (home) self.custom = { ...(self.custom ?? {}), homeX: home.x, homeY: home.y };
+          const out = Number(self.custom?.outTurns ?? 0);
+          self.custom = { ...(self.custom ?? {}), outTurns: inSlumber(state, self) ? 0 : out + 1 };
+        },
+      },
+    ],
+  },
+};
 
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
   Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -148,7 +197,12 @@ const EMPEROR_DEF: UnitTypeDef = {
    * 还能把人往黑暗里拽（勾魂）、破城断传承。
    * 只有走修真路线练到高层，才有和它对线的资格。
    */
+  // 他会自己决定什么时候回沉眠地（没有 profile 的话只会一路往西，永不回头）
+  aiAutonomy: 0.35,
+  aiProfile: 'emperor-cycle',
   abilities: [
+    'swift-aging',
+    'emperor-cycle',
     'shadow-erosion',
     'blood-clot',
     'soul-hook',
@@ -200,7 +254,6 @@ const SLUMBER_DEF: UnitTypeDef = {
   maxHp: 300,
   range: 0,
   vision: 4,
-  magicRes: 20,
   summonedOnly: true,
 };
 
@@ -304,34 +357,6 @@ registerSkillAi('soul-devour', (c) => {
  * 四、衰老与老死
  * ══════════════════════════════════════════════════════════════════ */
 
-/**
- * 每回合（它的回合）：
- *   1. 第一次见到它时，把寿元和年龄落库；
- *   2. 不在沉眠地 → 年龄再 +1（核心已经 +1，所以一共 +2）；
- *   3. 年龄超过寿元 → 老死。
- *
- * 为什么老死用 `api.killUnit` 而不是把 hp 设 0：走完整死亡流程，
- * 战报会留下"寿元耗尽"这句话，而且席位出局/胜负判定都按正常死亡算。
- */
-function tickEmperor(state: GameState, player: PlayerId, api: AbilityApi): void {
-  for (const u of state.units) {
-    if (u.owner !== player || !isEmperor(u) || u.hp <= 0) continue;
-
-    // 1）落库：顺手把"一上来就快死了"这件事写进年龄
-    if (u.custom?.dtInit !== 1) {
-      u.custom = { ...(u.custom ?? {}), lifespan: lifespanOf(u) ?? LIFESPAN, dtInit: 1 };
-      if ((u.age ?? 0) <= 1) u.age = START_AGE;
-    }
-
-    // 2）不在沉眠地：比平时老得快一倍
-    if (!inSlumber(state, u)) u.age = (u.age ?? 0) + 1;
-
-    // 3）寿元耗尽
-    if ((u.age ?? 0) > (lifespanOf(u) ?? LIFESPAN)) {
-      api.killUnit(state, u, undefined, '尸骸仙帝寿元耗尽，化作一地白骨');
-    }
-  }
-}
 
 /* ══════════════════════════════════════════════════════════════════
  * 五、影系（2026-11-18）
@@ -3181,8 +3206,63 @@ const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
   aiAutonomy: 0.6,
   aiProfile: 'mortal-immortal-harvest',
   // 2026-11-19 作者给的一套：飞、跳、化血、暗影侵蚀、断传承、痴愚
-  abilities: ['shadow-erosion', 'blood-clot', 'shadow-possess', 'break-lineage', 'dull-wit'],
+  abilities: ['swift-aging', 'shadow-erosion', 'blood-clot', 'shadow-possess', 'break-lineage', 'dull-wit'],
   skills: [SHADOW_STEP_SKILL],
+};
+
+/** 每个兵种的老化参数：寿元上限、登场年龄 */
+const AGING: Record<string, { lifespan: number; startAge: number }> = {
+  [EMPEROR]: { lifespan: 200, startAge: 140 },
+  [MORTAL_IMMORTAL]: { lifespan: 160, startAge: 120 },
+};
+
+/**
+ * 「加速衰老」：仙帝与红尘仙都有，也是它们**为什么会死**的全部答案。
+ *
+ * 以前这件事写在扩展的回合钩子里（`tickEmperor` / `tickMortals`），
+ * 玩家在面板上完全看不到——只看到"它好像越来越弱"，甚至以为是被谁打了。
+ * 现在做成词条：面板会印出"年龄 / 寿元"，规则书里也查得到。
+ *
+ * 规则：
+ *   · 在沉眠地附近（2 格）每回合 +1 岁，在外面 +2 岁——**出去是会折寿的**；
+ *   · 年龄超过寿元就死（仙帝靠骨灰罐回来，红尘仙没有）。
+ */
+const SWIFT_AGING: AbilityDef = {
+  id: 'swift-aging',
+  name: '加速衰老',
+  summary: '在沉眠地附近每回合老 1 岁，离开沉眠地加倍。年龄超过寿元就会死。',
+  group: 'defense',
+  valueLabel: () => '沉眠地外衰老加倍',
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          const { state, self, api } = c;
+          const spec = AGING[self.type];
+          if (!spec) return;
+          // 第一回合落库：把寿元和登场年龄写进 custom（超脱/读碑造的会自己带上）
+          if (self.custom?.dtInit !== 1) {
+            self.custom = {
+              ...(self.custom ?? {}),
+              lifespan: lifespanOf(self) ?? spec.lifespan,
+              dtInit: 1,
+            };
+            if ((self.age ?? 0) <= 1) self.age = spec.startAge;
+          }
+          if (!inSlumber(state, self)) self.age = (self.age ?? 0) + 1;
+          if ((self.age ?? 0) > (lifespanOf(self) ?? spec.lifespan)) {
+            api.killUnit(
+              state,
+              self,
+              undefined,
+              self.type === EMPEROR ? '尸骸仙帝寿元耗尽，化作一地白骨' : '红尘仙寿元耗尽，散作尘埃',
+            );
+          }
+        },
+      },
+    ],
+  },
 };
 
 /** 红尘仙的暗蚀 */
@@ -3190,28 +3270,6 @@ const MORTAL_IMMORTAL_DEF: UnitTypeDef = {
 
 /* ── 红尘仙的老死与出山 ─────────────────────────────────────────── */
 
-/**
- * 红尘仙：和仙帝一样会老，但**没资格吃同伴**，所以只能更频繁地出山。
- *
- * 出山条件（任一）：
- *   · 自己剩下的寿元不多（`STARVE_LEFT`，和仙帝同一个刻度）；
- *   · 仙帝已经在出山了（同场上没有沉眠中的仙帝）。
- *
- * 平时就缩在沉眠地附近——`inSlumber` 那个判定直接复用。
- */
-function tickMortals(state: GameState, player: PlayerId, api: AbilityApi): void {
-  for (const u of state.units) {
-    if (u.owner !== player || u.type !== MORTAL_IMMORTAL || u.hp <= 0) continue;
-    if (u.custom?.dtInit !== 1) {
-      u.custom = { ...(u.custom ?? {}), lifespan: MORTAL_LIFESPAN, dtInit: 1, rank: 8 };
-      if ((u.age ?? 0) <= 1) u.age = 120;
-    }
-    if (!inSlumber(state, u)) u.age = (u.age ?? 0) + 1;
-    if ((u.age ?? 0) > (lifespanOf(u) ?? MORTAL_LIFESPAN)) {
-      api.killUnit(state, u, undefined, '红尘仙寿元耗尽，散作尘埃');
-    }
-  }
-}
 
 /** 读过碑的人：三回合到了就死，尸体会站起一名红尘仙 */
 function tickDoomed(state: GameState, api: AbilityApi): void {
@@ -3234,6 +3292,91 @@ function mortalIsOut(state: GameState, u: Unit): boolean {
   const emperor = state.units.find((o) => o.owner === u.owner && o.type === EMPEROR && o.hp > 0);
   return !!emperor && !inSlumber(state, emperor);
 }
+
+/**
+ * 仙帝的来去：**该回家就回家，在家就待着**。
+ *
+ * 这条 profile 只做两件事：
+ *   · 判"该不该回"（见「出山」那两条判据），该回就给一个 240 分的走位候选——
+ *     压得住总指挥给的任何进攻动作；
+ *   · 在外的时候补一手"往敌人身上靠"，让它的出山不像乱走。
+ *
+ * 分数为什么要这么高：它的自主分只有 0.35，`240 × 0.35 = 84`，
+ * 还得高过普通进攻（≈6~20），所以给足。
+ */
+const EMPEROR_CYCLE_AI: UnitAiProfile = {
+  id: 'emperor-cycle',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const { state, unit } = c;
+    const homeX = Number(unit.custom?.homeX ?? NaN);
+    const homeY = Number(unit.custom?.homeY ?? NaN);
+    const home = Number.isFinite(homeX) && Number.isFinite(homeY) ? { x: homeX, y: homeY } : null;
+    const out = !inSlumber(state, unit);
+    const left = yearsLeft(unit);
+    const outTurns = Number(unit.custom?.outTurns ?? 0);
+
+    if (home && out) {
+      const shouldReturn =
+        left >= HARVEST_HOME_LEFT || (outTurns > HARVEST_MAX_OUT && left > HARVEST_HUNGRY_LEFT);
+      if (shouldReturn) {
+        const gap = dist(unit, home);
+        if (gap === 0) return {};
+        /*
+         * 回家也用它自己的暗影跳跃：8 格暗影铺出去之后，"跳一段再走"比纯走快得多。
+         * 只在不亏的时候跳（至少省 3 格），否则老实走。
+         */
+        if (canStep(c) && gap > 4) {
+          const jump = bestShadowJump(c, (x, y) => -dist({ x, y }, home));
+          if (jump && dist({ x: jump.x, y: jump.y }, home) <= gap - 3) {
+            return {
+              add: [
+                {
+                  action: { type: 'HERO_SKILL', unitId: unit.id, skillId: 'shadow-step', targetX: jump.x, targetY: jump.y },
+                  score: 245,
+                },
+              ],
+            };
+          }
+        }
+        const walk = steps(c, Math.max(1, c.def.move))
+          .filter((p) => p.d > 0)
+          .sort((a, b) => dist(a, home) - dist(b, home))[0];
+        if (walk && dist(walk, home) < gap) {
+          return { add: [{ action: { type: 'MOVE', unitId: unit.id, x: walk.x, y: walk.y }, score: 240 }] };
+        }
+        return {};
+      }
+    }
+    if (!out) return {};
+
+    // 在外：打得到的就打（挑血最少的收人头），打不到就往最近的人挪
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const prey = c.foes.filter((f) => dist(f, unit) <= range).sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: unit.id, targetId: prey.id }, score: 170 });
+    const goal = c.foes.sort((a, b) => dist(a, unit) - dist(b, unit))[0];
+    if (goal) {
+      const gap = dist(unit, goal);
+      // 走不够快的时候跳：暗影跳跃是它 8 格暗影之外唯一的机动手段
+      if (canStep(c) && gap > range + 4) {
+        const jump = bestShadowJump(c, (x, y) => -dist({ x, y }, goal));
+        if (jump && dist({ x: jump.x, y: jump.y }, goal) <= gap - 3) {
+          add.push({
+            action: { type: 'HERO_SKILL', unitId: unit.id, skillId: 'shadow-step', targetX: jump.x, targetY: jump.y },
+            score: 175,
+          });
+        }
+      }
+      const walk = steps(c, Math.max(1, c.def.move))
+        .filter((p) => p.d > 0)
+        .sort((a, b) => dist(a, goal) - dist(b, goal))[0];
+      if (walk && dist(walk, goal) < gap) {
+        add.push({ action: { type: 'MOVE', unitId: unit.id, x: walk.x, y: walk.y }, score: 150 });
+      }
+    }
+    return add.length ? { add } : {};
+  },
+};
 
 /**
  * 红尘仙：出山就收割，没出山就缩在沉眠地附近。
@@ -3631,6 +3774,8 @@ for (const a of [
   KNOWLEDGE_POLLUTION,
   DARK_SOURCE,
   LINEAGE_WELL,
+  SWIFT_AGING,
+  EMPEROR_CYCLE,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -3759,7 +3904,13 @@ export const DARK_TURMOIL: Expansion = {
     '**尸骸**：朝**暗影**走（吞了能变成不详）；周围没有暗影就原地不动。',
     '**不详**：朝**尸骸仙帝**走，但到 4 格就停下不再靠近；看不见仙帝时沉进暗影最深处。',
     '## 尸骸仙帝',
-    '**尸骸仙帝**：寿元将尽才会出山；缺"食物"时先吞自己人续命。',
+    '**加速衰老**（他和红尘仙都有）：在**沉眠地附近每回合老 1 岁，离开则老 2 岁**；' +
+      '年龄超过寿元就会死。所以"他为什么突然倒下了"的答案是——他老了。面板上有年龄和寿元。',
+    '**尸骸仙帝**：140 / 200 岁登场，只剩六十来年。缺"食物"时先吞自己人续命' +
+      '（吞不得骨灰罐、成帝碑、沉眠地——那是他的来历）。',
+    '**出山**：寿元快见底才出山收割；**寿元吃回 60 就回沉眠地**。在外超过 40 个回合、' +
+      '而且寿元还在 30 以上，也会提前回去——他不是一直往前推的东西，是会回去歇的。',
+    '他倒下之后，**骨灰罐**会把他拉回来：0 岁、寿元减半、生命上限减半，一次比一次薄。',
     '## 仆从',
     '仆从是**追随者**，不是污染物：他们听总体指挥，也有一点自己的判断（会绕开经济单位那种"纪律"）。',
     '所以和诡异正好相反——**仆从会占城，诡异不会**（见「痴愚」）。',
@@ -3885,6 +4036,8 @@ export const DARK_TURMOIL: Expansion = {
     KNOWLEDGE_POLLUTION,
     DARK_SOURCE,
     LINEAGE_WELL,
+    SWIFT_AGING,
+    EMPEROR_CYCLE,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -3905,11 +4058,11 @@ export const DARK_TURMOIL: Expansion = {
     SERVANT_HANG_BACK,
     HEIR_ORDER,
     MORTAL_IMMORTAL_AI,
+    EMPEROR_CYCLE_AI,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
-      tickEmperor(state, player, api);
-      tickMortals(state, player, api);
+      // 寿元那一套已经搬进「加速衰老」词条（面板上看得见）；这里只剩读碑到期的清算
       tickDoomed(state, api);
       freezeForming(state, player);
     },
@@ -4055,6 +4208,19 @@ export const DARK_TURMOIL: Expansion = {
 
       const radius = def?.shadowRadius ?? 0;
       if (radius > 0) lines.push(`暗影领域：半径 ${radius} 格（里面的单位视野与射程减半）`);
+
+      /*
+       * 会老的单位：把年龄和寿元印出来。
+       *
+       * 这一行是"玩家为什么看不懂它在掉血/倒下"的答案——以前这件事只写在后端的
+       * 回合钩子里，面板上一个字都没有，看的人以为它是被谁打死的。
+       */
+      const aging = AGING[unit.type];
+      if (aging) {
+        const life = lifespanOf(unit) ?? aging.lifespan;
+        const age = unit.age ?? aging.startAge;
+        lines.push(`寿元：${Math.round(age)} / ${Math.round(life)}（在沉眠地附近每回合 +1，离开则 +2）`);
+      }
 
       /*
        * 能力行：**遍历这个兵挂的词条**，数值问词条自己（`valueLabel`）。

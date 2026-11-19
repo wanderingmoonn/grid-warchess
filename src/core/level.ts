@@ -1344,19 +1344,30 @@ export function boneSeaMap(): { rows: string[]; citiesA: MapPoint[]; citiesB: Ma
 /** 骨海的地图与城位（同一份数据，关卡和部署都用它，免得两边对不上） */
 const BONE_SEA_MAP = boneSeaMap();
 
-/** 从城位派生开局兵：每座城门口放一个民兵加一个工兵 */
+/**
+ * 从城位派生开局兵：每座城门口一个民兵 + 一个**工匠**，另外第一座城多给一个**炼气士**。
+ *
+ * 2026-11-19 改的两处：
+ *   · 原来第二格放的是 `crew`（建筑队，**第 5 代**，280 金）——开局是青铜时代，
+ *     放一个五代单位等于白送，玩家会觉得"我什么时候能造这个？"（他自己也发现不对）。
+ *     换成同时代同职能的**工匠**（`anc_engineer`，1 代、55 金）。
+ *   · 每方多送**一个炼气士**：这一关的实话是"只有修真的路线能对上仙帝"，
+ *     那就别让玩家自己摸索前 30 回合，开局手上先有一个能练的种子。
+ */
 function boneSeaDeploy(cities: MapPoint[]): Array<{ type: string; x: number; y: number }> {
   const out: Array<{ type: string; x: number; y: number }> = [];
-  for (const c of cities) {
+  cities.forEach((c, i) => {
     const ring: Array<[number, number]> = [
       [c.x, c.y + 2], [c.x + 2, c.y], [c.x - 1, c.y], [c.x, c.y - 1],
       [c.x + 1, c.y + 2], [c.x - 1, c.y + 1], [c.x + 2, c.y + 1], [c.x + 1, c.y - 1],
     ];
     const free = ring.filter(([x, y]) => BONE_SEA_MAP.rows[y]?.[x] === '.');
-    if (free.length < 2) continue;
+    if (free.length < 2) return;
     out.push({ type: 'militia', x: free[0]![0], y: free[0]![1] });
-    out.push({ type: 'crew', x: free[1]![0], y: free[1]![1] });
-  }
+    out.push({ type: 'anc_engineer', x: free[1]![0], y: free[1]![1] });
+    // 第一座城多一个炼气士（i === 0），别每座城都塞——那是八个，太厚了
+    if (i === 0 && free[2]) out.push({ type: 'qi-cultivator', x: free[2]![0], y: free[2]![1] });
+  });
   return out;
 }
 
@@ -2444,14 +2455,14 @@ export const LEVELS: LevelDef[] = [
     version: LEVEL_VERSION,
     side: true,
     chapter: '黑暗动乱 · 终局',
-    name: '骨海',
+    name: '帝骸渡',
     brief:
-      '64×64，两人合作，各四座城。中间是海，只有三条堤坝；对岸只有仙帝和他的沉眠地，' +
-      '成帝碑立在海心的小岛上、骨灰罐藏在东南角。**杀死尸骸仙帝**就算赢——' +
-      '但罐子还在的话，他会一次次站起来，一次比一次薄。（数值是占位版。）',
+      '64×64，两人合作，各四座城。中间是海，只有三条堤坝；对岸只有尸骸仙帝和他的沉眠地，' +
+      '成帝碑立在海心的小岛上，而**骨灰罐藏在东南角**。' +
+      '目标：杀死尸骸仙帝。但罐子还在的话，他会一次次站起来，一次比一次薄。',
     map: {
       id: 'levelmap:bone-sea',
-      name: '骨海',
+      name: '帝骸渡',
       w: 64,
       h: 64,
       // 地形与城位由 `boneSeaMap()` 一次生成：两边必须同源，否则改地形忘改城就会错位
@@ -2490,6 +2501,20 @@ export const LEVELS: LevelDef[] = [
         id: 'opens',
         when: { kind: 'turn', at: 1 },
         do: [{ kind: 'say', text: '海那边很安静。安静得不像有活物。' }],
+      },
+      {
+        /*
+         * 这件事必须在开局就说：他倒下了还会从东南角的罐子里爬回来，
+         * 一次比一次薄。不说的话玩家会以为"打一次就完了"，然后被第二次吓一跳。
+         */
+        id: 'urn-hint',
+        when: { kind: 'turn', at: 2 },
+        do: [
+          {
+            kind: 'say',
+            text: '他倒下不是结束——东南角有一只罐子，里面还留着一份他自己。想让他真的死，先砸了那只罐子。',
+          },
+        ],
       },
       {
         id: 'cross',
