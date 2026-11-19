@@ -434,6 +434,13 @@ export interface UnitTypeDef {
   short: string;
   /** 需要城市达到哪个时代才能生产 */
   era: number;
+  /**
+   * 这个兵种只属于某个席位（肉鸽的卡牌强化版，2026-11-19）。
+   *
+   * 兵种表是双方共用的：不标归属的话，Boss 有城时它的 AI 会在同一张表里
+   * 挑到玩家的 `spearman~L3`，造出强化版敌人——用户实机看到过。
+   */
+  rogueOwner?: string;
   /** 战斗单位 / 经济单位 / 建筑 */
   category: UnitCategory;
   /**
@@ -1553,6 +1560,15 @@ export interface MatchConfig {
    * 兵种表保持完整——刷兵、事件、敌人部署都还能用。
    */
   recruitOnly?: string[];
+  /**
+   * **先别判胜负**（肉鸽撤离用，2026-11-19）。
+   *
+   * `doEndTurn` 一进来就 `checkWinner`，判到有赢家就**早退**：不换手、不推进
+   * 回合、不重置 `moved`。肉鸽里"清空敌人"正是玩家判胜的时刻，于是第一次
+   * 结束回合之后回合永远停在原地——玩家看到的是"撤离只有第一回合能动"。
+   * 打开这个开关，`checkWinner` 一律返回 null，回合照常推进。
+   */
+  holdWinner?: boolean;
   /**
    * 被显式关掉的兵种（只记"本来会自己进场"的那些：自定义兵、已开扩展带的兵）。
    *

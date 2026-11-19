@@ -705,8 +705,21 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
    * 肉鸽：只允许产"手上的兵"（花名册 ∪ 抽到的卡）。同样放在这个共同出口上，
    * 产线面板、军营、AI 采购、建造单位全都自动同一个口径。
    */
+  /*
+   * 卡牌强化版只属于它的主人（2026-11-19）。
+   * 这一条要放在最前面：别的席位连"看见"都不该看见，更别说造。
+   */
+  const cardDef = state.unitTypes[typeId];
+  if (cardDef?.rogueOwner && cardDef.rogueOwner !== side) return false;
+
+  /*
+   * 卡池限制**只约束玩家席位**（2026-11-19）。
+   *
+   * 原来这里是整局级判断，于是肉鸽的 Boss 有城之后，它的产线也被玩家的
+   * 卡池限制着——表现是"Boss 只能造玩家抽到的兵"，又弱又怪。
+   */
   const only = state.config.recruitOnly;
-  if (only && !only.includes(typeId)) return false;
+  if (only && side === 'A' && !only.includes(typeId)) return false;
   const draft = state.draft;
   if (!draft) return true;
   // 跳过选卡＝这一局按原版打，名单限制整个不生效

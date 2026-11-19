@@ -27,11 +27,22 @@ import { goalText, validateLevel } from './core/level.ts';
 import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
-import { compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { cardTypeId, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { ELITE_UNIT_MAP } from './core/roguelike/elites.ts';
+import { actLabel, isBossStage } from './core/roguelike/stages.ts';
 import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor } from './core/roguelike/roster.ts';
 import { cityUpgradeCost } from './core/roguelike/rewards.ts';
-import { cardLevel, cardsToNext, drawCards } from './core/roguelike/cards.ts';
+import { cardLevel, cardsToNext, drawCards, rngFrom } from './core/roguelike/cards.ts';
+import { TACTICS, TACTIC_RATE, applyTacticNow } from './core/roguelike/tactics.ts';
+import {
+  capacityBonus,
+  cityArmorBonus,
+  healsIntake,
+  hornFreebies,
+  RELIC_BY_ID,
+  skipMoney,
+} from './core/roguelike/relics.ts';
 import { UNIT_TYPES } from './core/config.ts';
 import type { LevelDef } from './core/level.ts';
 import { onlyVisibleCells, playerView, viewOnBoard } from './core/fog.ts';
@@ -151,7 +162,7 @@ import { BUILD_VERSION } from './core/build-info.ts';
 import { openOnlinePanel } from './ui/online-panel.ts';
 import { manualBooks, openManualChooser } from './ui/books.ts';
 import { openUnitEditor } from './ui/unit-editor.ts';
-import { openFeedbackPanel } from './ui/feedback.ts';
+import { autoReport, openFeedbackPanel } from './ui/feedback.ts';
 import {
   adoptDecision,
   claimSeat,
@@ -1685,6 +1696,9 @@ function renderDebugHud(): void {
     `aiPaused=${aiPaused} aiToken=${aiToken} aiBusy=${aiBusy()} watching=${watching()}`,
     `room=${room ? `${room.code}/${room.seat}${room.spectator ? '(watcher)' : ''}` : 'null'} peerSeated=${peerSeated}`,
     `level=${state.config.level?.id ?? '-'} dirty=${dirty} 已提交=${pushOkCount}`,
+    // 最近两条 AI 调度痕迹：排查"电脑不行动"时截图就能读到（2026-11-19）
+    `ai: ${aiTrace.slice(-3).join(' | ') || '(无)'}`,
+    `empty=${aiEmptyTurns} 单位=${state.units.length} 城=${state.cities.map((c) => `${c.owner}:${c.hp}`).join(',')}`,
     `快照=${lastSnapUpdated ? `${Math.round((Date.now() - Date.parse(lastSnapUpdated)) / 1000)}秒前` : '-'}` +
       ` 拉取=${lastSnapAt ? `${Math.round((Date.now() - lastSnapAt) / 1000)}秒前` : '-'} 远端=${lastSnapHead || '-'}`,
   ].join('\n');
@@ -3523,7 +3537,27 @@ function dispatch(action: Action): boolean {
    * 于是下一步 `applyAction` 直接返回"对局已结束"，倒计时、走兵、结束回合
    * 全军覆没（实测：turn 停在 1、current 停在 A、evacLeft 一直 2）。
    */
-  if (rogue && rogue.snap.phase === 'evac') keepPlaying(state);
+  /*
+   * 肉鸽里"我把敌人清空了"**不等于这一局结束**——后面还有撤离要走。
+   *
+   * 原来这里只在 `phase === 'evac'` 时清胜负，而**第一手结束时阶段还是
+   * battle**（撤离判定发生在这一手之后），于是 `applyAction(END_TURN)`
+   * 被"对局已结束"拒掉：回合不前进、`moved` 标记不重置，
+   * 玩家看到的就是"撤离只有第一回合能动"（2026-11-19 复现）。
+   *
+   * 现在只要 run 还在、赢的是玩家自己，就一律把胜负按下不表——
+   * 真正的收尾交给撤离结算（`finishRogueStage`）。
+   */
+  if (rogue && !rogue.settled && state.winner === 'A') keepPlaying(state);
+  /*
+   * 清场那一刻就要把"先别判胜负"打开（2026-11-19）。
+   *
+   * 只等 hook 里按 phase 打开太晚——第一次按"结束回合"时 phase 还是 battle，
+   * `doEndTurn` 已经判胜并早退，回合没推进，于是"撤离只有第一回合能动"。
+   */
+  if (rogue && !rogue.settled && (rogue.snap.phase === 'evac' || foesLeft(state) === 0)) {
+    state.config.holdWinner = true;
+  }
   // 复盘里只能看：`state` 是别人那一局，往前走一步就是改写历史
   if (replay) {
     toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -5514,6 +5548,7 @@ const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
  */
 async function runAiLoop(): Promise<void> {
   const token = ++aiToken;
+  aiLog(`loop+ token=${token} cur=${state.current}`);
   clearSelection();
 
   /*
@@ -5533,9 +5568,79 @@ async function runAiLoop(): Promise<void> {
   // 本机有未提交的进展：让轮询别把云端旧局面套上来（pushTurn 成功会清掉）
   if (pushing) dirty = true;
 
+  /*
+   * **空转计数**（2026-11-19）：电脑这一回合一个动作都没做就交回去。
+   *
+   * 用户报的正是这个现象："我一直按结束回合，AI 依然不行动就结束回合"——
+   * 不是卡死，是每回合空过。这里用"单位的 moved/acted 有没有变"来判断，
+   * 变了就是真做了事，没变就是空转。
+   */
+  const activity = (): string =>
+    state.units
+      .map((u) => `${u.id}:${u.moved ? 1 : 0}${u.acted ? 1 : 0}:${u.hp}:${u.x},${u.y}`)
+      .join('|');
+  const before = activity();
+
+  let loops = 0;
   while (token === aiToken && !state.winner && !aiPaused && isAiSide(state, state.current)) {
+    loops += 1;
     await runAiTurn(token);
   }
+
+  if (token === aiToken && !state.winner && activity() === before) {
+    const aiSideSeat = (state.config.aiSeats ?? []).find((p) =>
+      state.units.some((u) => u.owner === p),
+    ) ?? state.current;
+    aiLog(`empty-turn rounds=${loops} cur=${state.current} ai=${aiSideSeat} token=${aiToken}`);
+    aiEmptyTurns += 1;
+    const now = Date.now();
+    /*
+     * 放宽到"第一次空转就上报"（2026-11-19）。
+     *
+     * 原来要连续 2 次才传，而真机上常见的是"空转一次、动一次"交替，
+     * 计数器一直被重置，一次都没传上去——白等了七轮截图。
+     */
+    if (aiEmptyTurns >= 1 && now - aiEmptyReportAt > 30000) {
+      aiEmptyReportAt = now;
+      /*
+       * **空转时现场复核一次**（2026-11-19）。
+       *
+       * 只报状态不够——我需要知道"在**这一份**状态上，`aiNextAction` 到底返回什么"。
+       * 之前我在 node 里重建局面复现不出来，差别一定在这份状态里。
+       * 这里直接把它的返回值和关键字段一起写进上报，读库就能比对。
+       */
+      const snapTrace = aiTrace.slice(-8).join(' / ');
+      void aiEngine()
+        .then((e) => {
+          // 预算用引擎里的默认值；取不到就退回一个同形状的对象
+          const budgetLike = { maxRecruit: 2, maxUpgrade: 1, recruited: 0, upgraded: 0 };
+          /*
+           * **必须把 current 切回电脑那一席再问**（2026-11-19 修正）。
+           *
+           * `aiNextAction` 没有席位参数，它读 `state.current`。空转复核是在
+           * 交棒之后跑的，那时 current 已经回到玩家，于是问出来的是**玩家的决策**
+           * ——上次那条 `RECRUIT c1` 就是这么来的，是测量错误，不是 AI 的病。
+           */
+          const probe = { ...state, current: aiSideSeat } as typeof state;
+          const a = e.aiNextAction(probe, budgetLike as never, new Set()) as unknown;
+          autoReport(
+            () => state,
+            `空转复核 aiNextAction=${JSON.stringify(a)} | turn=${state.turn} cur=${state.current} w=${state.w} h=${state.h} units=${state.units.length} od=${JSON.stringify(state.orderDirectives)} | ${snapTrace}`,
+          );
+        })
+        .catch(() => {
+          autoReport(
+            () => state,
+            `空转复核失败（引擎加载异常）| ${snapTrace}`,
+          );
+        });
+    }
+  } else {
+    aiEmptyTurns = 0;
+  }
+  aiLog(
+    `loop- token=${token}/${aiToken} rounds=${loops} cur=${state.current} aiSide=${isAiSide(state, state.current)} winner=${state.winner ?? '-'} paused=${aiPaused}`,
+  );
 
   /*
    * 电脑这一轮走完，**强制**推上去（不带乐观锁）。
@@ -5639,6 +5744,8 @@ async function runAiTurn(
   stopWhen?: () => boolean,
 ): Promise<void> {
   const player = state.current;
+  aiLog(`turn+ p=${player} token=${token}`);
+  let applied = 0;
   const budget: AiBudget = {
     ...DEFAULT_BUDGET,
     // 指挥官模式下**每一方**都只有"一回合一个兵"的产能，AI 也不例外。
@@ -5710,15 +5817,60 @@ async function runAiTurn(
             rejected,
           )
         : engine.aiNextAction(state, budget, rejected);
-    if (!action) break;
+    if (!action) {
+      /*
+       * 决策层返回空 = 这一回合什么都不做（2026-11-19）。
+       *
+       * 把当时的预算和"被拒过的动作数"一起记下来：预算耗尽（recruit/upgrade/step）
+       * 与"根本没有可行动作"在外部看起来一模一样，但病因完全不同。
+       */
+      aiLog(
+        `null-action budget=${JSON.stringify(budget)} rejected=${rejected.size} units=${state.units.filter((u) => u.owner === player).length}`,
+      );
+      break;
+    }
 
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
     const actor = state.current;
     const before = state;
+    /*
+     * **守卫：不许往别人的城里造兵**（2026-11-19）。
+     *
+     * 现场证据（自动上报 #12）：无城席位 B 的决策是
+     * `{"type":"RECRUIT","cityId":"c1"}`，而 c1 是**玩家 A 的城**。
+     * 这个动作必然被规则拒绝，AI 收不到"为什么不行"，于是这一回合
+     * 只剩空转——外部看到的就是"电脑一回合什么都不做"。
+     *
+     * 这里提前拦掉：不和规则层打架，只是把非法目标当成"这条不可行"，
+     * 让它继续去找移动/攻击。属于兜底，不是修复根因（根因在 ai.ts 的目标选取）。
+     */
+    if (action.type === 'RECRUIT' && 'cityId' in action && action.cityId) {
+      const target = state.cities.find((c) => c.id === action.cityId);
+      if (!target || target.owner !== player) {
+        aiLog(`guard recruit ${action.cityId} owner=${target?.owner ?? '?'} → 跳过`);
+        rejected.add(engine.aiActionKey(action));
+        await sleep(0);
+        continue;
+      }
+    }
+
     const result = applyAction(state, action);
-    if (!result.ok) { rejected.add(engine.aiActionKey(action)); await sleep(0); continue; }
+    if (!result.ok) {
+      /*
+       * **动作被拒要留痕**（2026-11-19）。
+       *
+       * 这里原来只把动作塞进 `rejected` 就跳过了，什么痕迹都没有——
+       * 于是"AI 一回合什么都没做"在外部看来完全无解。现在把拒绝原因记进
+       * aiTrace（屏幕上能看到），一眼就知道是"单位已动过"还是"打不到"。
+       */
+      aiLog(`reject ${String((action as { type?: string }).type ?? '?')}: ${result.reason}`);
+      rejected.add(engine.aiActionKey(action));
+      await sleep(0);
+      continue;
+    }
     rejected.clear();
+    applied += 1;
 
     state = result.state;
     /*
@@ -5727,6 +5879,21 @@ async function runAiTurn(
      * 撤离倒计时按"轮到玩家"扣，而"轮到玩家"这一下发生在 **AI 走完之后**——
      * 只在 dispatch 里观察的话永远看不到，倒计时卡住不动。
      */
+    /*
+     * 免费建造次数（2026-11-19 补）：抽到兵种卡会送一次，用来抵扣下一次造兵的钱。
+     * 做法是"先照常付钱、成功后把这一笔退还"——不动规则层的扣费逻辑，
+     * 也不会出现"钱不够但免单"的怪状态。
+     */
+    if (action.type === 'RECRUIT' && rogue && !rogue.settled && rogue.run.freeBuilds > 0) {
+      const cost = state.unitTypes[action.unitType]?.cost ?? 0;
+      if (cost > 0) {
+        state.players.A.gold += cost;
+        rogue.run.freeBuilds -= 1;
+        rogueSave();
+        toast(`免费建造：省下 ${cost} 金（还剩 ${rogue.run.freeBuilds} 次）`);
+        render();
+      }
+    }
     rogueAfterAction(before, state);
     noteHpDrops(before, state);
     noteStrikeFlash(before, state);
@@ -5772,6 +5939,7 @@ async function runAiTurn(
    * 现在它至少能在控制台留痕：如果以后有人看到这句，说明式子该重推了
    * （或者有个"成功但没用"的动作在空转，那是卡死检测该管的事）。
    */
+  aiLog(`turn- p=${player} applied=${applied} cur=${state.current} winner=${state.winner ?? '-'}`);
   if (stepsRun >= stepCap && alive() && !state.winner) {
     const n = state.units.filter((u) => u.owner === player).length;
     const c = state.cities.filter((x) => x.owner === player).length;
@@ -5923,6 +6091,9 @@ function rogueCtx() {
     evacTurns: st.meta.evacTurns,
     expectedTurns: st.meta.expectedTurns,
     playerSeat: 'A' as const,
+    // 遗物：驮马（兵额）/ 军械（带回满血）
+    capacityBonus: capacityBonus(rogue!.run),
+    healIntake: healsIntake(rogue!.run),
   };
 }
 
@@ -5957,7 +6128,7 @@ function showRunPanel(): void {
     run: rogue.run,
     stageNo: rogue.run.node + 1,
     total: SLICE_STAGES.length,
-    stageTitle: st.level.name,
+    stageTitle: `${actLabel(rogue.run.node)} · ${st.level.name}${isBossStage(rogue.run.node) ? ' · BOSS' : ''}`,
     onStart: startRogueStage,
     onNewRun: (allowRestart) => {
       rogue = { run: newRun(randomSeed(), { allowRestart }), snap: initRunner(), settled: false };
@@ -5981,7 +6152,8 @@ function startRogueStage(): void {
     toast(`这一关的数据有问题：${checked.errors[0] ?? '未知'}`);
     return;
   }
-  const units = mergeUnits(loadCustomUnits(), compileUnits(rogue.run.cards));
+  // 精英怪只存在于肉鸽：必须一起交给建局，否则关卡里的 elite_* 摆不出来
+  const units = mergeUnits(mergeUnits(loadCustomUnits(), ELITE_UNIT_MAP), compileUnits(rogue.run.cards));
   /*
    * 第 3 条（"只能造抽到的卡"）**暂不用 enabledUnits 实现**：
    * 它会把 `state.unitTypes` 一起裁掉，而关卡摆兵是按这张表查兵种的——
@@ -5995,7 +6167,20 @@ function startRogueStage(): void {
    * 用 `recruitOnly` 而不是 `enabledUnits`：后者会把兵种表一起裁掉，
    * 关卡摆兵的骑士/长弓会变成"这一局没有这个兵种"而静默跳过。
    */
-  const allowed = [...new Set([...rogue.run.roster.map((u) => u.type), ...Object.keys(rogue.run.cards)])];
+  /*
+   * 可造清单用**升级后的类型 id**（2026-11-19）：
+   * 卡加成不再覆盖原兵种（否则敌人同兵种一起变强），
+   * 所以玩家能造的必须是 `militia~L2` 这种专属类型。
+   */
+  const allowed = [
+    ...new Set([
+      ...rogue.run.roster.map((u) => u.type),
+      ...Object.entries(rogue.run.cards).map(([id, n]) => {
+        const lv = cardLevel(n);
+        return lv > 0 ? cardTypeId(id, lv) : id;
+      }),
+    ]),
+  ];
   const buildable = allowed.length > 0 ? allowed : ['militia', 'archer'];
   state = createMatch(
     {
@@ -6024,10 +6209,24 @@ function startRogueStage(): void {
    *     但仍然删掉经济单位（肉鸽里不产钱）。
    */
   const hasRoster = rogue.run.roster.length > 0;
+  /*
+   * **只有第 1 关给紧急征召**（2026-11-19 用户指出）。
+   *
+   * `createMatch` 会给没有部署的席位自动撒 5 个（3 战斗 + 2 经济）。
+   * 之前只在"有花名册"时清掉，于是后几关只要花名册是空的（比如刚被打光），
+   * 就会白拿 3 个兵——Boss 关尤其明显，看起来像"开局送兵没删干净"。
+   *
+   * 现在：有花名册 → 只摆花名册；第 1 关 → 留 3 个战斗兵当起步；
+   * 第 2 关以后且花名册为空 → 一个都不给（那本来就该判这一局结束了）。
+   */
+  const firstStage = rogue.run.node === 0;
   state.units = state.units.filter((u) => {
-    if (u.owner === 'A' && hasRoster) return false; // 有花名册：一个默认兵都不要
     const def = state.unitTypes[u.type];
-    return !def || def.category === 'combat'; // 否则也至少删掉经济单位
+    const isCombat = !def || def.category === 'combat';
+    if (u.owner !== 'A') return isCombat; // 敌人那边照常只去经济单位
+    if (hasRoster) return false; // 有花名册：一个默认兵都不要
+    if (firstStage) return isCombat; // 第 1 关：保留战斗兵
+    return false; // 后续关卡且没人：不送
   });
   if (hasRoster) {
     const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
@@ -6053,6 +6252,46 @@ function startRogueStage(): void {
     }
     state.nextUnitSeq = seq;
   }
+  /*
+   * 空投援军：上一关攒的战术卡在这里落地（2026-11-19）。
+   * 不占兵额——它是"临时工"，结算时照样按城内/城外判定。
+   */
+  /*
+   * 号角（遗物）：只在第 1 关给一次免费援军（2026-11-19）。
+   * 和空投援军共用同一段落位逻辑，区别只在"从哪来"。
+   */
+  const horn = rogue.run.node === 0 ? hornFreebies(rogue.run) : 0;
+  if (horn > 0 || rogue.run.tactics.includes('airdrop')) {
+    const useAirdrop = rogue.run.tactics.includes('airdrop');
+    rogue.run.tactics = rogue.run.tactics.filter((x) => x !== 'airdrop');
+    const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
+    const spots = city ? cityTiles(city) : [];
+    const taken = new Set(state.units.map((u) => `${u.x},${u.y}`));
+    let seq = state.nextUnitSeq;
+    let placed = 0;
+    const want = Math.max(horn, useAirdrop ? 2 : 0);
+    for (const s2 of spots) {
+      if (placed >= want) break;
+      if (taken.has(`${s2.x},${s2.y}`)) continue;
+      const def = state.unitTypes['militia'];
+      state.units.push({
+        id: `u${seq++}`,
+        type: 'militia',
+        owner: 'A',
+        x: s2.x,
+        y: s2.y,
+        hp: def?.maxHp ?? 10,
+        kills: 0,
+        moved: false,
+        acted: false,
+      });
+      placed += 1;
+    }
+    state.nextUnitSeq = seq;
+    rogueSave();
+    toast(`${useAirdrop ? '空投援军' : '号角'}到位：${placed} 个民兵`);
+  }
+  applyRogueStageSetup();
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
@@ -6087,16 +6326,134 @@ function applyRushDirective(): void {
   };
 }
 
+/** 已经做过"城血翻倍"的状态（同一份状态只翻一次） */
+const cityScaled = new WeakSet<GameState>();
+
+function foesLeft(s: GameState): number {
+  return s.units.filter((u) => u.owner !== 'A' && u.hp > 0).length;
+}
+
+/**
+ * 建局时只跑一次：城血翻倍 / 城血跨关 / 铁壁护甲 / ai.pressure。
+ *
+ * **2026-11-19 修**：这几段原来被放进了 `rogueAfterAction`（每走一步都跑），
+ * 于是城血一路 30→60→120… 变成 `4.53e+24`，城防也每步 +2。
+ * 它们属于"开局布置"，只能在新的一局建好之后跑一次。
+ */
+function applyRogueStageSetup(): void {
+  if (!rogue) return;
+  /*
+   * 遗物「铁壁」：城防 +2（2026-11-19）。城对象在 createMatch 里已经生成，
+   * 这里直接加护甲——规则层读的是 `city.armor`，不另设开关。
+   */
+  /*
+   * 城的血跨关保留（2026-11-19）。
+   *
+   * 之前每关 `createMatch` 都造一座**满血新城**，等于"城自动修满"，
+   * 于是整备里的"修城"没有落点。现在：
+   *   · 整备选了修城 → 这一关开局补满；
+   *   · 否则把上一关结束时的城血带过来（不超过上限）。
+   */
+  /*
+   * 肉鸽的城血翻倍（2026-11-19 用户定）。
+   *
+   * 理由：三幕九场、城血跨关保留，按普通对局的血量打不到第三幕——
+   * 城在第 4~5 场就见底了。翻倍之后"守城"才有余地，
+   * 修城也从"救命"变成"规划"。
+   *
+   * 顺序很重要：**先翻倍上限，再套用上一关带回来的血量**（那个数已经是翻倍后的刻度）。
+   */
+  const CITY_HP_MULT = 2;
+  /*
+   * 同一份状态只翻一次（2026-11-19）。
+   *
+   * 光把 `*= 2` 改成"基础值 × 2"还不够：如果 `startRogueStage` 被重复调用
+   * 而 state 是同一份（续局、重开本关），基础值本身已经被翻过了，仍会继续涨。
+   * 用一个 WeakSet 记住"这份状态翻过没"，比往 config 里塞字段干净。
+   */
+  const needScale = !cityScaled.has(state);
+  if (needScale) cityScaled.add(state);
+  for (const c of state.cities) {
+    if (c.owner !== 'A') continue;
+    if (!needScale) break;
+    /*
+     * **按基础值算 2 倍，不能在当前值上乘**（2026-11-19 修）。
+     *
+     * 之前写的是 `c.maxHp *= 2`：只要这一关的城被重复处理（续局、重开本关、
+     * 读档后再建局），就会一路 30→60→120→240…，玩家看到的是
+     * `4.53e+24` 这种血条。改成"基础值 × 2"之后，无论跑多少次都是同一个数。
+     */
+    const baseHp = c.maxHp;
+    c.maxHp = Math.round(baseHp * CITY_HP_MULT);
+    c.hp = c.maxHp;
+    if (rogue.run.repairNext) {
+      c.hp = c.maxHp;
+    } else if (typeof rogue.run.cityHp === 'number' && Number.isFinite(rogue.run.cityHp)) {
+      // 存的数可能是旧版本写坏的：超过上限就按满血算，不要把脏数据带进棋盘
+      c.hp = Math.max(1, Math.min(c.maxHp, rogue.run.cityHp));
+    }
+    // 顺手把 run 里的记录也归一到这一关的真实刻度
+    rogue.run.cityHp = c.hp;
+  }
+  if (rogue.run.repairNext) rogue.run.repairNext = false;
+  const armorBonus = cityArmorBonus(rogue.run);
+  if (armorBonus > 0) {
+    for (const c of state.cities) if (c.owner === 'A') c.armor += armorBonus;
+  }
+}
+
 function rogueAfterAction(prev: GameState, next: GameState): void {
   if (!rogue || rogue.settled) return;
+  /*
+   * 兜底：无城席位必须有 ai.pressure，否则 AI 决策层返回空（2026-11-19）。
+   * 关卡校验可能不认识这个字段，所以建局这里再写一次。
+   */
+  if (state.config.level) {
+    state.config.level.ai = { ...(state.config.level.ai ?? {}), pressure: 1 };
+  }
   applyRushDirective(); // 每一手都重发，否则第二回合起敌人就站住了
   const before = rogue.snap;
   const after = observe(prev, next, before, rogueCtx());
+  /*
+   * 撤离一开始就把"先别判胜负"打开（2026-11-19）：
+   * 否则 `doEndTurn` 会以"玩家已赢"为由早退，回合不推进、`moved` 不重置，
+   * 于是撤离只有第一手能动。撤离结束（进入下一关/结算）时再关掉。
+   */
+  state.config.holdWinner = after.phase === 'evac';
   rogue.snap = after;
-  // 撤离期间每一步都可能被引擎重新判胜，见到就抹掉
-  if (after.phase === 'evac') keepPlaying(state);
+  // 撤离期间每一步都可能被引擎重新判胜（玩家清场即判胜），见到就抹掉
+  if (after.phase !== 'battle' || foesLeft(state) === 0) keepPlaying(state);
   if (after.phase === before.phase && after.evacLeft === before.evacLeft) return;
 
+  /*
+   * **输了要当场收尾**（2026-11-19）。
+   *
+   * 追踪日志显示：敌人把玩家打光之后 `winner=B`，引擎从此拒绝一切动作
+   * （`applyAction` 第一句就是"对局已结束"），而肉鸽这边**没有任何终局处理**——
+   * 不弹面板、不提示，玩家只会看到"敌人不动了、点什么都没反应"。
+   * 这就是"挂机几十回合敌军不进攻"的真实成因。
+   */
+  if (next.winner && next.winner !== 'A') {
+    rogue.settled = true;
+    localStorage.removeItem(RUN_KEY);
+    const g = rogue.run.gold;
+    rogue = null;
+    syncRogueHud();
+    /*
+     * 措辞必须对准真实判据（2026-11-19 被用户当场纠正）：
+     * 普通席位的出局条件是**没有城**，不是没有兵。
+     * 实测那种局面是"5 个兵还活着、城被敌人占了"，
+     * 写成"兵打光了"会让玩家以为自己看错了棋盘。
+     */
+    const alive = state.units.filter((u) => u.owner === 'A').length;
+    toast(
+      alive > 0
+        ? `这一局结束了：你的城被占了（场上还有 ${alive} 个兵，但没城就判负）。剩 ${g} 金。`
+        : `这一局结束了：兵打光了。剩 ${g} 金。`,
+    );
+    showTitle();
+    return;
+  }
   if (after.phase !== before.phase) {
     if (after.phase === 'evac') {
       keepPlaying(state);
@@ -6122,9 +6479,20 @@ function finishRogueStage(): void {
   const res = settleStage(state, rogue.snap, rogueCtx());
   rogue.run.gold += res.gold + res.refund;
   rogue.run.roster = res.taken;
-  if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) rogue.run.relics.push(st.meta.relic);
+  /*
+   * 拿到遗物要**当场说清是什么效果**（2026-11-19）。
+   * 之前只往数组里塞个 id，玩家在界面上看不到任何东西。
+   */
+  if (st.meta.relic && !rogue.run.relics.includes(st.meta.relic)) {
+    rogue.run.relics.push(st.meta.relic);
+    const def = RELIC_BY_ID[st.meta.relic];
+    if (def) toast(`获得遗物【${def.name}】：${def.blurb}`);
+  }
   const finished = rogue.run.node + 1;
   rogue.run.node = Math.min(finished, SLICE_STAGES.length - 1);
+  // 城血要带回下一关（2026-11-19）：不然修城没有意义
+  const ownCity = state.cities.find((c) => c.owner === 'A');
+  if (ownCity) rogue.run.cityHp = Math.max(1, ownCity.hp);
   rogueSave();
   syncRogueHud();
   openSettlePanel({
@@ -6189,15 +6557,49 @@ function offerRogueCards(after: () => void): void {
       note: `第 ${cardLevel(owned) + 1} 级还差 ${toNext} 张${toNext === 1 ? '（拿了就升）' : ''}`,
     };
   });
-  const money = 80;
+  /*
+   * 30% 概率把最后一张换成战术卡（2026-11-19）。
+   * 用同一个 seed 派生，重开本关不会刷出不同的组合。
+   */
+  const rollTactic = rngFrom(seed ^ 0x5f3759df)() < TACTIC_RATE;
+  if (rollTactic) {
+    const tactic = TACTICS[Math.floor(rngFrom(seed ^ 0x1a2b3c4d)() * TACTICS.length)]!;
+    cards[cards.length - 1] = {
+      id: `tactic:${tactic.id}`,
+      name: tactic.name,
+      owned: 0,
+      note: tactic.blurb,
+    };
+  }
+  const money = skipMoney(run);
   openCardChoice({
     cards,
     money,
     onPick: (id) => {
       if (!rogue) return;
+      if (id.startsWith('tactic:')) {
+        const tid = id.slice('tactic:'.length) as never;
+        const msg = applyTacticNow(tid, rogue.run, (type) => UNIT_TYPES[type]?.maxHp ?? 10);
+        toast(msg);
+        rogueSave();
+        after();
+        return;
+      }
       rogue.run.cards[id] = (rogue.run.cards[id] ?? 0) + 1;
+      // 每抽一张兵种卡送一次免费建造（2026-11-19 补：原来只有卡、没有建造优惠）
+      rogue.run.freeBuilds += 1;
       const lv = cardLevel(rogue.run.cards[id]!);
-      if (rogue.run.cards[id]! % 3 === 0) toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${lv} 级`);
+      if (rogue.run.cards[id]! % 3 === 0) {
+        const d = UNIT_TYPES[id];
+        const pct = 25 * lv;
+        toast(
+          `${d?.name ?? id} 升到 ${lv} 级（攻 ${d ? Math.round(d.atk * (1 + 0.25 * lv)) : '?'} · 血 ${
+            d ? Math.round(d.maxHp * (1 + 0.25 * lv)) : '?'
+          }，+${pct}%）· 免费建造 +1`,
+        );
+      } else {
+        toast(`拿到 ${UNIT_TYPES[id]?.name ?? id} · 免费建造 +1`);
+      }
       rogueSave();
       after();
     },
@@ -6250,6 +6652,66 @@ document.addEventListener('click', (ev) => {
 });
 
 /*
+ * **AI 看门狗**（2026-11-19）。
+ *
+ * 真机上复现过：第 12 回合轮到电脑，敌人走了一两步之后**再也没人驱动**——
+ * `aiBusy` 为真只是"轮到电脑"的派生值，没有任何东西会再去叫醒循环，
+ * 于是整局停在那里（玩家看到的就是"敌人不进攻"，而自己还能结束回合）。
+ *
+ * 判据只看一件事：**轮到电脑 + 局面在 1.5 秒内毫无变化**。变了就说明循环在跑，
+ * 不动才补一脚。不碰 AI 决策本身，只保证"它有机会走"。
+ */
+let aiWatchSig = '';
+let aiWatchAt = 0;
+let aiWatchKicks = 0;
+let aiWatchUploadAt = 0;
+let aiEmptyTurns = 0;
+let aiEmptyReportAt = 0;
+
+function aiWatchdog(): void {
+  if (replay || room || spectating() || aiPaused) return;
+  if (!isAiSide(state, state.current)) {
+    aiWatchSig = '';
+    return;
+  }
+  const sig = [
+    state.turn,
+    state.current,
+    state.units.length,
+    state.units.reduce((n, u) => n + (u.moved ? 1 : 0) + (u.acted ? 1 : 0), 0),
+    state.winner ?? '-',
+  ].join('|');
+  const now = Date.now();
+  if (sig !== aiWatchSig) {
+    aiWatchSig = sig;
+    aiWatchAt = now;
+    return;
+  }
+  if (now - aiWatchAt < 1500) return;
+  // 局面确实停在原地：补一脚，并把这件事记下来（下次排查有据可查）
+  aiWatchAt = now;
+  console.warn('[ai] 看门狗：轮到电脑但局面 1.5s 没动，重新驱动');
+  aiWatchKicks += 1;
+  /*
+   * 补过三次还不动 → **自动上传现场**（2026-11-19）。
+   *
+   * 这类"AI 停住"只在真实运行环境里出现，我这边复现不稳定。
+   * 与其让玩家截图、让我猜，不如让程序在出事的当口把自己传上来：
+   * 快照里带 aiTrace、回合、双方兵与城的血量。60 秒最多传一次，不刷屏。
+   */
+  if (aiWatchKicks >= 3 && now - aiWatchUploadAt > 60000) {
+    aiWatchUploadAt = now;
+    autoReport(
+      () => state,
+      `轮到电脑但局面长时间不动（turn=${state.turn} token=${aiToken}）：${aiTrace.slice(-6).join(' / ')}`,
+    );
+  }
+  kickAiIfNeeded();
+}
+
+setInterval(aiWatchdog, 500);
+
+/*
  * 肉鸽调试钩子：只在 `?roguedebug=1` 下挂到 window（2026-11-19）。
  * 用途：撤离/下一关这条链跨 4 个模态面板，无头浏览器要能把整条链跑完。
  */
@@ -6271,6 +6733,17 @@ if (new URLSearchParams(location.search).has('roguedebug')) {
     hud: (): string => (document.getElementById('rogue-hud')?.textContent ?? '').trim(),
     snap: () => rogue?.snap ?? null,
     sel: (): string | null => selectedId,
+    /** 撤离期排查：回合/席位/胜负 + 我方的 moved/acted 标记 */
+    probeTurn: (): string =>
+      `turn=${state.turn} cur=${state.current} winner=${state.winner ?? '-'} | ` +
+      state.units
+        .filter((u) => u.owner === 'A')
+        .map((u) => `${u.id}@${u.x},${u.y} m=${u.moved ? 1 : 0} a=${u.acted ? 1 : 0} hp=${u.hp}`)
+        .join(' / '),
+    /** AI 调度链的门：卡住时看这四个值就知道断在哪 */
+    aiTrace: (): string[] => aiTrace.slice(-14),
+    ai: (): string =>
+      `busy=${aiBusy()} paused=${aiPaused} token=${aiToken} current=${state.current} turn=${state.turn}`,
     mine: (): Array<{ id: string; x: number; y: number }> =>
       state.units.filter((u) => u.owner === 'A').map((u) => ({ id: u.id, x: u.x, y: u.y })),
     foes: (): string =>
@@ -6303,6 +6776,7 @@ function maybeRest(after: () => void): void {
     capacity: cityCapacity(size),
     roster: run.roster,
     cardKinds: Object.keys(run.cards).length,
+    cityHp: run.cityHp ?? 0,
     cityEra: run.cityEra,
     upgradeCost: run.cityEra >= 8 ? null : cityUpgradeCost(run.cityEra),
     gold: run.gold,
@@ -6326,19 +6800,54 @@ function maybeRest(after: () => void): void {
         toast(`城墙加固：${now}×${now}，兵额 ${cityCapacity(now)}`);
         rogueSave();
         after();
-      } else if (kind === 'heal') {
-        // 花名册按兵种上限回满（HP 跨关保留，所以这是唯一"回血"的入口）
-        run.roster = run.roster.map((u) => ({
-          ...u,
-          hp: UNIT_TYPES[u.type]?.maxHp ?? u.hp,
-        }));
-        toast(`部队修整完毕：${run.roster.length} 人回满血`);
+      } else if (kind === 'repairCity') {
+        /*
+         * 修城（2026-11-19 用户纠正：整备该修的是**城**，不是部队）。
+         *
+         * 城每关重建，所以"回血"落不到下一关——能落地的是**血量上限 +10**：
+         * 城墙本身修厚了，之后每一关的城都更耐打。
+         */
+        run.repairNext = true;
+        toast('修城完成：下一关开局城市回满血');
         rogueSave();
         after();
       } else {
-        offerRogueCards(() => {
-          rogueSave();
-          after();
+        /*
+         * 整备的「升一级兵种卡」= 直接补满一级（2026-11-19 用户指出：
+         * 三选一只能拿一张，永远凑不够三张，这一项等于废的）。
+         * 所以这里列的是**已拥有的卡**，选中就 +3 张。
+         */
+        const owned = Object.keys(run.cards);
+        if (owned.length === 0) {
+          toast('还没有任何兵种卡，先在三选一里拿一张');
+          show();
+          return;
+        }
+        openCardChoice({
+          cards: owned.slice(0, 3).map((id) => {
+            const lv = cardLevel(run.cards[id] ?? 0);
+            const d = UNIT_TYPES[id];
+            return {
+              id,
+              name: d?.name ?? id,
+              owned: run.cards[id] ?? 0,
+              note: `直接升到 ${lv + 1} 级：攻 ${d ? Math.round(d.atk * (1 + 0.25 * lv)) : '?'}→${
+                d ? Math.round(d.atk * (1 + 0.25 * (lv + 1))) : '?'
+              } · 血 ${d ? Math.round(d.maxHp * (1 + 0.25 * lv)) : '?'}→${
+                d ? Math.round(d.maxHp * (1 + 0.25 * (lv + 1))) : '?'
+              }`,
+            };
+          }),
+          money: 0,
+          onPick: (id) => {
+            run.cards[id] = (run.cards[id] ?? 0) + 3;
+            toast(`${UNIT_TYPES[id]?.name ?? id} 升到 ${cardLevel(run.cards[id]!)} 级`);
+            rogueSave();
+            after();
+          },
+          onSkip: () => {
+            show();
+          },
         });
       }
     },
@@ -6464,7 +6973,17 @@ function exitTutorial(): void {
 }
 
 /** 新开一局 / 导入存档之后，如果当前方是 AI 就让它自己跑起来 */
+/** AI 调度追踪：只留最近 40 条，排查"轮到电脑却不动"用 */
+const aiTrace: string[] = [];
+function aiLog(msg: string): void {
+  aiTrace.push(msg);
+  if (aiTrace.length > 40) aiTrace.shift();
+}
+
 function kickAiIfNeeded(): void {
+  aiLog(
+    `kick watching=${watching()} aiSide=${isAiSide(state, state.current)} winner=${state.winner ?? '-'} token=${aiToken} paused=${aiPaused}`,
+  );
   aiPaused = false;
   // 观战位只跟着快照看，本地不驱 AI（见 runAiLoop 顶部那段）
   if (watching()) return;

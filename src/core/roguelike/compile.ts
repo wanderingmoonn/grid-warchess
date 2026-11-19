@@ -7,7 +7,7 @@
  */
 
 import { UNIT_TYPES } from '../config.ts';
-import type { UnitTypeDef } from '../types.ts';
+import type { PlayerId, UnitTypeDef } from '../types.ts';
 import { cardLevel } from './cards.ts';
 
 /**
@@ -17,15 +17,36 @@ import { cardLevel } from './cards.ts';
  * 越到后期越像"没升"。按比例之后每一级对任何兵种都是同样分量的质变，
  * 数值也就不用跟着兵种表一路重调。
  *
- * 取整用 `Math.round`：低于 0.5 的增量会被舍掉，所以 1 级对极其便宜的兵可能看不出差别
- * ——这是刻意的，卡牌不该让 5 攻的杂兵翻倍。
+ * 取整用 `Math.round`。**2026-11-19 从 12% 提到 25%**：12% 对民兵（atk 11）只有 1 点，
+ * 四舍五入之后面板几乎看不出变化，玩家会以为"合成没生效"。
  */
-export const PER_LEVEL_PCT = { atk: 0.12, maxHp: 0.12 } as const;
+export const PER_LEVEL_PCT = { atk: 0.25, maxHp: 0.25 } as const;
 
 /**
  * @param counts 卡 id → 抽到的张数
  * @param base   基础兵种表（默认原版表；测试里可以塞假表）
  */
+/**
+ * 升级后的兵种 id：`militia~L1`。
+ *
+ * **为什么不直接覆盖原 id**（2026-11-19 用户抓到的问题）：
+ * `state.unitTypes` 是**双方共用**的一张表。把 `militia` 的攻血改高，
+ * 敌人的民兵也一起变强——玩家升的卡等于给对面送礼。
+ * 所以升级版另发一个 id，只有玩家的产线认它；敌人按原 id 摆兵，数值不变。
+ */
+export function cardTypeId(baseId: string, level: number): string {
+  return `${baseId}~L${level}`;
+}
+
+/** 从"类型 id"反查基础兵种与等级（不是卡兵种就返回 null） */
+export function parseCardTypeId(typeId: string): { baseId: string; level: number } | null {
+  const at = typeId.lastIndexOf('~L');
+  if (at <= 0) return null;
+  const level = Number(typeId.slice(at + 2));
+  if (!Number.isInteger(level) || level <= 0) return null;
+  return { baseId: typeId.slice(0, at), level };
+}
+
 export function compileUnits(
   counts: Record<string, number>,
   base: Record<string, UnitTypeDef> = UNIT_TYPES as unknown as Record<string, UnitTypeDef>,
@@ -37,11 +58,28 @@ export function compileUnits(
     const def = base[id];
     // 卡池里写了不存在的兵种（关卡自定义兵种被删掉）：跳过，不要造出一条空定义
     if (!def) continue;
-    out[id] = {
-      ...def,
-      atk: Math.round(def.atk * (1 + PER_LEVEL_PCT.atk * lv)),
-      maxHp: Math.round(def.maxHp * (1 + PER_LEVEL_PCT.maxHp * lv)),
-    };
+    /*
+     * **1 级起每一级都发一个类型**，而不是只发最高级。
+     * 花名册里可能还留着上一关的 `~L1`，只定义 `~L2` 会让那些兵变成"未知类型"。
+     */
+    for (let level = 1; level <= lv; level += 1) {
+      const tid = cardTypeId(id, level);
+      out[tid] = {
+        ...def,
+        id: tid,
+        name: `${def.name} +${level}`,
+        /*
+         * **只属于玩家席位**（2026-11-19）。
+         *
+         * 光换 id 不够：`state.unitTypes` 是双方共用的，Boss 有城时它的 AI
+         * 会在同一张表里挑兵，挑到 `spearman~L3` 就造出了你的强化版。
+         * 这个字段让 `canUseType` 能按席位把它们挡在门外。
+         */
+        rogueOwner: 'A' as PlayerId,
+        atk: Math.round(def.atk * (1 + PER_LEVEL_PCT.atk * level)),
+        maxHp: Math.round(def.maxHp * (1 + PER_LEVEL_PCT.maxHp * level)),
+      };
+    }
   }
   return out;
 }

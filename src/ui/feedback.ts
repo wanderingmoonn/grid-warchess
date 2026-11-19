@@ -24,7 +24,7 @@ import {
   snapshotJson,
   type SnapshotEnv,
 } from '../core/snapshot.ts';
-import { uploadSnapshot } from '../net/snapshots.ts';
+import { fetchSnapshotById, uploadSnapshot } from '../net/snapshots.ts';
 
 function esc(raw: string): string {
   return raw
@@ -112,6 +112,8 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
 
         <div class="modal-foot">
           <button class="btn" data-act="close">关闭</button>
+          <input class="level-say-input" data-look-id placeholder="按编号查看 #" style="width:110px">
+          <button class="btn" data-act="look">查看</button>
           <button class="btn" data-act="copy">复制 JSON</button>
           <button class="btn btn-primary" data-act="upload" ${busy ? 'disabled' : ''}>
             ${busy ? '上传中…' : '上传'}
@@ -164,6 +166,38 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
       });
       return;
     }
+    if (act === 'look') {
+      /*
+       * 按编号看一条反馈（2026-11-19）。
+       *
+       * 快照表不给客户端读权限，只有 `warchess_snapshot_get(id)` 这个函数
+       * 能按 id 取单条（见 sql/warchess_snapshot_get.sql）。这条入口的意义：
+       * 玩家上传后拿到 `#12`，直接在这里输入就能看到云端那份内容，
+       * 不用整个 JSON 复制粘贴。
+       */
+      const input = mask.querySelector<HTMLInputElement>('[data-look-id]');
+      const id = Number((input?.value ?? '').replace(/[^0-9]/g, ''));
+      if (!id) {
+        result = '先填编号（上传成功后会显示 #编号）';
+        resultBad = true;
+        paint();
+        return;
+      }
+      result = `正在查 #${id}…`;
+      resultBad = false;
+      paint();
+      void fetchSnapshotById(id).then((row) => {
+        if (!row) {
+          result = `查不到 #${id}：函数没建（先跑 sql/warchess_snapshot_get.sql），或者这条不存在`;
+          resultBad = true;
+        } else {
+          result = `#${id} · ${row.build} · ${row.headline}\n${row.note || '（没有写描述）'}`;
+          resultBad = false;
+        }
+        paint();
+      });
+      return;
+    }
     if (act === 'upload') {
       if (busy) return;
       busy = true;
@@ -173,10 +207,24 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
       void uploadSnapshot(snap).then((res) => {
         busy = false;
         if (res.ok) {
+          /*
+           * 上传成功后**自动把摘要复制到剪贴板**（2026-11-19）。
+           *
+           * 为什么：开发者那头不一定能直接查库（工具不在），
+           * 而玩家最省事的接力方式就是"上传 → 粘贴给我"。
+           * 摘要只含编号/版本/回合/描述，不含整份快照，粘起来不臃肿。
+           */
+          const digest = [
+            res.id ? `#${res.id}` : '#（无编号）',
+            `build=${snap.build}`,
+            `turn=${snap.turns}`,
+            snap.note ? `问题：${snap.note}` : '（没写描述）',
+          ].join(' · ');
+          navigator.clipboard?.writeText(digest).catch(() => {});
           result = res.duplicate
             ? '这条刚刚已经传过了，云端只留一份'
             : res.id
-              ? `已上传并读回 #${res.id}。把这一句连同截图发给开发者，他就能直接定位。`
+              ? `已上传 #${res.id}，摘要已复制到剪贴板，直接粘给开发者就行。`
               : res.note ?? '已上传（云端没回行号，但写入成功）。';
           resultBad = false;
           // 传成功了就把描述清空：下一次通常是另一个问题
@@ -203,4 +251,23 @@ export function openFeedbackPanel(opts: FeedbackOptions): void {
 
   paint();
   document.body.appendChild(mask);
+}
+
+
+/**
+ * 自动上报一份现场（2026-11-19）。
+ *
+ * 给"AI 停摆"这类只在真实环境出现的问题用：看门狗察觉局面长时间不动时，
+ * 直接把当时的状态传上去，开发者从库里就能读，不必让玩家截图或复述。
+ * 与手动反馈共用同一张表，note 前缀 `[auto]` 便于区分。
+ */
+export function autoReport(current: () => GameState, note: string): void {
+  try {
+    const snap = buildSnapshot(current(), { note: `[auto] ${note}`, env: readEnv(), timeline: null });
+    void uploadSnapshot(snap).then((r) => {
+      if (r.ok) console.info('[auto-report]', r.id ? `#${r.id}` : 'ok');
+    });
+  } catch (err) {
+    console.warn('[auto-report] 失败', err);
+  }
 }

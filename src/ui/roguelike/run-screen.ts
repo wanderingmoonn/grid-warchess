@@ -7,6 +7,7 @@
 
 import type { RosterUnit, RunState } from '../../core/roguelike/run-state.ts';
 import { cityCapacity, citySizeFor } from '../../core/roguelike/roster.ts';
+import { RELICS, relicNames } from '../../core/roguelike/relics.ts';
 /** 各面板各写一份，和别的 UI 文件保持一致（没有共享的 util） */
 const esc = (t: string): string =>
   String(t).replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
@@ -42,7 +43,10 @@ export function openRunPanel(opts: RunPanelOptions): void {
           <span class="rogue-chip">金币 <b>${run.gold}</b></span>
           <span class="rogue-chip">兵额 <b>${run.roster.length} / ${cap}</b></span>
           <span class="rogue-chip">城市时代 <b>${run.cityEra}</b></span>
-          <span class="rogue-chip">遗物 <b>${run.relics.length}</b></span>
+          <span class="rogue-chip">免费建造 <b>${run.freeBuilds}</b></span>
+          <span class="rogue-chip">遗物 <b>${
+            run.relics.length === 0 ? '无' : relicNames(run).join('、')
+          }</b></span>
           <span class="rogue-chip">重开 <b>${run.allowRestart ? '允许' : '不允许'}</b></span>
         </div>
         ${
@@ -62,6 +66,11 @@ export function openRunPanel(opts: RunPanelOptions): void {
             : `<button class="btn btn-primary" data-act="start">开始第 ${opts.stageNo} 关</button>
                ${opts.onAbandon ? '<button class="btn" data-act="abandon">放弃这局</button>' : ''}`
         }
+        ${
+          run.relics.length > 0
+            ? `<button class="btn" data-act="relics">遗物 ${run.relics.length}（看效果）</button>`
+            : ''
+        }
         <button class="btn" data-act="close">关掉</button>
       </div>
     </div>`;
@@ -70,6 +79,10 @@ export function openRunPanel(opts: RunPanelOptions): void {
     if (ev.target === mask || act === 'close') {
       mask.remove();
       opts.onClose();
+      return;
+    }
+    if (act === 'relics') {
+      openRelicPanel(opts.run);
       return;
     }
     if (act === 'start') {
@@ -211,12 +224,14 @@ export interface RestPanelOptions {
   roster: Array<{ type: string; hp: number }>;
   /** 已经抽过几种卡（面板上显示一下） */
   cardKinds: number;
+  /** 上一关结束时的城血（0 = 第一关，按满血算） */
+  cityHp: number;
   /** 城市时代与升下一代的价钱（升城**不占整备次数**） */
   cityEra: number;
   upgradeCost: number | null;
   gold: number;
   onUpgradeCity: () => void;
-  onPick: (kind: 'wall' | 'heal' | 'card') => void;
+  onPick: (kind: 'wall' | 'repairCity' | 'card') => void;
 }
 
 /**
@@ -253,15 +268,15 @@ export function openRestPanel(opts: RestPanelOptions): void {
             }）</span>
             <span class="rogue-card-owned">当前：${opts.citySize}×${opts.citySize} · 已加固 ${opts.wallProgress} 次</span>
           </button>
-          <button class="rogue-card" data-rest="heal">
-            <span class="rogue-card-name">修整部队</span>
-            <span class="rogue-card-note">花名册里的兵回满血（打完仗都带伤）</span>
-            <span class="rogue-card-owned">带伤：${opts.roster.filter((u) => u.hp > 0).length} 人</span>
+          <button class="rogue-card" data-rest="repairCity">
+            <span class="rogue-card-name">修城</span>
+            <span class="rogue-card-note">下一关开局城市回满血（城血跨关保留，打完仗是带着伤进下一关的）</span>
+            <span class="rogue-card-owned">当前城血：${opts.cityHp > 0 ? opts.cityHp : '满'}</span>
           </button>
           <button class="rogue-card" data-rest="card">
             <span class="rogue-card-name">升一级兵种卡</span>
-            <span class="rogue-card-note">抽三张兵种卡挑一张（同名三张 = 升一级）</span>
-            <span class="rogue-card-owned">已抽 ${opts.cardKinds} 种 · 三张同名升一级</span>
+            <span class="rogue-card-note">直接给一张已有的卡 +1 级（等于一次补满三张）</span>
+            <span class="rogue-card-owned">已抽 ${opts.cardKinds} 种</span>
           </button>
         </div>
       </div>
@@ -289,7 +304,49 @@ export function openRestPanel(opts: RestPanelOptions): void {
     const kind = t.closest<HTMLElement>('[data-rest]')?.dataset.rest;
     if (!kind) return;
     mask.remove();
-    opts.onPick(kind as 'wall' | 'heal' | 'card');
+    opts.onPick(kind as 'wall' | 'repairCity' | 'card');
+  });
+  document.body.appendChild(mask);
+}
+
+
+/**
+ * 遗物一览（2026-11-19）。
+ *
+ * 之前只有关卡面板上一句"遗物：铁壁"，效果只写在代码注释里——
+ * 玩家拿了什么、有什么用，界面上一概看不到。这一页把**每一件遗物**
+ * 连同效果一起列出来：已获得的实心显示，没获得的灰掉（名字也藏着，
+ * 免得剧透还没打到的东西）。
+ */
+export function openRelicPanel(run: RunState): void {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  const owned = new Set(run.relics);
+  mask.innerHTML = `
+    <div class="modal rogue-panel">
+      <div class="modal-head">
+        <h2>遗物 ${owned.size} / ${RELICS.length}</h2>
+        <p>遗物靠"打谁"获得：精英与 Boss 关固定掉落，拿到就永久生效。</p>
+      </div>
+      <div class="modal-body">
+        <div class="rogue-cards">
+          ${RELICS.map((r) => {
+            const has = owned.has(r.id);
+            return `<div class="rogue-card${has ? '' : ' is-locked'}">
+              <span class="rogue-card-name">${has ? esc(r.name) : '？？？'}</span>
+              <span class="rogue-card-note">${has ? esc(r.blurb) : '还没拿到'}</span>
+              <span class="rogue-card-owned">${has ? '已获得' : '未获得'}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-act="close">关掉</button>
+      </div>
+    </div>`;
+  mask.addEventListener('click', (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === mask || t.closest('[data-act="close"]')) mask.remove();
   });
   document.body.appendChild(mask);
 }

@@ -50,6 +50,20 @@ export interface RunState {
   cityEra: number;
   /** 开局选的主分支（升级路线），决定卡池偏向 */
   branch: string;
+  /** 战术卡背包（只放"下一关才生效"的那种，比如空投援军） */
+  tactics: string[];
+  /**
+   * 城的血跨关保留（2026-11-19）。
+   *
+   * 之前每关 `createMatch` 都造一座满血新城，等于"城每关自动修满"，
+   * 修城这个整备项就没有落点。现在把上一关结束时的城血带进下一关；
+   * `null` 表示"这一关还没有记录"（第一关按满血开）。
+   */
+  cityHp: number | null;
+  /** 整备里选了"修城"：下一关开局把城修满 */
+  repairNext: boolean;
+  /** 免费建造次数：每抽到一张兵种卡送一次，下一关造兵免单 */
+  freeBuilds: number;
 }
 
 export const RUN_KEY = 'warchess:run:v1';
@@ -78,6 +92,10 @@ export function newRun(seed: number, opts: NewRunOptions): RunState {
     wallProgress: 0,
     cityEra: 1,
     branch: opts.branch ?? 'cold',
+    tactics: [],
+    cityHp: null,
+    repairNext: false,
+    freeBuilds: 0,
   };
 }
 
@@ -101,6 +119,17 @@ export function parseRun(raw: string | null): RunState | null {
       // 老存档没有这个字段：当成青铜时代（第一幕的默认值）
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       branch: typeof obj.branch === 'string' ? obj.branch : 'cold',
+      tactics: Array.isArray(obj.tactics) ? (obj.tactics as string[]) : [],
+      /*
+       * 城血只可能是"几十到几百"这个量级：旧版本叠乘过翻倍，
+       * 存档里出现过 4.5e24。超过 10000 一律当作脏数据丢掉（= 满血重开）。
+       */
+      cityHp:
+        typeof obj.cityHp === 'number' && Number.isFinite(obj.cityHp) && obj.cityHp > 0 && obj.cityHp < 10000
+          ? obj.cityHp
+          : null,
+      repairNext: obj.repairNext === true,
+      freeBuilds: typeof obj.freeBuilds === 'number' ? obj.freeBuilds : 0,
       v: 1,
     } as RunState;
   } catch {

@@ -15,7 +15,7 @@ import {
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
 import { CARDS_PER_LEVEL, cardLevel, cardWeight, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
-import { PER_LEVEL_PCT, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
+import { PER_LEVEL_PCT, cardTypeId, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
 import { SETTLE, cityUpgradeCost, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
@@ -25,7 +25,15 @@ import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage } from '
 import { ENEMY_POOLS, WEAK_RATIO, pickEnemies, poolForStage, poolUnits } from '../../../src/core/roguelike/enemy-pools.ts';
 import { UNIT_TYPES } from '../../../src/core/config.ts';
 import { validateLevel } from '../../../src/core/level.ts';
-import { incomeOf } from '../../../src/core/rules.ts';
+import { applyAction, incomeOf } from '../../../src/core/rules.ts';
+import { TACTICS, TACTIC_BY_ID, applyTacticNow } from '../../../src/core/roguelike/tactics.ts';
+import {
+  capacityBonus,
+  cityArmorBonus,
+  healsIntake,
+  hornFreebies,
+  skipMoney,
+} from '../../../src/core/roguelike/relics.ts';
 import { canUseType } from '../../../src/core/draft.ts';
 import { createMatch, DEFAULT_CONFIG } from '../../../src/core/setup.ts';
 
@@ -309,24 +317,168 @@ export function run() {
      * 关卡摆兵是按 `state.unitTypes` 查兵种的，所以拿它收窄"可造"，
      * 会连带把关卡里 deploy 的骑士/长弓变成"这一局没有这个兵种"而被静默跳过。
      */
-    assert.equal(s.unitTypes.knight, undefined, '这个行为本身就是坑，别拿它收窄可造集');
+    assert.equal(s.unitTypes.spearman, undefined, '这个行为本身就是坑，别拿它收窄可造集');
   });
 
   test('肉鸽：recruitOnly 只夹"能不能造"，不裁兵种表', () => {
-    const r = validateLevel(SLICE_STAGES[2]!.level); // 第 3 关有长弓、骑士
+    const r = validateLevel(SLICE_STAGES[0]!.level); // 第 3 关有长弓、骑士
     assert.ok(r.ok);
     const s = createMatch(
       { ...DEFAULT_CONFIG, level: r.level, recruitOnly: ['militia', 'archer'], noIncome: true } as never,
       31,
     );
     assert.equal(canUseType(s, 'A', 'militia'), true);
-    assert.equal(canUseType(s, 'A', 'knight'), false, '没抽到的兵种不该能造');
+    assert.equal(canUseType(s, 'A', 'spearman'), false, '没抽到的兵种不该能造');
     // 关键：兵种表完整，所以关卡摆的敌人还在
     assert.ok(s.unitTypes.knight, '兵种表必须完整（否则关卡摆兵会被静默跳过）');
     assert.ok(s.units.filter((u) => u.owner === 'B').length > 0, '敌人必须还在场上');
     // 普通对局不受影响
     const plain = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 32);
-    assert.equal(canUseType(plain, 'A', 'knight'), true);
+    assert.equal(canUseType(plain, 'A', 'spearman'), true);
+  });
+
+  test('肉鸽：战术卡——补给立刻给钱，空投进背包，修整回满血', () => {
+    assert.equal(TACTICS.length, 3);
+    const run = newRun(1, { allowRestart: true });
+    run.gold = 10;
+    run.roster = [{ type: 'militia', hp: 3, cardLv: 0 }];
+    const maxHp = () => 28;
+
+    applyTacticNow('supply', run, maxHp);
+    assert.equal(run.gold, 130, '补给应该立刻 +120');
+
+    applyTacticNow('airdrop', run, maxHp);
+    assert.deepEqual(run.tactics, ['airdrop'], '空投要留在背包里等下一关');
+
+    applyTacticNow('repair', run, maxHp);
+    assert.equal(run.roster[0]!.hp, 28, '修整应该回满');
+
+    // 背包要能过存档
+    const back = parseRun(serializeRun(run));
+    assert.ok(back);
+    assert.deepEqual(back.tactics, ['airdrop']);
+    assert.ok(TACTIC_BY_ID.supply.name.length > 0);
+  });
+
+  test('肉鸽：遗物真的生效——铁壁/驮马/号角/军械/吝啬鬼', () => {
+    const run = newRun(1, { allowRestart: true });
+    assert.equal(cityArmorBonus(run), 0, '没遗物就是 0');
+    assert.equal(capacityBonus(run), 0);
+    assert.equal(hornFreebies(run), 0);
+    assert.equal(healsIntake(run), false);
+    assert.equal(skipMoney(run), 80);
+
+    run.relics = ['ironwall', 'packhorse', 'horn', 'arsenal', 'miser'];
+    assert.equal(cityArmorBonus(run), 2, '铁壁：城防 +2');
+    assert.equal(capacityBonus(run), 2, '驮马：兵额 +2');
+    assert.equal(hornFreebies(run), 2, '号角：2 个免费民兵');
+    assert.equal(healsIntake(run), true, '军械：带回满血');
+    assert.equal(skipMoney(run), 160, '吝啬鬼：不选拿钱翻倍');
+  });
+
+  test('肉鸽：驮马与军械在撤离结算里生效', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let state = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 41);
+    const city = state.cities.find((c) => c.owner === 'A')!;
+    const mk = (i: number, x: number, y: number, hp: number) => ({
+      ...state.units.find((u) => u.owner === 'A')!,
+      id: `z${i}`,
+      x,
+      y,
+      hp,
+    });
+    // 城里 5 个（超过默认兵额 4）+ 城外 1 个
+    state = {
+      ...state,
+      units: [
+        mk(1, city.x, city.y, 5),
+        mk(2, city.x + 1, city.y, 5),
+        mk(3, city.x, city.y + 1, 5),
+        mk(4, city.x + 1, city.y + 1, 5),
+        mk(5, city.x, city.y, 5),
+        mk(6, 14, 14, 5),
+      ],
+      winner: null,
+    };
+    const base = { run: newRun(1, { allowRestart: true }), stageIndex: 0, evacTurns: 2, expectedTurns: 6, playerSeat: 'A' as const };
+    const plain = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, base);
+    const buffed = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, {
+      ...base,
+      capacityBonus: 2,
+      healIntake: true,
+    });
+    assert.ok(buffed.taken.length > plain.taken.length, '驮马应该多带走几个人');
+    assert.ok(buffed.taken.every((u) => u.hp >= 5), '军械只能加血不能减');
+    assert.ok(buffed.taken.every((u) => typeof u.hp === 'number'));
+  });
+
+  test('肉鸽：撤离期间回合必须照常推进（holdWinner）', () => {
+    const st = SLICE_STAGES[0]!;
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    let s = createMatch({ ...DEFAULT_CONFIG, level: r.level, holdWinner: true } as never, 77);
+    // 清空敌人后，结束回合必须"换手 + turn+1"，否则 moved 标记永远不重置
+    s.units = s.units.filter((u) => u.owner === 'A');
+    const before = s.turn;
+    const res = applyAction(s, { type: 'END_TURN' });
+    assert.ok(res.ok, '结束回合应当被接受');
+    assert.ok(res.state.turn > before, '回合必须推进');
+    assert.equal(res.state.winner, null, 'holdWinner 下不该判胜负');
+
+    // 关掉开关后照常判胜（普通对局不受影响）
+    const plain = createMatch({ ...DEFAULT_CONFIG, level: r.level } as never, 78);
+    plain.units = plain.units.filter((u) => u.owner === 'A');
+    const res2 = applyAction(plain, { type: 'END_TURN' });
+    assert.ok(res2.ok);
+    assert.equal(res2.state.winner, 'A', '没开关时清场即判胜，老行为不变');
+  });
+
+  test('肉鸽：卡每级 +25%，且真的改到攻击/血量', () => {
+    const base = UNIT_TYPES.militia!;
+    const out = compileUnits({ militia: 3 });
+    assert.equal(out[cardTypeId('militia', 1)]!.atk, Math.round(base.atk * 1.25), '一级应当 +25% 攻');
+    assert.equal(out[cardTypeId('militia', 1)]!.maxHp, Math.round(base.maxHp * 1.25), '一级应当 +25% 血');
+    const six = compileUnits({ militia: 6 });
+    assert.equal(six[cardTypeId('militia', 2)]!.atk, Math.round(base.atk * 1.5), '两级 +50%');
+    assert.ok(out[cardTypeId('militia', 1)]!.atk > base.atk, '数字必须真的变大，不能是 NaN');
+    assert.ok(Number.isFinite(out[cardTypeId('militia', 1)]!.atk));
+  });
+
+  test('肉鸽：强化兵只属于玩家，敌人既造不到也不被卡池限制', () => {
+    const st = SLICE_STAGES[2]!; // Boss 关：敌人有城，会产兵
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    const units = mergeUnits(undefined, compileUnits({ spearman: 3 }));
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, level: r.level, recruitOnly: [cardTypeId('spearman', 1)] } as never,
+      91,
+      units,
+    );
+    assert.ok(s.unitTypes[cardTypeId('spearman', 1)], '强化版应当在兵种表里');
+    // 玩家能造自己的强化版
+    assert.equal(canUseType(s, 'A', cardTypeId('spearman', 1)), true);
+    // 敌人造不到：那是玩家的兵
+    assert.equal(canUseType(s, 'B', cardTypeId('spearman', 1)), false, '敌人不该能造玩家的强化兵');
+    // 敌人也不该被玩家的卡池限制（Boss 有城，要能正常出兵）
+    assert.equal(canUseType(s, 'B', 'spearman'), true, 'Boss 不该被玩家的卡池卡住');
+    // 玩家自己的原版兵被卡池挡着
+    assert.equal(canUseType(s, 'A', 'spearman'), false);
+  });
+
+  test('肉鸽：城血跨关保留，修城下一关补满', () => {
+    const run = newRun(1, { allowRestart: true });
+    run.cityHp = 9;
+    run.freeBuilds = 2;
+    const back = parseRun(serializeRun(run));
+    assert.ok(back);
+    assert.equal(back.cityHp, 9, '城血要过存档');
+    assert.equal(back.freeBuilds, 2);
+    assert.equal(back.repairNext, false);
+
+    run.repairNext = true;
+    assert.equal(parseRun(serializeRun(run))!.repairNext, true, '修城标记要过存档');
   });
 
   test('肉鸽：升城市时代价钱递增', () => {
@@ -341,16 +493,19 @@ export function run() {
     };
     // 6 张 = 2 级
     const table = compileUnits({ archer: 6, militia: 3 }, base);
-    assert.equal(table.archer.atk, Math.round(11 * (1 + PER_LEVEL_PCT.atk * 2)));
-    assert.equal(table.archer.maxHp, Math.round(24 * (1 + PER_LEVEL_PCT.maxHp * 2)));
-    assert.ok(table.archer.atk > 11 && table.archer.maxHp > 24);
-    assert.equal(table.militia, undefined, '基础表里没有的兵种不该被凭空造出来');
+    const a2 = table[cardTypeId('archer', 2)]!;
+    assert.equal(a2.atk, Math.round(11 * (1 + PER_LEVEL_PCT.atk * 2)));
+    assert.equal(a2.maxHp, Math.round(24 * (1 + PER_LEVEL_PCT.maxHp * 2)));
+    assert.ok(a2.atk > 11 && a2.maxHp > 24);
+    // 原 id 不能被覆盖（否则敌人的同名兵也会变强）
+    assert.equal(table.archer, undefined, '不许覆盖基础兵种');
+    assert.equal(table[cardTypeId('militia', 1)], undefined, '基础表里没有的兵种不该被凭空造出来');
   });
 
   test('肉鸽：百分比加成随等级线性且不翻倍', () => {
     const base = { cheap: { id: 'cheap', atk: 4, maxHp: 10 } };
-    const lv1 = compileUnits({ cheap: 3 }, base).cheap;
-    const lv3 = compileUnits({ cheap: 9 }, base).cheap;
+    const lv1 = compileUnits({ cheap: 3 }, base)[cardTypeId('cheap', 1)];
+    const lv3 = compileUnits({ cheap: 9 }, base)[cardTypeId('cheap', 3)];
     assert.equal(lv1.atk, Math.round(4 * (1 + PER_LEVEL_PCT.atk)));
     assert.ok(lv3.atk > lv1.atk);
     // 3 级也不该翻倍（12% × 3 = 36%）
@@ -436,19 +591,26 @@ export function run() {
     }
   });
 
-  test('肉鸽：三场手写遭遇都能过校验并建出局', () => {
-    assert.equal(SLICE_STAGES.length, 3);
+  test('肉鸽：九场遭遇（三幕×三场）都能过校验并建出局', () => {
+    assert.equal(SLICE_STAGES.length, 9);
     for (const st of SLICE_STAGES) {
       const r = validateLevel(st.level);
       assert.ok(r.ok, `${st.level.name} 校验失败：${!r.ok ? r.errors.join(' / ') : ''}`);
       const s = createMatch({ ...DEFAULT_CONFIG, level: r.level }, 11);
       const b = s.units.filter((u) => u.owner === 'B').length;
       assert.ok(b > 0, `${st.level.name} 的敌人没摆上去`);
-      assert.equal(
-        s.cities.filter((c) => c.owner === 'B').length,
-        0,
-        `${st.level.name} 的敌人不该有城（cityless）`,
-      );
+      /*
+       * 三幕结构：前两场是精英（无城），第三场是 Boss（**带城**）。
+       * 2026-11-19 定：城只给 Boss，精英改成「一只新怪 + 常规队」。
+       */
+      const foeCities = s.cities.filter((c) => c.owner === 'B').length;
+      if (st.meta.slot === 3) {
+        assert.equal(foeCities, 1, `${st.level.name} 是 Boss，应当有城`);
+        assert.ok(!(st.level.seats.cityless ?? []).includes('B'), 'Boss 不该是无城席位');
+      } else {
+        assert.equal(foeCities, 0, `${st.level.name} 是精英关，不该有城`);
+        assert.ok((st.level.seats.cityless ?? []).includes('B'), '精英关的敌人是无城席位');
+      }
       assert.equal(s.cities.filter((c) => c.owner === 'A').length, 1, '玩家必须有一座城');
       assert.ok(st.meta.evacTurns >= 1);
       assert.ok(st.meta.expectedTurns >= st.meta.evacTurns);

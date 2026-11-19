@@ -177,3 +177,57 @@ export async function uploadSnapshot(snap: BugSnapshot): Promise<SnapshotUploadR
 }
 
 export const SNAPSHOT_TABLE = TABLE;
+
+
+/**
+ * 按行号取一条反馈（2026-11-19）。
+ *
+ * 依赖 `sql/warchess_snapshot_get.sql` 里那个 SECURITY DEFINER 函数：
+ * 表本身不给客户端读权限，只有"知道 id"时才拿得到那一条。
+ * 函数不存在时安静返回 null——调用方自己决定怎么提示。
+ */
+export async function fetchSnapshotById(id: number): Promise<{ note: string; build: string; headline: string } | null> {
+  try {
+    const db = (await cloudDatabase()) as unknown as {
+      rpc(name: string, args?: Record<string, unknown>): PromiseLike<{ data?: unknown; error?: unknown }>;
+    };
+    const r = await db.rpc('warchess_snapshot_get', { sid: id });
+    if (r?.error || !r?.data) return null;
+    const row = r.data as { note?: string; build?: string; payload?: { headline?: string } };
+    return {
+      note: row.note ?? '',
+      build: row.build ?? '',
+      headline: row.payload?.headline ?? '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+
+export interface SnapshotBrief {
+  id: number;
+  created_at: string;
+  build: string;
+  turn: number;
+  note: string;
+  headline: string;
+}
+
+/**
+ * 拉最近 N 条反馈（需要口令，见 `sql/warchess_snapshot_admin.sql`）。
+ *
+ * 口令不对时函数返回空数组而不是报错——不给爆破线索。
+ */
+export async function fetchSnapshotList(pin: string, limit = 30): Promise<SnapshotBrief[]> {
+  try {
+    const db = (await cloudDatabase()) as unknown as {
+      rpc(name: string, args?: Record<string, unknown>): PromiseLike<{ data?: unknown; error?: unknown }>;
+    };
+    const r = await db.rpc('warchess_snapshot_list', { pin, lim: limit });
+    if (r?.error || !Array.isArray(r?.data)) return [];
+    return (r.data as SnapshotBrief[]).filter((x) => typeof x?.id === 'number');
+  } catch {
+    return [];
+  }
+}
