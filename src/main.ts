@@ -5749,7 +5749,18 @@ async function runAiTurn(
             rejected,
           )
         : engine.aiNextAction(state, budget, rejected);
-    if (!action) break;
+    if (!action) {
+      /*
+       * 决策层返回空 = 这一回合什么都不做（2026-11-19）。
+       *
+       * 把当时的预算和"被拒过的动作数"一起记下来：预算耗尽（recruit/upgrade/step）
+       * 与"根本没有可行动作"在外部看起来一模一样，但病因完全不同。
+       */
+      aiLog(
+        `null-action budget=${JSON.stringify(budget)} rejected=${rejected.size} units=${state.units.filter((u) => u.owner === player).length}`,
+      );
+      break;
+    }
 
     planMovePath(state, action);
     const walked = pendingMovePath?.values().next().value?.length ?? 0;
