@@ -6263,6 +6263,7 @@ function startRogueStage(): void {
     rogueSave();
     toast(`${useAirdrop ? '空投援军' : '号角'}到位：${placed} 个民兵`);
   }
+  applyRogueStageSetup();
   state.aiControl = undefined;
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
@@ -6297,12 +6298,22 @@ function applyRushDirective(): void {
   };
 }
 
+/** 已经做过"城血翻倍"的状态（同一份状态只翻一次） */
+const cityScaled = new WeakSet<GameState>();
+
 function foesLeft(s: GameState): number {
   return s.units.filter((u) => u.owner !== 'A' && u.hp > 0).length;
 }
 
-function rogueAfterAction(prev: GameState, next: GameState): void {
-  if (!rogue || rogue.settled) return;
+/**
+ * 建局时只跑一次：城血翻倍 / 城血跨关 / 铁壁护甲 / ai.pressure。
+ *
+ * **2026-11-19 修**：这几段原来被放进了 `rogueAfterAction`（每走一步都跑），
+ * 于是城血一路 30→60→120… 变成 `4.53e+24`，城防也每步 +2。
+ * 它们属于"开局布置"，只能在新的一局建好之后跑一次。
+ */
+function applyRogueStageSetup(): void {
+  if (!rogue) return;
   /*
    * 遗物「铁壁」：城防 +2（2026-11-19）。城对象在 createMatch 里已经生成，
    * 这里直接加护甲——规则层读的是 `city.armor`，不另设开关。
@@ -6325,21 +6336,46 @@ function rogueAfterAction(prev: GameState, next: GameState): void {
    * 顺序很重要：**先翻倍上限，再套用上一关带回来的血量**（那个数已经是翻倍后的刻度）。
    */
   const CITY_HP_MULT = 2;
+  /*
+   * 同一份状态只翻一次（2026-11-19）。
+   *
+   * 光把 `*= 2` 改成"基础值 × 2"还不够：如果 `startRogueStage` 被重复调用
+   * 而 state 是同一份（续局、重开本关），基础值本身已经被翻过了，仍会继续涨。
+   * 用一个 WeakSet 记住"这份状态翻过没"，比往 config 里塞字段干净。
+   */
+  const needScale = !cityScaled.has(state);
+  if (needScale) cityScaled.add(state);
   for (const c of state.cities) {
     if (c.owner !== 'A') continue;
-    c.maxHp *= CITY_HP_MULT;
+    if (!needScale) break;
+    /*
+     * **按基础值算 2 倍，不能在当前值上乘**（2026-11-19 修）。
+     *
+     * 之前写的是 `c.maxHp *= 2`：只要这一关的城被重复处理（续局、重开本关、
+     * 读档后再建局），就会一路 30→60→120→240…，玩家看到的是
+     * `4.53e+24` 这种血条。改成"基础值 × 2"之后，无论跑多少次都是同一个数。
+     */
+    const baseHp = c.maxHp;
+    c.maxHp = Math.round(baseHp * CITY_HP_MULT);
     c.hp = c.maxHp;
     if (rogue.run.repairNext) {
       c.hp = c.maxHp;
-    } else if (typeof rogue.run.cityHp === 'number') {
+    } else if (typeof rogue.run.cityHp === 'number' && Number.isFinite(rogue.run.cityHp)) {
+      // 存的数可能是旧版本写坏的：超过上限就按满血算，不要把脏数据带进棋盘
       c.hp = Math.max(1, Math.min(c.maxHp, rogue.run.cityHp));
     }
+    // 顺手把 run 里的记录也归一到这一关的真实刻度
+    rogue.run.cityHp = c.hp;
   }
   if (rogue.run.repairNext) rogue.run.repairNext = false;
   const armorBonus = cityArmorBonus(rogue.run);
   if (armorBonus > 0) {
     for (const c of state.cities) if (c.owner === 'A') c.armor += armorBonus;
   }
+}
+
+function rogueAfterAction(prev: GameState, next: GameState): void {
+  if (!rogue || rogue.settled) return;
   /*
    * 兜底：无城席位必须有 ai.pressure，否则 AI 决策层返回空（2026-11-19）。
    * 关卡校验可能不认识这个字段，所以建局这里再写一次。

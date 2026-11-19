@@ -120,7 +120,14 @@ export function parseRun(raw: string | null): RunState | null {
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       branch: typeof obj.branch === 'string' ? obj.branch : 'cold',
       tactics: Array.isArray(obj.tactics) ? (obj.tactics as string[]) : [],
-      cityHp: typeof obj.cityHp === 'number' ? obj.cityHp : null,
+      /*
+       * 城血只可能是"几十到几百"这个量级：旧版本叠乘过翻倍，
+       * 存档里出现过 4.5e24。超过 10000 一律当作脏数据丢掉（= 满血重开）。
+       */
+      cityHp:
+        typeof obj.cityHp === 'number' && Number.isFinite(obj.cityHp) && obj.cityHp > 0 && obj.cityHp < 10000
+          ? obj.cityHp
+          : null,
       repairNext: obj.repairNext === true,
       freeBuilds: typeof obj.freeBuilds === 'number' ? obj.freeBuilds : 0,
       v: 1,
