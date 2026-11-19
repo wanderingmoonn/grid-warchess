@@ -203,3 +203,31 @@ export async function fetchSnapshotById(id: number): Promise<{ note: string; bui
     return null;
   }
 }
+
+
+export interface SnapshotBrief {
+  id: number;
+  created_at: string;
+  build: string;
+  turn: number;
+  note: string;
+  headline: string;
+}
+
+/**
+ * 拉最近 N 条反馈（需要口令，见 `sql/warchess_snapshot_admin.sql`）。
+ *
+ * 口令不对时函数返回空数组而不是报错——不给爆破线索。
+ */
+export async function fetchSnapshotList(pin: string, limit = 30): Promise<SnapshotBrief[]> {
+  try {
+    const db = (await cloudDatabase()) as unknown as {
+      rpc(name: string, args?: Record<string, unknown>): PromiseLike<{ data?: unknown; error?: unknown }>;
+    };
+    const r = await db.rpc('warchess_snapshot_list', { pin, lim: limit });
+    if (r?.error || !Array.isArray(r?.data)) return [];
+    return (r.data as SnapshotBrief[]).filter((x) => typeof x?.id === 'number');
+  } catch {
+    return [];
+  }
+}
