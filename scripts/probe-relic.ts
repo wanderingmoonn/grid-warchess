@@ -22,6 +22,7 @@ import {
   FUNERARY_URN,
   IMPERIAL_STELE,
   MORTAL_IMMORTAL,
+  SLUMBER,
 } from '../src/core/dark-turmoil-packs.ts';
 import { realmArmorBase, realmAtkBase, trueDamageForRank, extraAttacksForRank } from '../src/core/cultivation/stats.ts';
 import { totalHpBonusForRank } from '../src/core/cultivation/progression.ts';
@@ -224,6 +225,73 @@ console.log('\n[1c] 黑暗的源头');
   check('骨灰罐也会吐东西（黑暗之源 + 衍脉）', ['dark-source', 'lineage-well'].every((a) => (urn.abilities ?? []).includes(a)));
   const un = s.unitTypes['unnamable']!;
   check('诡异自己带「黑暗之源」（它原来没有来源）', (un.abilities ?? []).includes('dark-source'));
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 1c2. 出山与返程
+ * ══════════════════════════════════════════════════════════════════ */
+console.log('\n[1c2] 出山与返程');
+{
+  const profile = unitAiProfileOf('emperor-cycle')!;
+  const build = (left: number, outTurns: number, away: boolean) => {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns };
+    em.age = 200 - left;
+    const home = a.mk('home', SLUMBER, 'B', away ? 4 : 10, away ? 10 : 12);
+    em.custom = { ...(em.custom ?? {}), homeX: home.x, homeY: home.y };
+    return { s: a.s, em, profile };
+  };
+
+  // 在外、寿元已经吃够（≥60）→ 回家
+  {
+    const { s, em } = build(65, 10, true);
+    const out = profile.handler(ctxOf(s, em));
+    const mv = out.add?.find((x) => x.action.type === 'MOVE')?.action;
+    check('寿元回到 60 以上：往回走', !!mv, JSON.stringify(out.add));
+  }
+  // 在外超 40 回合、寿元还剩 40（>30）→ 也回家
+  {
+    const { s, em } = build(40, 45, true);
+    const out = profile.handler(ctxOf(s, em));
+    check('在外超 40 回合且还剩 30 以上：也回家', !!out.add?.some((x) => x.action.type === 'MOVE'), JSON.stringify(out.add));
+  }
+  // 在外超 40 回合但寿元只剩 20（<30）→ 还得继续找吃的（不会给"回家"那个 240 分候选）
+  {
+    const { s, em } = build(20, 45, true);
+    const out = profile.handler(ctxOf(s, em));
+    check('快饿死时不算"没吃够"：不返程', !out.add?.some((x) => x.score >= 240), JSON.stringify(out.add));
+  }
+  // 没吃饱、也没到 40 回合 → 继续在外（有敌人就打）
+  {
+    const { s, em } = build(35, 10, true);
+    const prey = { id: 'p', type: 'militia', owner: 'A', x: 10, y: 11, hp: 40, kills: 0, moved: false, acted: false } as Unit;
+    s.units.push(prey);
+    const out = profile.handler(ctxOf(s, em));
+    check('在外没吃饱也没超时：继续打', !!out.add?.some((x) => x.action.type === 'ATTACK'), JSON.stringify(out.add));
+  }
+  // 在沉眠地里 → 不动
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    em.custom = { lifespan: 200, dtInit: 1, outTurns: 0, homeX: 10, homeY: 11 };
+    em.age = 150;
+    a.mk('home', SLUMBER, 'B', 10, 11);
+    const out = profile.handler(ctxOf(a.s, em));
+    check('在家就待着（不乱跑）', !out.add || out.add.length === 0, JSON.stringify(out.add));
+  }
+
+  // 词条会记住沉眠地的位置
+  {
+    const a = arena();
+    const em = a.mk('em', EMPEROR, 'B', 10, 10);
+    const home = a.mk('home', SLUMBER, 'B', 12, 10);
+    em.custom = { lifespan: 200, dtInit: 1 };
+    const t = beginTurnOf(a.s, 'B');
+    const after = t.units.find((u) => u.id === 'em')!;
+    check('记住了沉眠地的坐标', Number(after.custom?.homeX) === home.x && Number(after.custom?.homeY) === home.y, JSON.stringify(after.custom));
+    check('在沉眠地里"在外回合数"归零', Number(after.custom?.outTurns) === 0, String(after.custom?.outTurns));
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════

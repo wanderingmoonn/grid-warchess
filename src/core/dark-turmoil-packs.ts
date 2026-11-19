@@ -55,6 +55,49 @@ const SLUMBER_RADIUS = 2;
 const STARVE_LEFT = 8;
 /** 周围（这个格数内）敌人少于这个数，就算"不够吃" */
 const STARVE_FOES = 2;
+/** 出山之后，寿元回到这个数就回去（"吃到够用"） */
+const HARVEST_HOME_LEFT = 60;
+/** 在外最多待这么多回合，之后就算没吃够也往家走 */
+const HARVEST_MAX_OUT = 40;
+/** 但寿元低于这个数就不算"没吃够"——那时候它还得继续找吃的 */
+const HARVEST_HUNGRY_LEFT = 30;
+
+/**
+ * 「出山」：仙帝的来去循环。
+ *
+ * 两件事：**记住沉眠地在哪**，以及**什么时候该回去**。
+ *
+ * 回去的判据（作者给的，两条任一成立）：
+ *   · 寿元吃掉够用了（回到 `HARVEST_HOME_LEFT`）；
+ *   · 在外超过 `HARVEST_MAX_OUT` 个回合、且寿元还在 `HARVEST_HUNGRY_LEFT` 以上
+ *     ——"没吃够也得回去了"。
+ *
+ * 注意第三条的用意：寿元已经掉到 30 以下时**不算没吃够**，它还得继续找吃的。
+ * 所以这个兵不是"出门 40 回合必回家"，而是"40 回合后，只要不是快饿死就回家"。
+ *
+ * 没有这条之前它出山就一路往西，永远不回来——玩家顶不住，剧本也散架了。
+ */
+const EMPEROR_CYCLE: AbilityDef = {
+  id: 'emperor-cycle',
+  name: '出山',
+  summary: `寿元回到 ${HARVEST_HOME_LEFT} 就回沉眠地；在外超过 ${HARVEST_MAX_OUT} 回合且寿元还在 ${HARVEST_HUNGRY_LEFT} 以上，也会回去。`,
+  group: 'support',
+  valueLabel: () => `寿元 ≥ ${HARVEST_HOME_LEFT} 就回巢`,
+  hooks: {
+    onTurnStart: [
+      {
+        stage: TURN_START.self,
+        apply: (c) => {
+          const { state, self } = c;
+          const home = state.units.find((u) => u.owner === self.owner && u.type === SLUMBER && u.hp > 0);
+          if (home) self.custom = { ...(self.custom ?? {}), homeX: home.x, homeY: home.y };
+          const out = Number(self.custom?.outTurns ?? 0);
+          self.custom = { ...(self.custom ?? {}), outTurns: inSlumber(state, self) ? 0 : out + 1 };
+        },
+      },
+    ],
+  },
+};
 
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
   Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -154,8 +197,12 @@ const EMPEROR_DEF: UnitTypeDef = {
    * 还能把人往黑暗里拽（勾魂）、破城断传承。
    * 只有走修真路线练到高层，才有和它对线的资格。
    */
+  // 他会自己决定什么时候回沉眠地（没有 profile 的话只会一路往西，永不回头）
+  aiAutonomy: 0.35,
+  aiProfile: 'emperor-cycle',
   abilities: [
     'swift-aging',
+    'emperor-cycle',
     'shadow-erosion',
     'blood-clot',
     'soul-hook',
@@ -3258,6 +3305,63 @@ function mortalIsOut(state: GameState, u: Unit): boolean {
 }
 
 /**
+ * 仙帝的来去：**该回家就回家，在家就待着**。
+ *
+ * 这条 profile 只做两件事：
+ *   · 判"该不该回"（见「出山」那两条判据），该回就给一个 240 分的走位候选——
+ *     压得住总指挥给的任何进攻动作；
+ *   · 在外的时候补一手"往敌人身上靠"，让它的出山不像乱走。
+ *
+ * 分数为什么要这么高：它的自主分只有 0.35，`240 × 0.35 = 84`，
+ * 还得高过普通进攻（≈6~20），所以给足。
+ */
+const EMPEROR_CYCLE_AI: UnitAiProfile = {
+  id: 'emperor-cycle',
+  handler: (c: UnitAiCtx): UnitAiResult => {
+    const { state, unit } = c;
+    const homeX = Number(unit.custom?.homeX ?? NaN);
+    const homeY = Number(unit.custom?.homeY ?? NaN);
+    const home = Number.isFinite(homeX) && Number.isFinite(homeY) ? { x: homeX, y: homeY } : null;
+    const out = !inSlumber(state, unit);
+    const left = yearsLeft(unit);
+    const outTurns = Number(unit.custom?.outTurns ?? 0);
+
+    if (home && out) {
+      const shouldReturn =
+        left >= HARVEST_HOME_LEFT || (outTurns > HARVEST_MAX_OUT && left > HARVEST_HUNGRY_LEFT);
+      if (shouldReturn) {
+        const gap = dist(unit, home);
+        if (gap === 0) return {};
+        const walk = steps(c, Math.max(1, c.def.move))
+          .filter((p) => p.d > 0)
+          .sort((a, b) => dist(a, home) - dist(b, home))[0];
+        if (walk && dist(walk, home) < gap) {
+          return { add: [{ action: { type: 'MOVE', unitId: unit.id, x: walk.x, y: walk.y }, score: 240 }] };
+        }
+        return {};
+      }
+    }
+    if (!out) return {};
+
+    // 在外：打得到的就打（挑血最少的收人头），打不到就往最近的人挪
+    const add: UnitAiCandidate[] = [];
+    const range = c.def.range ?? 1;
+    const prey = c.foes.filter((f) => dist(f, unit) <= range).sort((a, b) => a.hp - b.hp)[0];
+    if (prey) add.push({ action: { type: 'ATTACK', unitId: unit.id, targetId: prey.id }, score: 170 });
+    const goal = c.foes.sort((a, b) => dist(a, unit) - dist(b, unit))[0];
+    if (goal) {
+      const walk = steps(c, Math.max(1, c.def.move))
+        .filter((p) => p.d > 0)
+        .sort((a, b) => dist(a, goal) - dist(b, goal))[0];
+      if (walk && dist(walk, goal) < dist(unit, goal)) {
+        add.push({ action: { type: 'MOVE', unitId: unit.id, x: walk.x, y: walk.y }, score: 150 });
+      }
+    }
+    return add.length ? { add } : {};
+  },
+};
+
+/**
  * 红尘仙：出山就收割，没出山就缩在沉眠地附近。
  *
  * 不打同族（这是仙帝的特权），所以它的目标永远是敌人。
@@ -3654,6 +3758,7 @@ for (const a of [
   DARK_SOURCE,
   LINEAGE_WELL,
   SWIFT_AGING,
+  EMPEROR_CYCLE,
 ]) {
   PACK_ABILITIES.set(a.id, a);
 }
@@ -3784,8 +3889,10 @@ export const DARK_TURMOIL: Expansion = {
     '## 尸骸仙帝',
     '**加速衰老**（他和红尘仙都有）：在**沉眠地附近每回合老 1 岁，离开则老 2 岁**；' +
       '年龄超过寿元就会死。所以"他为什么突然倒下了"的答案是——他老了。面板上有年龄和寿元。',
-    '**尸骸仙帝**：145 / 200 岁登场，只剩六十来年。缺"食物"时先吞自己人续命' +
+    '**尸骸仙帝**：140 / 200 岁登场，只剩六十来年。缺"食物"时先吞自己人续命' +
       '（吞不得骨灰罐、成帝碑、沉眠地——那是他的来历）。',
+    '**出山**：寿元快见底才出山收割；**寿元吃回 60 就回沉眠地**。在外超过 40 个回合、' +
+      '而且寿元还在 30 以上，也会提前回去——他不是一直往前推的东西，是会回去歇的。',
     '他倒下之后，**骨灰罐**会把他拉回来：0 岁、寿元减半、生命上限减半，一次比一次薄。',
     '## 仆从',
     '仆从是**追随者**，不是污染物：他们听总体指挥，也有一点自己的判断（会绕开经济单位那种"纪律"）。',
@@ -3913,6 +4020,7 @@ export const DARK_TURMOIL: Expansion = {
     DARK_SOURCE,
     LINEAGE_WELL,
     SWIFT_AGING,
+    EMPEROR_CYCLE,
   ],
   // 三个兵的"本能"。走 Expansion.unitAi 而不是在包里自己注册：
   // unit-ai.ts 在模块初始化时要读 EXPANSIONS，包再去 import 它就是循环。
@@ -3933,6 +4041,7 @@ export const DARK_TURMOIL: Expansion = {
     SERVANT_HANG_BACK,
     HEIR_ORDER,
     MORTAL_IMMORTAL_AI,
+    EMPEROR_CYCLE_AI,
   ],
   hooks: {
     onTurnStart: ({ state, player, api }) => {
