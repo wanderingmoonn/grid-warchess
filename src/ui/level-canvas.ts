@@ -16,7 +16,7 @@
  */
 
 import { CONFIG } from '../core/config.ts';
-import { TERRAIN_CHARS, validateFixedMap } from '../core/fixed-maps.ts';
+import { MAP_MAX_SIZE, TERRAIN_CHARS, validateFixedMap } from '../core/fixed-maps.ts';
 import { LEVEL_TERRAINS, type LevelDef } from '../core/level.ts';
 import { terrainFromChar } from '../core/mapgen.ts';
 import type { MapPoint } from '../core/fixed-maps.ts';
@@ -25,7 +25,8 @@ import { cellFromEvent as cellAtEvent, cellTone, cityLookup, gridFromRows, rende
 import { toast } from './toast.ts';
 
 const MIN_SIZE = 8;
-const MAX_SIZE = 40;
+// 别再手写这个数：它和固定地图的校验上限必须一致，写死过一次就漂了
+const MAX_SIZE = MAP_MAX_SIZE;
 /** 城的边长。开了「城郭」会变 3，但那是开局设置，地图数据里没这个字段。 */
 const CITY_SIZE = 2;
 

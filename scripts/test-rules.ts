@@ -61,7 +61,7 @@ import {
   turnOrderBonusFor,
 } from '../src/core/expansions.ts';
 import { CITY_MIN_GAP, MAP_STYLES, generateLayout, generateMultiLayout, mapStylesFor, terrainFromChar, twoCityMinSize } from '../src/core/mapgen.ts';
-import { BUILTIN_MAPS, TERRAIN_CHARS, mapToText, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
+import { BUILTIN_MAPS, MAP_MAX_SIZE, TERRAIN_CHARS, mapToText, parseMapFile, validateFixedMap } from '../src/core/fixed-maps.ts';
 import { mapFromFileText } from '../src/core/map-source.ts';
 import { fullUnitCatalog, unitDigest } from './lib/unit-digest.ts';
 import { CARD_PRIOR, CARD_PRIOR_META } from './lib/card-prior.table.ts';
@@ -19270,8 +19270,9 @@ test('导出地图：城贴边/在角上都放行，只有框不进棋盘才报�
   const s3 = fresh({ size: 4, startEra: 1 });
   const r3 = stateToFixedMap(s3, '太小');
   assert.equal(r3.ok, false, '4×4 不该能导出');
+  // 上界别写成字面量：它跟着 MAP_MAX_SIZE 走（2026-11-19 从 40 调到 64 时这里先挂了）
   assert.ok(
-    r3.errors.some((e) => e.includes('8') && e.includes('40')),
+    r3.errors.some((e) => e.includes('8') && e.includes(String(MAP_MAX_SIZE))),
     `要把尺寸范围说出来：${r3.errors.join('；')}`,
   );
 
