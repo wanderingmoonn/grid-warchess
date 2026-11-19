@@ -6208,10 +6208,24 @@ function startRogueStage(): void {
    *     但仍然删掉经济单位（肉鸽里不产钱）。
    */
   const hasRoster = rogue.run.roster.length > 0;
+  /*
+   * **只有第 1 关给紧急征召**（2026-11-19 用户指出）。
+   *
+   * `createMatch` 会给没有部署的席位自动撒 5 个（3 战斗 + 2 经济）。
+   * 之前只在"有花名册"时清掉，于是后几关只要花名册是空的（比如刚被打光），
+   * 就会白拿 3 个兵——Boss 关尤其明显，看起来像"开局送兵没删干净"。
+   *
+   * 现在：有花名册 → 只摆花名册；第 1 关 → 留 3 个战斗兵当起步；
+   * 第 2 关以后且花名册为空 → 一个都不给（那本来就该判这一局结束了）。
+   */
+  const firstStage = rogue.run.node === 0;
   state.units = state.units.filter((u) => {
-    if (u.owner === 'A' && hasRoster) return false; // 有花名册：一个默认兵都不要
     const def = state.unitTypes[u.type];
-    return !def || def.category === 'combat'; // 否则也至少删掉经济单位
+    const isCombat = !def || def.category === 'combat';
+    if (u.owner !== 'A') return isCombat; // 敌人那边照常只去经济单位
+    if (hasRoster) return false; // 有花名册：一个默认兵都不要
+    if (firstStage) return isCombat; // 第 1 关：保留战斗兵
+    return false; // 后续关卡且没人：不送
   });
   if (hasRoster) {
     const city = state.cities.find((c) => c.owner === 'A' && !c.ruined);
