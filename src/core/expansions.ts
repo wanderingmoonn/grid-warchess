@@ -352,6 +352,14 @@ export interface TurnEndCtx {
    * `hurtPhysical`，那条会走护甲、转移和受伤钩子。
    */
   hurt: (u: Unit, amount: number) => void;
+  /**
+   * 能力层那套 api（判定能不能站、生成/击杀、写战报）。
+   *
+   * 加它的理由和 `onUnitDamaged` 那条一样：回合末钩子里能做的事几乎都要副作用
+   * （比如「勾魂」要把人往暗影里挪），没有 api 就只能自己 `u.x = ...`，
+   * 正好绕开"站位只有一个判定"这条纪律。
+   */
+  api: AbilityApi;
   /** 写一条战报 */
   log: (p: PlayerId, text: string) => void;
 }
