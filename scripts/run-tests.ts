@@ -35,6 +35,7 @@ const PARALLEL_STEPS = [
   'test:ui',
   'probe:fold',
   'probe:ai-goal',
+  'probe:cultivation-chain',
   'test:boot',
   'test:blackout',
   'test:marquee',

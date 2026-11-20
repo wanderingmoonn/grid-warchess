@@ -61,6 +61,34 @@ export const CULTIVATION_AI_GOALS: AiGoal[] = [
       {
         id: 'fields',
         done: (c) => countOf(c, isField) >= WANT_FIELDS,
+        claimsBuild: isField,
+        /*
+         * **带地形判断地认领**（2026-11-20 第二版）。
+         *
+         * 第一版我给的是"46 − 危险×30 − 造价"——两块地同分，等于把核心
+         * 那套 `unitYield` 地形判断盖掉了（森林产灵石、平原产金币）。
+         * 第二版直接**不算**，交给通用经济评分——结果灵田根本不造
+         * （通用分不够高，被炼器炉挤掉）。
+         *
+         * 现在这一版：自己调 `unitYield` 问"这一格真能产多少"，
+         * 把灵石按 3 倍金折价（它更稀缺），再给一点链上的加成。
+         * 既没盖掉地形，也能让链的第一步真的动起来。
+         */
+        buildScore: (_c, _buildId, spot, def) => {
+          /*
+           * 自己算这一格能产多少，**不 import rules 的 `unitYield`**：
+           * 那会把 rules 拖进扩展的初始化链，形成 EXPANSIONS 未初始化的环
+           * （2026-11-20 实撞：`Cannot access 'EXPANSIONS' before initialization`）。
+           * 算法和 `unitYield` 的前两段一致——有 `yieldByTerrain` 就按地形，
+           * 否则用固定 `yield`。灵田正好走的是地形那一段。
+           */
+          const per = def.yieldByTerrain?.[spot.terrain] ?? def.yield ?? {};
+          const gold = (per.gold ?? 0) + (def.incomeByTerrain?.[spot.terrain] ?? def.income ?? 0);
+          const stone = per[SPIRIT_STONE] ?? 0;
+          // 一格产出都没有的地盖上也是白盖（和通用经济评分同一条口径）
+          if (gold + stone <= 0) return null;
+          return (gold + stone * 3) * 4 + 10 - def.cost * 0.02;
+        },
         /*
          * **不认领灵田的建造**（2026-11-20 改）。
          *
@@ -80,8 +108,12 @@ export const CULTIVATION_AI_GOALS: AiGoal[] = [
         id: 'sect',
         done: (c) => countOf(c, isSect) >= 1,
         claimsBuild: isSect,
-        // 宗门是 2×2 的大件，值高一点：没有它后面两步都不存在
-        buildScore: (c, _id, spot, def) => buildScoreFor(c, spot, def) + 26,
+        /*
+         * 宗门是这条链的闸门：没有它，后面两步都不存在。
+         * 加成给到 +40 是因为实测（seed 8100）它会被"灵塔"挤掉——
+         * 塔的防御分本来就高，而链的下一步没有别处可以去。
+         */
+        buildScore: (c, _id, spot, def) => buildScoreFor(c, spot, def) + 40,
         cost: (c) => c.state.unitTypes[UNIT_IDS.SECT]?.cost ?? 0,
         saveScore: 13,
       },

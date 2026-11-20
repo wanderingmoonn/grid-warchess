@@ -98,6 +98,7 @@ import type { UnitAiResult } from './expansions.ts';
 import { SKILL_AI_HINTS } from './skill-hooks.ts';
 import {
   COMMIT_BUILD_BONUS,
+  allAiGoals,
   DEFAULT_GOAL_BUILD_SCORE,
   DEFAULT_GOAL_UNIT_SCORE,
   DEFAULT_GOAL_SAVE_SCORE,
@@ -3000,6 +3001,17 @@ function goalBuildScore(
   const def = s.unitTypes[buildId];
   if (!def) return null;
   const ctx = goalCtxOf(s, unit.owner, era, urgent, threat, commit);
+  /*
+   * "归不归目标管"和"现在轮不轮到它"是两件事，必须分开判（2026-11-20 修）。
+   *
+   * 原来只遍历**在推进中**的段，于是"某条链还卡在前一步"时，后面那一步管的
+   * 建筑会**漏回通用评分**——修真链实测：宗门抢在灵田前面建起来了，
+   * 因为它掉进了"军营/产兵点"那条通用线。
+   *
+   * 现在的语义：只要某个目标的**任何一段**认领了这个建筑，它就归目标管；
+   * 只有当前在推进的那一段才能给出分数，其余一律 -999（现在别建）。
+   */
+  const claimsIt = allAiGoals().some((g) => g.steps.some((st) => st.claimsBuild?.(def)));
   let claimed = false;
   let best: number | null = null;
   for (const { step, committed } of goalStepsInPlay(ctx)) {
@@ -3017,7 +3029,7 @@ function goalBuildScore(
     const scored = committed ? v + COMMIT_BUILD_BONUS : v;
     best = best === null ? scored : Math.max(best, scored);
   }
-  if (!claimed) return null;
+  if (!claimed) return claimsIt ? -999 : null;
   return best === null ? -999 : best;
 }
 

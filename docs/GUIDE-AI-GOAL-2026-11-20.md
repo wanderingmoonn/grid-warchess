@@ -161,6 +161,7 @@ AI 提出一个必被规则拒的动作，执行方会中断这一步（实机�
 4. 需要攒钱的那一步写了 `cost` 吗？`saveScore` 量级对吗（2~15，不是 100）？
 5. 核心文件里有没有出现扩展的兵种/建筑 id？
 6. 跑过 `probe:ai-goal` 和对应的 `diag-build`，**机制计数**变了吗？
+   有链的（海军/装甲/修真）还要跑对应的链探针：`probe:cultivation-chain`。
 7. 有对照基线吗（`git show <改造前 sha>:src/core/ai.ts` 抄到 `scripts/baselines/`）？
 8. 验收时长够吗？高时代要 24~28 的图、160+ 回合才是有效样本。
 
@@ -172,7 +173,7 @@ AI 提出一个必被规则拒的动作，执行方会中断这一步（实机�
 | `armor-power` | 电站 | 在用 |
 | `armor-dock` | 装配坞 | 在用 |
 | `armor-frame` | 素体（采购） | 在用 |
-| `cultivation-*` | 宗门 → 藏经阁 → 研发 → 研读 | 计划中 |
+| `cultivation` | 灵田 → 宗门 → 藏经阁 → 研发 | 在用（`probe:cultivation-chain`） |
 
 ## 9. 还欠着的
 
