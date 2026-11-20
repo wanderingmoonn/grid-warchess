@@ -23,8 +23,9 @@
 import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
 import { applyAction, buildSiteError, unitsOf } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
+import { knownSpells, spellSlotsOf } from '../src/core/cultivation/spells.ts';
 
-const STEPS = 80;
+const STEPS = 140;
 
 /** 造局面：一座城、一个执事、一大堆钱和灵石，别的什么都没有 */
 function scene(seed: number) {
@@ -62,6 +63,22 @@ function scene(seed: number) {
     kills: 0,
     moved: false,
     acted: false,
+  });
+  /*
+   * 一个修士：研读那一步要有人站在藏经阁旁边读书。
+   * 境界给够（不然法术位是 0，学了也白学）——这里直接在 `custom` 上写 rank 2。
+   */
+  s.units.push({
+    id: 'probe-qi',
+    type: 'qi-cultivator',
+    owner: 'A',
+    x: city.x - 1,
+    y: city.y + 1,
+    hp: 60,
+    kills: 0,
+    moved: false,
+    acted: false,
+    custom: { rank: 2, exp: 0, lifespan: 200, mana: 60 },
   });
   return s;
 }
@@ -115,12 +132,19 @@ function run(seed: number) {
       u.acted = false;
       if (u.attacksLeft !== undefined) u.attacksLeft = undefined;
     }
-    if (journal.filter((x) => x.startsWith('ONE research')).length > 0) break;
+    if (journal.filter((x) => x.startsWith('ONE learn:')).length > 0) break;
     if (step === STEPS - 1) console.log('  最后一步后 aiNextAction 为空');
   }
 
   // 临时诊断：手工发一条研发动作，看规则层怎么说
   if (process.env.DBG) {
+    const lib = unitsOf(s, 'A').find((u: any) => u.type === 'cultivation-scripture-pavilion');
+    const qi = unitsOf(s, 'A').filter((u: any) => u.type === 'qi-cultivator');
+    console.log('  藏经阁:', lib ? `${lib.x},${lib.y}` : '无', '| 研发:', (s.researched?.A ?? []).length);
+    for (const u of qi) {
+      const near = lib ? Math.max(Math.abs(u.x - lib.x), Math.abs(u.y - lib.y)) <= 1 : false;
+      console.log(`   修士 ${u.x},${u.y} rank=${u.custom?.rank} 已学=${knownSpells(u).length} 法术位=${spellSlotsOf(u)} 邻阁=${near}`);
+    }
     const dc: any = unitsOf(s, 'A').find((u: any) => u.type === 'cultivation-deacon');
     if (dc) {
       const why: Record<string, number> = {};
@@ -141,7 +165,8 @@ function run(seed: number) {
   const libAt = journal.findIndex((x) => x === 'BUILD scripture-pavilion');
   const fieldAt = journal.findIndex((x) => x === 'BUILD spirit-field');
   const researchAt = journal.findIndex((x) => x.startsWith('ONE research'));
-  return { journal, rejected, sectAt, libAt, fieldAt, researchAt, s };
+  const learned = unitsOf(s, 'A').reduce((n: number, u: any) => n + ((u.extraSkills ?? []).length > 0 ? 1 : 0), 0);
+  return { journal, rejected, sectAt, libAt, fieldAt, researchAt, learned, s };
 }
 
 let failed = 0;
@@ -171,6 +196,11 @@ for (const seed of [8191, 8100]) {
     `宗门 ${r.sectAt} / 藏经阁 ${r.libAt}`,
   );
   check('最后发出研发动作', r.researchAt >= 0, `研发 ${r.researchAt}`);
+  check(
+    '有修士学会了一门法术（研读那一段）',
+    (r.journal ?? []).some((x) => x.startsWith('ONE learn:')) || r.learned > 0,
+    `研读动作 ${r.journal?.find((x) => x.startsWith('ONE learn:')) ?? '没有'}`,
+  );
   check('没有动作被拒', r.rejected.length === 0, r.rejected.join('; '));
 }
 

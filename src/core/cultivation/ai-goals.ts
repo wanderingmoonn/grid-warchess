@@ -22,8 +22,8 @@
  */
 import type { AiGoal } from '../ai-goal.ts';
 import type { GameState, PlayerId, UnitTypeDef } from '../types.ts';
-import { UNIT_IDS } from './identity.ts';
-import { researchedOf, SPELLS, RESEARCH_STONE_COST } from './spells.ts';
+import { UNIT_IDS, isCultivatorDef } from './identity.ts';
+import { researchedOf, SPELLS, RESEARCH_STONE_COST, knownSpells, spellSlotsOf } from './spells.ts';
 import { SPIRIT_STONE } from './resources.ts';
 
 /** 这条链要几座灵田才够养下面的开销：宗门 20 + 藏经阁 10 + 一门研发 60 */
@@ -42,6 +42,11 @@ const isLibrary = (d: UnitTypeDef): boolean => d.id === UNIT_IDS.SCRIPTURE_PAVIL
 /** 本方（或任一方）有多少座某种建筑 */
 function countOf(c: Parameters<AiGoal['value']>[0], pred: (d: UnitTypeDef) => boolean): number {
   return c.count(pred);
+}
+
+/** 自己人（不 import rules 的 `unitsOf`：那会形成 EXPANSIONS 的循环依赖） */
+function ownUnits(c: { state: GameState; me: PlayerId }) {
+  return c.state.units.filter((u) => u.owner === c.me && u.hp > 0);
 }
 
 /** 这一方研发了几门法术 */
@@ -147,6 +152,71 @@ export const CULTIVATION_AI_GOALS: AiGoal[] = [
             action: { type: 'UNIT_ACTION', unitId: sect.id, actionId: `research:${cand.sp.skill.id}` },
             score: 58,
           }];
+        },
+      },
+      {
+        id: 'learn',
+        /**
+         * 研读：修士**站在藏经阁旁边**把书读进脑子里（`UNIT_ACTION learn:<法术>`）。
+         *
+         * 这是链上第一次需要"会走路的人"：
+         *   · 没站在藏经阁旁边 → 先发一条 MOVE 走过去（核心不知道藏经阁是什么，
+         *     这里只是"朝某一格移动"，和 T11 的思路一致）；
+         *   · 站到了 → 挑一门**已研发、自己没学、还有法术位**的，发 learn。
+         *
+         * 法术位由境界决定（`spellSlotsOf`），满了就学不进去——这时候返回空，
+         * 让链停在这一步，而不是白发一条必被拒的动作。
+         */
+        done: (c) =>
+          ownUnits(c).some(
+            (u) => isCultivatorDef(c.state.unitTypes[u.type]) && knownSpells(u).length > 0,
+          ),
+        actions: (c) => {
+          const lib = ownUnits(c).find((u) => isLibrary(c.state.unitTypes[u.type]));
+          if (!lib) return [];
+          const learned = new Set(researchedOf(c.state, c.me));
+          if (learned.size === 0) return [];
+          const out: Array<{ action: any; score: number }> = [];
+          for (const u of ownUnits(c)) {
+            const def = c.state.unitTypes[u.type];
+            if (!isCultivatorDef(def)) continue;
+            const near = Math.max(Math.abs(u.x - lib.x), Math.abs(u.y - lib.y)) <= 1;
+            if (!near) {
+              /*
+               * 走过去：目标是藏经阁**旁边**的空格，不是藏经阁本身
+               * （那格被建筑占着，走上去必然被拒）。
+               */
+              // 目标格：藏经阁周围 2 格内**最近的空格**（8 向，含对角）
+              let spot: { x: number; y: number } | null = null;
+              let bestD = Infinity;
+              for (let dy = -2; dy <= 2; dy += 1) {
+                for (let dx = -2; dx <= 2; dx += 1) {
+                  if (dx === 0 && dy === 0) continue;
+                  const px = lib.x + dx;
+                  const py = lib.y + dy;
+                  if (px < 0 || py < 0 || px >= c.state.w || py >= c.state.h) continue;
+                  if (c.state.units.some((o) => o.hp > 0 && o.x === px && o.y === py)) continue;
+                  const d = Math.max(Math.abs(dx), Math.abs(dy));
+                  if (d < bestD) {
+                    bestD = d;
+                    spot = { x: px, y: py };
+                  }
+                }
+              }
+              if (spot) out.push({ action: { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y }, score: 34 });
+              continue;
+            }
+            const known = new Set(knownSpells(u).map((k) => k.id));
+            if (known.size >= spellSlotsOf(u)) continue; // 法术位满了，学不进去
+            const pick = [...learned].find((id) => !known.has(id));
+            if (!pick) continue;
+            out.push({
+              action: { type: 'UNIT_ACTION', unitId: u.id, actionId: `learn:${pick}` },
+              score: 56,
+            });
+            break; // 一次只教一个，发多了同一步会重复
+          }
+          return out;
         },
       },
     ],
