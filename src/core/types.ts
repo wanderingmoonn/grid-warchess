@@ -1819,6 +1819,26 @@ export interface AiCommit {
   valueAt: number;
 }
 
+/**
+ * AI 的跨回合记忆：**一个对象装两件事**。
+ *
+ *   · `save`：这一回合为谁停手攒钱（每回合重选，可能为空）
+ *   · `chain`：我在追哪条产业链的哪一段（有粘性，跨回合）
+ *
+ * 为什么放在一起：它们回答的是同一个问题的两半——"我在为什么攒钱/投资"。
+ * 分成两个字段时，两处各搬一次（雾图副本 → 真状态），漏搬一处就是"攒到一半忘了"。
+ *
+ * **注意：这只是存储合并，不是语义合并。** 真正合成"一个位置、一次 argmax"
+ * 还有一步没做：现在攒钱目标（英雄/升时代）会把链承诺顶掉，两者仍是独立的判断。
+ * 要做那一步，得先决定"链的下一步"和"买英雄"谁优先——那是个需要实测的选择。
+ */
+export interface AiFocus {
+  /** 攒钱目标（形状沿用 `AiIntent`） */
+  save?: AiIntent | null;
+  /** 产业链承诺（形状沿用 `AiCommit`） */
+  chain?: AiCommit | null;
+}
+
 export interface AiIntent {
   goal: 'unit' | 'hero' | 'era' | 'rebuild' | 'goal';
   /** `goal === 'goal'` 时攒的是哪条产业链的哪一段 */
@@ -2231,6 +2251,13 @@ export interface GameState {
    * 语义正好等于"没有在追任何产业链"。
    */
   aiCommit?: Partial<Record<PlayerId, AiCommit>>;
+  /**
+   * AI 的跨回合记忆（2026-11-20 起两份记忆合并到这里）。
+   *
+   * `aiIntent` / `aiCommit` 是旧字段，只为老存档保留：读的时候如果 `aiFocus`
+   * 没有，就回落到它们；写一律写 `aiFocus`。等老存档自然淘汰了可以删。
+   */
+  aiFocus?: Partial<Record<PlayerId, AiFocus>>;
   /**
    * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
    *

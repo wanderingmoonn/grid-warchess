@@ -87,7 +87,7 @@ import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
 import { seatsOf } from './types.ts';
-import type { Action, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
 import type { AiBudget } from './ai-meta.ts';
@@ -2948,6 +2948,45 @@ function goalCtxOf(
 }
 
 /**
+ * AI 的跨回合记忆：读写都走这两个函数。
+ *
+ * 2026-11-20 把 `aiIntent`（攒钱目标）和 `aiCommit`（产业链承诺）合到一个
+ * `aiFocus` 里——它们本来就是同一个问题的两半，分开存的时候两处各搬一次
+ * （雾图副本 → 真状态），漏一处就是"攒到一半忘了"。
+ *
+ * 老存档里只有 `aiIntent` / `aiCommit`：读的时候回落，写的时候只写 `aiFocus`。
+ */
+function focusOf(s: GameState, me: PlayerId): AiFocus {
+  const f = s.aiFocus?.[me];
+  if (f) return f;
+  return {
+    save: s.aiIntent?.[me] ?? null,
+    chain: s.aiCommit?.[me] ?? null,
+  };
+}
+
+function setFocus(s: GameState, me: PlayerId, f: AiFocus | null): void {
+  /*
+   * 不比较"有没有变就跳过写"：`cost` / `since` / `seen` 每回合都会刷新，
+   * 漏写它们会让 `INTENT_TURNS` 的新鲜度判断走偏（实测指纹会变）。
+   * 一次对象分配换"行为和搬迁前逐字一致"，值。
+   */
+  const bag = { ...(s.aiFocus ?? {}), [me]: f ?? {} };
+  s.aiFocus = bag;
+  // 旧字段随之清掉，免得"新的写了、旧的还在"两套记忆打架
+  if (s.aiIntent?.[me]) {
+    const b = { ...s.aiIntent };
+    delete b[me];
+    s.aiIntent = b;
+  }
+  if (s.aiCommit?.[me]) {
+    const b = { ...s.aiCommit };
+    delete b[me];
+    s.aiCommit = b;
+  }
+}
+
+/**
  * 这个建筑是不是某个**正在推进中**的产业链目标当前要建的东西。
  *
  * 和 `goalBuildScore` 分开是因为它有两个用处：算分（那个）和判断"能不能让路"
@@ -5000,7 +5039,7 @@ function buildPlan(
   let goalNote = '';
   let goalOptions: AiPlan['goalOptions'] = [];
   /** 上一次立下的意向（跨回合记忆，见 types.ts 的 aiIntent） */
-  const prev = s.aiIntent?.[me] ?? null;
+  const prev = focusOf(s, me).save ?? null;
   // 弃城期把"兵够不够"的门槛压低：这一档要的就是兵力少的时候也能攒钱，
   // 而不是"兵少于六个就永远别想升级"。urgent 那条线照旧拦着真正的危险。
   const armyGate = mood.weight.boom > 0.45 ? 4 : 6;
@@ -5362,9 +5401,9 @@ function buildPlan(
       prev.goal === savingFor &&
       (prev.unitId ?? null) === (targetUnitId ?? null) &&
       (savingFor !== 'goal' || (prev.goalId === targetGoalId && prev.stepId === targetStepId));
-    s.aiIntent = {
-      ...(s.aiIntent ?? {}),
-      [me]: {
+    setFocus(s, me, {
+      ...focusOf(s, me),
+      save: {
         goal: savingFor,
         goalId: targetGoalId ?? undefined,
         stepId: targetStepId ?? undefined,
@@ -5374,11 +5413,9 @@ function buildPlan(
         since: same ? prev.since : s.turn,
         seen: s.turn,
       },
-    };
+    });
   } else if (prev) {
-    const bag = { ...(s.aiIntent ?? {}) };
-    delete bag[me];
-    s.aiIntent = bag;
+    setFocus(s, me, { ...focusOf(s, me), save: null });
   }
 
   return {
@@ -6951,19 +6988,17 @@ function aiNextActionCoreInner(
    * `depth > 0` 时只读不写：那是"推演对手下一步"的分支，不该顺手改我方的账本。
    */
   {
-    const prevCommit = s.aiCommit?.[me] ?? null;
+    const prevCommit = focusOf(s, me).chain ?? null;
     const baseCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.threat, prevCommit);
     const nextCommit = resolveCommit(baseCtx, prevCommit);
     fields.goalCommit = nextCommit;
     if (depth === 0) {
       if (nextCommit) {
         if (nextCommit !== prevCommit) {
-          s.aiCommit = { ...(s.aiCommit ?? {}), [me]: nextCommit };
+          setFocus(s, me, { ...focusOf(s, me), chain: nextCommit });
         }
       } else if (prevCommit) {
-        const bag = { ...s.aiCommit };
-        delete bag[me];
-        s.aiCommit = bag;
+        setFocus(s, me, { ...focusOf(s, me), chain: null });
       }
     }
   }
@@ -6980,11 +7015,10 @@ function aiNextActionCoreInner(
    * 这是 aiNextAction 里唯一一处写状态的地方——它不改变任何合法动作，
    * 只影响"这一回合要不要停手攒钱"，所以不会让回放/联机出现分歧。
    */
-  if (view.aiIntent?.[me]) s.aiIntent = { ...(s.aiIntent ?? {}), [me]: view.aiIntent[me]! };
-  else if (s.aiIntent?.[me]) {
-    const bag = { ...s.aiIntent };
-    delete bag[me];
-    s.aiIntent = bag;
+  {
+    const vf = view.aiFocus?.[me] ?? null;
+    if (vf) setFocus(s, me, vf);
+    else if (s.aiFocus?.[me]) setFocus(s, me, null);
   }
   // 这一回合的升级名额已经用掉了：攒时代的计划对采购就不再生效。
   // 不然钱被冻着、升级又没得升，这一回合等于白过——而且连着几个回合都白过。
