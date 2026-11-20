@@ -3097,6 +3097,113 @@ function goalUnitBonus(c: AiGoalCtx, def: UnitTypeDef): number {
   return best;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * 节奏判断：现在该打，还是该发展？（2026-11-20）
+ *
+ * 人类的算法（用户原话，2026-11-20）：
+ *
+ *   「当自己的单位走到敌方城市的时间 > 自己提升一个时代需要的耗时时，
+ *     就默认进攻部队到达时会面临高一个时代的反击，就不进攻，
+ *     专注造经济单位提升经济产出。」
+ *
+ * 三处必须做对，不然这条规则会误判：
+ *
+ *   1. **距离用距离场**（`distanceFields`），不是直线除以移动力——
+ *      绕山绕水走的路比直线长得多，直线会把"该发展"算成"该打"。
+ *   2. **"我方部队"取最近的那一批能形成战斗力的**（`PACE_STRIKE_GROUP` 个），
+ *      不是全体中位数：先到的那两三个就是去送死的。
+ *   3. **升级耗时要带上"造经济单位的加速度"**，不能拿 `(费用 − 现金) ÷ 收入`
+ *      一除了事——投进经济的钱会抬高收入，剩下的时间比这个数短。
+ *      `projectedTurnsToEra` 就是干这个的。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 算"我军多久能到"时取最近几个战斗单位（凑成一支能打的） */
+const PACE_STRIKE_GROUP = 3;
+/**
+ * 每 1 金投进经济，每回合能多回多少（一阶估计）。
+ *
+ * 参考值：农民/工人 50~60 金、好地形上 5~7 金/回合 → 0.10 上下。
+ * 这个数只影响"加速度有多陡"，不影响方向；`--verbose` 会把两种算法并排打出来。
+ */
+const ECON_YIELD_PER_GOLD = 0.1;
+/** 投影最多看多少回合（超过这个数就当"够不着"） */
+const PACE_HORIZON = 30;
+
+export interface AiPace {
+  /** 最近那批战斗单位走到敌城要几回合（距离场口径） */
+  walk: number;
+  /** 攒到升一代要几回合（老口径，一除到底） */
+  eraFlat: number;
+  /** 同上，但算上"把钱投进经济 → 收入变高"的加速度 */
+  eraProjected: number;
+  /** 结论：该打还是该发展 */
+  verdict: 'fight' | 'develop';
+}
+
+/** 我方战斗单位里"最近的那一批"到敌城还剩几回合（距离场） */
+function strikeWalkTurns(view: GameState, me: PlayerId, fields: Map<string, number[]>): number {
+  const mine = unitsOf(view, me).filter((u) => utype(view, u.type).category === 'combat');
+  if (mine.length === 0 || fields.size === 0) return Infinity;
+  const per: number[] = [];
+  for (const u of mine) {
+    const idx = u.y * view.w + u.x;
+    let best = Infinity;
+    for (const f of fields.values()) {
+      const d = f[idx];
+      if (typeof d === 'number' && d >= 0 && d < best) best = d;
+    }
+    if (Number.isFinite(best)) per.push(best / Math.max(1, utype(view, u.type).move ?? 1));
+  }
+  if (per.length === 0) return Infinity;
+  per.sort((a, b) => a - b);
+  // 最近的那一批取平均：单个最快不代表部队能到，全取又会被后方部队拖平
+  const group = per.slice(0, Math.min(PACE_STRIKE_GROUP, per.length));
+  return group.reduce((n, x) => n + x, 0) / group.length;
+}
+
+/**
+ * 攒到下一代的回合数，**带加速度**。
+ *
+ * 老口径 `(费用 − 现金) ÷ 收入` 假设收入不变；实际上钱投进经济会抬高收入，
+ * 所以真实时间更短。这里按"每回合把一份收入投进经济"往前滚：
+ * 收入每回合涨 `投入 × ECON_YIELD_PER_GOLD`。
+ */
+function projectedTurnsToEra(s: GameState, me: PlayerId, cost: number, inc: number): number {
+  const inc0 = Math.max(1, inc);
+  if (s.players[me].gold >= cost) return 0;
+  let gold = s.players[me].gold;
+  let income = inc0;
+  for (let t = 1; t <= PACE_HORIZON; t += 1) {
+    gold += income;
+    if (gold >= cost) return t;
+    // 攒的同时留一份收入继续投经济（这才是"加速"的来源）
+    const invest = Math.min(gold, income);
+    gold -= invest;
+    income += invest * ECON_YIELD_PER_GOLD;
+  }
+  return Infinity;
+}
+
+/**
+ * 现在该打还是该发展。
+ *
+ * 没得升级（封顶）或升不起（费用拿不到）时按 `Infinity` 处理 → 判"该打"，
+ * 因为这时候没有"发展"这条路可走。
+ */
+export function paceOf(s: GameState, me: PlayerId): AiPace {
+  const fields = distanceFields(s, me, 'advance');
+  const walk = strikeWalkTurns(s, me, fields);
+  const city = citiesOf(s, me).find((c) => !c.ruined) ?? null;
+  const cost = city ? upgradeCostOf(s, city) : null;
+  const inc = Math.max(1, incomeResOf(s, me).gold ?? 0);
+  if (cost === null) {
+    return { walk, eraFlat: Infinity, eraProjected: Infinity, verdict: 'fight' };
+  }
+  const eraFlat = Math.max(0, cost - s.players[me].gold) / inc;
+  const eraProjected = projectedTurnsToEra(s, me, cost, inc);
+  return { walk, eraFlat, eraProjected, verdict: walk > eraProjected ? 'develop' : 'fight' };
+}
+
 /**
  * 「海军」：这张图有水、陆路又绕不过去，就攒一支舰队。
  *
