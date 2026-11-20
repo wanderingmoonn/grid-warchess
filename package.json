@@ -108,6 +108,7 @@
     "probe:fold": "node --experimental-strip-types scripts/probe-fold.ts",
     "probe:ai-goal": "node --experimental-strip-types scripts/probe-ai-goal.ts",
     "probe:cultivation-chain": "node --experimental-strip-types scripts/probe-cultivation-chain.ts",
+    "diag:mechanics": "node --experimental-strip-types scripts/diag-mechanics.ts",
     "probe:dark-turmoil": "node --experimental-strip-types scripts/probe-dark-turmoil.ts",
     "test:fast": "node --experimental-strip-types scripts/run-tests.ts --parallel 6",
     "test:serial": "node --experimental-strip-types scripts/run-tests.ts",

@@ -7035,6 +7035,22 @@ function aiNextActionCoreInner(
   for (let i=candidates.length-1;i>=0;i--) {
     const action=candidates[i]!.action;
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
+    /*
+     * **建造落点用真局再核一次**（2026-11-20，T3）。
+     *
+     * 候选是在**雾图**上算的：AI 看不见的敌人正好站在它想盖的那一格，
+     * 提出来到真局就非法。实测 4 局 22 次（`probe:ai-goal` 早期统计），
+     * 每次白扔一步——实机会顺延，跑批脚本会中断整回合。
+     *
+     * 修法和当年"走位落点"那条一样（见 docs/UPDATE-2026-10-28-height-terrain.md）：
+     * **只核合法性、不核内容**。这里只问"真局这一格有没有人"，不问是谁，
+     * 所以不算开图——AI 从中学不到任何关于敌人的信息，只是少提一个必被拒的动作。
+     */
+    if (action.type === 'BUILD') {
+      const occ = s.units.some((u) => u.hp > 0 && u.x === action.x && u.y === action.y);
+      const built = s.cities.some((c) => c.x === action.x && c.y === action.y);
+      if (occ || built) { candidates.splice(i, 1); continue; }
+    }
     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
       const cost=recruitCost(view,me,utype(view,action.unitType));
       /*
