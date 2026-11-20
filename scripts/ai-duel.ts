@@ -25,7 +25,7 @@
 import { applyAction } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction as newAi } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey, aiNextAction as newAi } from '../src/core/ai.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -111,11 +111,25 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
   while (!s.winner && s.turn <= CAP) {
     const ai = aiFor(s.current);
     const budget = { ...DEFAULT_BUDGET };
+    /*
+     * 被拒的动作记一笔、**接着找下一个**，不掐掉这一回合。
+     *
+     * 2026-11-20 改：原来是 `if (!r.ok) break`，一被拒就提前交棒。而实机
+     * （main.ts 的 runAiTurn）从 2026-11-19 起就是 `rejected.add(...) + continue`。
+     * 两边口径不一致的后果很实在：AI 在雾里朝"看不见的敌人"那格架桥会被拒，
+     * 实测 4 局就有 14 次——实机只是白费一步，跑批却直接少打半回合。
+     * 拿这种数去比胜率，比的是"谁更倒霉撞上这个 bug"。
+     */
+    const rejected = new Set<string>();
     for (let i = 0; i < AI_MAX_STEPS && !s.winner; i++) {
-      const a = ai(s, budget);
+      const a = ai(s, budget, rejected);
       if (!a) break;
       const r = applyAction(s, a);
-      if (!r.ok) break;
+      if (!r.ok) {
+        rejected.add(aiActionKey(a));
+        continue;
+      }
+      rejected.clear();
       s = r.state;
       if (a.type === 'RECRUIT') budget.recruited += 1;
       if (a.type === 'UPGRADE') budget.upgraded += 1;

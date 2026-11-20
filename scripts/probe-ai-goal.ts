@@ -13,7 +13,7 @@
  */
 // @ts-nocheck
 import { createHash } from 'node:crypto';
-import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../src/core/ai.ts';
 import { applyAction } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 
@@ -39,6 +39,8 @@ function run(seed: number) {
   const budget = { maxRecruit: 3, maxUpgrade: 1, recruited: 0, upgraded: 0 };
   const acts: string[] = [];
   const rejected: string[] = [];
+  /** 这一回合被拒过的动作：和实机一样，同一个动作本回合不再提 */
+  const tried = new Set<string>();
   const built = new Map<string, number>();
   const recruited = new Map<string, number>();
 
@@ -46,7 +48,7 @@ function run(seed: number) {
     budget.recruited = 0;
     budget.upgraded = 0;
     for (let step = 0; step < AI_MAX_STEPS; step += 1) {
-      const a = aiNextAction(s, budget);
+      const a = aiNextAction(s, budget, tried);
       if (!a) break;
       /*
        * 指纹只取"这个决定是什么"，不取坐标以外的细节：
@@ -65,9 +67,16 @@ function run(seed: number) {
       if (a.type === 'UPGRADE') budget.upgraded += 1;
       const r = applyAction(s, a);
       if (!r.ok) {
+        /*
+         * 和实机一样**顺延**，不掐掉这一回合。
+         * 实机（main.ts）从 2026-11-19 起就是 `rejected.add + continue`；
+         * 这里以前是 break，于是"雾里撞车"在跑批里被放大成"少打半回合"。
+         */
         rejected.push(`${a.type} ${a.unitType ?? ''}@${a.x},${a.y} — ${r.reason ?? ''}`);
-        break;
+        tried.add(aiActionKey(a));
+        continue;
       }
+      tried.clear();
       s = r.state;
     }
     if (s.winner) break;
