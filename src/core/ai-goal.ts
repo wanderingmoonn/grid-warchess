@@ -1,0 +1,177 @@
+/**
+ * 「产业链目标」：AI 跨回合的投资计划。
+ *
+ * ── 为什么要有这一层 ──────────────────────────────────────────────
+ *
+ * AI 的每一个动作都是**当场比分数**选出来的：建造、采购、走位全扔进一个池子，
+ * 谁分高选谁。这套东西打"买一个兵、走一步、打一下"很好用，但它天生做不了
+ * **投资**——因为投资的第一步（建电站、建船坞、建宗门）当下一定不如"再买一个弓兵"。
+ *
+ * 于是引擎里长出了一堆手写的补丁：海军的 `seaDemand` + 船坞上限、装甲的
+ * `armorSupportNudge` + 采购里那条「工程机组 +45」。它们形状完全一样：
+ *
+ *     目标值不值 → 数前置还差几样 → 差的那一步给高分 → 够了就压回去
+ *
+ * 这一层就是把那个形状抽出来。核心只做四件事：
+ *
+ *   1. 问每个目标「现在值多少分」（`value`）；
+ *   2. 跳过值为 0 的；
+ *   3. 在最有价值的那个目标里，找**第一段没完成的**（`steps`）；
+ *   4. 那一段说的建筑给高分（`buildScore`），或者直接生成动作（`actions`）。
+ *
+ * ── 为什么目标由扩展声明 ─────────────────────────────────────────
+ *
+ * 核心不该认识「宗门」「藏经阁」「法术」这些词。所以核心只定义接口，
+ * **谁家的产业链谁声明**；连核心自己的海军/装甲也走同一个口子（`registerCoreGoal`），
+ * 不给扩展开后门，也不让自己留特例。
+ *
+ * 扩展写坏了（比如目标永远返回 0、或者提了非法动作）是扩展的问题：
+ * 这里只保证**不会把整局打死**——抛错按"没这个目标"处理。
+ */
+
+import { EXPANSIONS } from './expansions.ts';
+import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+
+/**
+ * 目标拿到的局面读数。
+ *
+ * 只放**通用**查询，不放「这张图有多少水」这种某一家的东西：
+ * 每个目标自己算自己的，否则这一层迟早变成"核心认识所有扩展"的那张表。
+ */
+export interface AiGoalCtx {
+  state: GameState;
+  me: PlayerId;
+  /** 现在打在第几代（AI 对局势的读数，不是某一座城的时代） */
+  era: number;
+  /** 自己有几座城 */
+  cityCount: number;
+  /** 自己有几个满足条件的单位（数建筑、数船都用它） */
+  count: (pred: (def: UnitTypeDef) => boolean) => number;
+  /** 这个建筑现在能盖在哪（已经按规则过滤过：地形、占位、贴邻条件） */
+  buildSpots: (
+    buildId: string,
+    builder: Unit,
+  ) => Array<{ x: number; y: number; terrain: Terrain }>;
+  /** 这一格现在危不危险（下回合会不会被拆） */
+  inDanger: (x: number, y: number) => boolean;
+  /** 棋盘距离 */
+  dist: (a: { x: number; y: number }, b: { x: number; y: number }) => number;
+  /** 离自家最近的城市有多远；没有城时返回 Infinity */
+  distToNearestCity: (p: { x: number; y: number }) => number;
+}
+
+/** 目标里的一段。核心每回合只推进第一段没完成的。 */
+export interface AiGoalStep {
+  id: string;
+  /** 这一段完成了吗 */
+  done: (c: AiGoalCtx) => boolean;
+  /**
+   * 这一段管的是哪些建筑。
+   *
+   * 用**判据**而不是 id 列表：核心那两条产业链（海军/装甲）不许写死扩展的兵种 id，
+   * 否则就是把"扩展的内容"重新塞回核心。扩展自己声明目标时想写 id 随便写。
+   */
+  claimsBuild?: (def: UnitTypeDef) => boolean;
+  /**
+   * 建它的分数。不写就用 `DEFAULT_GOAL_BUILD_SCORE`。
+   *
+   * 返回 `null` 表示"这个局面下建它没意义"（等价于旧代码里的 `-999`）：
+   * 比如离城太远、这一档的船一条都造不了。**必须和以前一样在这里拦住**，
+   * 否则 AI 会提一个必被规则拒的动作，而执行方遇到非法动作会中断整回合。
+   */
+  buildScore?: (
+    c: AiGoalCtx,
+    buildId: string,
+    spot: { x: number; y: number; terrain: Terrain },
+    def: UnitTypeDef,
+  ) => number | null;
+  /**
+   * 不属于建造的推进手段（研发法术、研读、升级建筑……）。
+   *
+   * 返回的动作会和别的候选一起比分数——**没有插队，也没有后门**。
+   */
+  actions?: (c: AiGoalCtx) => Array<{ action: Action; score: number }>;
+}
+
+export interface AiGoal {
+  id: string;
+  /** 现在这个目标值多少分。≤ 0 = 不追（每一步重新算，局势变了就该变） */
+  value: (c: AiGoalCtx) => number;
+  /** 有顺序的几段，核心只推进第一段没完成的 */
+  steps: readonly AiGoalStep[];
+}
+
+/** 目标没写 `buildScore` 时给的分：够高到能压过一次「挪一格」（四五十） */
+export const DEFAULT_GOAL_BUILD_SCORE = 70;
+
+/**
+ * 核心自己的目标（海军、装甲……）。
+ *
+ * 单独一张表而不是并进 `EXPANSIONS`：这些是核心内容，不该伪装成一个扩展；
+ * 但它们走的**是同一个接口**，不给核心留特例——否则这一层又变成"两套规则"。
+ */
+const CORE_GOALS: AiGoal[] = [];
+
+export function registerCoreGoal(goal: AiGoal): void {
+  if (CORE_GOALS.some((g) => g.id === goal.id)) {
+    throw new Error(`产业链目标重复注册：${goal.id}`);
+  }
+  CORE_GOALS.push(goal);
+}
+
+/** 只警告一次（AI 一回合要问几十次，每步刷屏等于没人看） */
+const warned = new Set<string>();
+function warnOnce(key: string, text: string): void {
+  if (warned.has(key)) return;
+  warned.add(key);
+  console.warn(text);
+}
+
+/** 全部目标：核心的 + 扩展声明的 */
+export function allAiGoals(): AiGoal[] {
+  const out = [...CORE_GOALS];
+  for (const e of EXPANSIONS) {
+    for (const g of e.aiGoals ?? []) out.push(g);
+  }
+  return out;
+}
+
+/** 测试用 */
+export function resetAiGoalWarnings(): void {
+  warned.clear();
+}
+
+/**
+ * 现在**在推进中**的所有目标段。
+ *
+ * 注意这里是"所有"而不是"最值的那一个"，这是刻意的：
+ * 旧代码里海军和装甲各算各的，互不压制；如果这里只留最值的目标，
+ * 海军值 0.5 的时候装甲就永远拿不到分——那是**行为变化**，不是抽象。
+ *
+ * 至于"同时追五条会不会每条都推一半"：会的。但那不是这一层该管的事——
+ * 段内的顺序保证每条链只推进"下一步"，而要不要限制同时追几条，
+ * 是标定问题，等有了两条以上的扩展目标再谈（现在只有核心的两条）。
+ */
+export function goalStepsInPlay(c: AiGoalCtx): Array<{ goal: AiGoal; step: AiGoalStep; value: number }> {
+  const out: Array<{ goal: AiGoal; step: AiGoalStep; value: number }> = [];
+  for (const goal of allAiGoals()) {
+    let v = 0;
+    try {
+      v = goal.value(c);
+    } catch (err) {
+      warnOnce(`value:${goal.id}`, `[ai-goal] 目标「${goal.id}」算价值时抛错，当它不存在：${String(err)}`);
+      continue;
+    }
+    if (!Number.isFinite(v) || v <= 0) continue;
+    let step: AiGoalStep | undefined;
+    try {
+      step = goal.steps.find((s) => !s.done(c));
+    } catch (err) {
+      warnOnce(`done:${goal.id}`, `[ai-goal] 目标「${goal.id}」判断前置时抛错，跳过：${String(err)}`);
+      continue;
+    }
+    if (!step) continue; // 全做完了，这个目标不再出牌
+    out.push({ goal, step, value: v });
+  }
+  return out;
+}

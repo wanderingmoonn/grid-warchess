@@ -96,6 +96,8 @@ import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from '.
 import type { UnitAiBinding } from './unit-ai.ts';
 import type { UnitAiResult } from './expansions.ts';
 import { SKILL_AI_HINTS } from './skill-hooks.ts';
+import { DEFAULT_GOAL_BUILD_SCORE, goalStepsInPlay, registerCoreGoal } from './ai-goal.ts';
+import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -2872,6 +2874,117 @@ function buildSpots(
   return out;
 }
 
+
+/* ══════════════════════════════════════════════════════════════════
+ * 产业链目标（见 core/ai-goal.ts）
+ *
+ * 核心自己的两条链（海军、装甲）也走这张表，不给核心留特例。
+ * 这里只放"怎么把局面读成目标要的样子"，不放任何具体产业链的规则。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 水上产兵点的判据：写在数据里（`buildOn` 有水），不写死兵种 id */
+function onWaterDef(def: UnitTypeDef): boolean {
+  return (def.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
+}
+
+/** 把局面读成目标要的样子。每次决策算一次，别让每个目标各算一遍 */
+function goalCtxOf(s: GameState, me: PlayerId, era: number): AiGoalCtx {
+  const mine = unitsOf(s, me);
+  const cities = citiesOf(s, me);
+  return {
+    state: s,
+    me,
+    era,
+    cityCount: cities.length,
+    count: (pred) => mine.filter((u) => pred(utype(s, u.type))).length,
+    buildSpots: (buildId, builder) => buildSpots(s, builder, s.unitTypes[buildId]),
+    inDanger: (x, y) => inDanger(s, me, x, y),
+    dist: (a, b) => distance(a, b),
+    distToNearestCity: (p) => {
+      let best = Infinity;
+      for (const c of cities) best = Math.min(best, distance(p, c));
+      return best;
+    },
+  };
+}
+
+/**
+ * 这个建筑归不归某个产业链管：归就返回分数，不归返回 null。
+ *
+ * 返回 `-999` 表示"归某个目标管，但它现在不该建"（前置没完成、离城太远、
+ * 这一档的产物一条都造不了）。这个返回值必须和以前一样**在这里就拦住**：
+ * 让 AI 提一个必被规则拒的动作，执行方会中断整回合。
+ */
+function goalBuildScore(
+  s: GameState,
+  unit: Unit,
+  buildId: string,
+  spot: { x: number; y: number; terrain: Terrain },
+  era: number,
+): number | null {
+  const def = s.unitTypes[buildId];
+  if (!def) return null;
+  const ctx = goalCtxOf(s, unit.owner, era);
+  let claimed = false;
+  let best: number | null = null;
+  for (const { step } of goalStepsInPlay(ctx)) {
+    if (!step.claimsBuild?.(def)) continue;
+    claimed = true;
+    let v: number | null = null;
+    try {
+      v = step.buildScore ? step.buildScore(ctx, buildId, spot, def) : DEFAULT_GOAL_BUILD_SCORE;
+    } catch (err) {
+      unitAiWarn(`goal-build:${buildId}`, `[ai-goal] 目标算「${buildId}」的分数时抛错，按不建处理：${String(err)}`);
+      v = null;
+    }
+    if (v === null) continue;
+    best = best === null ? v : Math.max(best, v);
+  }
+  if (!claimed) return null;
+  return best === null ? -999 : best;
+}
+
+/**
+ * 「海军」：这张图有水、陆路又绕不过去，就攒一支舰队。
+ *
+ * 分数与判据**逐字照搬**自 `rawBuildScore` 里原来那段（2026-11-20 迁移），
+ * 包括那条标定历史——44 分排不上、244 分过头、70 分每局一座。
+ * 迁移的唯一目的是让"加一条新产业链"不用再回 `ai.ts` 改分支。
+ */
+const NAVY_GOAL: AiGoal = {
+  id: 'navy',
+  value: (c) => seaDemand(c.state, c.me),
+  steps: [
+    {
+      id: 'shipyard',
+      // 上限按城市数给、最多两座：一座够一支舰队出门，两座是"两线同时下水"
+      done: (c) => {
+        const cap = Math.min(2, Math.max(1, Math.floor(c.cityCount / 2)));
+        return c.count((d) => isProducer(d) && onWaterDef(d)) >= cap;
+      },
+      claimsBuild: (d) => isProducer(d) && onWaterDef(d),
+      buildScore: (c, _buildId, spot, def) => {
+        // 船是奢侈品的时候造船坞，等于把钱埋进水里
+        const sea = seaDemand(c.state, c.me);
+        if (sea <= 0) return null;
+        // 落成即废的那几档：白名单里全是更高代的船，现在修好也下不了水
+        const usable = produceUsableCount(def, c.state.unitTypes, c.era || def.era);
+        if (usable !== null && usable <= 0) return null;
+        if (c.cityCount === 0) return null;
+        // 离自家城市太远就没有意义：只是多一个被顺手拆掉的目标
+        const nearOwn = c.distToNearestCity(spot);
+        if (nearOwn > 10) return null;
+        const docks = c.count((d) => isProducer(d) && onWaterDef(d));
+        // 海上工地会挨舰炮，但没有陆上工地那么致命（水面上摸过来的兵少）
+        const risky = c.inDanger(spot.x, spot.y);
+        return 70 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
+      },
+    },
+  ],
+};
+
+registerCoreGoal(NAVY_GOAL);
+
 function rawBuildScore(
   s: GameState,
   unit: Unit,
@@ -2879,8 +2992,14 @@ function rawBuildScore(
   spot: { x: number; y: number; terrain: Terrain },
   land: Map<string, number[]>,
   mood?: AiMood,
-  /** 这张图值不值得养海军（Fields.sea），只有水上产兵点读它 */
-  sea = 0,
+  /**
+   * 这张图值不值得养海军（`Fields.sea`）。
+   *
+   * 2026-11-20 之后**这个函数自己不用它了**：水上产兵点归 `NAVY_GOAL` 管，
+   * 那边会自己问一次 `seaDemand`（有 memo，同一回合问几次都只算一遍）。
+   * 参数留着是因为调用方按位置传，删掉要改三处，收益为零。
+   */
+  _sea = 0,
   /** 局势现在打在第几代（Fields.era），只有带白名单的产兵点读它 */
   era = 0,
 ): number {
@@ -2982,59 +3101,11 @@ function rawBuildScore(
   /*
    * 水上产兵点（船坞 / 造船厂 / 海军船台）：**不跟军营共用一条线**。
    *
-   * 这两件事的价值来源不一样，混在一起会有两个后果，每一个都足以让它永远造不出来：
-   *
-   *   · **抢额度**。军营是"每城一座、最多四座"，河道图上 AI 的营早就顶满了。
-   *     船坞一进来就是 -999：玩家能用、AI 一次不造。实测 4 局 20×20 海军包，
-   *     造船厂出现 0 次（`scripts/diag-build.ts`）。
-   *   · **量错了尺子**。军营的分数按"离敌人多近"给，可船坞跟敌人远近几乎无关，
-   *     它只跟"这张图有多少水、我能不能靠陆路摸到对面"有关（`seaDemand`）。
-   *
-   * 判据写在数据里（buildOn 里有水），不写死 id：以后再加一档船坞不用回来改这里。
+   * 这里只留一句"归产业链目标管"，具体分数搬到了下面的 `NAVY_GOAL`（2026-11-20）。
+   * 判据仍然是数据（`buildOn` 里有水），核心不认识 `nv-dock` 这种 id。
    */
-  const onWater = (def.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
-  if (isProducer(def) && onWater) {
-    // 船是奢侈品的时候造船坞，等于把钱埋进水里
-    if (sea <= 0) return -999;
-    // 落成即废的那几档：白名单里全是更高代的船，现在修好也下不了水。
-    // 规则层（doBuild）也会拒，这里先拦是不让 AI 提一个必被拒的动作——
-    // 执行方遇到非法动作会中断整回合。
-    const usable = produceUsableCount(def, s.unitTypes, era || def.era);
-    if (usable !== null && usable <= 0) return -999;
-
-    const cities = citiesOf(s, unit.owner);
-    if (cities.length === 0) return -999;
-
-    // 自己的水上产兵点单独计数，不占军营的额度。
-    // 上限按城市数给、最多两座：一座船坞够一支舰队出门，两座是"两线同时下水"。
-    const docks = unitsOf(s, unit.owner).filter((u) => {
-      const ud = utype(s, u.type);
-      return isProducer(ud) && (ud.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
-    }).length;
-    if (docks >= Math.min(2, Math.max(1, Math.floor(cities.length / 2)))) return -999;
-
-    // 离自家城市太远就没有意义：船是要拿来保交通线、抢滩头的，
-    // 在没人去的水塘里修一座船坞，只是多一个被顺手拆掉的目标。
-    let nearOwn = Infinity;
-    for (const c of cities) nearOwn = Math.min(nearOwn, distance(spot, c));
-    if (nearOwn > 10) return -999;
-
-    // 海上工地会挨舰炮，但没有陆上工地那么致命（水面上摸过来的兵少）
-    /*
-     * 基准分给到 70：这一档必须**一次就建起来**。
-     *
-     * 标定过程（4 局 20×20 纵河图，水域 12.8%，脚本 `diag-build.ts --map river-v`）：
-     *   · 44 分（沿用军营的量级）→ 0 次。它不是被规则拒掉的，是永远当不上最优动作：
-     *     建造候选和走位候选在同一个池子里比大小，工程兵一步"朝桥头挪一格"就有四五十分，
-     *     而船坞只值四十几——于是那座船坞连一次都没被选中过（候选生成进了 1819 次）。
-     *   · 244 分 → 2 局建 5 座，机制确认无误，但显然过头了。
-     *   · 70 分 → 每局一座左右，抢在桥和营前面动手，之后被 `docks × 45` 迅速压下去。
-     *
-     * 为什么敢让它压过桥的 58 分基准：真需要过河时 `scoreBuild` 会给非桥建造扣 20 分，
-     * 桥那条路有自己的护栏（见 needBridge 分支），不会被一座船坞挡死。
-     */
-    return 70 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
-  }
+  const goalScore = goalBuildScore(s, unit, buildId, spot, era);
+  if (goalScore !== null) return goalScore;
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
   // 位置讲究"不近不远"——贴着敌人下回合就被推平，缩在后方等于没造。
@@ -6255,6 +6326,24 @@ function aiNextActionCoreInner(
      */
     const unitAi = unitAiOf(view, u);
     if (unitAi) candidates.push(...unitAiCandidates(view, u, own, rejected, unitAi, foeUnits, myUnitsNow));
+  }
+
+  /*
+   * 产业链目标的"非建造"动作（研发法术、研读、升级建筑……）。
+   *
+   * 一场只问一次：这些是**席位级**的决定，跟着每个兵问一遍只会得到重复候选。
+   * 扩展写的 handler 抛错只警告一次、跳过——一个写坏的目标不该把整局打死。
+   */
+  {
+    const goalCtx = goalCtxOf(view, me, fields.era);
+    for (const { step } of goalStepsInPlay(goalCtx)) {
+      if (!step.actions) continue;
+      try {
+        for (const c of step.actions(goalCtx)) candidates.push(c);
+      } catch (err) {
+        unitAiWarn(`goal-actions:${step.id}`, `[ai-goal] 目标段「${step.id}」的动作抛错，跳过：${String(err)}`);
+      }
+    }
   }
 
   // 这一回合"要不要养海军"：整回合只算一次（里面有一次全图 flood fill），
