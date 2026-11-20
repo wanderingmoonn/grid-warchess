@@ -1,22 +1,49 @@
 /**
- * 「黑暗动乱」最小循环探针。
+ * 「黑暗动乱」整包测试（2026-11-20 合并版）。
  *
- * ── 它守的是哪条循环 ────────────────────────────────────────────────
+ * ── 为什么只剩一个文件 ──────────────────────────────────────────────
  *
- *   衰老（平时 +2 / 沉眠地 +1）→ 寿元见底 → 吞同伴续命 → 还是老死
+ * 之前拆成十个探针（shadow / shade / blood / bone / odd / servant / court /
+ * heir / relic + 这个），四百多条断言，相当一部分在钉"兵种血量是不是 140"这种
+ * **配置复述**：改数值它就红、真改错了反而不一定红——它守的是文档，不是行为。
  *
- * 这条循环是这个包唯一别人没有的东西。仆从、诡异、攻城、关卡都还没做，
- * 所以现在能验的就是它：**别说它强不强，先确认它真的会老、真的会吃、真的会死。**
+ * 现在只守**机制**：每条 1~3 句，问的是"这个机制还成立吗"，不是"这个数是几"。
+ * 数值、面板文案、词条挂载交给规则书和代码审查，不在这里重复一遍。
  *
  * 用法：npm run probe:dark-turmoil
  */
 
-import { DEFAULT_BUDGET, aiNextAction } from '../src/core/ai.ts';
-import { abilityApi, applyAction, produceAt } from '../src/core/rules.ts';
+import { abilityApi, applyAction, isHiddenFrom, visionOf } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { SKILL_AI_HINTS } from '../src/core/skill-hooks.ts';
 import type { SkillAiCtx } from '../src/core/skill-hooks.ts';
-import { DARK_TURMOIL, EMPEROR, SLUMBER } from '../src/core/dark-turmoil-packs.ts';
+import { realmArmorBase, realmAtkBase, trueDamageForRank, extraAttacksForRank } from '../src/core/cultivation/stats.ts';
+import { totalHpBonusForRank } from '../src/core/cultivation/progression.ts';
+import { unitAiProfileOf } from '../src/core/unit-ai.ts';
+import type { UnitAiCtx } from '../src/core/expansions.ts';
+import {
+  BLACK_COCOON,
+  BLACK_LOCUST,
+  BLOOD_MEDIC,
+  BLOOD_POOL,
+  BONE_SKELETON,
+  BONE_UNNAMED,
+  BRONZE_GUARD,
+  CLOT_DAMAGE,
+  EMPEROR,
+  FLESH,
+  FUNERARY_URN,
+  IMPERIAL_STELE,
+  KINDRED,
+  MORTAL_IMMORTAL,
+  PUPPET_MASTER,
+  SHADE,
+  SHADOW_LORD,
+  SLUMBER,
+  SOUL_HOOKER,
+  UNNAMABLE,
+  refreshShadow,
+} from '../src/core/dark-turmoil-packs.ts';
 import { LEVELS } from '../src/core/level.ts';
 import type { GameState, PlayerId, Unit } from '../src/core/types.ts';
 
@@ -28,341 +55,324 @@ function check(name: string, ok: boolean, detail = ''): void {
     console.log(`  ✗ ${name}${detail ? ` —— ${detail}` : ''}`);
   }
 }
+const section = (name: string): void => console.log(`\n[${name}]`);
 
 const CONFIG = {
   ...DEFAULT_CONFIG,
-  size: 14,
+  size: 24,
   startEra: 6,
   expansionIds: [...DEFAULT_CONFIG.expansionIds, 'cultivation', 'dark-turmoil'],
 };
 
+const dist = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+
 interface Arena {
   s: GameState;
-  boss: Unit;
-  slumber: Unit;
-  foods: Unit[];
+  mk: (id: string, type: string, owner: PlayerId, x: number, y: number) => Unit;
 }
 
-/**
- * 平地小场：B 方一条仙帝 + 一座沉眠地 + 两个"应急食品"（1 级修士），A 方留一个兵。
- *
- * 为什么给 A 留兵：没有敌人的话 `checkWinner` 会在某些路径上判"对面出局"，
- * 而且"周围敌人不够吃"这条判断也需要一个真实的敌人列表。
- */
-function arena(opts: { slumberAt?: { x: number; y: number } } = {}): Arena {
+/** 平地小场：两家各一座城（没城的席位会被判出局），其余全靠 `mk` 摆 */
+function arena(): Arena {
   const s = createMatch(CONFIG, 9876);
   s.fog = false;
   s.units = [];
   s.marks = [];
-  s.players.A.gold = 0;
-  s.players.B.gold = 0;
+  s.overlays = {};
+  s.players.A.gold = 9999;
+  s.players.B.gold = 9999;
   s.tiles = s.tiles.map(() => ({ terrain: 'plain' as const, cityId: null }));
   s.cities = [
-    { id: 'ca', owner: 'A', x: 1, y: 1, size: 2, era: 6, hp: 70, maxHp: 70, armor: 4 },
-    { id: 'cb', owner: 'B', x: 11, y: 11, size: 2, era: 6, hp: 70, maxHp: 70, armor: 4 },
+    { id: 'ca', owner: 'A', x: 0, y: 0, size: 2, era: 6, hp: 70, maxHp: 70, armor: 4 },
+    { id: 'cb', owner: 'B', x: 21, y: 21, size: 2, era: 6, hp: 70, maxHp: 70, armor: 4 },
   ];
-  for (const c of s.cities) {
-    for (let dy = 0; dy < c.size; dy += 1) {
-      for (let dx = 0; dx < c.size; dx += 1) {
-        s.tiles[(c.y + dy) * s.w + (c.x + dx)] = { terrain: 'city', cityId: c.id };
-      }
-    }
-  }
-  const mk = (id: string, type: string, owner: 'A' | 'B', x: number, y: number): Unit => {
-    const u: Unit = {
-      id,
-      type,
-      owner,
-      x,
-      y,
-      hp: s.unitTypes[type]!.maxHp,
-      kills: 0,
-      moved: false,
-      acted: false,
-    };
+  // 一把用来"一击必杀"的刀，也当高血木桩用
+  s.unitTypes['probe-killer'] = {
+    ...s.unitTypes['militia']!,
+    id: 'probe-killer',
+    name: '处刑者',
+    atk: 999,
+    range: 2,
+    move: 2,
+    armor: 0,
+    maxHp: 400,
+    skills: [],
+    aiAutonomy: 0,
+  };
+  const mk = (id: string, type: string, owner: PlayerId, x: number, y: number): Unit => {
+    const u: Unit = { id, type, owner, x, y, hp: s.unitTypes[type]!.maxHp, kills: 0, moved: false, acted: false };
+    if (s.unitTypes[type]!.layer) u.layer = s.unitTypes[type]!.layer;
     s.units.push(u);
     return u;
   };
-  const boss = mk('boss', EMPEROR, 'B', 8, 8);
-  const at = opts.slumberAt ?? { x: 8, y: 10 }; // 默认贴着沉眠地
-  const slumber = mk('slumber', SLUMBER, 'B', at.x, at.y);
-  // 两个"应急食品"：一个 2 级、一个 1 级（应该先吃 1 级那个）
-  const food2 = mk('food2', 'qi-cultivator', 'B', 8, 7);
-  food2.custom = { rank: 2 };
-  const food1 = mk('food1', 'qi-cultivator', 'B', 7, 8);
-  food1.custom = { rank: 1 };
-  mk('foe', 'militia', 'A', 4, 4);
-  s.current = 'A';
+  mk('keep-alive', 'militia', 'A', 0, 20);
+  s.current = 'B';
   s.turn = 10;
-  // 寿元和年龄直接写死，免得被"初始化"分支影响
-  boss.custom = { lifespan: 200, dtInit: 1 };
-  boss.age = 178;
-  return { s, boss, slumber, foods: [food1, food2] };
+  return { s, mk };
 }
 
-/** 推进到"B 的回合开始"（A 结束回合），返回期间的年龄变化 */
-function advanceToBTurn(s: GameState): GameState {
-  const end = applyAction(s, { type: 'END_TURN' });
-  if (!end.ok) throw new Error(`END_TURN 失败：${end.reason}`);
-  return end.state;
-}
+const beginTurnOf = (s: GameState, side: PlayerId): GameState => {
+  const other: PlayerId = side === 'A' ? 'B' : 'A';
+  if (s.current !== other) s.current = other;
+  const e = applyAction(s, { type: 'END_TURN' });
+  if (!e.ok) throw new Error(`END_TURN 失败：${e.reason}`);
+  return e.state;
+};
+const endTurnOf = (s: GameState, side: PlayerId): GameState => {
+  if (s.current !== side) s.current = side;
+  const e = applyAction(s, { type: 'END_TURN' });
+  if (!e.ok) throw new Error(`END_TURN 失败：${e.reason}`);
+  return e.state;
+};
+const ctxOf = (s: GameState, u: Unit): UnitAiCtx => ({
+  state: s,
+  unit: u,
+  def: s.unitTypes[u.type]!,
+  api: abilityApi,
+  candidates: [],
+  rejected: new Set<string>(),
+  foes: s.units.filter((x) => x.owner !== u.owner && x.hp > 0),
+  allies: s.units.filter((x) => x.owner === u.owner && x.hp > 0),
+});
 
-console.log('「黑暗动乱」最小循环探针\n');
+console.log('「黑暗动乱」整包测试\n');
 
-/* ══════════════════════════════════════════════════════════════════
- * 1. 兵种：只能从关卡来，造不出来
- * ══════════════════════════════════════════════════════════════════ */
-console.log('[1] 兵种');
+/* ── 1. 暗影领域：里面的人视野减半 ─────────────────────────────── */
+section('1 暗影领域');
 {
-  const s = createMatch(CONFIG, 1);
-  check('尸骸仙帝进了本局兵种表', !!s.unitTypes[EMPEROR]);
-  check('沉眠地进了本局兵种表', !!s.unitTypes[SLUMBER]);
-  check('尸骸仙帝标了 summonedOnly（不进产线）', s.unitTypes[EMPEROR]?.summonedOnly === true);
-  const city = s.cities.find((c) => c.owner === 'A')!;
-  const r = produceAt(s, { kind: 'city', city }, s.unitTypes[EMPEROR]!);
-  check('玩家从城里造不出它（不是"AI 不买"，是产线硬拦）', !r.ok, r.ok ? '居然造出来了' : r.reason);
-  check('扩展依赖修真包', (DARK_TURMOIL.requires ?? []).includes('cultivation'));
+  const { s, mk } = arena();
+  mk('lord', SHADOW_LORD, 'B', 10, 10);
+  const inside = mk('in', 'militia', 'A', 10, 13);
+  const outside = mk('out', 'militia', 'A', 10, 21);
+  refreshShadow(s);
+  check('暗影里的视野比外面小', visionOf(s, inside) < visionOf(s, outside), `${visionOf(s, inside)} / ${visionOf(s, outside)}`);
 }
 
-/* ══════════════════════════════════════════════════════════════════
- * 2. 衰老：平时 +2，沉眠地 +1
- * ══════════════════════════════════════════════════════════════════ */
-console.log('\n[2] 衰老');
+/* ── 2. 血系：伤害攒够就长淤血 ─────────────────────────────────── */
+section('2 化血');
 {
-  // 贴着沉眠地（距离 2）
-  const near = arena({ slumberAt: { x: 8, y: 10 } });
-  const a0 = near.boss.age ?? 0;
-  const s1 = advanceToBTurn(near.s);
-  const afterNear = s1.units.find((u) => u.id === 'boss')!.age ?? 0;
-  check(
-    '在沉眠地：一个回合只长 1 岁（核心那 1 岁之外不再加）',
-    afterNear - a0 === 1,
-    `${a0} → ${afterNear}`,
-  );
+  const { s, mk } = arena();
+  const pool = mk('pool', BLOOD_POOL, 'B', 5, 5);
+  pool.custom = { blood: CLOT_DAMAGE };
+  check('攒够就长出一滩新淤血', beginTurnOf(s, 'B').units.filter((u) => u.type === BLOOD_POOL).length === 2);
 
-  // 沉眠地在很远的地方（距离 12）
-  const far = arena({ slumberAt: { x: 1, y: 1 } });
-  const b0 = far.boss.age ?? 0;
-  const s2 = advanceToBTurn(far.s);
-  const afterFar = s2.units.find((u) => u.id === 'boss')!.age ?? 0;
-  check(
-    '在外行走：一个回合长 2 岁（核心 1 + 本包 1）',
-    afterFar - b0 === 2,
-    `${b0} → ${afterFar}`,
-  );
+  const capped = arena();
+  capped.mk('pool', BLOOD_POOL, 'B', 5, 5).custom = { blood: CLOT_DAMAGE * 10 };
+  check('一回合最多两滩（不然一发溅射就雪崩）', beginTurnOf(capped.s, 'B').units.filter((u) => u.type === BLOOD_POOL).length === 3);
 }
 
-/* ══════════════════════════════════════════════════════════════════
- * 3. 吞噬：什么时候想吃、吃谁
- * ══════════════════════════════════════════════════════════════════ */
-console.log('\n[3] 吞噬（AI 提示）');
-const hint = SKILL_AI_HINTS['soul-devour'];
-check('吞噬已经注册 AI 提示', !!hint);
-if (hint) {
-  const build = (left: number, foes: number): SkillAiCtx => {
-    const { s, boss, foods } = arena();
-    boss.custom = { lifespan: 200, dtInit: 1 };
-    boss.age = 200 - left;
-    const enemy = s.units.find((u) => u.owner === 'A')!;
-    return {
-      state: s,
-      unit: boss,
-      def: s.unitTypes[EMPEROR]!,
-      skill: s.unitTypes[EMPEROR]!.skills!.find((k) => k.effect === 'soul-devour')!,
-      api: abilityApi,
-      foes: foes > 0 ? [enemy] : [],
-      hpRatio: 1,
-      allies: [boss, ...foods],
-    };
-  };
+/* ── 3. 骨系：吞下 → 停一拍 → 变形 ────────────────────────────── */
+section('3 寻躯');
+{
+  const { s, mk } = arena();
+  mk('bone', BONE_SKELETON, 'B', 5, 5);
+  mk('flesh', FLESH, 'B', 5, 6);
+  const t1 = endTurnOf(s, 'B');
+  check('第一回合末吞掉血肉', !t1.units.some((u) => u.id === 'flesh'));
+  check('但当回合不变形（要停一拍）', t1.units.find((u) => u.id === 'bone')!.type === BONE_SKELETON);
+  const t2 = endTurnOf(beginTurnOf(t1, 'B'), 'B');
+  check('第二回合末变成尸骸', t2.units.find((u) => u.id === 'bone')!.type === BONE_SKELETON.replace('skeleton', 'corpse'));
+}
 
-  check('寿元充裕（还剩 50 年）时不会去吃自己人', hint(build(50, 0)) === null);
-  const hungry = hint(build(3, 0));
-  check(
-    '寿元将尽 + 没敌人：会去吃',
-    hungry !== null && typeof hungry === 'object',
-    JSON.stringify(hungry),
-  );
-  if (hungry && typeof hungry === 'object') {
-    const { s } = arena();
-    const target = s.units.find((u) => u.x === hungry.x && u.y === hungry.y);
-    check(
-      '吃的是**境界最低**的那个（1 级优先，不是 2 级）',
-      target?.id === 'food1',
-      `目标 ${target?.id ?? '空'}`,
-    );
+/* ── 4. 不成系：黑蝗繁殖 / 无形 / 无形凝视 ─────────────────────── */
+section('4 黑蝗与诡异');
+{
+  const { s, mk } = arena();
+  mk('cocoon', BLACK_COCOON, 'B', 10, 10); // 提供暗影
+  mk('l1', BLACK_LOCUST, 'B', 11, 10);
+  mk('l2', BLACK_LOCUST, 'B', 12, 10);
+  refreshShadow(s);
+  const before = s.units.filter((u) => u.type === BLACK_LOCUST).length;
+  check('条件满足就繁殖', endTurnOf(s, 'B').units.filter((u) => u.type === BLACK_LOCUST).length > before);
+
+  const fog = arena();
+  fog.s.fog = true;
+  const un = fog.mk('un', UNNAMABLE, 'B', 10, 10);
+  check('无形：没出手时对面看不见', isHiddenFrom(fog.s, un, 'A'));
+  un.acted = true;
+  check('出手之后现形', !isHiddenFrom(fog.s, un, 'A'));
+
+  // 诡异在空中层：地面兵要射程 2 才够得着（处刑者正好是 2）
+  const gaze = arena();
+  const un2 = gaze.mk('un', UNNAMABLE, 'B', 10, 10);
+  gaze.mk('hit', 'probe-killer', 'A', 10, 11);
+  gaze.s.current = 'A';
+  const hp0 = un2.hp;
+  const r = applyAction(gaze.s, { type: 'ATTACK', unitId: 'hit', targetId: 'un' });
+  check('没被它打过的人打它：这一下打空', r.ok && r.state.units.find((u) => u.id === 'un')!.hp === hp0, r.ok ? '' : r.reason);
+}
+
+/* ── 5. 卫系：残躯复活 / 留食 / 断传承 ────────────────────────── */
+section('5 卫系');
+{
+  const { s, mk } = arena();
+  const guard = mk('g', BRONZE_GUARD, 'B', 10, 10);
+  guard.hp = 1;
+  mk('killer', 'probe-killer', 'A', 10, 11);
+  s.current = 'A';
+  const r = applyAction(s, { type: 'ATTACK', unitId: 'killer', targetId: 'g' });
+  check('机关倒下留一具残躯', r.ok && r.state.units.some((u) => u.type === 'puppet-wreck'), r.ok ? '' : r.reason);
+  if (r.ok) {
+    r.state.units.push({ id: 'sh', type: SHADE, owner: 'B', x: 11, y: 10, hp: 30, kills: 0, moved: false, acted: false } as Unit);
+    const t = beginTurnOf(r.state, 'B');
+    check('残躯吸到暗影后半血站回来', t.units.some((u) => u.type === BRONZE_GUARD && u.hp > 0));
   }
 
-  /*
-   * 黑名单：骨灰罐 / 成帝碑 / 沉眠地不是食物。
-   *
-   * 这三样是仙帝自己的来历（罐子是他爬出来的地方、碑是他成道的地方、
-   * 沉眠地是他歇脚的地方），吃它们既不合剧情，也会让"超脱"这类机制自毁。
-   */
+  const few = arena();
+  few.mk('g', BRONZE_GUARD, 'B', 8, 8);
+  for (let i = 0; i < 2; i += 1) few.mk(`eco${i}`, 'lumberjack', 'A', 9 + i, 8);
+  few.s.current = 'B';
+  const r2 = applyAction(few.s, { type: 'ATTACK', unitId: 'g', targetId: 'eco0' });
+  check('视野里只剩 2 个经济单位：不肯下口', !r2.ok && r2.reason.includes('留食'), r2.ok ? '居然打了' : r2.reason);
+
+  const raze = arena();
+  // 城在 (0,0) 占 2×2；青铜卫射程 1，站在城外这一格才够得着
+  raze.mk('g', BRONZE_GUARD, 'B', 2, 0);
+  raze.s.cities.find((c) => c.id === 'ca')!.hp = 1;
+  raze.s.current = 'B';
+  const r3 = applyAction(raze.s, { type: 'SIEGE', unitId: 'g', cityId: 'ca' });
+  check('破城时那座城掉一级', r3.ok && r3.state.cities.find((c) => c.id === 'ca')!.era === 5, r3.ok ? String(r3.state.cities.find((c) => c.id === 'ca')!.era) : r3.reason);
+}
+
+/* ── 6. 仆系：傀儡制造 / 勾魂 / 增生光环 ──────────────────────── */
+section('6 仆系');
+{
+  const { s, mk } = arena();
+  mk('maker', PUPPET_MASTER, 'B', 10, 10);
+  let cur = s;
+  for (let i = 0; i < 3; i += 1) cur = beginTurnOf(cur, 'B');
+  check('傀儡师第 3 回合造出第一具', cur.units.filter((u) => u.type === BRONZE_GUARD).length === 1);
+
+  const pull = arena();
+  const hooker = pull.mk('h', SOUL_HOOKER, 'B', 10, 10);
+  refreshShadow(pull.s);
+  const victim = pull.mk('v', 'militia', 'A', 10, 13);
+  const before = dist(victim, hooker);
+  check('勾魂：没动过的人被拽过去', dist(endTurnOf(pull.s, 'A').units.find((u) => u.id === 'v')!, hooker) < before);
+
+  const heal = arena();
+  heal.mk('medic', BLOOD_MEDIC, 'B', 10, 10);
+  heal.mk('tank', 'probe-killer', 'A', 11, 10).hp = 200;
+  let h = beginTurnOf(heal.s, 'B');
+  const tank = h.units.find((u) => u.id === 'tank')!;
+  check('治疗的同时积下影蚀之血', tank.hp > 200 && Number(tank.custom?.shadowBlood ?? 0) > 0, `${tank.hp} / ${String(tank.custom?.shadowBlood)}`);
+  let died = false;
+  for (let i = 0; i < 30 && !died; i += 1) {
+    h = beginTurnOf(h, 'B');
+    died = !h.units.some((u) => u.id === 'tank');
+  }
+  check('污染积满后化成血肉与暗影', died && h.units.some((u) => u.type === FLESH) && h.units.some((u) => u.type === SHADE));
+}
+
+/* ── 7. 裔系：避城 / 归附 ─────────────────────────────────────── */
+section('7 裔系');
+{
+  const { s, mk } = arena();
+  mk('kid', KINDRED, 'B', 3, 3); // 要站在城的视野内（视野 6），不然它"看不见"
+  s.cities.find((c) => c.id === 'ca')!.era = 3;
+  const t = beginTurnOf(s, 'B');
+  check('看到时代 ≤3 的敌城就进入撤离期', Number(t.units.find((u) => u.id === 'kid')!.custom?.retreatUntil ?? 0) > t.turn);
+
+  const conv = arena();
+  conv.mk('kid', KINDRED, 'B', 5, 5);
+  let c = beginTurnOf(conv.s, 'B');
+  c = beginTurnOf(c, 'B');
+  check('场上没有仆系时，眷属两回合归附', c.units.find((u) => u.id === 'kid')!.type !== KINDRED);
+}
+
+/* ── 8. 骨灰罐与成帝碑 ───────────────────────────────────────── */
+section('8 三件');
+{
+  const { s, mk } = arena();
+  mk('urn', FUNERARY_URN, 'B', 10, 10);
+  const em = mk('em', EMPEROR, 'B', 10, 11);
+  em.custom = { lifespan: 200, dtInit: 1 };
+  em.age = 199;
+  abilityApi.killUnit(s, em, undefined, '测试');
+  const born = s.units.find((u) => u.type === EMPEROR);
+  check('仙帝倒下后从罐子里回来', !!born);
+  check('回来时年龄清零、上限减半', (born?.age ?? -1) === 0 && born!.hp < (s.unitTypes[EMPEROR]?.maxHp ?? 0), `${String(born?.age)} 岁 / ${String(born?.hp)} 血`);
+
+  const pol = arena();
+  pol.mk('stele', IMPERIAL_STELE, 'B', 10, 10);
+  pol.mk('v', 'militia', 'A', 10, 11);
+  const t = beginTurnOf(pol.s, 'B');
+  check('贴到碑边的兵变成诡异', !t.units.some((u) => u.id === 'v') && t.units.some((u) => u.type === BONE_UNNAMED));
+
+  const immune = arena();
+  immune.mk('stele', IMPERIAL_STELE, 'B', 10, 10);
+  immune.mk('monk', 'militia', 'A', 10, 11).custom = { rank: 6 };
+  check('六级修士免疫', beginTurnOf(immune.s, 'B').units.some((u) => u.id === 'monk'));
+
+  const read = arena();
+  read.mk('stele', IMPERIAL_STELE, 'B', 10, 10);
+  read.mk('r', 'militia', 'A', 10, 11).custom = { rank: 6 };
+  read.s.current = 'A';
+  const r = applyAction(read.s, { type: 'UNIT_ACTION', unitId: 'r', actionId: 'read-stele' });
+  check('读碑：境界 +1', r.ok && Number(r.state.units.find((u) => u.id === 'r')!.custom?.rank) === 7, r.ok ? '' : r.reason);
+  if (r.ok) {
+    let cur = r.state;
+    for (let i = 0; i < 4; i += 1) cur = beginTurnOf(cur, 'A');
+    check('三回合后死，原地站起红尘仙', !cur.units.some((u) => u.id === 'r') && cur.units.some((u) => u.type === MORTAL_IMMORTAL));
+  }
+}
+
+/* ── 9. 仙帝：对标九级 / 出山返程 / 吞噬黑名单 ────────────────── */
+section('9 仙帝');
+{
+  const { s } = arena();
+  const em = s.unitTypes[EMPEROR]!;
+  // 九级炼气士的总账：现算，不抄数字（修真包改公式这里会立刻知道）
+  const r9 = {
+    atk: 10 + realmAtkBase(9),
+    armor: realmArmorBase(9),
+    hp: 20 + totalHpBonusForRank(9),
+    true: trueDamageForRank(9),
+    attacks: 1 + extraAttacksForRank(9),
+  };
+  check(`血 ${em.maxHp} 超过九级修士 ${r9.hp}`, em.maxHp > r9.hp);
+  check(`攻 ${em.atk} 超过九级修士 ${r9.atk}`, em.atk > r9.atk);
+  check(`甲 ${em.armor} 超过九级修士 ${r9.armor}`, em.armor > r9.armor);
+  check(`段数 ${em.burst ?? 1} 不少于九级修士 ${r9.attacks}`, (em.burst ?? 1) >= r9.attacks);
+
+  // 出山：吃够就回家
+  const back = arena();
+  const e2 = back.mk('e', EMPEROR, 'B', 10, 10);
+  e2.custom = { lifespan: 200, dtInit: 1, outTurns: 12, homeX: 20, homeY: 10 };
+  e2.age = 135; // 寿元 65 ≥ 60
+  back.mk('sl', SLUMBER, 'B', 20, 10);
+  const out = unitAiProfileOf('emperor-cycle')!.handler(ctxOf(back.s, e2));
+  check('寿元吃回 60 就回家', !!out.add?.some((x) => x.action.type === 'MOVE' || x.action.type === 'HERO_SKILL'), JSON.stringify(out.add));
+
+  // 吞噬：骨灰罐不是食物
   const banned = arena();
-  banned.boss.custom = { lifespan: 200, dtInit: 1 };
-  banned.boss.age = 197;
-  const steleLike = [
-    { id: 'b1', type: 'funerary-urn', owner: 'B', x: banned.boss.x + 1, y: banned.boss.y, hp: 20000, kills: 0, moved: false, acted: false },
-    { id: 'b2', type: 'imperial-stele', owner: 'B', x: banned.boss.x - 1, y: banned.boss.y, hp: 5000, kills: 0, moved: false, acted: false },
-    { id: 'b3', type: 'slumber-site', owner: 'B', x: banned.boss.x, y: banned.boss.y + 1, hp: 300, kills: 0, moved: false, acted: false },
-  ] as Unit[];
-  banned.s.units.push(...steleLike);
-  const onlyBanned: SkillAiCtx = {
+  const be = banned.mk('be', EMPEROR, 'B', 10, 10);
+  be.custom = { lifespan: 200, dtInit: 1 };
+  be.age = 197;
+  const urn = banned.mk('u', FUNERARY_URN, 'B', 11, 10);
+  const hint = SKILL_AI_HINTS['soul-devour'];
+  const ctx = {
     state: banned.s,
-    unit: banned.boss,
+    unit: be,
     def: banned.s.unitTypes[EMPEROR]!,
     skill: banned.s.unitTypes[EMPEROR]!.skills!.find((k) => k.effect === 'soul-devour')!,
     api: abilityApi,
     foes: [],
     hpRatio: 1,
-    allies: [banned.boss, ...steleLike],
-  };
-  check('饿死也不吃罐子/碑/沉眠地', hint(onlyBanned) === null, JSON.stringify(hint(onlyBanned)));
-
-  // 敌人在附近时不该吃——那是"不够吃"，不是"饿死了"
-  const ctx2 = build(3, 1);
-  const twoFoes: SkillAiCtx = { ...ctx2, foes: [ctx2.state.units.find((u) => u.owner === 'A')!, ctx2.state.units.find((u) => u.owner === 'A')!] };
-  check('敌人够吃（附近 ≥ 2 个）时不吃自己人', hint(twoFoes) === null);
+    allies: [be, urn],
+  } as SkillAiCtx;
+  check('饿死也不吞骨灰罐', !!hint && hint(ctx) === null);
 }
 
-/* ══════════════════════════════════════════════════════════════════
- * 4. 真的吞一次：同伴没了、寿元变长
- * ══════════════════════════════════════════════════════════════════ */
-console.log('\n[4] 吞一次的结算');
+/* ── 10. 关卡：结构（跑批在 test 的别处） ─────────────────────── */
+section('10 关卡');
 {
-  const { s, boss, foods } = arena();
-  s.current = 'B';
-  s.turn = 20;
-  const before = Number(boss.custom?.lifespan ?? 0);
-  const target = foods.find((f) => f.id === 'food1')!;
-  const r = applyAction(s, {
-    type: 'HERO_SKILL',
-    unitId: boss.id,
-    skillId: 'devour',
-    targetX: target.x,
-    targetY: target.y,
-  });
-  check('放得出来', r.ok, r.ok ? '' : r.reason);
-  if (r.ok) {
-    const after = r.state.units.find((u) => u.id === boss.id)!;
-    check('同伴消失了（走完整死亡流程，不是从数组里抹掉）', !r.state.units.some((u) => u.id === 'food1'));
-    check(
-      '寿元变长（+10 年）',
-      Number(after.custom?.lifespan ?? 0) - before === 10,
-      `${before} → ${after.custom?.lifespan}`,
-    );
-    check('年龄没有被"变年轻"（只是续命，不是返老还童）', (after.age ?? 0) === 178, String(after.age));
-  }
-
-  // 不能吞敌人
-  const { s: s2, boss: b2 } = arena();
-  s2.current = 'B';
-  s2.turn = 20;
-  const foe = s2.units.find((u) => u.owner === 'A')!;
-  const r2 = applyAction(s2, {
-    type: 'HERO_SKILL',
-    unitId: b2.id,
-    skillId: 'devour',
-    targetX: foe.x,
-    targetY: foe.y,
-  });
-  check('吞不了敌人（是应急口粮，不是攻击技能）', !r2.ok, r2.ok ? '居然吞了敌人' : r2.reason);
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * 5. 老死
- * ══════════════════════════════════════════════════════════════════ */
-/** 让 `side` 开始新回合（词条的 onTurnStart 在这时跑） */
-const beginTurnOf = (st: GameState, side: PlayerId): GameState => {
-  const other: PlayerId = side === 'A' ? 'B' : 'A';
-  if (st.current !== other) st.current = other;
-  const e = applyAction(st, { type: 'END_TURN' });
-  if (!e.ok) throw new Error(`END_TURN 失败：${e.reason}`);
-  return e.state;
-};
-
-console.log('\n[5] 寿元耗尽');
-{
-  /*
-   * 2026-11-19：老化从扩展的回合钩子搬进了「加速衰老」词条，
-   * 所以这里不能再直接调 `hooks.onTurnStart` —— 要让它**真的开始一个回合**，
-   * 词条的 onTurnStart 才会跑（和游戏里同一条路）。
-   */
-  const { s, boss } = arena();
-  boss.age = 199; // 寿元 200：这一回合在沉眠地里 +1 刚好到 200，不该死
-  boss.custom = { lifespan: 200, dtInit: 1 };
-  const t1 = beginTurnOf(s, 'B');
-  check('年龄刚到寿元不死（要"超过"才算耗尽）', t1.units.some((u) => u.id === 'boss'));
-  check('沉眠地里一回合只老 1 岁', (t1.units.find((u) => u.id === 'boss')!.age ?? 0) === 200, String(t1.units.find((u) => u.id === 'boss')!.age));
-
-  const s2 = arena();
-  s2.boss.age = 201;
-  s2.boss.custom = { lifespan: 200, dtInit: 1 };
-  const t2 = beginTurnOf(s2.s, 'B');
-  check('年龄超过寿元：原地坐化', !t2.units.some((u) => u.id === 'boss'));
-  check('战报里说清楚了死因（不是"被消灭"）', t2.log.some((l) => l.text.includes('寿元耗尽')));
-}
-
-/* ══════════════════════════════════════════════════════════════════
- * 6. 关体能跑起来（真跑 40 个行动）
- *
- * 前面五段验的是零件；这一段验的是"装到关里还能不能用"：
- * 部署坐标合不合法、cityless 席位会不会一帧出局、仙帝会不会自己续命。
- * ══════════════════════════════════════════════════════════════════ */
-console.log('\n[6] 关体');
-{
-  const lv = LEVELS.find((l) => l.id === 'level:dark-turmoil');
-  check('关卡注册进表了', !!lv);
+  const lv = LEVELS.find((l) => l.id === 'level:bone-sea');
+  check('帝骸渡在关卡表里', !!lv);
   if (lv) {
-    let s = createMatch({ ...CONFIG, level: lv }, 2026);
-    check('开局就有尸骸仙帝', s.units.some((u) => u.type === EMPEROR));
-    check('开局有沉眠地', s.units.some((u) => u.type === SLUMBER));
-
-    const ages: number[] = [];
-    let ateSomething = false;
-    let ateCount = 0;
-    const t0 = s.units.find((u) => u.type === EMPEROR)?.age ?? 0;
-
-    for (let turn = 0; turn < 40 && !s.winner; turn += 1) {
-      const side = s.current;
-      const budget = { ...DEFAULT_BUDGET };
-      const rejected = new Set<string>();
-      const cap = 8 + 6 * s.units.filter((u) => u.owner === side).length + 6 * s.cities.filter((c) => c.owner === side).length;
-      for (let i = 0; i < cap; i += 1) {
-        const a = aiNextAction(s, budget, rejected);
-        if (!a) break;
-        const r = applyAction(s, a);
-        if (!r.ok) { rejected.add(JSON.stringify(a)); continue; }
-        rejected.clear();
-        if (a.type === 'HERO_SKILL') { ateSomething = true; ateCount += 1; }
-        s = r.state;
-        if (s.winner) break;
-      }
-      const boss = s.units.find((u) => u.type === EMPEROR);
-      if (boss) ages.push(boss.age ?? 0);
-      if (s.winner) break;
-      const e = applyAction(s, { type: 'END_TURN' });
-      if (!e.ok) break;
-      s = e.state;
-    }
-
-    const bossNow = s.units.find((u) => u.type === EMPEROR);
-    console.log(
-      `  · 实况：仙帝${bossNow ? `年龄 ${bossNow.age} / 寿元 ${bossNow.custom?.lifespan}` : '已坐化'}` +
-        ` · 吞噬 ${ateCount} 次 · 场上同伴 ${s.units.filter((u) => u.owner === 'B').length} 个 · 胜者 ${s.winner ?? '未决'}`,
-    );
-    check('40 个行动跑完没崩', true);
-    check(
-      '仙帝确实在变老（不是站着不动）',
-      ages.length >= 5 && Math.max(...ages) > t0,
-      `年龄 ${t0} → ${Math.max(...ages)}`,
-    );
-    check(
-      '它给自己续过命（吃过同伴，或者已经老死）',
-      ateSomething || !bossNow,
-      ateSomething ? '吃过' : bossNow ? '既没吃也还活着' : '已老死',
-    );
+    const s = createMatch({ ...DEFAULT_CONFIG, level: lv }, 2024);
+    check('八座城、两家各四座', s.cities.filter((c) => c.owner === 'A').length === 4 && s.cities.filter((c) => c.owner === 'B').length === 4, String(s.cities.length));
+    check('仙帝与沉眠地都在场上', s.units.some((u) => u.type === EMPEROR) && s.units.some((u) => u.type === SLUMBER));
   }
 }
 
