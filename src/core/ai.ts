@@ -80,22 +80,36 @@ import {
 } from './rules.ts';
 import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
-import { orderDirectiveOf } from './rules.ts';
+import { isArmed, orderDirectiveOf } from './rules.ts';
 import { GOLD, canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
 import { seatsOf } from './types.ts';
-import type { Action, AiIntent, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
 import type { AiBudget } from './ai-meta.ts';
+import { NULL_STRATEGIST } from './ai-strategist.ts';
+import type { Strategist } from './ai-strategist.ts';
 import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
 import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from './unit-ai.ts';
 import type { UnitAiBinding } from './unit-ai.ts';
 import type { UnitAiResult } from './expansions.ts';
 import { SKILL_AI_HINTS } from './skill-hooks.ts';
+import {
+  COMMIT_BUILD_BONUS,
+  allAiGoals,
+  DEFAULT_GOAL_BUILD_SCORE,
+  DEFAULT_GOAL_UNIT_SCORE,
+  DEFAULT_GOAL_SAVE_SCORE,
+  goalStepsInPlay,
+  registerCoreGoal,
+  resolveCommit,
+} from './ai-goal.ts';
+import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
+import type { AiCommit } from './types.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -1658,6 +1672,23 @@ interface Fields {
    */
   focusTargetId: string | null;
   /**
+   * 局面吃紧（和 `plan.urgent` 同一个口径：兵少于 3 个，或者敌人摸到城下 3 格）。
+   *
+   * 产业链目标在吃紧时不推进——那时候还在攒"将来的战力"，是拿命换经济。
+   */
+  urgent: boolean;
+  /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
+  threat: number;
+  /** 哪些非金币资源供不上（`scarceResources`）：资源缺口目标靠它决定要不要补产出 */
+  scarce: ReadonlySet<string>;
+  /**
+   * 这一回合在追哪条产业链（`AiCommit`），没有就是 null。
+   *
+   * 整回合算一次：承诺要写回真状态，而候选生成一回合要跑几百次，
+   * 每次现算会变成"同一步里反复改主意"。
+   */
+  goalCommit: AiCommit | null;
+  /**
    * 这张图值不值得养海军（0~1，见 `seaDemand`）。
    *
    * 建造评分要用它：船坞造不造，取决于"船是不是唯一的路"，而不是"离敌人多近"。
@@ -2872,6 +2903,601 @@ function buildSpots(
   return out;
 }
 
+
+/* ══════════════════════════════════════════════════════════════════
+ * 产业链目标（见 core/ai-goal.ts）
+ *
+ * 核心自己的两条链（海军、装甲）也走这张表，不给核心留特例。
+ * 这里只放"怎么把局面读成目标要的样子"，不放任何具体产业链的规则。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 水上产兵点的判据：写在数据里（`buildOn` 有水），不写死兵种 id */
+function onWaterDef(def: UnitTypeDef): boolean {
+  return (def.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
+}
+
+/** 把局面读成目标要的样子。每次决策算一次，别让每个目标各算一遍 */
+function goalCtxOf(
+  s: GameState,
+  me: PlayerId,
+  era: number,
+  urgent: boolean,
+  threat: number,
+  commit: AiCommit | null,
+  scarce: ReadonlySet<string> = new Set(),
+): AiGoalCtx {
+  const mine = unitsOf(s, me);
+  const cities = citiesOf(s, me);
+  return {
+    state: s,
+    me,
+    era,
+    urgent,
+    threat,
+    commit,
+    scarce,
+    cityCount: cities.length,
+    count: (pred) => mine.filter((u) => pred(utype(s, u.type))).length,
+    buildSpots: (buildId, builder) => buildSpots(s, builder, s.unitTypes[buildId]),
+    inDanger: (x, y) => inDanger(s, me, x, y),
+    dist: (a, b) => distance(a, b),
+    distToNearestCity: (p) => {
+      let best = Infinity;
+      for (const c of cities) best = Math.min(best, distance(p, c));
+      return best;
+    },
+  };
+}
+
+/**
+ * AI 的跨回合记忆：读写都走这两个函数。
+ *
+ * 2026-11-20 把 `aiIntent`（攒钱目标）和 `aiCommit`（产业链承诺）合到一个
+ * `aiFocus` 里——它们本来就是同一个问题的两半，分开存的时候两处各搬一次
+ * （雾图副本 → 真状态），漏一处就是"攒到一半忘了"。
+ *
+ * 老存档里只有 `aiIntent` / `aiCommit`：读的时候回落，写的时候只写 `aiFocus`。
+ */
+function focusOf(s: GameState, me: PlayerId): AiFocus {
+  const f = s.aiFocus?.[me];
+  if (f) return f;
+  return {
+    save: s.aiIntent?.[me] ?? null,
+    chain: s.aiCommit?.[me] ?? null,
+  };
+}
+
+function setFocus(s: GameState, me: PlayerId, f: AiFocus | null): void {
+  /*
+   * 不比较"有没有变就跳过写"：`cost` / `since` / `seen` 每回合都会刷新，
+   * 漏写它们会让 `INTENT_TURNS` 的新鲜度判断走偏（实测指纹会变）。
+   * 一次对象分配换"行为和搬迁前逐字一致"，值。
+   */
+  const bag = { ...(s.aiFocus ?? {}), [me]: f ?? {} };
+  s.aiFocus = bag;
+  // 旧字段随之清掉，免得"新的写了、旧的还在"两套记忆打架
+  if (s.aiIntent?.[me]) {
+    const b = { ...s.aiIntent };
+    delete b[me];
+    s.aiIntent = b;
+  }
+  if (s.aiCommit?.[me]) {
+    const b = { ...s.aiCommit };
+    delete b[me];
+    s.aiCommit = b;
+  }
+}
+
+/**
+ * 这个建筑是不是某个**正在推进中**的产业链目标当前要建的东西。
+ *
+ * 和 `goalBuildScore` 分开是因为它有两个用处：算分（那个）和判断"能不能让路"
+ * （`scoreBuild` 里过河压制要不要减半）。合成一个函数会让后者为了一个布尔
+ * 去算一遍分数，读起来莫名其妙。
+ */
+function goalClaimsBuild(
+  s: GameState,
+  unit: Unit,
+  buildId: string,
+  era: number,
+  urgent: boolean,
+  threat: number,
+  commit: AiCommit | null,
+  scarce: ReadonlySet<string>,
+): boolean {
+  return goalClaimsBuildOf(s, unit.owner, buildId, era, urgent, threat, commit, scarce);
+}
+
+/** 同上的 owner 版本：攒钱那一层只有 PlayerId，没有具体建造者 */
+function goalClaimsBuildOf(
+  s: GameState,
+  me: PlayerId,
+  buildId: string,
+  era: number,
+  urgent: boolean,
+  threat: number,
+  commit: AiCommit | null,
+  scarce: ReadonlySet<string>,
+): boolean {
+  const def = s.unitTypes[buildId];
+  if (!def) return false;
+  const ctx = goalCtxOf(s, me, era, urgent, threat, commit, scarce);
+  for (const { step } of goalStepsInPlay(ctx)) {
+    if (step.claimsBuild?.(def)) return true;
+  }
+  return false;
+}
+
+/**
+ * 这个建筑归不归某个产业链管：归就返回分数，不归返回 null。
+ *
+ * 返回 `-999` 表示"归某个目标管，但它现在不该建"（前置没完成、离城太远、
+ * 这一档的产物一条都造不了）。这个返回值必须和以前一样**在这里就拦住**：
+ * 让 AI 提一个必被规则拒的动作，执行方会中断整回合。
+ */
+function goalBuildScore(
+  s: GameState,
+  unit: Unit,
+  buildId: string,
+  spot: { x: number; y: number; terrain: Terrain },
+  era: number,
+  urgent: boolean,
+  threat: number,
+  commit: AiCommit | null,
+  scarce: ReadonlySet<string>,
+): number | null {
+  const def = s.unitTypes[buildId];
+  if (!def) return null;
+  const ctx = goalCtxOf(s, unit.owner, era, urgent, threat, commit, scarce);
+  /*
+   * "归不归目标管"和"现在轮不轮到它"是两件事，必须分开判（2026-11-20 修）。
+   *
+   * 原来只遍历**在推进中**的段，于是"某条链还卡在前一步"时，后面那一步管的
+   * 建筑会**漏回通用评分**——修真链实测：宗门抢在灵田前面建起来了，
+   * 因为它掉进了"军营/产兵点"那条通用线。
+   *
+   * 现在的语义：只要某个目标的**任何一段**认领了这个建筑，它就归目标管；
+   * 只有当前在推进的那一段才能给出分数，其余一律 -999（现在别建）。
+   */
+  const claimsIt = allAiGoals().some((g) => g.steps.some((st) => st.claimsBuild?.(def)));
+  let claimed = false;
+  let best: number | null = null;
+  for (const { step, committed } of goalStepsInPlay(ctx)) {
+    if (!step.claimsBuild?.(def)) continue;
+    claimed = true;
+    let v: number | null = null;
+    try {
+      v = step.buildScore ? step.buildScore(ctx, buildId, spot, def) : DEFAULT_GOAL_BUILD_SCORE;
+    } catch (err) {
+      unitAiWarn(`goal-build:${buildId}`, `[ai-goal] 目标算「${buildId}」的分数时抛错，按不建处理：${String(err)}`);
+      v = null;
+    }
+    if (v === null) continue;
+    // 已经在追的那一段再加一把：让它不至于"每回合重新竞争"被挤掉
+    const scored = committed ? v + COMMIT_BUILD_BONUS : v;
+    best = best === null ? scored : Math.max(best, scored);
+  }
+  if (!claimed) return claimsIt ? -999 : null;
+  return best === null ? -999 : best;
+}
+
+/**
+ * 买这个兵，产业链给多少分。
+ *
+ * 和 `goalBuildScore` 同一个形状，只是管的是兵种：目标说"为了这条链，
+ * 这个兵值得优先买"，采购那边把它加到自己的分上，剩下照旧参与比较。
+ * **没有插队**——加了分也可能输给更该买的东西。
+ */
+function goalUnitBonus(c: AiGoalCtx, def: UnitTypeDef): number {
+  let best = 0;
+  for (const { step, committed } of goalStepsInPlay(c)) {
+    if (!step.claimsUnit?.(def)) continue;
+    const v = step.unitScore ?? DEFAULT_GOAL_UNIT_SCORE;
+    const scored = committed ? v + COMMIT_BUILD_BONUS : v;
+    if (scored > best) best = scored;
+  }
+  return best;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 节奏判断：现在该打，还是该发展？（2026-11-20）
+ *
+ * 人类的算法（用户原话，2026-11-20）：
+ *
+ *   「当自己的单位走到敌方城市的时间 > 自己提升一个时代需要的耗时时，
+ *     就默认进攻部队到达时会面临高一个时代的反击，就不进攻，
+ *     专注造经济单位提升经济产出。」
+ *
+ * 三处必须做对，不然这条规则会误判：
+ *
+ *   1. **距离用距离场**（`distanceFields`），不是直线除以移动力——
+ *      绕山绕水走的路比直线长得多，直线会把"该发展"算成"该打"。
+ *   2. **"我方部队"取最近的那一批能形成战斗力的**（`PACE_STRIKE_GROUP` 个），
+ *      不是全体中位数：先到的那两三个就是去送死的。
+ *   3. **升级耗时要带上"造经济单位的加速度"**，不能拿 `(费用 − 现金) ÷ 收入`
+ *      一除了事——投进经济的钱会抬高收入，剩下的时间比这个数短。
+ *      `projectedTurnsToEra` 就是干这个的。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 算"我军多久能到"时取最近几个战斗单位（凑成一支能打的） */
+const PACE_STRIKE_GROUP = 3;
+/**
+ * 每 1 金投进经济，每回合能多回多少（一阶估计）。
+ *
+ * 参考值：农民/工人 50~60 金、好地形上 5~7 金/回合 → 0.10 上下。
+ * 这个数只影响"加速度有多陡"，不影响方向；`--verbose` 会把两种算法并排打出来。
+ */
+const ECON_YIELD_PER_GOLD = 0.1;
+/** 投影最多看多少回合（超过这个数就当"够不着"） */
+const PACE_HORIZON = 30;
+
+export interface AiPace {
+  /** 最近那批战斗单位走到敌城要几回合（距离场口径） */
+  walk: number;
+  /** 攒到升一代要几回合（老口径，一除到底） */
+  eraFlat: number;
+  /** 同上，但算上"把钱投进经济 → 收入变高"的加速度 */
+  eraProjected: number;
+  /** 结论：该打还是该发展 */
+  verdict: 'fight' | 'develop';
+}
+
+/** 我方战斗单位里"最近的那一批"到敌城还剩几回合（距离场） */
+function strikeWalkTurns(view: GameState, me: PlayerId, fields: Map<string, number[]>): number {
+  const mine = unitsOf(view, me).filter((u) => utype(view, u.type).category === 'combat');
+  if (mine.length === 0 || fields.size === 0) return Infinity;
+  const per: number[] = [];
+  for (const u of mine) {
+    const idx = u.y * view.w + u.x;
+    let best = Infinity;
+    for (const f of fields.values()) {
+      const d = f[idx];
+      if (typeof d === 'number' && d >= 0 && d < best) best = d;
+    }
+    if (Number.isFinite(best)) per.push(best / Math.max(1, utype(view, u.type).move ?? 1));
+  }
+  if (per.length === 0) return Infinity;
+  per.sort((a, b) => a - b);
+  // 最近的那一批取平均：单个最快不代表部队能到，全取又会被后方部队拖平
+  const group = per.slice(0, Math.min(PACE_STRIKE_GROUP, per.length));
+  return group.reduce((n, x) => n + x, 0) / group.length;
+}
+
+/**
+ * 攒到下一代的回合数，**带加速度**。
+ *
+ * 老口径 `(费用 − 现金) ÷ 收入` 假设收入不变；实际上钱投进经济会抬高收入，
+ * 所以真实时间更短。这里按"每回合把一份收入投进经济"往前滚：
+ * 收入每回合涨 `投入 × ECON_YIELD_PER_GOLD`。
+ */
+function projectedTurnsToEra(s: GameState, me: PlayerId, cost: number, inc: number): number {
+  const inc0 = Math.max(1, inc);
+  if (s.players[me].gold >= cost) return 0;
+  let gold = s.players[me].gold;
+  let income = inc0;
+  for (let t = 1; t <= PACE_HORIZON; t += 1) {
+    gold += income;
+    if (gold >= cost) return t;
+    // 攒的同时留一份收入继续投经济（这才是"加速"的来源）
+    const invest = Math.min(gold, income);
+    gold -= invest;
+    income += invest * ECON_YIELD_PER_GOLD;
+  }
+  return Infinity;
+}
+
+/**
+ * 现在该打还是该发展。
+ *
+ * 没得升级（封顶）或升不起（费用拿不到）时按 `Infinity` 处理 → 判"该打"，
+ * 因为这时候没有"发展"这条路可走。
+ */
+export function paceOf(s: GameState, me: PlayerId): AiPace {
+  const fields = distanceFields(s, me, 'advance');
+  const walk = strikeWalkTurns(s, me, fields);
+  const city = citiesOf(s, me).find((c) => !c.ruined) ?? null;
+  const cost = city ? upgradeCostOf(s, city) : null;
+  const inc = Math.max(1, incomeResOf(s, me).gold ?? 0);
+  if (cost === null) {
+    return { walk, eraFlat: Infinity, eraProjected: Infinity, verdict: 'fight' };
+  }
+  const eraFlat = Math.max(0, cost - s.players[me].gold) / inc;
+  const eraProjected = projectedTurnsToEra(s, me, cost, inc);
+  return { walk, eraFlat, eraProjected, verdict: walk > eraProjected ? 'develop' : 'fight' };
+}
+
+/**
+ * 「海军」：这张图有水、陆路又绕不过去，就攒一支舰队。
+ *
+ * 分数与判据**逐字照搬**自 `rawBuildScore` 里原来那段（2026-11-20 迁移），
+ * 包括那条标定历史——44 分排不上、244 分过头、70 分每局一座。
+ * 迁移的唯一目的是让"加一条新产业链"不用再回 `ai.ts` 改分支。
+ */
+const NAVY_GOAL: AiGoal = {
+  id: 'navy',
+  value: (c) => seaDemand(c.state, c.me),
+  steps: [
+    {
+      id: 'shipyard',
+      // 上限按城市数给、最多两座：一座够一支舰队出门，两座是"两线同时下水"
+      done: (c) => {
+        const cap = Math.min(2, Math.max(1, Math.floor(c.cityCount / 2)));
+        return c.count((d) => isProducer(d) && onWaterDef(d)) >= cap;
+      },
+      claimsBuild: (d) => isProducer(d) && onWaterDef(d),
+      buildScore: (c, _buildId, spot, def) => {
+        // 船是奢侈品的时候造船坞，等于把钱埋进水里
+        const sea = seaDemand(c.state, c.me);
+        if (sea <= 0) return null;
+        // 落成即废的那几档：白名单里全是更高代的船，现在修好也下不了水
+        const usable = produceUsableCount(def, c.state.unitTypes, c.era || def.era);
+        if (usable !== null && usable <= 0) return null;
+        if (c.cityCount === 0) return null;
+        // 离自家城市太远就没有意义：只是多一个被顺手拆掉的目标
+        const nearOwn = c.distToNearestCity(spot);
+        if (nearOwn > 10) return null;
+        const docks = c.count((d) => isProducer(d) && onWaterDef(d));
+        // 海上工地会挨舰炮，但没有陆上工地那么致命（水面上摸过来的兵少）
+        const risky = c.inDanger(spot.x, spot.y);
+        /*
+         * 基准 70 → 95（2026-11-20，迁进目标表时重标的）。
+         *
+         * 70 是当年定的，那时它的对手是"工程兵朝桥头挪一格"（四十几分）。
+         * 现在桥拿的是 `needBridge` +24 和"接上自己那截" +26，分数到了八十几，
+         * 70 分连一次都排不上。实测 4 局 20×20 纵河（海军包）：
+         *   · 70 分 + 过河压制 −20 → 船坞 0 座
+         *   · 95 分 + 过河压制 −10 → 船坞 2 座，桥和营的数量没变
+         * 这仍然是"每局半座"的量级，不够多；但这是**真实需要**的问题
+         * （城里本来就能造一部分 nv_ 船，船坞只是高阶船的门槛），
+         * 不是靠继续加分数能解决的——再往上是拿桥换船坞。
+         */
+        return 95 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
+      },
+    },
+  ],
+};
+
+registerCoreGoal(NAVY_GOAL);
+/**
+ * 「装甲」：两段前置——先有电，再有坞。
+ *
+ * 分数与判据逐字照搬自 `armorSupportNudge`（2026-11-20 迁移）。原来那一段
+ * 写在 `rawBuildScore` 的一个特判分支里，注释记着它为什么必须早于所有 −999：
+ * 电站/坞不产兵、不产钱、不是桥，会掉进"工事/塔"那条线，而那条线要求
+ * 离敌人 7 格内——老家后院的电站永远拿不到分，于是"没电 → 素体断电 →
+ * 采购被挡 → 更不会盖电站"是一个死结。
+ *
+ * 迁移之后这个死结由**段内顺序**表达：第一段没完成时，电站就是当前那一步，
+ * 排在所有 −999 之前；建好电站才轮到坞。
+ */
+const ARMOR_VALUE = (c: AiGoalCtx): number => {
+  // 一台素体都没有、也还没到第 7 代：别把钱砸在基建上
+  const frames = c.count((d) => d.armorFrame === true);
+  return frames > 0 || c.era >= 7 ? 1 : 0;
+};
+
+/**
+ * 电：没有任何电站时最急（70），已经有了但余电不足 40 时还值 40，其余不建。
+ *
+ * 注意电站和坞是**两条并行支线**，不是先后置。第一版把它们写成同一个目标的
+ * 两段（先电后坞），实测坞从 4 座掉到 1 座——因为"余电不足"会让第一段长期
+ * 不算完成，第二段永远排不上。而旧代码里两者各查各的条件，本来就是并行的。
+ * 顺序链留给修真（宗门→藏经阁→研发，那是真的硬前置）。
+ */
+const ARMOR_POWER_GOAL: AiGoal = {
+  id: 'armor-power',
+  value: ARMOR_VALUE,
+  steps: [
+    {
+      id: 'plant',
+      done: (c) =>
+        c.count((d) => (d.armorPower ?? 0) > 0) > 0 &&
+        energyReport(c.state, c.me).headroom >= 40,
+      claimsBuild: (d) => (d.armorPower ?? 0) > 0,
+      // 最便宜的那一档电站要多少钱：钱不够时进"攒钱"那张表
+      cost: (c) => {
+        const plants = Object.values(c.state.unitTypes).filter((d) => (d.armorPower ?? 0) > 0);
+        return plants.length > 0 ? Math.min(...plants.map((d) => d.cost ?? 0)) : 0;
+      },
+      saveScore: 10,
+      buildScore: (c, _buildId, spot, def) => {
+        const plants = c.count((d) => (d.armorPower ?? 0) > 0);
+        const need = plants === 0 ? 70 : energyReport(c.state, c.me).headroom < 40 ? 40 : -25;
+        if (need <= 0) return null;
+        return 40 + need - (c.inDanger(spot.x, spot.y) ? 30 : 0) - def.cost * 0.01;
+      },
+    },
+  ],
+};
+
+/** 坞：一座起步；素体多起来（每三台一座）再要第二座 */
+const ARMOR_DOCK_GOAL: AiGoal = {
+  id: 'armor-dock',
+  value: ARMOR_VALUE,
+  steps: [
+    {
+      id: 'dock',
+      done: (c) => {
+        const frames = c.count((d) => d.armorFrame === true);
+        return c.count(isArmorDockDef) >= Math.max(1, Math.floor(frames / 3));
+      },
+      claimsBuild: isArmorDockDef,
+      buildScore: (c, _buildId, spot, def) => {
+        const frames = c.count((d) => d.armorFrame === true);
+        const docks = c.count(isArmorDockDef);
+        const need = docks === 0 ? (frames > 0 ? 65 : 35) : 10;
+        if (need <= 0) return null;
+        return 40 + need - (c.inDanger(spot.x, spot.y) ? 30 : 0) - def.cost * 0.01;
+      },
+    },
+  ],
+};
+
+
+/**
+ * 素体：这条链真正花钱、也真正打仗的一环。
+ *
+ * 原来是断的——电站盖了、坞盖了，**素体一台都不买**，于是整条链没有任何产出。
+ * 原因很实在：素体面板 atk 只有 12~34（那只是撞击），按常规估值永远排不过
+ * 同代步兵；而它的价值在"装上一门炮之后"，那件事采购评分看不见。
+ *
+ * 这里不做定价，只表达一句话："这条链需要它"。加 30 分是采购基准（50~70）
+ * 的半档——够把素体从"排第五"抬到"排第一"，不够让更该买的东西翻盘。
+ */
+const ARMOR_FRAME_GOAL: AiGoal = {
+  id: 'armor-frame',
+  /*
+   * **有电有坞才要素体**（2026-11-20 实测）：和采购里那两道门（没电 / 没坞可装）
+   * 同一个判据。不加这一条会死锁——目标是按注册顺序抢并列的，素体排在电/坞
+   * 前面就会一直"攒一台装不了炮的素体"，而电和坞永远排不上（实测 40 回合
+   * 一台电站都没建，坞建了又被拆，素体 0）。
+   *
+   * 这条也让"顺序"回到了它该在的地方：素体是这条链的产出，不是起点。
+   */
+  value: (c) => {
+    if (c.era < 7) return 0;
+    const hasPower = c.count((d) => (d.armorPower ?? 0) > 0) > 0;
+    const hasDock = c.count(isArmorDockDef) > 0;
+    return hasPower && hasDock ? 1 : 0;
+  },
+  steps: [
+    {
+      id: 'frames',
+      // 两台起：一台装不了"多兵种配合"，两台才谈得上编成
+      done: (c) => c.count((d) => d.armorFrame === true) >= 2,
+      claimsUnit: (d) => d.armorFrame === true,
+      unitScore: 30,
+      // 最便宜的那台素体要多少钱
+      cost: (c) => {
+        const frames = Object.values(c.state.unitTypes).filter((d) => d.armorFrame === true);
+        return frames.length > 0 ? Math.min(...frames.map((d) => d.cost ?? 0)) : 0;
+      },
+      saveScore: 12,
+    },
+  ],
+};
+
+registerCoreGoal(ARMOR_FRAME_GOAL);
+
+/* ══════════════════════════════════════════════════════════════════
+ * 资源缺口：缺粮/缺材/缺灵石时，去建**产出那种资源**的建筑（2026-11-20）
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────────
+ *
+ * 实测（城郭与物料，24×24 三局）：AI 会建粮仓和采石场，但**建得太多**——
+ * 某一局粮食存量 666、建材 1543，还在继续修采石场。因为通用经济评分只问
+ * "这一格能产多少值多少分"，从来不问"我还缺吗"，堆到"每城两座"的上限为止。
+ *
+ * ── 它怎么做到不认识扩展 ─────────────────────────────────────
+ *
+ * 三样全是数据：
+ *   · **缺什么**：把这一局所有非金币资源（从兵种表的 `costRes` 里扫出来）
+ *     逐个比对"存量 vs 每回合收入"；
+ *   · **谁能产**：建筑的 `yield` / `yieldByTerrain` 里有没有那种资源；
+ *   · **这格值多少**：`unitYield` 探针（和通用经济评分同一把尺子）。
+ *
+ * 核心不认识"粮食""灵石"这些词，只认识"资源 id"和"产出表"。
+ * ══════════════════════════════════════════════════════════════════ */
+
+
+/** 这一局所有**非金币**资源（从兵种成本表里扫，不写死名字） */
+function resourcesInPlay(s: GameState): string[] {
+  const out = new Set<string>();
+  for (const def of Object.values(s.unitTypes)) {
+    for (const id of Object.keys(def.costRes ?? {})) if (id !== 'gold') out.add(id);
+  }
+  return [...out];
+}
+
+/**
+ * 现在哪些资源"供不上"：**比上次回合开始时少了**。
+ *
+ * 判据是趋势而不是绝对值，理由见 `GameState.aiResMark`：
+ * 引擎没有"每回合消耗多少"的流量概念，只能看库存怎么变。
+ * 试过的另外两版都失败（留档 T18）：按"存量 < 收入×3"会形成反馈环
+ * （建了产出 → 收入变高 → 门槛变高 → 永远缺），按"产出为 0"又太保守
+ * （经济单位本来就产一点，永远不等于 0）。
+ */
+function scarceResources(
+  s: GameState,
+  me: PlayerId,
+  mark: { turn: number; stock: Record<string, number> } | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!mark) return out; // 第一回合没有可比的对象
+  const stock = (s.players[me].res ?? {}) as Record<string, number | undefined>;
+  for (const id of resourcesInPlay(s)) {
+    const now = stock[id] ?? 0;
+    const before = mark.stock[id] ?? 0;
+    // 掉了一点就算"供不上"：上限压一压，免得国库几千时波动也触发
+    if (now < before - 1 && now < 320) out.add(id);
+  }
+  return out;
+}
+
+/** 这个建筑产出哪种非金币资源（取产出表里最大的那一项） */
+function producedResourceOf(def: UnitTypeDef): string | null {
+  const best = (bag: Record<string, number> | undefined): string | null => {
+    if (!bag) return null;
+    let id: string | null = null;
+    let n = 0;
+    for (const [k, v] of Object.entries(bag)) {
+      if (k === 'gold' || v <= n) continue;
+      id = k;
+      n = v;
+    }
+    return id;
+  };
+  return best(def.yield as Record<string, number> | undefined);
+}
+
+const RESOURCE_GAP_GOAL: AiGoal = {
+  id: 'resource-gap',
+  value: (c) => (c.scarce.size > 0 ? 1 : 0),
+  steps: [
+    {
+      id: 'producers',
+      done: (c) => c.scarce.size === 0,
+      // 认领所有"产非金币资源"的建筑：只有缺的时候才放行
+      claimsBuild: (d) => producedResourceOf(d) !== null,
+      buildScore: (c, _buildId, spot, def) => {
+        const scarce = c.scarce;
+        const res = producedResourceOf(def);
+        if (!res) return null;
+        // 不缺这一种（哪怕缺别的）就别建它
+        if (!scarce.has(res)) return null;
+        const probe: Unit = {
+          id: 'ai-res-probe',
+          type: def.id,
+          owner: c.me,
+          x: spot.x,
+          y: spot.y,
+          hp: def.maxHp,
+          kills: 0,
+          moved: true,
+          acted: true,
+        };
+        const inc = resourceValue(c.state, c.me, unitYield(c.state, probe));
+        // 这一格产不出东西就别提（和通用经济评分同一条口径）
+        if (inc <= 0) return null;
+        return inc * 4 + 8;
+      },
+    },
+  ],
+};
+
+registerCoreGoal(RESOURCE_GAP_GOAL);
+registerCoreGoal(ARMOR_POWER_GOAL);
+registerCoreGoal(ARMOR_DOCK_GOAL);
+
+
+/**
+ * 建造评分。
+ *
+ * ⚠️ **要给某套内容加"AI 会建它"，不要在这里加 if。**
+ * 写一个 `AiGoal`（见 `docs/GUIDE-AI-GOAL-2026-11-20.md`），
+ * 这个函数只负责把目标给的分接进来。
+ */
 function rawBuildScore(
   s: GameState,
   unit: Unit,
@@ -2879,10 +3505,24 @@ function rawBuildScore(
   spot: { x: number; y: number; terrain: Terrain },
   land: Map<string, number[]>,
   mood?: AiMood,
-  /** 这张图值不值得养海军（Fields.sea），只有水上产兵点读它 */
-  sea = 0,
+  /**
+   * 这张图值不值得养海军（`Fields.sea`）。
+   *
+   * 2026-11-20 之后**这个函数自己不用它了**：水上产兵点归 `NAVY_GOAL` 管，
+   * 那边会自己问一次 `seaDemand`（有 memo，同一回合问几次都只算一遍）。
+   * 参数留着是因为调用方按位置传，删掉要改三处，收益为零。
+   */
+  _sea = 0,
   /** 局势现在打在第几代（Fields.era），只有带白名单的产兵点读它 */
   era = 0,
+  /** 局面吃紧（Fields.urgent）：攒钱这时候不该继续 */
+  urgent = false,
+  /** 威胁值（Fields.threat）：产业链靠它决定要不要放弃投资 */
+  threat = 0,
+  /** 哪些非金币资源供不上（Fields.scarce） */
+  scarce: ReadonlySet<string> = new Set(),
+  /** 这一势力正在追的产业链（Fields.goalCommit） */
+  goalCommit: AiCommit | null = null,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
@@ -2914,11 +3554,13 @@ function rawBuildScore(
    * 而那条线要求"离敌人 7 格内"——老家后院的电站永远拿不到分，直接 -999。
    * 结果是：AI 一台素体都造不出来的死结（没电 → 素体全断电 → 采购被挡 →
    * 更不会盖电站）。这一条是打这个死结的唯一位置：早于所有 -999。
+   *
+   * 2026-11-20：分数搬进 `ARMOR_GOAL`（两段前置：先电、后坞）。
+   * 这里只留"归目标管"的那一句。
    */
   if (ARMOR_SUPPORT_BUILDINGS.has(buildId)) {
-    const need = armorSupportNudge(s, unit.owner, buildId);
-    if (need <= 0) return need;
-    return 40 + need - (risky ? 30 : 0) - def.cost * 0.01;
+    const goalScore2 = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit, scarce);
+    return goalScore2 ?? -999;
   }
 
   // 桥：跨得过去、对岸通向敌方城市才值得架
@@ -2982,59 +3624,11 @@ function rawBuildScore(
   /*
    * 水上产兵点（船坞 / 造船厂 / 海军船台）：**不跟军营共用一条线**。
    *
-   * 这两件事的价值来源不一样，混在一起会有两个后果，每一个都足以让它永远造不出来：
-   *
-   *   · **抢额度**。军营是"每城一座、最多四座"，河道图上 AI 的营早就顶满了。
-   *     船坞一进来就是 -999：玩家能用、AI 一次不造。实测 4 局 20×20 海军包，
-   *     造船厂出现 0 次（`scripts/diag-build.ts`）。
-   *   · **量错了尺子**。军营的分数按"离敌人多近"给，可船坞跟敌人远近几乎无关，
-   *     它只跟"这张图有多少水、我能不能靠陆路摸到对面"有关（`seaDemand`）。
-   *
-   * 判据写在数据里（buildOn 里有水），不写死 id：以后再加一档船坞不用回来改这里。
+   * 这里只留一句"归产业链目标管"，具体分数搬到了下面的 `NAVY_GOAL`（2026-11-20）。
+   * 判据仍然是数据（`buildOn` 里有水），核心不认识 `nv-dock` 这种 id。
    */
-  const onWater = (def.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
-  if (isProducer(def) && onWater) {
-    // 船是奢侈品的时候造船坞，等于把钱埋进水里
-    if (sea <= 0) return -999;
-    // 落成即废的那几档：白名单里全是更高代的船，现在修好也下不了水。
-    // 规则层（doBuild）也会拒，这里先拦是不让 AI 提一个必被拒的动作——
-    // 执行方遇到非法动作会中断整回合。
-    const usable = produceUsableCount(def, s.unitTypes, era || def.era);
-    if (usable !== null && usable <= 0) return -999;
-
-    const cities = citiesOf(s, unit.owner);
-    if (cities.length === 0) return -999;
-
-    // 自己的水上产兵点单独计数，不占军营的额度。
-    // 上限按城市数给、最多两座：一座船坞够一支舰队出门，两座是"两线同时下水"。
-    const docks = unitsOf(s, unit.owner).filter((u) => {
-      const ud = utype(s, u.type);
-      return isProducer(ud) && (ud.buildOn ?? []).some((t) => t === 'water' || t === 'shallow' || t === 'deep');
-    }).length;
-    if (docks >= Math.min(2, Math.max(1, Math.floor(cities.length / 2)))) return -999;
-
-    // 离自家城市太远就没有意义：船是要拿来保交通线、抢滩头的，
-    // 在没人去的水塘里修一座船坞，只是多一个被顺手拆掉的目标。
-    let nearOwn = Infinity;
-    for (const c of cities) nearOwn = Math.min(nearOwn, distance(spot, c));
-    if (nearOwn > 10) return -999;
-
-    // 海上工地会挨舰炮，但没有陆上工地那么致命（水面上摸过来的兵少）
-    /*
-     * 基准分给到 70：这一档必须**一次就建起来**。
-     *
-     * 标定过程（4 局 20×20 纵河图，水域 12.8%，脚本 `diag-build.ts --map river-v`）：
-     *   · 44 分（沿用军营的量级）→ 0 次。它不是被规则拒掉的，是永远当不上最优动作：
-     *     建造候选和走位候选在同一个池子里比大小，工程兵一步"朝桥头挪一格"就有四五十分，
-     *     而船坞只值四十几——于是那座船坞连一次都没被选中过（候选生成进了 1819 次）。
-     *   · 244 分 → 2 局建 5 座，机制确认无误，但显然过头了。
-     *   · 70 分 → 每局一座左右，抢在桥和营前面动手，之后被 `docks × 45` 迅速压下去。
-     *
-     * 为什么敢让它压过桥的 58 分基准：真需要过河时 `scoreBuild` 会给非桥建造扣 20 分，
-     * 桥那条路有自己的护栏（见 needBridge 分支），不会被一座船坞挡死。
-     */
-    return 70 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
-  }
+  const goalScore = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit, scarce);
+  if (goalScore !== null) return goalScore;
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
   // 位置讲究"不近不远"——贴着敌人下回合就被推平，缩在后方等于没造。
@@ -3176,22 +3770,11 @@ function rawBuildScore(
 /** 装甲基建。它们既不产兵也不产钱，普通建造评分永远排不上 */
 const ARMOR_SUPPORT_BUILDINGS = new Set(['armor_coal', 'armor_fusion', 'armor_dock', 'armor_yard']);
 
-function armorSupportNudge(s: GameState, me: PlayerId, buildId: string): number {
-  if (!ARMOR_SUPPORT_BUILDINGS.has(buildId)) return 0;
-  const mine = unitsOf(s, me);
-  const frames = mine.filter((u) => utype(s, u.type).armorFrame);
-  // 一台素体都没有、也还没到第 7 代：别把钱砸在基建上
-  if (frames.length === 0 && eraNowOf(s) < 7) return 0;
-  const plants = mine.filter((u) => (utype(s, u.type).armorPower ?? 0) > 0).length;
-  const docks = mine.filter((u) => u.type === 'armor_dock' || u.type === 'armor_yard').length;
-  if (buildId === 'armor_coal' || buildId === 'armor_fusion') {
-    if (plants === 0) return 70;
-    return energyReport(s, me).headroom < 40 ? 40 : -25;
-  }
-  // 坞：先有一座；素体多起来再考虑第二座
-  if (docks === 0) return frames.length > 0 ? 65 : 35;
-  return docks < Math.max(1, Math.floor(frames.length / 3)) ? 10 : -25;
+/** 装配坞（含升级档）：装甲基建里"不是电站"的那一半 */
+function isArmorDockDef(d: UnitTypeDef): boolean {
+  return ARMOR_SUPPORT_BUILDINGS.has(d.id) && (d.armorPower ?? 0) <= 0;
 }
+
 
 /**
  * 一台素体"装完之后"值多少分。
@@ -3304,7 +3887,10 @@ function scoreBuild(
   spot: { x: number; y: number; terrain: Terrain },
   all: Fields,
 ): number {
-  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood, all.sea, all.era);
+  const raw = rawBuildScore(
+    s, unit, buildId, spot, all.land, all.mood, all.sea, all.era,
+    all.urgent, all.threat, all.scarce, all.goalCommit,
+  );
   if (raw <= -900) return raw;
 
 
@@ -3318,8 +3904,23 @@ function scoreBuild(
   if (all.needBridge && s.unitTypes[buildId]?.bridges) return raw + 24;
 
   if (all.needBridge && canBridge && !s.unitTypes[buildId]?.bridges) {
-    // 过河阶段压别的建造，但不能一刀切：军营是"过了河立刻用得上"的东西，
-    // 压满 45 分等于整条河岸一个产兵点都没有，兵只能从老家一趟趟往前线跑。
+    /*
+     * 过河阶段压别的建造，但不能一刀切：军营是"过了河立刻用得上"的东西，
+     * 压满 45 分等于整条河岸一个产兵点都没有，兵只能从老家一趟趟往前线跑。
+     *
+     * 2026-11-20：**产业链目标当前要建的东西再让一档**。
+     *
+     * 实测（`diag-build --exp naval --map river-v`）：两局 20×20，49 次建造里
+     * 40 次是桥，船坞一次都没有。船坞拿的是产兵点那档 −20，而桥在 `needBridge`
+     * 时额外 +24、接上自己那截再 +26——两边分差只有个位数，工兵又全被桥占着，
+     * 于是"过河"这个**临时战术需求**把一条**战略投资**永久压死了。
+     *
+     * 两者不是一回事：桥是这一回合的通行证，产业链是这一局的路线。所以目标
+     * 认领的建筑只吃一半压制（−10），让它还有机会排上来，但绝不取消压制——
+     * 真到了必须架桥的时候，桥仍然是第一位的。
+     */
+    const strategic = goalClaimsBuild(s, unit, buildId, all.era, all.urgent, all.threat, all.goalCommit, all.scarce);
+    if (strategic) return raw - 10;
     return raw - (isProducer(s.unitTypes[buildId]) ? 20 : 45);
   }
   return raw;
@@ -3397,6 +3998,125 @@ function unitAiCandidates(
   return list;
 }
 
+/**
+ * "走到能盖这个建筑的位置"——产业链目标的选址推手（T11）。
+ *
+ * ── 为什么要它 ──────────────────────────────────────────────
+ *
+ * 建造候选只看**当前站位周围**（`buildSpots`）。需要"紧贴某个建筑"的东西
+ * （修真的藏经阁贴着宗门）就永远卡住：条件全齐、人也在，就差一格空地，
+ * 而工人不会为了那一格走下去。实测执事在宗门旁边转了整局，藏经阁 0 座。
+ *
+ * ── 怎么做到不认识扩展 ─────────────────────────────────────
+ *
+ * 核心**不判断哪里好**，只做三件通用的事：
+ *
+ *   1. 扫一片格子（自己城市/建筑周围，不是全图）；
+ *   2. 逐格问目标："在这儿盖这个建筑，值多少？"——`buildScore`，
+ *      返回 `null` 的格子直接跳过，所以"贴宗门""建在水上"这些规则
+ *      全由扩展自己表达，核心一个字都不知道；
+ *   3. 挑最值的那一格，从可达格子里找一个能站着盖的位置，发一条 MOVE。
+ *
+ * 分数取"那一格的分 × 0.7"：**比真盖上低一档**——已经站在能盖的位置时，
+ * BUILD 候选自然赢；走过去的收益只是"离那一步更近"。
+ */
+function goalApproachCandidate(
+  s: GameState,
+  unit: Unit,
+  buildId: string,
+  buildDef: UnitTypeDef,
+  all: Fields,
+): Candidate | null {
+  const ctx = goalCtxOf(s, unit.owner, all.era, all.urgent, all.threat, all.goalCommit);
+  const steps = goalStepsInPlay(ctx).filter((x) => x.step.claimsBuild?.(buildDef));
+  if (steps.length === 0) return null;
+
+  /*
+   * 扫描范围：自己城市 + 自己建筑周围 10 格。
+   * 不扫全图有两个原因：代价（每格一次 buildScore），以及"在敌人鼻子底下
+   * 盖东西"本来就不该被鼓励——那类风险由 `buildScore` 里的 `inDanger` 扣。
+   */
+  const anchors = [...citiesOf(s, unit.owner), ...unitsOf(s, unit.owner).filter(
+    (u) => utype(s, u.type).category === 'building',
+  )];
+  if (anchors.length === 0) return null;
+  const R = 10;
+  const seen = new Set<number>();
+  let best: { x: number; y: number; score: number } | null = null;
+  for (const a of anchors) {
+    for (let dy = -R; dy <= R; dy += 1) {
+      for (let dx = -R; dx <= R; dx += 1) {
+        const x = a.x + dx;
+        const y = a.y + dy;
+        if (!inBounds(s, x, y)) continue;
+        const key = y * s.w + x;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const tile = s.tiles[key];
+        if (!tile) continue;
+        /*
+         * **先问规则层这一格能不能建**。
+         *
+         * `buildScore` 只回答"值不值"，不回答"行不行"——它平时只被
+         * `buildSpots`（已经过规则筛）的格子调用，所以返回 null 的是
+         * "这个局面下建它没意义"，不是"这里不许建"。
+         * 扫全图时必须补这一问，否则会朝一个盖不了的格子走过去。
+         * 判据用 `buildSiteError`（和 doBuild 同一个函数），核心不需要
+         * 知道"藏经阁要贴宗门"这种规则。
+         */
+        if (buildSiteError(s, buildDef, { ...unit, x, y }, x, y) !== null) continue;
+        const spot = { x, y, terrain: tile.terrain };
+        for (const { step } of steps) {
+          let v: number | null = null;
+          try {
+            v = step.buildScore ? step.buildScore(ctx, buildId, spot, buildDef) : DEFAULT_GOAL_BUILD_SCORE;
+          } catch {
+            v = null;
+          }
+          if (v === null || v <= 0) continue;
+          if (!best || v > best.score) best = { x, y, score: v };
+        }
+      }
+    }
+  }
+  if (!best) return null;
+
+  // 已经能盖了（有合法位置）就别再走——交给 BUILD 候选
+  if (buildSpots(s, unit, buildDef).length > 0) return null;
+
+  /*
+   * 找一个"站上去就能盖"的可达格：目标格周围 buildRange 以内、且从那儿
+   * `buildSpots` 非空。找不到就退而求其次——走到离目标最近的可达格。
+   */
+  const reach = reachableTiles(s, unit);
+  let stand: { x: number; y: number } | null = null;
+  let standDist = Infinity;
+  let nearest: { x: number; y: number } | null = null;
+  let nearestDist = Infinity;
+  const target = { x: best.x, y: best.y };
+  for (const [k] of reach) {
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
+    const d = distance({ x, y }, target);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = { x, y };
+    }
+    if (d > CONFIG.buildRange) continue;
+    if (d >= standDist) continue;
+    if (buildSpots(s, { ...unit, x, y } as Unit, buildDef).length > 0) {
+      standDist = d;
+      stand = { x, y };
+    }
+  }
+  const goTo = stand ?? nearest;
+  if (!goTo) return null;
+  return {
+    action: { type: 'MOVE', unitId: unit.id, x: goTo.x, y: goTo.y },
+    score: Math.max(18, Math.min(64, best.score * 0.7)),
+  };
+}
+
 function unitCandidates(
   s: GameState,
   unit: Unit,
@@ -3449,11 +4169,27 @@ function unitCandidates(
         // 钱和编制都要够：以前没查，AI 会一直提"金币不足"的建造，
         // 而执行方遇到非法动作就中断整回合。
         if (!canPay(s.players[s.current], recruitResCost(s, s.current, buildDef))) continue;
-        for (const spot of buildSpots(s, unit, buildDef)) {
+        const spots = buildSpots(s, unit, buildDef);
+        for (const spot of spots) {
           out.push({
             action: { type: 'BUILD', unitId: unit.id, unitType: buildId, x: spot.x, y: spot.y },
             score: scoreBuild(s, unit, buildId, spot, all),
           });
+        }
+        /*
+         * 脚下没有位置 → **走向能盖的地方**（2026-11-20，T11）。
+         *
+         * 现场：修真的藏经阁要求"紧贴宗门"，执事站在宗门旁边转了半天，
+         * 周围全被占满，于是永远不建。条件是全齐的（时代、钱、人）。
+         *
+         * 判据仍然全在扩展那边：核心只做三件事——扫格子、问目标"这个位置
+         * 值多少"（`buildScore`）、把"走过去"发成一条普通的 MOVE 候选。
+         * 核心不知道"藏经阁要贴着宗门"，也没必要知道：`buildScore` 返回
+         * `null` 的格子自动被跳过，能给出高分的格子自然就是规则允许的。
+         */
+        if (spots.length === 0) {
+          const go = goalApproachCandidate(s, unit, buildId, buildDef, all);
+          if (go) out.push(go);
         }
       }
     }
@@ -3643,6 +4379,12 @@ interface RecruitSource {
  * 每条技能只有"该开"和"不该开"两种判断，不做多回合规划——技能 CD 都不长，
  * 早开一轮和晚开一轮的差别远小于"根本不开"。
  * 分数给得比普通动作高一点（20~40），因为技能不占行动：开了还能接着打。
+ */
+/**
+ * 主动技能的候选。
+ *
+ * ⚠️ "AI 不会放某个技能"不要在这里加 case——用 `registerSkillAi`
+ * （见 `src/core/skill-hooks.ts` 的说明）。这里的 switch 是历史遗留。
  */
 function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
   const def = utype(view, u.type);
@@ -3960,9 +4702,12 @@ export interface AiPlan {
    * 2026-11-02 新增 `'unit'`：人类会"停手攒钱买一个大件"，而原来的三种目标
    * 只有英雄 / 升时代 / 收废墟，普通兵种永远吃不到这套预留机制。
    */
-  savingFor: 'hero' | 'era' | 'rebuild' | 'unit' | null;
+  savingFor: 'hero' | 'era' | 'rebuild' | 'unit' | 'goal' | null;
   /** savingFor === 'unit' 时，攒的是哪一个兵种 */
   targetUnitId: string | null;
+  /** savingFor === 'goal' 时，攒的是哪条产业链的哪一段 */
+  targetGoalId: string | null;
+  targetStepId: string | null;
   targetCost: number;
   /**
    * 攒钱期可动用的现金（每回合）。
@@ -3993,6 +4738,8 @@ export interface AiPlan {
    */
   goalOptions: Array<{ kind: string; cost: number; score: number; note: string }>;
   urgent: boolean;
+  /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
+  threat: number;
 }
 
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
@@ -4165,7 +4912,10 @@ export function savingAllowance(
  * 这样四个目标可以直接排大小，"为什么攒这个"就有据可查，而不是四条 if 的先后。
  */
 interface SaveGoal {
-  kind: 'hero' | 'era' | 'rebuild' | 'unit';
+  kind: 'hero' | 'era' | 'rebuild' | 'unit' | 'goal';
+  /** `kind === 'goal'` 时：哪条产业链的哪一段 */
+  goalId?: string;
+  stepId?: string;
   targetUnitId: string | null;
   /** 升时代 / 收废墟时对准的那座城（跨回合记忆要记它，不然复活时会认错目标） */
   cityId?: string | null;
@@ -4217,11 +4967,96 @@ function reviveIntent(
     if (ctx.gold >= cost) return null;
     return { cost, cityId: ruin.id, note: '重建这座废墟（接着攒）' };
   }
+  if (it.goal === 'goal' && it.goalId && it.stepId) {
+    // 那一段还在推进吗？还要钱吗？两问都得答"是"才接着攒
+    const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), false, 0, null));
+    const cur = live.find((x) => x.goal.id === it.goalId && x.step.id === it.stepId);
+    if (!cur?.step.cost) return null;
+    const want = cur.step.cost(goalCtxOf(s, me, eraNowOf(s), false, 0, null));
+    if (!(want > ctx.gold)) return null; // 钱够了就该去花，而不是继续举牌子
+    return { cost: want, note: `${it.goalId} · ${it.stepId}（接着攒）` };
+  }
   const def = it.unitId ? s.unitTypes[it.unitId] : null;
   if (!def || def.category !== 'combat') return null;
   const price = Math.max(1, recruitPriceOf(s, me, def).gold);
   if (ctx.gold >= price) return null;
   return { cost: price, unitId: def.id, note: `${def.name}（接着攒）` };
+}
+
+/**
+ * 局面吃紧吗——`plan.urgent` 和产业链目标共用这一份判据。
+ *
+ * 以前这两句写在 `buildPlan` 里，只有"攒钱"读它。产业链目标也要读同一件事
+ * （吃紧时不推进投资），所以抽出来。**判据只能有一处**：两处各写一遍，
+ * 迟早出现"攒钱知道要收手、产业链还在往前拱"。
+ */
+/**
+ * 威胁值：这座城**守不住多少**。
+ *
+ * 三件事，缺一个就会误判（2026-11-20 第二版）：
+ *
+ *   1. **谁在打**：`isArmed` 判据（规则层同一个函数），不是 `atk > 0`。
+ *      只看法术攻击的单位（`magicAtk > 0` 但 `atk = 0`）以前完全不算威胁——
+ *      修真接进来之后这是个真漏洞：一堆修士站在城下，AI 觉得没事。
+ *   2. **守不守得住**：拿**攻方战力减守方战力**，不是"有人靠近就算"。
+ *      城自己有攻击力，城内 5 格内的武装单位也算守军。守得住就不该打断投资。
+ *   3. **哪座城**：逐城算，取差值最大的那一座。不是把所有城的敌人加在一起。
+ *
+ * 返回"净威胁"：> `THREAT_ATK` 才算真的要吃城。
+ */
+function threatLevelOf(s: GameState, me: PlayerId, foe: Unit[], mood: AiMood): number {
+  const cities = citiesOf(s, me).filter((c) => !c.ruined && c.id !== mood.abandonedCityId);
+  if (cities.length === 0) return 0;
+  const mine = unitsOf(s, me);
+  /** 一支队伍每回合能砸出多少伤害（法术攻击也算，取高的那一项） */
+  const powerOf = (us: readonly Unit[]): number =>
+    us.reduce((n, u) => {
+      const d = utype(s, u.type);
+      return n + Math.max(d.atk ?? 0, d.magicAtk ?? 0) * (d.burst ?? 1);
+    }, 0);
+  let worst = 0;
+  for (const c of cities) {
+    const attackers = foe.filter((u) => {
+      const d = utype(s, u.type);
+      if (d.category !== 'combat' || !isArmed(s, u)) return false;
+      // 下回合就能摸到城墙：移动 + 射程，再多给一格余量
+      return distToCity(u, c) <= (d.move ?? 0) + (d.range ?? 1) + 1;
+    });
+    if (attackers.length === 0) continue;
+    const defenders = mine.filter((u) => distToCity(u, c) <= 5 && isArmed(s, u));
+    // 城自己也会还手，但 City 上没有 atk 字段（城墙的伤害在 rules 里），
+    // 这里不硬编，只算守军——保守一点，宁可多算一次威胁
+    const gap = powerOf(attackers) - powerOf(defenders);
+    if (gap > worst) worst = gap;
+  }
+  return worst;
+}
+
+function isUrgentNow(
+  s: GameState,
+  me: PlayerId,
+  my: Unit[],
+  foe: Unit[],
+  mood: AiMood,
+): boolean {
+  const myCities = citiesOf(s, me).filter((c) => !c.ruined);
+  const army = my.filter((u) => utype(s, u.type).category === 'combat').length;
+  // 城下有人：半径 3 是"下回合就能摸到城墙"的量级。放弃掉的那座城不算。
+  const threaten = foe.some((u) =>
+    myCities.some((c) => c.id !== mood.abandonedCityId && distToCity(u, c) <= 3),
+  );
+  // 只剩一座城、经营权重够高、经济单位够多，且没有敌人打得着它：安全后方
+  const developingRear =
+    myCities.length === 1 &&
+    mood.weight.boom >= ABANDON_AT &&
+    mood.metrics.earners >= 2 &&
+    foe.every(
+      (u) =>
+        utype(s, u.type).category !== 'combat' ||
+        distToCity(u, myCities[0]!) >
+          effectiveRangeAgainst(s, u, tileAt(s, myCities[0]!.x, myCities[0]!.y)) + 2,
+    );
+  return (army < 3 && !developingRear && !mood.abandonedCityId) || threaten;
 }
 
 function buildPlan(
@@ -4256,7 +5091,8 @@ function buildPlan(
   const developingRear = myCities.length === 1 && mood.weight.boom >= ABANDON_AT &&
     mood.metrics.earners >= 2 && foe.every(u =>
       utype(s,u.type).category !== 'combat' || distToCity(u,myCities[0]!) > effectiveRangeAgainst(s,u,tileAt(s,myCities[0]!.x,myCities[0]!.y))+2);
-  const urgent = (army < 3 && !developingRear && !mood.abandonedCityId) || threaten;
+  const urgent = isUrgentNow(s, me, my, foe, mood);
+  const threatNow = threatLevelOf(s, me, foe, mood);
 
   // 没被打塌的敌城，和已经塌了等接管的废墟。
   //
@@ -4305,12 +5141,14 @@ function buildPlan(
   let savingFor: AiPlan['savingFor'] = null;
   let targetCost = 0;
   let targetUnitId: string | null = null;
+  let targetGoalId: string | null = null;
+  let targetStepId: string | null = null;
   let targetCityId: string | null = null;
   let goalScore = 0;
   let goalNote = '';
   let goalOptions: AiPlan['goalOptions'] = [];
   /** 上一次立下的意向（跨回合记忆，见 types.ts 的 aiIntent） */
-  const prev = s.aiIntent?.[me] ?? null;
+  const prev = focusOf(s, me).save ?? null;
   // 弃城期把"兵够不够"的门槛压低：这一档要的就是兵力少的时候也能攒钱，
   // 而不是"兵少于六个就永远别想升级"。urgent 那条线照旧拦着真正的危险。
   const armyGate = mood.weight.boom > 0.45 ? 4 : 6;
@@ -4502,6 +5340,33 @@ function buildPlan(
       });
     }
 
+    /*
+     * 产业链：正在追的那一段如果要的钱还差着，就把它排进同一张表。
+     *
+     * 和上面四条**共用一把尺子**（`score` 是"每金战力"量级），所以
+     * "攒英雄"和"攒宗门"能直接比大小，不需要再写一段"谁优先"的 if。
+     * 分怎么来由扩展给（`saveScore`），核心不替它定价。
+     */
+    const commit = s.aiCommit?.[me] ?? null;
+    if (commit) {
+      const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), urgent, threatNow, commit));
+      const cur = live.find(
+        (x) => x.goal.id === commit.goalId && x.step.id === commit.stepId,
+      );
+      const want = cur?.step.cost?.(goalCtxOf(s, me, eraNowOf(s), urgent, threatNow, commit)) ?? 0;
+      if (want > gold && reach(want, SAVE_HORIZON)) {
+        goals.push({
+          kind: 'goal',
+          goalId: commit.goalId,
+          stepId: commit.stepId,
+          targetUnitId: null,
+          cost: want,
+          score: cur?.step.saveScore ?? DEFAULT_GOAL_SAVE_SCORE,
+          note: `${cur?.goal.id ?? commit.goalId} · ${commit.stepId}（${want} 金，差 ${want - gold}）`,
+        });
+      }
+    }
+
     goals.sort((a, b) => b.score - a.score);
     goalOptions = goals.map((g) => ({ kind: g.kind, cost: g.cost, score: g.score, note: g.note }));
     /*
@@ -4513,9 +5378,12 @@ function buildPlan(
      */
     let pick = goals[0];
     if (pick && prev) {
-      const held = goals.find(
-        (g) => g.kind === prev.goal && (prev.goal !== 'unit' || g.targetUnitId === (prev.unitId ?? null)),
-      );
+      const held = goals.find((g) => {
+        if (g.kind !== prev.goal) return false;
+        if (prev.goal === 'unit') return g.targetUnitId === (prev.unitId ?? null);
+        if (prev.goal === 'goal') return g.goalId === prev.goalId && g.stepId === prev.stepId;
+        return true;
+      });
       const fresh = s.turn - prev.since <= INTENT_TURNS;
       if (held && held !== pick && fresh && pick.score < held.score * INTENT_MARGIN) pick = held;
     }
@@ -4524,6 +5392,8 @@ function buildPlan(
       targetCost = pick.cost;
       targetUnitId = pick.targetUnitId;
       targetCityId = pick.cityId ?? null;
+      targetGoalId = pick.goalId ?? null;
+      targetStepId = pick.stepId ?? null;
       goalScore = pick.score;
       goalNote = pick.note;
       /*
@@ -4635,22 +5505,26 @@ function buildPlan(
    * 所以那边还要把它搬回真状态（见 aiNextAction 里的搬运用那几行）。
    */
   if (savingFor) {
-    const same = prev !== null && prev.goal === savingFor && (prev.unitId ?? null) === (targetUnitId ?? null);
-    s.aiIntent = {
-      ...(s.aiIntent ?? {}),
-      [me]: {
+    const same =
+      prev !== null &&
+      prev.goal === savingFor &&
+      (prev.unitId ?? null) === (targetUnitId ?? null) &&
+      (savingFor !== 'goal' || (prev.goalId === targetGoalId && prev.stepId === targetStepId));
+    setFocus(s, me, {
+      ...focusOf(s, me),
+      save: {
         goal: savingFor,
+        goalId: targetGoalId ?? undefined,
+        stepId: targetStepId ?? undefined,
         unitId: targetUnitId ?? undefined,
         cityId: targetCityId ?? undefined,
         cost: targetCost,
         since: same ? prev.since : s.turn,
         seen: s.turn,
       },
-    };
+    });
   } else if (prev) {
-    const bag = { ...(s.aiIntent ?? {}) };
-    delete bag[me];
-    s.aiIntent = bag;
+    setFocus(s, me, { ...focusOf(s, me), save: null });
   }
 
   return {
@@ -4660,6 +5534,9 @@ function buildPlan(
     targetUnitId,
     allowance,
     buildAllowance,
+    targetGoalId,
+    targetStepId,
+    threat: threatNow,
     goalScore,
     goalNote,
     goalOptions,
@@ -4823,6 +5700,13 @@ function valueContextOf(s: GameState, me: PlayerId, plan: AiPlan): ValueContext 
   return { tempo, visionCoverage: coverage, fog: s.fog !== false, waterShare: waterShare(s), era: eraNow };
 }
 
+/**
+ * 采购评分。
+ *
+ * ⚠️ **"AI 不会买某个兵"不要在这里加特判。**
+ * 写一个 `AiGoal` 的 `claimsUnit` + `unitScore`（见文档第 4 节）。
+ * 这里的 `royalComboBonus` 是历史遗留，新内容一律走目标。
+ */
 function recruitCandidate(
   s: GameState,
   src: RecruitSource,
@@ -4849,6 +5733,29 @@ function recruitCandidate(
   const w = moodw;
   const me = s.current;
   const gold = s.players[me].gold;
+  /*
+   * 产业链目标的读数：整次采购算一遍，别跟着每个兵种重算
+   * （`goalStepsInPlay` 会问每个目标的价值，海军那条还要查水域）。
+   */
+  const goalCtx = goalCtxOf(s, me, eraNowOf(s), plan.urgent, plan.threat, s.aiCommit?.[me] ?? null);
+  /*
+   * 这个产兵点的"规则层身份"。
+   *
+   * 取价必须带上它：修真的宗门招弟子**不收金币、收灵石**（`modifyCost` /
+   * `modifyResourceCost` 两个钩子按 `source` 生效），城市那条线照旧收金币。
+   * 以前这里不传，于是宗门招人被按**城市价**估——明明更便宜、而且花的是灵石，
+   * AI 却以为要掏一大笔金币，要么放弃要么排不上。和面板/规则层共用一个口径。
+   */
+  const produceSource: ProduceSource | undefined =
+    src.kind === 'camp'
+      ? (() => {
+          const camp = s.units.find((u) => u.id === src.id && u.hp > 0) ?? null;
+          return camp ? ({ kind: 'camp', camp } as const) : undefined;
+        })()
+      : (() => {
+          const city = s.cities.find((c) => c.id === src.id) ?? null;
+          return city ? ({ kind: 'city', city } as const) : undefined;
+        })();
   /*
    * 追踪设施放在过滤器**之前**：这些"候选池级"的拒绝（时代不够、英雄已有一个、
    * 没出兵格）以前根本没进统计，于是"某个兵没人造"永远查不到原因——
@@ -5024,7 +5931,7 @@ function recruitCandidate(
     // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃。
     // 这笔钱和规则层、界面估价共用 recruitPriceOf 一份口径——三处各算一次，
     // 迟早会出现"AI 以为买得起、规则层说资源不足、这一格生产序列静默空转"。
-    const quote = recruitPriceOf(s, me, d);
+    const quote = recruitPriceOf(s, me, d, produceSource);
     const unlockFee = quote.unlockFee;
     const price = recruitCost(s, me, d);
     /*
@@ -5331,6 +6238,15 @@ function recruitCandidate(
 
     // 配合：国王 + 精英骑兵（见 royalComboBonus）
     if (d.category === 'combat') score += royalComboBonus(s, me, d, myUnits, src);
+
+    /*
+     * 产业链目标认领的兵种：为了这条链，这个兵值得优先买。
+     *
+     * 装甲素体是第一个用它的：素体面板 atk 只有 12~34（那只是撞击），
+     * 按常规估值永远排在同代步兵后面——而它整条链的价值在"装上炮之后"。
+     * 目标说一句"我需要它"，比在采购里再写一条特判干净。
+     */
+    score += goalUnitBonus(goalCtx, d);
 
     if (traits.favorites.includes(d.id)) score += 9;
     // 高级的随机幅度更小：选择更"有主意"，不会因为噪声去造一个明显不合适的兵
@@ -5694,7 +6610,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true, threat: 0 },
         null,
         mood,
       );
@@ -6023,10 +6939,11 @@ function aiNextActionCore(
   budget: AiBudget = DEFAULT_BUDGET,
   rejected: ReadonlySet<string> = new Set(),
   depth = 0,
+  strategist: Strategist = NULL_STRATEGIST,
 ): Action | null {
   const owner = enterMemoScope();
   try {
-    return aiNextActionCoreInner(s, budget, rejected, depth);
+    return aiNextActionCoreInner(s, budget, rejected, depth, strategist);
   } finally {
     if (owner) exitMemoScope();
   }
@@ -6038,6 +6955,8 @@ function aiNextActionCoreInner(
   rejected: ReadonlySet<string> = new Set(),
   /** 深推层号：>0 表示这是模拟里的一次决策，**不再往下推**，防止递归 */
   depth = 0,
+  /** 战略层（见 `ai-strategist.ts`），默认为"不干预" */
+  strategist: Strategist = NULL_STRATEGIST,
 ): Action | null {
   if (s.winner) return null;
   /*
@@ -6120,6 +7039,25 @@ function aiNextActionCoreInner(
   /** 两翼分工：主攻方向定了才能分第二路 */
   const flank = flankSplit(view, me, land, mood.focusCityId);
 
+  /*
+   * 资源趋势：拿**上一回合开始时**的存量比现在。
+   *
+   * 只在 `depth === 0` 时往后写（推演分支不该改我方的账本），
+   * 而且只在一局的新回合第一次决策时写一次——一回合里有很多次决策，
+   * 每次都写就等于拿"上一步"比"这一步"，支出会被误判成"供不上"。
+   */
+  const prevMark = s.aiResMark?.[me];
+  const pendingScarce = scarceResources(view, me, prevMark);
+  if (depth === 0 && (!prevMark || prevMark.turn !== s.turn)) {
+    s.aiResMark = {
+      ...(s.aiResMark ?? {}),
+      [me]: {
+        turn: s.turn,
+        stock: { ...((s.players[me].res ?? {}) as Record<string, number>) },
+      },
+    };
+  }
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -6141,6 +7079,11 @@ function aiNextActionCoreInner(
     // 海军需求 / 局势时代：同样整回合算一次，建造评分每个候选格都要读
     sea: seaDemand(view, me),
     era: eraNowOf(view),
+    urgent: isUrgentNow(view, me, unitsOf(view, me), foeUnits, mood),
+    scarce: pendingScarce,
+    threat: threatLevelOf(view, me, foeUnits, mood),
+    // 承诺在下面算完再填（它要读 fields.era，而 fields 正在构造中）
+    goalCommit: null,
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
@@ -6148,6 +7091,30 @@ function aiNextActionCoreInner(
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
   };
+  /*
+   * 产业链承诺：每回合算一次，写回**真状态**。
+   *
+   * 和 `aiIntent` 走同一条路（见下面那段注释）：判断在雾图副本上做，
+   * 记忆必须落在真状态上，否则下次再从真状态切一份新副本，记忆就丢了。
+   *
+   * `depth > 0` 时只读不写：那是"推演对手下一步"的分支，不该顺手改我方的账本。
+   */
+  {
+    const prevCommit = focusOf(s, me).chain ?? null;
+    const baseCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.threat, prevCommit);
+    const nextCommit = resolveCommit(baseCtx, prevCommit);
+    fields.goalCommit = nextCommit;
+    if (depth === 0) {
+      if (nextCommit) {
+        if (nextCommit !== prevCommit) {
+          setFocus(s, me, { ...focusOf(s, me), chain: nextCommit });
+        }
+      } else if (prevCommit) {
+        setFocus(s, me, { ...focusOf(s, me), chain: null });
+      }
+    }
+  }
+
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
   const plan = buildPlan(view, me, unitsOf(view, me), foeUnits, mood);
@@ -6160,11 +7127,10 @@ function aiNextActionCoreInner(
    * 这是 aiNextAction 里唯一一处写状态的地方——它不改变任何合法动作，
    * 只影响"这一回合要不要停手攒钱"，所以不会让回放/联机出现分歧。
    */
-  if (view.aiIntent?.[me]) s.aiIntent = { ...(s.aiIntent ?? {}), [me]: view.aiIntent[me]! };
-  else if (s.aiIntent?.[me]) {
-    const bag = { ...s.aiIntent };
-    delete bag[me];
-    s.aiIntent = bag;
+  {
+    const vf = view.aiFocus?.[me] ?? null;
+    if (vf) setFocus(s, me, vf);
+    else if (s.aiFocus?.[me]) setFocus(s, me, null);
   }
   // 这一回合的升级名额已经用掉了：攒时代的计划对采购就不再生效。
   // 不然钱被冻着、升级又没得升，这一回合等于白过——而且连着几个回合都白过。
@@ -6257,6 +7223,24 @@ function aiNextActionCoreInner(
     if (unitAi) candidates.push(...unitAiCandidates(view, u, own, rejected, unitAi, foeUnits, myUnitsNow));
   }
 
+  /*
+   * 产业链目标的"非建造"动作（研发法术、研读、升级建筑……）。
+   *
+   * 一场只问一次：这些是**席位级**的决定，跟着每个兵问一遍只会得到重复候选。
+   * 扩展写的 handler 抛错只警告一次、跳过——一个写坏的目标不该把整局打死。
+   */
+  {
+    const goalCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.threat, fields.goalCommit);
+    for (const { step } of goalStepsInPlay(goalCtx)) {
+      if (!step.actions) continue;
+      try {
+        for (const c of step.actions(goalCtx)) candidates.push(c);
+      } catch (err) {
+        unitAiWarn(`goal-actions:${step.id}`, `[ai-goal] 目标段「${step.id}」的动作抛错，跳过：${String(err)}`);
+      }
+    }
+  }
+
   // 这一回合"要不要养海军"：整回合只算一次（里面有一次全图 flood fill），
   // 别让它跟着每个产兵点、每个候选兵种重算。
   const seaDemandNow = seaDemand(view, me);
@@ -6333,12 +7317,52 @@ function aiNextActionCoreInner(
     }
   }
 
+  /*
+   * 战略层第一刀：现在能不能主动进攻。
+   *
+   * 默认策略恒 true（见 `NULL_STRATEGIST`），所以挂不挂它行为一样——
+   * 必须先证明"口子本身不改变行为"，才敢往里面塞真策略。
+   * 这里的"进攻"只算 ATTACK / SIEGE 两类显式开火动作；
+   * "朝敌城推进"的走位留在战术层，等这一步验证完再决定要不要一起压。
+   */
+  const mayAttack = strategist.mayAttack(s, me);
   for (let i=candidates.length-1;i>=0;i--) {
     const action=candidates[i]!.action;
+    if (!mayAttack && (action.type === 'ATTACK' || action.type === 'SIEGE')) {
+      candidates.splice(i, 1);
+      continue;
+    }
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
+    /*
+     * **建造落点用真局再核一次**（2026-11-20，T3）。
+     *
+     * 候选是在**雾图**上算的：AI 看不见的敌人正好站在它想盖的那一格，
+     * 提出来到真局就非法。实测 4 局 22 次（`probe:ai-goal` 早期统计），
+     * 每次白扔一步——实机会顺延，跑批脚本会中断整回合。
+     *
+     * 修法和当年"走位落点"那条一样（见 docs/UPDATE-2026-10-28-height-terrain.md）：
+     * **只核合法性、不核内容**。这里只问"真局这一格有没有人"，不问是谁，
+     * 所以不算开图——AI 从中学不到任何关于敌人的信息，只是少提一个必被拒的动作。
+     */
+    if (action.type === 'BUILD') {
+      const occ = s.units.some((u) => u.hp > 0 && u.x === action.x && u.y === action.y);
+      const built = s.cities.some((c) => c.x === action.x && c.y === action.y);
+      if (occ || built) { candidates.splice(i, 1); continue; }
+    }
     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
       const cost=recruitCost(view,me,utype(view,action.unitType));
-      if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
+      /*
+       * 2026-11-20：产业链**自己那一步**的建筑不吃冻结。
+       *
+       * 建筑额度 `buildAllowance = 余额 − 目标价` 是二值的（见 AiPlan 里的注释：
+       * 放开过、结果 AI 把钱全铺成磨坊）。但这条对产业链是死结——"攒钱建宗门"
+       * 里，宗门既是攒钱的目标又是建筑，冻结它就等于永远建不了。
+       * 所以只放目标认领的那一种，磨坊照样冻结。
+       */
+      const forGoal = plan.savingFor === 'goal' && goalClaimsBuildOf(
+        view, me, action.unitType, fields.era, fields.urgent, fields.threat, fields.goalCommit, fields.scarce,
+      );
+      if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges && !forGoal) candidates.splice(i,1);
     }
   }
   if (candidates.length === 0) return null;
@@ -6563,10 +7587,17 @@ export function aiNextAction(
   budget: AiBudget = DEFAULT_BUDGET,
   rejected: ReadonlySet<string> = new Set(),
   depth = 0,
+  /**
+   * 战略层（见 `ai-strategist.ts`）。不传 = 老行为。
+   *
+   * 传进来之后，它只影响三处：能不能打、名额怎么分、想要几代。
+   * **战术层（走位/集火/采购排序）一行不改**——这是这次改造能安全实验的前提。
+   */
+  strategist: Strategist = NULL_STRATEGIST,
 ): Action | null {
   const me = s.current;
   if (orderDirectiveOf(s, me).strategy !== 'hold') {
-    const a = aiNextActionCore(s, budget, rejected, depth);
+    const a = aiNextActionCore(s, budget, rejected, depth, strategist);
     if (a) return a;
     // 深度推演里不做督战：那是"试走"，不该把对手的推演也拖进这一步
     if (

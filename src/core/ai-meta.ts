@@ -177,8 +177,9 @@ export function aiLevelLabel(lv: AiLevel): string {
 }
 
 /** 这一局的 AI 用的是哪个内核（缺省＝手写那套） */
-export function aiBrainOf(s: GameState): 'script' | 'net' {
-  return s.config.aiBrain === 'net' ? 'net' : 'script';
+export function aiBrainOf(s: GameState): 'script' | 'net' | 'goal' {
+  const b = s.config.aiBrain;
+  return b === 'net' || b === 'goal' ? b : 'script';
 }
 
 /**
@@ -188,7 +189,10 @@ export function aiBrainOf(s: GameState): 'script' | 'net' {
  * 对面换了个东西，尤其因为它不受迷雾限制（见 rl/brain.ts 的说明）。
  */
 export function aiNameOf(s: GameState): string {
-  return aiBrainOf(s) === 'net' ? '测试 AI' : `${aiLevelLabel(aiLevelOf(s))} AI`;
+  const brain = aiBrainOf(s);
+  if (brain === 'net') return '测试 AI';
+  if (brain === 'goal') return '实验 AI';
+  return `${aiLevelLabel(aiLevelOf(s))} AI`;
 }
 
 /**

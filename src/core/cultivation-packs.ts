@@ -61,6 +61,7 @@ import { TOWER_CHARGE_COST, TOWER_BURST_CHARGES } from './cultivation/skills/ind
 // 技能那一侧由 skills/index.ts 统一拉起（每个技能文件 + unlocks），
 // 能力解锁已经在 abilities/index.ts 里带进来了。
 import './cultivation/skills/index.ts';
+import { CULTIVATION_AI_GOALS } from './cultivation/ai-goals.ts';
 
 export const CULTIVATION_PACK: Expansion = {
   id: 'cultivation',
@@ -70,6 +71,8 @@ export const CULTIVATION_PACK: Expansion = {
   scale: 'large',
   hooks: CULTIVATION_HOOKS,
   abilities: CULTIVATION_ABILITIES,
+  // 产业链目标：灵田 → 宗门 → 藏经阁 → 研发（见 cultivation/ai-goals.ts）
+  aiGoals: CULTIVATION_AI_GOALS,
   // 法术留下的场（火海、刀山）。引擎负责可见性与次数，见 cultivation/spell-marks.ts
   marks: CULTIVATION_MARK_KINDS,
   units: [
