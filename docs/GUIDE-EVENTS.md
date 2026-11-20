@@ -80,6 +80,20 @@
 | `{ kind: 'gold', seat, amount }` | 加 / 扣金币（负数扣，封底 0） |
 | `{ kind: 'win', seat }` | **直接判这一席胜利**，一局只认第一次 |
 | `{ kind: 'branch', when, then, else? }` | 按条件分两支（下面细说） |
+| `{ kind: 'damage', zone, amount, ignoreArmor?, times?, owner? }` | 对区域内的每个单位造成伤害 |
+
+### 区域伤害：炸一片
+
+```json
+{ "kind": "damage", "zone": { "x0": 5, "y0": 5, "x1": 8, "y1": 8 },
+  "amount": 6, "times": 3, "ignoreArmor": true }
+```
+
+- 不写 `ignoreArmor` 就**走护甲**（甲先减，最低 0）；写了就是真的无视。
+- `times` 是**多段**，每段单独过甲——"3 段 6 点"打重甲比"1 段 18 点"更弱。
+- 不写 `owner` 就是**不分敌我**；写 `"owner": "B"` 只打 B 家。
+- 不针对城，只打单位。
+- 打死的单位**会记进这一手**，所以同一批里等 `unitDied` 的事件能看到它。
 
 ### 分支：同一次触发里走两条路
 
