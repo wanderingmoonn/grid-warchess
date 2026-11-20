@@ -1,7 +1,7 @@
 {
   "name": "warchess",
   "private": true,
-  "version": "0.9.101",
+  "version": "0.9.102",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -114,7 +114,8 @@
     "probe:servant": "node --experimental-strip-types scripts/probe-servant.ts",
     "probe:court": "node --experimental-strip-types scripts/probe-court.ts",
     "probe:heir": "node --experimental-strip-types scripts/probe-heir.ts",
-    "probe:relic": "node --experimental-strip-types scripts/probe-relic.ts"
+    "probe:relic": "node --experimental-strip-types scripts/probe-relic.ts",
+    "ci": "npx tsc --noEmit && npm run test:rules && npm run test:ai-optimization && npm run test:ui && npm run manual && git diff --ignore-cr-at-eol --exit-code -- public/manual.html 'public/manual-*.html' && npm run build"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",
