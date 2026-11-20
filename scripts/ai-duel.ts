@@ -12,7 +12,7 @@
  *
  * 用法：
  *   node --experimental-strip-types scripts/ai-duel.ts --era 1 --games 40 --seed 900
- *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --exp armor-era7 --games 20
+ *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --exp armor-era7 --size 28 --games 20
  *   node --experimental-strip-types scripts/ai-duel.ts --era 2 --games 40 --no-swap
  *   node --experimental-strip-types scripts/ai-duel.ts --era 3 --games 40 --old ./baselines/ai-6c3c992.ts
  * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z。
@@ -77,6 +77,7 @@ const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '40'));
 const BASE_SEED = Number(argOf('seed', '900'));
 const CAP = Number(argOf('cap', '160'));
+const SIZE = Number(argOf('size', String(DEFAULT_CONFIG.size)));
 /**
  * 台子上测哪一档。
  *
@@ -108,6 +109,13 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
       startEra: ERA,
       aiLevel: LEVEL,
       expansionIds: EXP,
+      /*
+       * 地图尺寸。默认 12×12 是 `DEFAULT_CONFIG` 的值，**对高时代不合适**：
+       * 时代越高作战半径越大，小图上"造出来的兵一回合就到对面城下"，
+       * 一切投资（电站、坞、素体）都没有回报空间，测出来的只是短兵相接。
+       * 验 5 代以上的内容请显式给 --size 24 或 28。
+       */
+      size: SIZE,
     },
     seed,
   );
