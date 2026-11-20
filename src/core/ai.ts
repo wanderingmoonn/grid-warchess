@@ -91,6 +91,8 @@ import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSourc
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
 import type { AiBudget } from './ai-meta.ts';
+import { NULL_STRATEGIST } from './ai-strategist.ts';
+import type { Strategist } from './ai-strategist.ts';
 import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
 import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from './unit-ai.ts';
 import type { UnitAiBinding } from './unit-ai.ts';
@@ -6937,10 +6939,11 @@ function aiNextActionCore(
   budget: AiBudget = DEFAULT_BUDGET,
   rejected: ReadonlySet<string> = new Set(),
   depth = 0,
+  strategist: Strategist = NULL_STRATEGIST,
 ): Action | null {
   const owner = enterMemoScope();
   try {
-    return aiNextActionCoreInner(s, budget, rejected, depth);
+    return aiNextActionCoreInner(s, budget, rejected, depth, strategist);
   } finally {
     if (owner) exitMemoScope();
   }
@@ -6952,6 +6955,8 @@ function aiNextActionCoreInner(
   rejected: ReadonlySet<string> = new Set(),
   /** 深推层号：>0 表示这是模拟里的一次决策，**不再往下推**，防止递归 */
   depth = 0,
+  /** 战略层（见 `ai-strategist.ts`），默认为"不干预" */
+  strategist: Strategist = NULL_STRATEGIST,
 ): Action | null {
   if (s.winner) return null;
   /*
@@ -7312,8 +7317,21 @@ function aiNextActionCoreInner(
     }
   }
 
+  /*
+   * 战略层第一刀：现在能不能主动进攻。
+   *
+   * 默认策略恒 true（见 `NULL_STRATEGIST`），所以挂不挂它行为一样——
+   * 必须先证明"口子本身不改变行为"，才敢往里面塞真策略。
+   * 这里的"进攻"只算 ATTACK / SIEGE 两类显式开火动作；
+   * "朝敌城推进"的走位留在战术层，等这一步验证完再决定要不要一起压。
+   */
+  const mayAttack = strategist.mayAttack(s, me);
   for (let i=candidates.length-1;i>=0;i--) {
     const action=candidates[i]!.action;
+    if (!mayAttack && (action.type === 'ATTACK' || action.type === 'SIEGE')) {
+      candidates.splice(i, 1);
+      continue;
+    }
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
     /*
      * **建造落点用真局再核一次**（2026-11-20，T3）。
@@ -7569,10 +7587,17 @@ export function aiNextAction(
   budget: AiBudget = DEFAULT_BUDGET,
   rejected: ReadonlySet<string> = new Set(),
   depth = 0,
+  /**
+   * 战略层（见 `ai-strategist.ts`）。不传 = 老行为。
+   *
+   * 传进来之后，它只影响三处：能不能打、名额怎么分、想要几代。
+   * **战术层（走位/集火/采购排序）一行不改**——这是这次改造能安全实验的前提。
+   */
+  strategist: Strategist = NULL_STRATEGIST,
 ): Action | null {
   const me = s.current;
   if (orderDirectiveOf(s, me).strategy !== 'hold') {
-    const a = aiNextActionCore(s, budget, rejected, depth);
+    const a = aiNextActionCore(s, budget, rejected, depth, strategist);
     if (a) return a;
     // 深度推演里不做督战：那是"试走"，不该把对手的推演也拖进这一步
     if (
