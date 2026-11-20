@@ -47,6 +47,7 @@ import {
 import { addRes } from '../resources.ts';
 import {
   SPELLS,
+  type SpellDef,
   abandonProblem,
   forgetProblem,
   forgetSpell,
@@ -122,6 +123,29 @@ function sealedReasonOf(s: GameState, unit: Unit): string | null {
     }
   }
   return null;
+}
+
+/**
+ * 法术的"境界档位"——界面拿它做筛选 chip。
+ *
+ * 为什么由扩展给而不是界面自己算：核心不认识 `SpellDef`，更不认识"境界"。
+ * 界面只收到一句话"这一条属于第 5 层"，然后把它变成一排能按的按钮。
+ * 不写 `minRank` 的法术是"谁都能学"，用「不限」单列一档——不能并进第 0 层，
+ * 那会让人以为它有个"零层"的要求。
+ */
+function rankFilterOf(sp: SpellDef): { value: string; label: string; order: number } {
+	const rank = sp.minRank ?? 0;
+	return { value: String(rank), label: rank > 0 ? `${rank} 层` : '不限', order: rank };
+}
+
+/**
+ * 搜索文本。
+ *
+ * 法术名往往很抽象（"混元一气""太虚剑意"），玩家记住的其实是**效果**
+ * （"回血""恐惧""拉人"）。所以把名字和说明都塞进去，搜"回血"也能命中。
+ */
+function spellSearchOf(sp: SpellDef): string {
+	return `${sp.skill.name} ${sp.skill.summary}`;
 }
 
 export const CULTIVATION_HOOKS: ExpansionHooks = {
@@ -692,6 +716,10 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 	// 面板拿它决定灰不灰，这里拿它决定放不放行。两处各写一遍就会变成
 	// "按钮能点、点下去被拒"。
 	//
+	// 每组都带 `filter` + `search`（2026-11-20）：法术有 78 门，宗庙那一屏平铺下来
+	// 是十几屏。界面不认"境界"这个概念，所以由这里告诉它"这一门属于第几层"，
+	// 其余（搜索框、chip 行、折叠）交给通用的那套。
+	//
 	// 两组按钮从不打架：修士站在藏经阁旁边才有「研修」，宗门大殿自己才有
 	// 「研发 / 遗弃」，所以按 `group` 分组渲染就够了。
 	unitActions: ({ state, unit, viewer }) => {
@@ -712,6 +740,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 						detail: sp.skill.summary,
 						disabled: !!problem,
 						note: problem ?? `${researchCostOf(sp)} 灵石`,
+						filter: rankFilterOf(sp),
+						search: spellSearchOf(sp),
 					});
 					continue;
 				}
@@ -723,6 +753,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 					confirm: `遗弃「${sp.skill.name}」？这会从本方的藏书目录里划掉它，` +
 						`腾出的研发额度可以用来研发别的法术。已经学会的修士保留它，但本方再也教不了新的弟子。`,
 					note: '不可撤回',
+					filter: rankFilterOf(sp),
+					search: spellSearchOf(sp),
 				});
 			}
 			return out;
@@ -745,6 +777,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 					detail: sp.skill.summary,
 					disabled: !!problem,
 					note: problem ?? `法术位 ${known.length} / ${slots}`,
+					filter: rankFilterOf(sp),
+					search: spellSearchOf(sp),
 				});
 			}
 		}
@@ -763,6 +797,8 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 						`腾出的法术位可以学别的。要重新学回来，得回藏经阁再读一遍。`,
 					disabled: !!problem,
 					note: problem ?? `法术位 ${known.length} / ${slots}`,
+					filter: rankFilterOf(sp),
+					search: spellSearchOf(sp),
 				});
 			}
 		}

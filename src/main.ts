@@ -672,6 +672,15 @@ let recruitPack = '';
  * "我只想看青铜的兵"是这一局的口味，不是对某座城的一时好奇。
  */
 let recruitEra = 0;
+/**
+ * 扩展按钮区（宗门大殿的研发清单、藏经阁的研读清单）的搜索词。
+ *
+ * 和产兵那一份**故意分开**：两块的用法不同（一个找兵买、一个找法术学），
+ * 共用一个变量会出现"在城里搜了个『弓』，回头点开宗门发现法术全被滤没了"。
+ */
+let actionQuery = '';
+/** 扩展按钮区按哪一档筛：'' = 全部。取值由扩展给（修真包＝最低境界） */
+let actionFilter = '';
 
 /**
  * 打击感的两个来源：**掉血的单位**与**刚出手的单位**。
@@ -1390,6 +1399,8 @@ function panelInput(known?: PlayerView): PanelInput {
     recruitQuery,
     recruitPack,
     recruitEra,
+    actionQuery,
+    actionFilter,
     logSide: logScope(),
     spawnPick: spawnPlan ? { type: spawnPlan.type } : null,
     /*
@@ -5499,6 +5510,27 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'recruit-era': {
       const v = Number(el.dataset.era ?? 0);
       recruitEra = recruitEra === v ? 0 : v;
+      render();
+      return;
+    }
+
+    /*
+     * 扩展按钮区（宗门大殿 78 门法术）的筛选档。
+     *
+     * 和时代 chip 同一条规矩：再点一次当前那一档＝回到全部。档位值由扩展给
+     * （修真包是"最低境界"），界面只是原样带回去——核心不解释它是什么。
+     */
+    case 'action-filter': {
+      const v = el.dataset.value ?? '';
+      actionFilter = actionFilter === v ? '' : v;
+      render();
+      return;
+    }
+
+    // 空结果里那颗「清掉筛选」：搜索词和档位一起放回全部
+    case 'action-clear': {
+      actionQuery = '';
+      actionFilter = '';
       render();
       return;
     }
@@ -9820,7 +9852,7 @@ topbarEl.addEventListener('mouseout', (e) => {
  * 这份逻辑**必须只有一份**：它里面那几条全是从"输入法把字打成乱码"里换来的，
  * 复制一遍就等于把同一个 bug 复制一遍。两个搜索框共用同一个 input 元素生命周期。
  */
-const SEARCH_ACTS: ReadonlySet<string> = new Set(['recruit-search', 'god-search']);
+const SEARCH_ACTS: ReadonlySet<string> = new Set(['recruit-search', 'god-search', 'action-search']);
 
 const isSearchInput = (el: EventTarget | null): el is HTMLInputElement =>
   el instanceof HTMLInputElement && SEARCH_ACTS.has(el.dataset.act ?? '');
@@ -9857,6 +9889,7 @@ function repaintSearchPanel(act: string): void {
 /** 把输入框里的字写回它对应的那份状态（产兵面板和货架各存一份） */
 function applySearchQuery(act: string, value: string): void {
   if (act === 'god-search') godQuery = value;
+  else if (act === 'action-search') actionQuery = value;
   else recruitQuery = value;
 }
 

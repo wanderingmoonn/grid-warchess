@@ -171,6 +171,109 @@ check('记账键带着城的 id（换一座城就是另一本账，不会串味�
   }
 });
 
+console.log('单位卡的「说明」');
+
+/**
+ * 修真局里摆一个修士和一个普通兵。
+ *
+ * id 必须自己起一个不撞的（`test-qi`）：开局编制已经占了 u1..u14，
+ * 撞号会让 `find(id)` 拿到前面那个民兵，测出来的东西全是错的（踩过一次）。
+ */
+function setupCultivation() {
+  const s: any = createMatch(
+    {
+      size: 16,
+      startEra: 3,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ['cultivation'],
+      enabledUnits: Object.keys(UNIT_TYPES),
+    } as any,
+    5,
+  );
+  s.current = 'A';
+  const add = (type: string, id: string, x: number) =>
+    s.units.push({
+      id,
+      type,
+      owner: 'A',
+      x,
+      y: 4,
+      hp: s.unitTypes[type].maxHp,
+      kills: 0,
+      moved: false,
+      acted: false,
+    });
+  add('qi-cultivator', 'test-qi', 3);
+  add('cultivation-sect', 'test-sect', 6);
+  return s;
+}
+
+const cult = setupCultivation();
+const qi = cult.units.find((u: any) => u.id === 'test-qi');
+const sect = cult.units.find((u: any) => u.id === 'test-sect');
+
+check('修士：说明一长就收起来，标题写着几条', () => {
+  const h = mountDefault(cult, { selectedUnit: qi });
+  const fold = h.querySelector('details[data-fold="unit:notes"]') as HTMLDetailsElement | null;
+  assert.ok(fold, '修士十几条说明没有收起来，还是铺了一屏');
+  const lines = fold!.querySelectorAll('.unit-notes div').length;
+  const text = fold!.querySelector('summary')!.textContent ?? '';
+  assert.ok(text.includes(String(lines)), `标题写的是「${text}」，实际 ${lines} 条`);
+});
+
+check('普通兵：说明短，原样铺着（给两行字加一次点击是添乱）', () => {
+  const h = mountDefault(cult, { selectedUnit: cult.units[0] });
+  assert.equal(
+    h.querySelectorAll('details[data-fold="unit:notes"]').length,
+    0,
+    '普通兵被折了',
+  );
+});
+
+console.log('宗门大殿的法术清单');
+
+const sectHost = mountDefault(cult, { selectedUnit: sect });
+const acts = () => sectHost.querySelectorAll('[data-act="unit-action"]').length;
+
+check('法术多到一定程度就出现搜索框', () => {
+  assert.ok(sectHost.querySelector('[data-act="action-search"]'), '没有搜索框，78 门只能靠眼睛扫');
+});
+
+check('按境界分档：chip 排出来，且带「全部」', () => {
+  const chips = [...sectHost.querySelectorAll('[data-act="action-filter"]')];
+  assert.ok(chips.length >= 2, `只有 ${chips.length} 颗 chip，分不出档`);
+  assert.equal(chips[0]!.getAttribute('data-value'), '', '第一颗应该是「全部」');
+});
+
+check('默认只露 12 条，其余收进折叠行', () => {
+  const fold = sectHost.querySelector('details.list-fold') as HTMLDetailsElement | null;
+  assert.ok(fold, '几十门法术一条都没收');
+  const group = fold!.closest('.recruit-list')!;
+  const outside = Array.from(group.children)
+    .filter((c) => c.tagName !== 'DETAILS')
+    .reduce((n, c) => n + c.querySelectorAll('[data-act="unit-action"]').length, 0);
+  assert.ok(outside <= 12, `露了 ${outside} 条`);
+});
+
+check('按一档筛：只剩这一档，chip 变高亮', () => {
+  const chips = [...sectHost.querySelectorAll('[data-act="action-filter"]')];
+  const one = chips[1]!;
+  const value = one.getAttribute('data-value')!;
+  const before = acts();
+  const h = mountDefault(cult, { selectedUnit: sect, actionFilter: value });
+  const after = h.querySelectorAll('[data-act="unit-action"]').length;
+  assert.ok(after > 0 && after < before, `筛「${value}」之后是 ${after} / 筛前 ${before}`);
+  const active = h.querySelector(`[data-act="action-filter"][data-value="${value}"].active`);
+  assert.ok(active, '选中的那一档没有高亮');
+});
+
+check('搜不到时给一颗「清掉筛选」，而不是只剩一句空话', () => {
+  const h = mountDefault(cult, { selectedUnit: sect, actionQuery: '绝不可能存在的法术名' });
+  assert.equal(h.querySelectorAll('[data-act="unit-action"]').length, 0);
+  assert.ok(h.querySelector('[data-act="action-clear"]'), '空结果里没有清筛选的入口');
+});
+
 console.log('钉底层');
 
 check('「结束行动」那一层还在侧栏末尾', () => {

@@ -3650,6 +3650,31 @@ html[data-terrain='on'] .tile.t-mountain {
   line-height: 1.85;
 }
 
+/*
+ * 扩展往兵种卡上补的那几行（境界、灵力、法术位、真元……）。
+ * 换个颜色是为了让玩家一眼分清"这条是兵种表里本来就有的"和"这条是某个
+ * 扩展算出来的"——两者混成一色时，查数值差异会从第一行就开始看错。
+ */
+.unit-notes.ext {
+  color: #8b7eb6;
+}
+
+/*
+ * 「说明」被折起来的时候（条数超过 UNIT_NOTES_FOLD_AT）。
+ * 折叠标题本身已经有一条分隔线，里面的第一块就不该再画一条——两条虚线上下
+ * 夹着标题，看着像排版坏了。
+ */
+.unit-notes-fold .unit-notes {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* 兵种说明和扩展说明是两块，折起来之后仍然要隔开 */
+.unit-notes-fold .unit-notes.ext {
+  margin-top: 8px;
+}
+
 .hpbar {
   height: 6px;
   border-radius: 3px;
