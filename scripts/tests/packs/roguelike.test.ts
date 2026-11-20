@@ -487,12 +487,12 @@ export function run() {
     const r = validateLevel(st.level);
     assert.ok(r.ok);
     const s = createMatch(
-      { ...DEFAULT_CONFIG, level: r.level, noProduceSeats: ['B'], freeRebuild: true } as never,
+      { ...DEFAULT_CONFIG, level: r.level, noEconomySeats: ['B'], freeRebuild: true } as never,
       55,
     );
-    // Boss 什么都不能造
-    assert.equal(canUseType(s, 'B', 'militia'), false, 'Boss 不该能造兵');
-    assert.equal(canUseType(s, 'B', 'archer'), false);
+    // Boss 不能造经济单位，但**战斗兵照常**
+    assert.equal(canUseType(s, 'B', 'farmer'), false, 'Boss 不该造经济单位');
+    assert.equal(canUseType(s, 'B', 'militia'), true, '战斗兵应当照常可造');
     // 玩家不受影响
     assert.equal(canUseType(s, 'A', 'militia'), true);
     // 占城不收重建费
