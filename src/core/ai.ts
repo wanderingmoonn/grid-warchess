@@ -87,7 +87,7 @@ import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
 import { seatsOf } from './types.ts';
-import type { Action, AiIntent, City, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
 import type { AiBudget } from './ai-meta.ts';
@@ -5474,6 +5474,24 @@ function recruitCandidate(
    */
   const goalCtx = goalCtxOf(s, me, eraNowOf(s), plan.urgent, plan.threat, s.aiCommit?.[me] ?? null);
   /*
+   * 这个产兵点的"规则层身份"。
+   *
+   * 取价必须带上它：修真的宗门招弟子**不收金币、收灵石**（`modifyCost` /
+   * `modifyResourceCost` 两个钩子按 `source` 生效），城市那条线照旧收金币。
+   * 以前这里不传，于是宗门招人被按**城市价**估——明明更便宜、而且花的是灵石，
+   * AI 却以为要掏一大笔金币，要么放弃要么排不上。和面板/规则层共用一个口径。
+   */
+  const produceSource: ProduceSource | undefined =
+    src.kind === 'camp'
+      ? (() => {
+          const camp = s.units.find((u) => u.id === src.id && u.hp > 0) ?? null;
+          return camp ? ({ kind: 'camp', camp } as const) : undefined;
+        })()
+      : (() => {
+          const city = s.cities.find((c) => c.id === src.id) ?? null;
+          return city ? ({ kind: 'city', city } as const) : undefined;
+        })();
+  /*
    * 追踪设施放在过滤器**之前**：这些"候选池级"的拒绝（时代不够、英雄已有一个、
    * 没出兵格）以前根本没进统计，于是"某个兵没人造"永远查不到原因——
    * 汇总里只会看到"池为空"或者一个都不 deny。
@@ -5648,7 +5666,7 @@ function recruitCandidate(
     // 英雄第一次要付解锁费：只看造价会让 AI 在"差一点钱"的时候反复选中又放弃。
     // 这笔钱和规则层、界面估价共用 recruitPriceOf 一份口径——三处各算一次，
     // 迟早会出现"AI 以为买得起、规则层说资源不足、这一格生产序列静默空转"。
-    const quote = recruitPriceOf(s, me, d);
+    const quote = recruitPriceOf(s, me, d, produceSource);
     const unlockFee = quote.unlockFee;
     const price = recruitCost(s, me, d);
     /*
