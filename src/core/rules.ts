@@ -631,6 +631,29 @@ export function hurtPhysical(
   return dealt;
 }
 
+/**
+ * 一次"被水淹没"的结算：**不直接移除，而是受一次大伤害**（2026-11-20）。
+ *
+ * 为什么改成伤害而不是直接消失：玩家看到的是"水来了，人凭空没了"——
+ * 中间少了一个可以理解的环节。给它一次伤害，至少有三件事能解释得通：
+ *   · 血厚的能扛住（活下来的由调用方挤到岸边）；
+ *   · 装甲模块的额外生命能吸收（"密封的素体泡在水里没死"）；
+ *   · 战报里有一条具体的"谁被水吞没"。
+ *
+ * `attrition: true` 是刻意的：溺水不是"挨打"，守御阵不该替人挡、也不该触发反击。
+ * 同时也意味着**不吃护盾**——护盾是法术给的外层，不是氧气瓶。
+ *
+ * 返回值：还活着吗。调用方决定"活着就挤上岸 / 死了从场上移除"。
+ */
+const DROWN_SHALLOW = 50;
+const DROWN_DEEP = 999;
+function drownUnit(s: GameState, u: Unit, deadly: boolean): boolean {
+  const name = utype(s, u.type).name;
+  const dmg = deadly ? DROWN_DEEP : DROWN_SHALLOW;
+  hurtUnit(s, u, dmg, { attrition: true, logText: `${name}${deadly ? '掉进深水' : '被水冲倒'}` });
+  return u.hp > 0;
+}
+
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
 interface BoundHook<C> {
   stage: number;
@@ -4949,6 +4972,51 @@ function runEventAction(s: GameState, act: import('./level.ts').LevelDo, ctx: Ev
     }
     return;
   }
+  if (act.kind === 'damage') {
+    /*
+     * 区域伤害（2026-11-19）。
+     *
+     * 走的是现成的两个口子，不自己算血：
+     *   · 经过护甲 → `hurtPhysical`（甲先减，全被吃掉时它自己会写一条私有战报）；
+     *   · 无视护甲 → `hurtUnit`（它就是"已经算好的伤害"，不减甲）。
+     *
+     * 每一段都**重新筛一次**活着的兵：上一段可能已经把人打死了，
+     * 而 `s.units` 在 `killUnit` 之后已经变了。
+     */
+    const z = act.zone;
+    const x0 = Math.min(z.x0, z.x1);
+    const x1 = Math.max(z.x0, z.x1);
+    const y0 = Math.min(z.y0, z.y1);
+    const y1 = Math.max(z.y0, z.y1);
+    const rounds = act.times ?? 1;
+    for (let round = 0; round < rounds; round += 1) {
+      const victims = s.units.filter(
+        (u) =>
+          u.hp > 0 &&
+          u.x >= x0 &&
+          u.x <= x1 &&
+          u.y >= y0 &&
+          u.y <= y1 &&
+          (!act.owner || u.owner === act.owner),
+      );
+      if (victims.length === 0) break;
+      for (const u of victims) {
+        if (u.hp <= 0) continue;
+        const name = utype(s, u.type).name;
+        if (act.ignoreArmor) {
+          hurtUnit(s, u, act.amount, { logText: `${name} 受到 ${act.amount} 点伤害`, kind: 'event' });
+        } else {
+          hurtPhysical(s, u, act.amount, { logText: `${name} 受到 ${act.amount} 点伤害` });
+        }
+        if (u.hp <= 0) {
+          killUnit(s, u, undefined, `${name} 被击毁`);
+          // 记进这一手的差量：同一批里靠 `unitDied` 触发的其他事件能看到
+          ctx.died.push(u);
+        }
+      }
+    }
+    return;
+  }
   if (act.kind === 'say') {
     /*
      * 旁白写进战报，**公开**（`open`）——这一关发生的事双方都该看到。
@@ -5242,10 +5310,39 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
      * 会凭空出现在岸上——玩家看到的是"水来了，人没事还传送了"。
      * 会水的（船）不受影响，它们本来就该在水里。
      */
-    const here = tileAt(s, u.x, u.y)?.terrain;
+    const here = tileUnder(s, u)?.terrain;
+    /*
+     * 水上单位脚下变陆地 → **搁浅**（2026-11-20）。
+     *
+     * 以前它走下面那条"挤走"：被挪到最近的水里，挤不到就消失。船凭空出现在
+     * 另一片水里同样说不通。现在留在原地、动不了、还能打——固定炮台。
+     * 地形变回水时解除（本函数末尾统一检查）。
+     */
+    if (utype(s, u.type).domain === 'water' && here !== 'water' && here !== 'deep') {
+      u.stranded = true;
+      say(`${name}搁浅了`);
+      continue;
+    }
     if ((here === 'water' || here === 'deep') && utype(s, u.type).domain !== 'water') {
-      gone.push(u);
-      say(`${name}落水`);
+      /*
+       * 水来了：先受一次大伤害，活下来的被冲到岸上（2026-11-20 改）。
+       *
+       * 原来这里直接 `gone.push(u)`——"水来了人凭空没了"。和桥塌那条路
+       * （`syncBridges`）一样改成"先淹一次"，两条路的处理才对得上。
+       */
+      if (!drownUnit(s, u, here === 'deep')) {
+        gone.push(u);
+        continue;
+      }
+      const spot = freeSpotWithin(s, u, u.type, 6);
+      if (spot) {
+        u.x = spot.x;
+        u.y = spot.y;
+        say(`${name}被冲上岸 (${spot.x}, ${spot.y})`);
+      } else {
+        gone.push(u);
+        say(`${name}没能上岸`);
+      }
       continue;
     }
     // 桥挪不了：地没了，桥就是没了
@@ -5267,6 +5364,15 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
   if (gone.length > 0) {
     const ids = new Set(gone.map((u) => u.id));
     s.units = s.units.filter((u) => !ids.has(u.id));
+  }
+
+  /*
+   * 搁浅的船：水回来了就重新浮起来（2026-11-20）。
+   * 不解除的话，地形改回来之后那条船永远动不了。
+   */
+  for (const u of s.units) {
+    if (!u.stranded) continue;
+    if (canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true })) delete u.stranded;
   }
 
   // 地形影响视野（高地看得远），改完要重新算一遍雾
@@ -5516,16 +5622,32 @@ function syncBridges(s: GameState): void {
     return !canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true });
   });
   if (drowned.length === 0) return;
-  for (const u of drowned) {
-    pushLog(s, u.owner, `桥被摧毁，${utype(s, u.type).name} 落水`, true);
-  }
-  const gone = new Set(drowned.map((u) => u.id));
   /*
-   * 这里刻意**不走** `killUnit`：落水不是"被击杀"——没有凶手，
-   * 也不该跑亡语（一个自爆兵掉进河里不该再炸一次）。
-   * "死亡"与"移除"的分界写在 killUnit 的注释里：有亡语的走前者，纯粹消失的走后者。
+   * 和事件改地形**走同一个结算**（2026-11-20）：先受一次大伤害，
+   * 活下来的被冲到岸上。两条路以前各写一套（那边直接删、这边也直接删），
+   * 表现都是"水来了人凭空没了"。
+   *
+   * 刻意**不走** `killUnit`：淹死不是"被击杀"——没有凶手，也不该跑亡语
+   * （一个自爆兵掉进河里不该再炸一次）。"死亡"与"移除"的分界写在 killUnit
+   * 的注释里：有亡语的走前者，纯粹消失的走后者。
    */
-  s.units = s.units.filter((u) => !gone.has(u.id));
+  const gone = new Set<string>();
+  for (const u of drowned) {
+    const deadly = tileUnder(s, u)?.terrain === 'deep';
+    if (!drownUnit(s, u, deadly)) {
+      gone.add(u.id);
+      continue;
+    }
+    const spot = freeSpotWithin(s, u, u.type, 6);
+    if (spot) {
+      u.x = spot.x;
+      u.y = spot.y;
+      pushLog(s, u.owner, `${utype(s, u.type).name} 被冲上岸 (${spot.x}, ${spot.y})`, true);
+    } else {
+      gone.add(u.id);
+    }
+  }
+  if (gone.size > 0) s.units = s.units.filter((u) => !gone.has(u.id));
 }
 
 /**
@@ -5557,6 +5679,11 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
   if (unit.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  /*
+   * 搁浅的船动不了（2026-11-20）。地形变回水会自动解除，
+   * 所以这不是一条死状态——作者用事件改出一条河道就能把它救回来。
+   */
+  if (unit.stranded) return { ok: false, reason: '这条船搁浅了，动不了' };
   /*
    * 走子按**单位所在的那张图**结算：月球上的兵走月球的格子。
    * `st` 是只读投影，变更仍然写在真的 `s` 上（单位对象本来就是同一个）。

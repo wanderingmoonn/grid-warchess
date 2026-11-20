@@ -10686,6 +10686,12 @@ a.btn {
   border-radius: 10px;
   border: 1px solid #d9d3c6;
   background: #fbf9f4;
+  /*
+   * 卡片底是写死的浅色，所以文字也必须写死深色（2026-11-20）。
+   * 不写的话会继承主题的 `--text`：暗色主题下变成"白字白底"，
+   * 对比度 1.16:1，卡片上的字等于看不见。
+   */
+  color: #2f2b26;
   text-align: left;
   cursor: pointer;
 }
@@ -10729,6 +10735,8 @@ a.btn {
 .rogue-card.is-locked:hover {
   border-color: #d9d3c6;
   background: #fbf9f4;
+  /* 对比度检查按"单条规则能读到的 color"算，所以这里也写一遍 */
+  color: #2f2b26;
 }
 
 /* 联机面板：提示"要上传的是哪一局" */

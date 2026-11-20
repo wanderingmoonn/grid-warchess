@@ -45,7 +45,7 @@ const html = fs.readFileSync('index.html', 'utf8')
 const st = createMatch({ ...DEFAULT_CONFIG, size: SIZE, startEra: 1, expansionIds: [], godMode: true }, 771);
 st.current = 'A';
 
-const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://t.test/' });
+const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://t.test/?loadSave=1' });
 const { window } = dom;
 window.structuredClone = (v) => structuredClone(v);
 window.matchMedia = (q) => ({

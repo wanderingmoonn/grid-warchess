@@ -214,7 +214,31 @@ export type LevelDo =
    * 判定记在 `levelState.decided`：`checkWinner` 会**先认它**，所以不会被后面
    * 的常规判定覆盖。一局只认第一次（先判先赢）。
    */
-  | { kind: 'win'; seat: PlayerId };
+  | { kind: 'win'; seat: PlayerId }
+  /**
+   * **对区域内的每个单位造成伤害**（2026-11-19）。
+   *
+   * 给爆炸、毒雾、落石这类"一次性打到一片"的东西用。和刷兵一样，不经过普攻流程。
+   *
+   * 三条要写清楚的口径：
+   *   · **经过护甲**走 `hurtPhysical`（甲先减，最低 0），`ignoreArmor: true` 则
+   *     直接扣血——注意这是**真的无视**，不是"甲减半"；
+   *   · `times` 是**多段**：每一段都单独过甲，所以"3 段各 5 点"打重甲比
+   *     "1 段 15 点"更弱（和普攻的多段是一个道理）；
+   *   · 打死的单位会**记进这一手的 `died`**，所以同一批里引用 `unitDied` 的
+   *     事件能看到它——和普攻打死一样。
+   */
+  | {
+      kind: 'damage';
+      zone: LevelZone;
+      amount: number;
+      /** 真＝完全无视护甲；不写＝走护甲减免 */
+      ignoreArmor?: boolean;
+      /** 打几段（默认 1，最多 20） */
+      times?: number;
+      /** 只打这一家的兵；不写＝区域内不分敌我 */
+      owner?: PlayerId;
+    };
 
 /**
  * 一件事：什么时候、做什么。
@@ -3842,6 +3866,42 @@ function normalizeDo(
     return { kind: 'gold', seat, amount };
   }
 
+  if (kind === 'damage') {
+    const zone = normZone(a.zone, `事件「${id}」的伤害区域`, map, errors);
+    if (!zone) return undefined;
+    const amount = Math.round(Number(a.amount));
+    if (!Number.isFinite(amount) || amount < 1 || amount > 9999) {
+      errors.push(`事件「${id}」的伤害值要在 1~9999（现在 ${String(a.amount)}）`);
+      return undefined;
+    }
+    let times: number | undefined;
+    if (a.times !== undefined) {
+      times = Math.round(Number(a.times));
+      if (!Number.isFinite(times) || times < 1 || times > 20) {
+        errors.push(`事件「${id}」的伤害段数要在 1~20（现在 ${String(a.times)}）`);
+        return undefined;
+      }
+    }
+    let owner: PlayerId | undefined;
+    if (a.owner !== undefined && a.owner !== '') {
+      const seat = String(a.owner).toUpperCase() as PlayerId;
+      if (!seated.includes(seat)) {
+        errors.push(`事件「${id}」的伤害只打「${String(a.owner)}」，但这一关只坐 ${seated.join(' / ')}`);
+        return undefined;
+      }
+      owner = seat;
+    }
+    return {
+      kind: 'damage',
+      zone,
+      amount,
+      ...(a.ignoreArmor === true ? { ignoreArmor: true } : {}),
+      // 1 段是默认值，不写进 JSON
+      ...(times !== undefined && times !== 1 ? { times } : {}),
+      ...(owner ? { owner } : {}),
+    };
+  }
+
   if (kind === 'win') {
     const seat = String(a.seat ?? '').toUpperCase() as PlayerId;
     if (!seated.includes(seat)) {
@@ -3852,7 +3912,7 @@ function normalizeDo(
   }
 
   errors.push(
-    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold / win / branch）`,
+    `事件「${id}」里有个不认识的动作「${kind}」（只能是 spawn / say / doctrine / deploy / terrain / reveal / gold / win / branch / damage）`,
   );
   return undefined;
 }

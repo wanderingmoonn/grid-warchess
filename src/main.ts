@@ -6141,6 +6141,14 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
       const saved = loadMatch();
       if (saved) state = saved;
       suspendSaves(false);
+      /*
+       * 读进来之后**立刻写回一份**（2026-11-20）。
+       *
+       * `loadMatch` 会把兵种表里没有的棋子摘掉，但那只是内存里的那份；
+       * 不写回的话，本机存的还是脏存档——下次继续上一局又得清理一遍，
+       * 而且"脏的东西一直躺在存档里"这件事本身就说不通。
+       */
+      if (saved) saveMatch(state);
       refreshMemory(state);
       clearSelection();
       render();

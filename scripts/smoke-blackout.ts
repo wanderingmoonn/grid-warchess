@@ -58,7 +58,7 @@ function boot(expansionIds) {
   );
   st.current = 'A';
 
-  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://t.test/' });
+  const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://t.test/?loadSave=1' });
   const { window } = dom;
   // jsdom 没有 structuredClone；浏览器 2022 年就有了，不补首屏会走"存档读不动"的兜底
   window.structuredClone = (v) => structuredClone(v);

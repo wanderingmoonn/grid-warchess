@@ -86,6 +86,7 @@ import { allAbilities, terrainArmorOf } from '../src/core/ability-registry.ts';
 import { CORE_ABILITIES } from '../src/core/abilities.ts';
 import { auraTargets } from '../src/core/ability-hooks.ts';
 import { CLIMATE_NAME, coastClassOf, seasonOf, type Climate } from '../src/core/seasons/climate.ts';
+import { WEATHER_UPKEEP_HP_CAP, weatherUpkeepHpLoss } from '../src/core/seasons/index.ts';
 import { effectLines, weatherEffect } from '../src/core/seasons/effect.ts';
 import type { WeatherDrivers } from '../src/core/seasons/effect.ts';
 import {
@@ -12750,6 +12751,24 @@ test('潮湿天收固定维护费，不看造价', () => {
   // 固定金额的意义：45 金的农夫和 260 金的农业公司交一样多，
   // 相对产出一个心疼、一个无感——这才是"高时代更抗天气"。
   assert.ok(!('upkeepRate' in humid(90)), '不许再按造价收百分比');
+});
+
+test('维护费不足的扣血有上限（大单位不会被一场雨淋死）', () => {
+  /*
+   * 2026-11-19 的真 bug：这条原本是"生命上限 × 10%，不封顶"。
+   * 普通兵（20~100 血）掉 2~10 点，看不出问题；尸骸仙帝 12000 血每回合掉 1200，
+   * 四个回合下来"天气"能把它打死，战报还写着"共损失 1200 点生命"。
+   */
+  assert.equal(weatherUpkeepHpLoss(40), 4, '民兵照旧：40 × 10% = 4');
+  assert.equal(weatherUpkeepHpLoss(100), 10, '百血单位照旧：10');
+  assert.equal(weatherUpkeepHpLoss(1600), WEATHER_UPKEEP_HP_CAP, '千血单位封顶');
+  assert.equal(weatherUpkeepHpLoss(12000), WEATHER_UPKEEP_HP_CAP, '仙帝也只掉封顶值');
+  assert.equal(weatherUpkeepHpLoss(1), 1, '再小也至少掉 1');
+
+  // 场景对照：修之前 12000 血会掉 1200，修之后是 10
+  const before = Math.round(12000 * 0.1);
+  assert.equal(before, 1200, '修之前确实是 1200（记在这里，免得以后有人以为夸大）');
+  assert.ok(weatherUpkeepHpLoss(12000) <= 10);
 });
 
 test('标签只挑最显眼的那一个讲：风大就说大风', () => {

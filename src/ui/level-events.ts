@@ -49,6 +49,7 @@ const DO_KIND_NAME: Record<string, string> = {
   gold: '给某一家金币',
   win: '直接判某一家胜利',
   branch: '如果…就…（分支）',
+  damage: '对区域内的单位造成伤害',
 };
 const WHEN_KIND_NAME: Record<string, string> = {
   turn: '第 N 次行动',
@@ -177,6 +178,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
             <li><b>改 AI 打法 / 让席位登场 / 改地形 / 点亮 / 加扣金币</b></li>
             <li><b>直接判胜</b> —— 不用等胜利条件，一局只认第一次</li>
             <li><b>如果…就…（分支）</b> —— 按当下局势二选一，可再嵌分支</li>
+            <li><b>对区域内的单位造成伤害</b> —— 可无视护甲、可分多段、可只打一家</li>
           </ul>
           <h3>三条规则</h3>
           <ol class="level-help-list">
@@ -250,6 +252,7 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (kind === 'branch') {
       return { kind: 'branch', when: { kind: 'turn', at: 5 }, then: [{ kind: 'say', text: '满足时' }] };
     }
+    if (kind === 'damage') return { kind: 'damage', zone: centerZone(2), amount: 5 };
     return { kind: 'say', text: '这一关发生了点事。' };
   };
 
@@ -565,6 +568,22 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
     if (act.kind === 'branch') {
       return `${kindSel}<span class="field-hint">满足条件时做一组动作，否则做另一组</span>`;
     }
+    if (act.kind === 'damage') {
+      return `${kindSel}<span class="level-when-arg">
+        <button class="btn btn-sm" data-pick-do-zone="${key}">${esc(zoneText(act.zone))}</button>
+        内每个单位扣
+        <input type="number" min="1" max="9999" class="level-mini-num" data-dmg-amount="${key}" value="${act.amount}">
+        点 ×
+        <input type="number" min="1" max="20" class="level-mini-num" data-dmg-times="${key}" value="${act.times ?? 1}">
+        段
+        <label class="editor-check"><input type="checkbox" data-dmg-ignore="${key}" ${act.ignoreArmor ? 'checked' : ''}> 无视护甲</label>
+        <select class="level-mini-select" data-dmg-owner="${key}">
+          <option value="" ${act.owner ? '' : 'selected'}>不分敌我</option>
+          ${seatOptions(act.owner)}
+        </select>
+      </span>`;
+    }
+    if (act.kind !== 'terrain') return `${kindSel}`;
     return `${kindSel}<span class="level-when-arg">
         把 <button class="btn btn-sm" data-pick-do-zone="${key}">${esc(zoneText(act.zone))}</button>
         改成
@@ -969,6 +988,25 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
 
   mask.addEventListener('input', (ev) => {
     const el = ev.target as HTMLElement;
+    const dmgAmount = el.getAttribute('data-dmg-amount');
+    if (dmgAmount) {
+      const act = doNode(dmgAmount);
+      if (act && act.kind === 'damage') {
+        act.amount = Math.max(1, Math.min(9999, Math.round(Number((el as HTMLInputElement).value) || 1)));
+      }
+      return;
+    }
+    const dmgTimes = el.getAttribute('data-dmg-times');
+    if (dmgTimes) {
+      const act = doNode(dmgTimes);
+      if (act && act.kind === 'damage') {
+        const n = Math.max(1, Math.min(20, Math.round(Number((el as HTMLInputElement).value) || 1)));
+        // 1 段是默认值，不写进 JSON
+        if (n === 1) delete act.times;
+        else act.times = n;
+      }
+      return;
+    }
     const say = el.getAttribute('data-say');
     if (say) {
       const act = doNode(say.split(':')[0]!);
@@ -1103,6 +1141,24 @@ export function openLevelEvents(opts: LevelEventsOptions): void {
         else node.op = val as '>=' | '<=' | '=' | '>' | '<';
       }
       renderList();
+      return;
+    }
+    const dmgIgnore = el.getAttribute('data-dmg-ignore');
+    if (dmgIgnore !== null) {
+      const act = doNode(dmgIgnore);
+      if (act && act.kind === 'damage') {
+        if ((el as HTMLInputElement).checked) act.ignoreArmor = true;
+        else delete act.ignoreArmor;
+      }
+      return;
+    }
+    const dmgOwner = el.getAttribute('data-dmg-owner');
+    if (dmgOwner !== null) {
+      const act = doNode(dmgOwner);
+      if (act && act.kind === 'damage') {
+        if (val) act.owner = val as PlayerId;
+        else delete act.owner;
+      }
       return;
     }
     const winSeat = el.getAttribute('data-win-seat');
