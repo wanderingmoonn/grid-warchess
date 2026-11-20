@@ -21,6 +21,7 @@ import { createMatch } from '../src/core/setup.ts';
 import { EXPANSIONS } from '../src/core/expansions.ts';
 import { UNIT_TYPES } from '../src/core/config.ts';
 import { playerView } from '../src/core/fog.ts';
+import { place } from './tests/support.ts';
 
 const dom = new JSDOM('<div id="host"></div>');
 (globalThis as any).document = dom.window.document;
@@ -77,6 +78,25 @@ function mount(s: any, city: any, extra: Record<string, unknown> = {}) {
 }
 
 const rowsIn = (el: Element) => el.querySelectorAll('[data-act="recruit"]').length;
+
+/** 渲染"没选中任何东西"那一页（默认页） */
+function mountDefault(s: any, extra: Record<string, unknown> = {}) {
+  const host = dom.window.document.getElementById('host')! as unknown as HTMLElement;
+  renderPanel(host, {
+    view: playerView(s, 'A', false),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+    logSide: 'A',
+    ...extra,
+  } as any);
+  return host;
+}
+
+const skillNames = (host: Element) =>
+  Array.from(host.querySelectorAll('[data-act="hero-skill"]')).map((b) => b.textContent ?? '');
 
 console.log('长列表收纳');
 
@@ -156,6 +176,72 @@ console.log('钉底层');
 check('「结束行动」那一层还在侧栏末尾', () => {
   assert.ok(host.innerHTML.includes('class="side-footer"'), 'side-footer 没了，钉底就没有锚点');
   assert.ok(host.innerHTML.includes('data-act="end-turn"'), '找不到结束行动按钮');
+});
+
+console.log('待放技能（mustCast）');
+
+/**
+ * 摆一队英雄：圣剑勇者（`mustCast`）+ 矮人王（没标）。
+ *
+ * 直接 `place` 而不走招募：这里量的是界面筛不筛，不是能不能买到。
+ */
+function setupHeroes(count = 1) {
+  const s = createMatch(
+    {
+      size: 16,
+      startEra: 8,
+      aiOpponent: false,
+      aiAlly: false,
+      expansionIds: ALL,
+      enabledUnits: Object.keys(UNIT_TYPES),
+    } as any,
+    999,
+  );
+  s.current = 'A';
+  for (let i = 0; i < count; i += 1) place(s, 'A', 'sword-saint', 2 + i, 2);
+  place(s, 'A', 'dwarf-king', 2, 6);
+  return s;
+}
+
+check('没选中单位时，只列标了 mustCast 的技能', () => {
+  const names = skillNames(mountDefault(setupHeroes(1)));
+  assert.ok(
+    names.some((t) => t.includes('圣剑觉醒')),
+    `圣剑觉醒没被顶到待放页，列出来的是：${names.join(' / ') || '（空）'}`,
+  );
+});
+
+check('没标 mustCast 的技能不在待放页（选中那个兵才看得到）', () => {
+  const names = skillNames(mountDefault(setupHeroes(1)));
+  assert.ok(
+    !names.some((t) => t.includes('投斧')),
+    '投斧没标 mustCast，却出现在了待放页',
+  );
+});
+
+check('选中那个兵之后，没标 mustCast 的技能照样在（只是不占默认页）', () => {
+  const s = setupHeroes(1);
+  const king = s.units.find((u) => u.type === 'dwarf-king')!;
+  const names = skillNames(mountDefault(s, { selectedUnit: king }));
+  assert.ok(
+    names.some((t) => t.includes('投斧')),
+    `选中兵之后投斧也不见了，列出来的是：${names.join(' / ') || '（空）'}`,
+  );
+});
+
+check('冷却中的技能不占待放页的位置', () => {  const s = setupHeroes(1);
+  const hero = s.units.find((u) => u.type === 'sword-saint')!;
+  hero.skillCd = { ascend: 3 };
+  assert.equal(skillNames(mountDefault(s)).length, 0, '还在冷却，却被列成"该放了"');
+});
+
+check('待放超过 5 条时收起，标题上的数字对得上', () => {
+  const h = mountDefault(setupHeroes(6));
+  const fold = h.querySelector('details.list-fold') as HTMLDetailsElement | null;
+  assert.ok(fold, '六条待放没有收起');
+  const hidden = fold!.querySelectorAll('[data-act="hero-skill"]').length;
+  assert.equal(hidden, 1, `藏起来的是 ${hidden} 条，六个英雄留 5 条应该只藏 1 条`);
+  assert.ok((fold!.querySelector('summary')!.textContent ?? '').includes('1'), '标题数字不对');
 });
 
 console.log(`\n通过 ${pass} 项${process.exitCode ? '，有失败' : '，全部正常'}`);

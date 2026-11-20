@@ -309,6 +309,14 @@ const panelHtmlCache = new WeakMap<HTMLElement, string>();
 const NO_FOLDS: ReadonlySet<string> = new Set();
 
 /**
+ * 「待放」那一页收起时留几条。
+ *
+ * 比产兵的 12 行小得多，因为两页的容量不是一回事：产兵列表一屏放二十行也只是
+ * "得多看两眼"，而"现在该做什么"超过五个，玩家就又开始挑不过来了。
+ */
+const MUST_CAST_KEEP = 5;
+
+/**
  * 让缓存作废。
  *
  * 侧栏被别人直接写过之后必须调一次（上帝模式的兵种货架就是这么干的）：
@@ -705,12 +713,33 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
  * 现在修士、建筑也在用。函数名没改（改起来牵连一堆调用点），
  * 但**给玩家看的字里不许再出现"英雄"**。
  */
-function heroSkillBlock(s: GameState, units: Unit[]): string {
+function heroSkillBlock(
+  s: GameState,
+  units: Unit[],
+  opts?: {
+    /**
+     * 只列「别忘了放」且**现在就能放**的那几条（`SkillDef.mustCast`）。
+     *
+     * "没选中任何单位"那一页走这个模式：那一页原来把每个兵的每条技能都铺出来，
+     * 一回合几十个法术之后就是一面墙，真正要紧的那条反而没人看见。
+     * 现在只留"漏了就补不回来"的，其余的选中那个兵再看。
+     */
+    mustCastOnly?: boolean;
+    /** 收起状态（mustCastOnly 下条目也会多起来，走长列表收纳那套） */
+    open?: boolean;
+  },
+): string {
   const rows: string[] = [];
   for (const u of units) {
     const def = utype(s, u.type);
     if (!skillsOf(s, u) || skillsOf(s, u).length === 0) continue;
     for (const k of heroSkillsOf(s, u)) {
+      /*
+       * 「待放」那一页只要两样：作者标了 `mustCast`，而且**此刻就绪**。
+       * 没就绪的不列——这一页的语义是"现在该你出手了"，不是"技能一览"；
+       * 冷却中的那几条在选中这个兵之后照样是灰按钮，不会丢。
+       */
+      if (opts?.mustCastOnly && !(k.def.mustCast === true && k.ready)) continue;
       // 充能型技能要把"还剩几发"写在脸上：写成"就绪/冷却"会让人以为
       // 只能一次一次地等，而它其实是"攒着可以连开"的那一类。
       const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
@@ -778,6 +807,23 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
   // 菜单底下原来有一句"技能不占行动，每个英雄每回合最多一次"的总说明。
   // 现在技能五花八门（有的占移动、有的耗灵石、有的能连发），一句话概括不了，
   // 所以删掉——代价与冷却都写在每个按钮自己的小字上了。
+  if (opts?.mustCastOnly) {
+    /*
+     * 「待放」这一页的标题不写"技能"：它回答的是"现在该出手了吗"，
+     * 不是"这个兵会什么"。写得含糊，玩家还是会把它当成技能一览表划过去。
+     *
+     * 条数多起来的时候走长列表收纳（和产兵同一套零件）。这里的门槛比产兵小得多：
+     * 产兵一屏放得下二十行也不算多，而"待办"超过五个就已经看不过来了。
+     */
+    const body = foldRows(rows, {
+      key: 'skill:must-cast',
+      open: opts.open === true,
+      limit: MUST_CAST_KEEP,
+      noun: '个技能',
+    });
+    return `<div class="card-title" style="margin-top:14px">待放 <span class="hint">漏了就补不回来</span></div>
+    <div class="recruit-list">${body}</div>`;
+  }
   return `<div class="card-title" style="margin-top:14px">技能</div>
     <div class="recruit-list">${rows.join('')}</div>`;
 }
@@ -1369,10 +1415,23 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     `;
   }
 
-  // 没选中任何东西时的默认页：把自己的英雄技能摆出来。
+  // 没选中任何东西时的默认页：只列「别忘了放」的技能。
+  /*
+   * 以前这里列的是**所有**自己单位的**所有**技能。修真包上线之后这一页变成一面墙：
+   * 十个修士、每人四门法术，四十行铺下来，玩家真正该做的那件事（圣剑觉醒还没点、
+   * 招魂还能救一个人）就淹在中间了。
+   *
+   * 现在只留作者标了 `mustCast` 的，而且只要**此刻就绪**的。其余的选中那个兵再看——
+   * 它们一条都没少，只是不该占着"没选中任何东西"这一页。
+   */
   const myHeroes =
-    input.spectator !== true && myTurn ? unitsOf(s, me).filter((u) => skillsOf(s, u)) : [];
-  const heroBlock = heroSkillBlock(s, myHeroes);
+    input.spectator !== true && myTurn
+      ? unitsOf(s, me).filter((u) => skillsOf(s, u)?.some((k) => k.mustCast === true))
+      : [];
+  const heroBlock = heroSkillBlock(s, myHeroes, {
+    mustCastOnly: true,
+    open: (input.openFolds ?? NO_FOLDS).has('skill:must-cast'),
+  });
 
   return `
     ${heroBlock}
