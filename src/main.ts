@@ -351,8 +351,23 @@ sideEl.addEventListener(
   'toggle',
   (e) => {
     const el = e.target as HTMLElement | null;
-    if (!el || !el.classList.contains('card-fold')) return;
+    if (!el) return;
     const open = (el as HTMLDetailsElement).open;
+    /*
+     * 长列表的「还有 N 种」：键由面板生成（`recruit:<id>:<组>`），开合记进集合。
+     * 这一支必须放在 `card-fold` 判断**之前**吗？不必——两个 class 不会同时出现，
+     * 但先判哪一个都得用 classList，不能只看 `data-fold`：卡片的 data-fold 是
+     * `log`/`ops`，键的命名空间和这里不一样。
+     */
+    if (el.classList.contains('list-fold')) {
+      const key = el.dataset.fold;
+      if (key) {
+        if (open) openFolds.add(key);
+        else openFolds.delete(key);
+      }
+      return;
+    }
+    if (!el.classList.contains('card-fold')) return;
     // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
     if (el.dataset.fold === 'log') logOpen = open;
     else opsOpen = open;
@@ -1213,6 +1228,14 @@ function myTurn(): boolean {
 let opsOpen = false;
 let logOpen = false;
 /**
+ * 长列表里哪几个「还有 N 种」被点开了。
+ *
+ * 用集合而不是单个布尔：一座城按类别有三组（战斗/经济/建造），军营还多一组
+ * 「还造不出来」，它们各开各的。键里带着城/营的 id，所以换一座城是新的账，
+ * 不会串味。
+ */
+const openFolds = new Set<string>();
+/**
  * 上一次渲染时，这一局已经触发过哪些关卡事件（id）。
  *
  * 只用来判断"**刚刚**触发了哪几条"，进而在它们带 `say` 时把战报展开。
@@ -1360,6 +1383,7 @@ function panelInput(known?: PlayerView): PanelInput {
     star: starPanelInfo(),
     opsOpen,
     logOpen,
+    openFolds,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
     chimeVolume,

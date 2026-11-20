@@ -29,6 +29,7 @@ import { boardIdOf, boardOf, EARTH } from '../core/board.ts';
 import { hazardLines, hazardOn } from '../core/hazard.ts';
 import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
+import { foldLimit, foldRows } from './list-fold.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
 import {
   MODULES,
@@ -169,6 +170,14 @@ export interface PanelInput {
    * 常驻展开等于把「结束回合」和「认输」一路顶出屏幕。
    */
   logOpen?: boolean;
+  /**
+   * 长列表里哪些「还有 N 种」是展开着的（键是 `recruit:<城/营 id>:<分组>`）。
+   *
+   * 和 `logOpen` 同一个理由：面板每帧整块重建，`<details open>` 是 DOM 上的状态，
+   * 重建一次就没了。所以开合记在 main 那边，渲染时按这个集合把 `open` 加回去。
+   * 用集合而不是一个布尔，是因为一座城有三个类别分组，各开各的。
+   */
+  openFolds?: ReadonlySet<string>;
   /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
@@ -295,6 +304,9 @@ export interface PanelReport {
  * 摘要漏一个字段就会让面板停在旧内容上，那种 bug 比慢难查得多。
  */
 const panelHtmlCache = new WeakMap<HTMLElement, string>();
+
+/** 没有任何长列表被展开时的占位：省掉每个调用点都写 `?? new Set()` */
+const NO_FOLDS: ReadonlySet<string> = new Set();
 
 /**
  * 让缓存作废。
@@ -1574,6 +1586,14 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const cats = (['combat', 'economy', 'builder'] as const).filter((cat) =>
     shown.some((d) => d.category === cat),
   );
+  /*
+   * 长列表收纳（2026-11-20）。
+   *
+   * 判据用 `shown.length`（筛完之后的条数）而不是 `buildable.length`：
+   * 玩家搜了"弓"、只剩三行，那就该三行全给，不要再折一次。
+   */
+  const keep = foldLimit(shown.length);
+  const folds = input.openFolds ?? NO_FOLDS;
   const grouped = cats
     .map((cat) => {
       const items = shown.filter((d) => d.category === cat);
@@ -1585,9 +1605,12 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
        */
       const title =
         cats.length > 1 ? `<div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>` : '';
-      return `<div class="recruit-group">${title}<div class="recruit-list">${items
-        .map(unitButton)
-        .join('')}</div></div>`;
+      const key = `recruit:${city.id}:${cat}`;
+      const body = foldRows(
+        items.map(unitButton),
+        { key, open: folds.has(key), limit: keep, noun: '种' },
+      );
+      return `<div class="recruit-group">${title}<div class="recruit-list">${body}</div></div>`;
     })
     .join('');
 
@@ -1987,50 +2010,66 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   const eraFilter = input.recruitEra ?? ERA_ALL;
   const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
+  // 长列表收纳：门槛和城市面板同一个口径（见 list-fold.ts）。军营的"还造不出来"
+  // 那组自己算自己的——它可能有四十条，而能造的三条不该跟着被折。
+  const folds = input.openFolds ?? NO_FOLDS;
+
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
       const items = shown.filter((d) => d.category === cat);
       if (items.length === 0) return '';
+      const key = `recruit:${camp.id}:${cat}`;
+      const body = foldRows(
+        items.map((d) => {
+          const slotsOk = slotsOf(d) > 0;
+          const extra =
+            d.domain === 'water'
+              ? waterSlots.length > 1
+                ? ` · ${waterSlots.length} 处水面可选`
+                : ' · 下水'
+              : '';
+          return recruitButton(
+            s,
+            me,
+            d,
+            ordering ? queueFull : !myTurn || !slotsOk,
+            extra,
+            ordering ? 'order' : 'recruit',
+            camp.id,
+            { kind: 'camp', camp },
+          );
+        }),
+        { key, open: folds.has(key), limit: foldLimit(shown.length), noun: '种' },
+      );
       return `<div class="recruit-group">
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
-        <div class="recruit-list">${items
-          .map((d) => {
-            const slotsOk = slotsOf(d) > 0;
-            const extra =
-              d.domain === 'water'
-                ? waterSlots.length > 1
-                  ? ` · ${waterSlots.length} 处水面可选`
-                  : ' · 下水'
-                : '';
-            return recruitButton(
-              s,
-              me,
-              d,
-              ordering ? queueFull : !myTurn || !slotsOk,
-              extra,
-              ordering ? 'order' : 'recruit',
-              camp.id,
-              { kind: 'camp', camp },
-            );
-          })
-          .join('')}</div>
+        <div class="recruit-list">${body}</div>
       </div>`;
     })
     .join('');
 
-  /** 白名单里有、但条件不满足的：按乙档灰着列出来，把原因写在按钮上 */
-  const gatedGroup =
-    gated.length === 0
-      ? ''
-      : `<div class="recruit-group">
+  /**
+   * 白名单里有、但条件不满足的：按乙档灰着列出来，把原因写在按钮上。
+   *
+   * 这一堆同样会很长（炼器炉能收几十种木器），所以走同一套收纳。
+   * 但它的门槛独立算：不能因为"能造的有 200 种"就把这堆也按 12 条切，
+   * 也不能因为它自己有 40 条就把能造的那几行也折了。
+   */
+  let gatedGroup = '';
+  if (gated.length > 0) {
+    const key = `recruit:${camp.id}:gated`;
+    const body = foldRows(
+      gated.map((d) => {
+        const v = verdictOf(d);
+        return recruitButton(s, me, d, true, ` · ${v.ok ? '' : v.reason}`);
+      }),
+      { key, open: folds.has(key), limit: foldLimit(gated.length), noun: '种' },
+    );
+    gatedGroup = `<div class="recruit-group">
         <div class="recruit-group-title">还造不出来</div>
-        <div class="recruit-list">${gated
-          .map((d) => {
-            const v = verdictOf(d);
-            return recruitButton(s, me, d, true, ` · ${v.ok ? '' : v.reason}`);
-          })
-          .join('')}</div>
+        <div class="recruit-list">${body}</div>
       </div>`;
+  }
 
   const groups =
     (buildable.length === 0

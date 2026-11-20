@@ -105,6 +105,7 @@
     "probe:unit-ai": "node --experimental-strip-types scripts/probe-unit-ai.ts",
     "probe:dragon-king": "node --experimental-strip-types scripts/probe-dragon-king.ts",
     "probe:skill-ai": "node --experimental-strip-types scripts/probe-skill-ai.ts",
+    "probe:fold": "node --experimental-strip-types scripts/probe-fold.ts",
     "probe:dark-turmoil": "node --experimental-strip-types scripts/probe-dark-turmoil.ts",
     "test:fast": "node --experimental-strip-types scripts/run-tests.ts --parallel 6",
     "test:serial": "node --experimental-strip-types scripts/run-tests.ts",
