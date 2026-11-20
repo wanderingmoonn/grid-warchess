@@ -3719,6 +3719,125 @@ function unitAiCandidates(
   return list;
 }
 
+/**
+ * "走到能盖这个建筑的位置"——产业链目标的选址推手（T11）。
+ *
+ * ── 为什么要它 ──────────────────────────────────────────────
+ *
+ * 建造候选只看**当前站位周围**（`buildSpots`）。需要"紧贴某个建筑"的东西
+ * （修真的藏经阁贴着宗门）就永远卡住：条件全齐、人也在，就差一格空地，
+ * 而工人不会为了那一格走下去。实测执事在宗门旁边转了整局，藏经阁 0 座。
+ *
+ * ── 怎么做到不认识扩展 ─────────────────────────────────────
+ *
+ * 核心**不判断哪里好**，只做三件通用的事：
+ *
+ *   1. 扫一片格子（自己城市/建筑周围，不是全图）；
+ *   2. 逐格问目标："在这儿盖这个建筑，值多少？"——`buildScore`，
+ *      返回 `null` 的格子直接跳过，所以"贴宗门""建在水上"这些规则
+ *      全由扩展自己表达，核心一个字都不知道；
+ *   3. 挑最值的那一格，从可达格子里找一个能站着盖的位置，发一条 MOVE。
+ *
+ * 分数取"那一格的分 × 0.7"：**比真盖上低一档**——已经站在能盖的位置时，
+ * BUILD 候选自然赢；走过去的收益只是"离那一步更近"。
+ */
+function goalApproachCandidate(
+  s: GameState,
+  unit: Unit,
+  buildId: string,
+  buildDef: UnitTypeDef,
+  all: Fields,
+): Candidate | null {
+  const ctx = goalCtxOf(s, unit.owner, all.era, all.urgent, all.threat, all.goalCommit);
+  const steps = goalStepsInPlay(ctx).filter((x) => x.step.claimsBuild?.(buildDef));
+  if (steps.length === 0) return null;
+
+  /*
+   * 扫描范围：自己城市 + 自己建筑周围 10 格。
+   * 不扫全图有两个原因：代价（每格一次 buildScore），以及"在敌人鼻子底下
+   * 盖东西"本来就不该被鼓励——那类风险由 `buildScore` 里的 `inDanger` 扣。
+   */
+  const anchors = [...citiesOf(s, unit.owner), ...unitsOf(s, unit.owner).filter(
+    (u) => utype(s, u.type).category === 'building',
+  )];
+  if (anchors.length === 0) return null;
+  const R = 10;
+  const seen = new Set<number>();
+  let best: { x: number; y: number; score: number } | null = null;
+  for (const a of anchors) {
+    for (let dy = -R; dy <= R; dy += 1) {
+      for (let dx = -R; dx <= R; dx += 1) {
+        const x = a.x + dx;
+        const y = a.y + dy;
+        if (!inBounds(s, x, y)) continue;
+        const key = y * s.w + x;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const tile = s.tiles[key];
+        if (!tile) continue;
+        /*
+         * **先问规则层这一格能不能建**。
+         *
+         * `buildScore` 只回答"值不值"，不回答"行不行"——它平时只被
+         * `buildSpots`（已经过规则筛）的格子调用，所以返回 null 的是
+         * "这个局面下建它没意义"，不是"这里不许建"。
+         * 扫全图时必须补这一问，否则会朝一个盖不了的格子走过去。
+         * 判据用 `buildSiteError`（和 doBuild 同一个函数），核心不需要
+         * 知道"藏经阁要贴宗门"这种规则。
+         */
+        if (buildSiteError(s, buildDef, { ...unit, x, y }, x, y) !== null) continue;
+        const spot = { x, y, terrain: tile.terrain };
+        for (const { step } of steps) {
+          let v: number | null = null;
+          try {
+            v = step.buildScore ? step.buildScore(ctx, buildId, spot, buildDef) : DEFAULT_GOAL_BUILD_SCORE;
+          } catch {
+            v = null;
+          }
+          if (v === null || v <= 0) continue;
+          if (!best || v > best.score) best = { x, y, score: v };
+        }
+      }
+    }
+  }
+  if (!best) return null;
+
+  // 已经能盖了（有合法位置）就别再走——交给 BUILD 候选
+  if (buildSpots(s, unit, buildDef).length > 0) return null;
+
+  /*
+   * 找一个"站上去就能盖"的可达格：目标格周围 buildRange 以内、且从那儿
+   * `buildSpots` 非空。找不到就退而求其次——走到离目标最近的可达格。
+   */
+  const reach = reachableTiles(s, unit);
+  let stand: { x: number; y: number } | null = null;
+  let standDist = Infinity;
+  let nearest: { x: number; y: number } | null = null;
+  let nearestDist = Infinity;
+  const target = { x: best.x, y: best.y };
+  for (const [k] of reach) {
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
+    const d = distance({ x, y }, target);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = { x, y };
+    }
+    if (d > CONFIG.buildRange) continue;
+    if (d >= standDist) continue;
+    if (buildSpots(s, { ...unit, x, y } as Unit, buildDef).length > 0) {
+      standDist = d;
+      stand = { x, y };
+    }
+  }
+  const goTo = stand ?? nearest;
+  if (!goTo) return null;
+  return {
+    action: { type: 'MOVE', unitId: unit.id, x: goTo.x, y: goTo.y },
+    score: Math.max(18, Math.min(64, best.score * 0.7)),
+  };
+}
+
 function unitCandidates(
   s: GameState,
   unit: Unit,
@@ -3771,11 +3890,27 @@ function unitCandidates(
         // 钱和编制都要够：以前没查，AI 会一直提"金币不足"的建造，
         // 而执行方遇到非法动作就中断整回合。
         if (!canPay(s.players[s.current], recruitResCost(s, s.current, buildDef))) continue;
-        for (const spot of buildSpots(s, unit, buildDef)) {
+        const spots = buildSpots(s, unit, buildDef);
+        for (const spot of spots) {
           out.push({
             action: { type: 'BUILD', unitId: unit.id, unitType: buildId, x: spot.x, y: spot.y },
             score: scoreBuild(s, unit, buildId, spot, all),
           });
+        }
+        /*
+         * 脚下没有位置 → **走向能盖的地方**（2026-11-20，T11）。
+         *
+         * 现场：修真的藏经阁要求"紧贴宗门"，执事站在宗门旁边转了半天，
+         * 周围全被占满，于是永远不建。条件是全齐的（时代、钱、人）。
+         *
+         * 判据仍然全在扩展那边：核心只做三件事——扫格子、问目标"这个位置
+         * 值多少"（`buildScore`）、把"走过去"发成一条普通的 MOVE 候选。
+         * 核心不知道"藏经阁要贴着宗门"，也没必要知道：`buildScore` 返回
+         * `null` 的格子自动被跳过，能给出高分的格子自然就是规则允许的。
+         */
+        if (spots.length === 0) {
+          const go = goalApproachCandidate(s, unit, buildId, buildDef, all);
+          if (go) out.push(go);
         }
       }
     }
