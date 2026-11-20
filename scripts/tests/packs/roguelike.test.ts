@@ -15,7 +15,7 @@ import {
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
 import { CARDS_PER_LEVEL, cardLevel, cardWeight, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
-import { PER_LEVEL_PCT, cardTypeId, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
+import { PER_LEVEL_PCT, buildableTypes, cardTypeId, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
 import { SETTLE, cityUpgradeCost, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
@@ -465,6 +465,20 @@ export function run() {
     assert.equal(canUseType(s, 'B', 'spearman'), true, 'Boss 不该被玩家的卡池卡住');
     // 玩家自己的原版兵被卡池挡着
     assert.equal(canUseType(s, 'A', 'spearman'), false);
+  });
+
+  test('肉鸽：同一兵种只给最高级那一档（+2 不会再出现 +1）', () => {
+    // 6 张 = 2 级；花名册里还带着上一关的 +1 老兵
+    const list = buildableTypes({ cards: { militia: 6 }, roster: [{ type: cardTypeId('militia', 1) }] });
+    assert.deepEqual(list, [cardTypeId('militia', 2)], '只应剩 +2 一档');
+    assert.ok(!list.includes(cardTypeId('militia', 1)), '不该再给 +1 的选项');
+
+    // 没卡但有老兵：给回它自己的档位，能补员
+    const onlyRoster = buildableTypes({ cards: {}, roster: [{ type: cardTypeId('archer', 1) }] });
+    assert.deepEqual(onlyRoster, [cardTypeId('archer', 1)]);
+
+    // 完全没卡没兵：给原版
+    assert.deepEqual(buildableTypes({ cards: {}, roster: [{ type: 'militia' }] }), ['militia']);
   });
 
   test('肉鸽：城血跨关保留，修城下一关补满', () => {

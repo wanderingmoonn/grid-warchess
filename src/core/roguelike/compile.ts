@@ -91,3 +91,37 @@ export function mergeUnits(
 ): Record<string, UnitTypeDef> {
   return { ...(base ?? {}), ...overrides };
 }
+
+
+/**
+ * 这一局**能造哪些兵**（2026-11-20）。
+ *
+ * 原来直接把"抽到的卡"和"花名册里的类型"拼成一张列表，于是同一个兵种会出现
+ * 好几档：`民兵 +1`（花名册里带的旧兵）和 `民兵 +2`（现在该造的）并列。
+ * 玩家点了 +1 那一档，造出来的自然是 +1 的数值——报"升过两次还是 +1"。
+ *
+ * 现在按**兵种**归并，只留最高级那一档：同一个人只需要一个选项。
+ */
+export function buildableTypes(run: {
+  cards: Record<string, number>;
+  roster: Array<{ type: string }>;
+}): string[] {
+  /** baseId → 最高等级 */
+  const best = new Map<string, number>();
+
+  for (const [id, n] of Object.entries(run.cards)) {
+    const lv = cardLevel(n);
+    if (lv <= 0) continue;
+    best.set(id, Math.max(best.get(id) ?? 0, lv));
+  }
+
+  for (const u of run.roster) {
+    const parsed = parseCardTypeId(u.type);
+    const baseId = parsed?.baseId ?? u.type;
+    const lv = parsed?.level ?? 0;
+    // 花名册里带着的兵至少要能补员；卡等级更高时按更高的造
+    best.set(baseId, Math.max(best.get(baseId) ?? 0, lv));
+  }
+
+  return [...best.entries()].map(([baseId, lv]) => (lv > 0 ? cardTypeId(baseId, lv) : baseId));
+}

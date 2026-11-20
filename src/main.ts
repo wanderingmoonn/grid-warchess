@@ -27,7 +27,7 @@ import { goalText, validateLevel } from './core/level.ts';
 import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
-import { cardTypeId, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { buildableTypes, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
 import { ELITE_UNIT_MAP } from './core/roguelike/elites.ts';
 import { actLabel, isBossStage } from './core/roguelike/stages.ts';
 import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
@@ -6302,15 +6302,12 @@ function startRogueStage(): void {
    * 卡加成不再覆盖原兵种（否则敌人同兵种一起变强），
    * 所以玩家能造的必须是 `militia~L2` 这种专属类型。
    */
-  const allowed = [
-    ...new Set([
-      ...rogue.run.roster.map((u) => u.type),
-      ...Object.entries(rogue.run.cards).map(([id, n]) => {
-        const lv = cardLevel(n);
-        return lv > 0 ? cardTypeId(id, lv) : id;
-      }),
-    ]),
-  ];
+  /*
+   * 可造清单按**兵种**归并，只留最高级（2026-11-20）。
+   * 以前同一兵种会出现 `民兵 +1` 和 `民兵 +2` 两个选项，
+   * 点错档位就会觉得"升了级但数值没变"。
+   */
+  const allowed = buildableTypes(rogue.run);
   const buildable = allowed.length > 0 ? allowed : ['militia', 'archer'];
   state = createMatch(
     {

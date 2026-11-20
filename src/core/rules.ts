@@ -5225,9 +5225,27 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
       }
     }
     if (!touched) continue;
+    /*
+     * **空中单位不受地形影响**（2026-11-20）：这一片改成水也好、深水也好，
+     * 飞在天上的东西照旧停在那儿，不该被"挤走"，更不该跟着淹死。
+     */
+    if (isAirborne(s, u)) continue;
     if (canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true })) continue;
 
     const name = utype(s, u.type).name;
+    /*
+     * 地形变成水/深水，**地面单位淹死**，不是被挤到旁边（2026-11-20）。
+     *
+     * 原来一律走"找个空地挪过去"：桥下的河床改成深水时，站在桥面上的兵
+     * 会凭空出现在岸上——玩家看到的是"水来了，人没事还传送了"。
+     * 会水的（船）不受影响，它们本来就该在水里。
+     */
+    const here = tileAt(s, u.x, u.y)?.terrain;
+    if ((here === 'water' || here === 'deep') && utype(s, u.type).domain !== 'water') {
+      gone.push(u);
+      say(`${name}落水`);
+      continue;
+    }
     // 桥挪不了：地没了，桥就是没了
     if (utype(s, u.type).bridges) {
       gone.push(u);
@@ -5481,6 +5499,15 @@ function syncBridges(s: GameState): void {
    * "水退了，桥断了，站在桥上的兵反而淹死"这种没道理的事。
    */
   const drowned = s.units.filter((u) => {
+    /*
+     * **空中不落水**（2026-11-20）。
+     *
+     * 判据原来只有"船本来就在水上"。飞行单位（含挂反重力模块的地面素体）
+     * 站在桥格上，桥塌之后 `canStandAt` 会拿**兵种**去判地形，
+     * 于是飞在天上的东西被判成"站不住"——桥塌了，鹰跟着掉下来。
+     * 这里按**这个单位实际在哪一层**判断，不看兵种。
+     */
+    if (isAirborne(s, u)) return false;
     if (utype(s, u.type).domain === 'water') return false; // 船本来就在水上
     const i = u.y * s.w + u.x;
     if (!collapsed.includes(i)) return false;

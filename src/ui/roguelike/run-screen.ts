@@ -176,7 +176,7 @@ export function openCardChoice(opts: CardChoiceOptions): void {
     <div class="modal rogue-panel">
       <div class="modal-head">
         <h2>三选一</h2>
-        <p>三张同名合成一级（每级 +12% 攻血）。</p>
+        <p>三张同名合成一级（每级 +25% 攻血）。</p>
       </div>
       <div class="modal-body">
         <div class="rogue-cards">
