@@ -66,6 +66,13 @@ export interface AiGoalCtx {
    * 细化计划见 docs/PLAN-AI-GOAL-2026-11-20.md 的"待办"。
    */
   urgent: boolean;
+  /**
+   * 威胁值：**能攻城的战力**摸到自己城下有多少（见 ai.ts 的 `threatLevelOf`）。
+   *
+   * 产业链用它判断"该不该放弃投资"，**不用 `urgent`**：`urgent` 里那条
+   * `army < 3` 会让开局（本来就没几个兵）永远处于"吃紧"，承诺每回合被清空。
+   */
+  threat: number;
   /** 这个势力现在在追哪条链（`AiCommit`），没有就是 null */
   commit: AiCommit | null;
 }
@@ -258,6 +265,14 @@ export function goalStepsInPlay(c: AiGoalCtx): Array<{
 export const COMMIT_KEEP_RATIO = 0.6;
 
 /**
+ * 威胁到多少就放弃投资。
+ *
+ * 40 ≈ 两个火枪兵 / 一个半戟兵站在城下——"真的会拆墙"的量级，不是侦察兵路过。
+ * 标定方式见 `threatLevelOf`；改这个数要拿装甲素体的产量重新量。
+ */
+export const THREAT_ATK = 40;
+
+/**
  * 承诺中的那一段给多少额外分。
  *
  * 15 的量级参考：一次普通建造 40~80，一个兵 20~50。够把"差一点点就排不上"
@@ -275,17 +290,16 @@ export const COMMIT_BUILD_BONUS = 15;
  */
 export function resolveCommit(c: AiGoalCtx, prev: AiCommit | null): AiCommit | null {
   /*
-   * `urgent` 现在借的是 `plan.urgent`，里面有一条 **`army < 3`**（给攒钱写的：
-   * 兵只剩一两个还攒钱是拿命换经济）。
+   * 判据是 `threat`，**不是 `urgent`**（2026-11-20 改，待办 T1）。
    *
-   * 实测它会把产业链投资锁死：开局兵本来就少于三个 → 永远 urgent → 承诺每回合
-   * 被清掉。装甲那条 `armor-frame` 在第 20 回合就是这样被清空的（终局素体 0 台）。
+   * `urgent` 里有一条 `army < 3`，那是给"攒钱"写的：兵只剩一两个还在攒钱是拿命
+   * 换经济。拿它管投资就成了死锁——开局兵本来就不够三个，于是永远"吃紧"，
+   * 承诺每回合被清空，装甲的 `armor-frame` 在第 20 回合就是这样死的（终局素体 0）。
    *
-   * 逻辑上这是反的——投资本来就是为了"以后有兵"，用"现在没兵"去否决它说不通。
-   * 试过换成"只看城下有没有人"，但那一版连电站都少建了，效果没看清，
-   * 先退回原口径。**待办 T1 就是这件事**：威胁判据要单独一条，不要复用攒钱的。
+   * 投资本来就是为了"以后有兵"，用"现在没兵"去否决它，逻辑上是反的。
+   * 现在只认"城下真的有一队能拆墙的兵"（`THREAT_ATK`）。
    */
-  if (c.urgent) return null;
+  if (c.threat >= THREAT_ATK) return null;
   const live = goalStepsInPlay({ ...c, commit: prev });
   if (prev) {
     const still = live.find((x) => x.goal.id === prev.goalId && x.step.id === prev.stepId);

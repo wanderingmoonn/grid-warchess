@@ -1674,6 +1674,8 @@ interface Fields {
    * 产业链目标在吃紧时不推进——那时候还在攒"将来的战力"，是拿命换经济。
    */
   urgent: boolean;
+  /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
+  threat: number;
   /**
    * 这一回合在追哪条产业链（`AiCommit`），没有就是 null。
    *
@@ -2915,6 +2917,7 @@ function goalCtxOf(
   me: PlayerId,
   era: number,
   urgent: boolean,
+  threat: number,
   commit: AiCommit | null,
 ): AiGoalCtx {
   const mine = unitsOf(s, me);
@@ -2924,6 +2927,7 @@ function goalCtxOf(
     me,
     era,
     urgent,
+    threat,
     commit,
     cityCount: cities.length,
     count: (pred) => mine.filter((u) => pred(utype(s, u.type))).length,
@@ -2951,9 +2955,10 @@ function goalClaimsBuild(
   buildId: string,
   era: number,
   urgent: boolean,
+  threat: number,
   commit: AiCommit | null,
 ): boolean {
-  return goalClaimsBuildOf(s, unit.owner, buildId, era, urgent, commit);
+  return goalClaimsBuildOf(s, unit.owner, buildId, era, urgent, threat, commit);
 }
 
 /** 同上的 owner 版本：攒钱那一层只有 PlayerId，没有具体建造者 */
@@ -2963,11 +2968,12 @@ function goalClaimsBuildOf(
   buildId: string,
   era: number,
   urgent: boolean,
+  threat: number,
   commit: AiCommit | null,
 ): boolean {
   const def = s.unitTypes[buildId];
   if (!def) return false;
-  const ctx = goalCtxOf(s, me, era, urgent, commit);
+  const ctx = goalCtxOf(s, me, era, urgent, threat, commit);
   for (const { step } of goalStepsInPlay(ctx)) {
     if (step.claimsBuild?.(def)) return true;
   }
@@ -2988,11 +2994,12 @@ function goalBuildScore(
   spot: { x: number; y: number; terrain: Terrain },
   era: number,
   urgent: boolean,
+  threat: number,
   commit: AiCommit | null,
 ): number | null {
   const def = s.unitTypes[buildId];
   if (!def) return null;
-  const ctx = goalCtxOf(s, unit.owner, era, urgent, commit);
+  const ctx = goalCtxOf(s, unit.owner, era, urgent, threat, commit);
   let claimed = false;
   let best: number | null = null;
   for (const { step, committed } of goalStepsInPlay(ctx)) {
@@ -3172,7 +3179,20 @@ const ARMOR_DOCK_GOAL: AiGoal = {
  */
 const ARMOR_FRAME_GOAL: AiGoal = {
   id: 'armor-frame',
-  value: (c) => (c.era >= 7 ? 1 : 0),
+  /*
+   * **有电有坞才要素体**（2026-11-20 实测）：和采购里那两道门（没电 / 没坞可装）
+   * 同一个判据。不加这一条会死锁——目标是按注册顺序抢并列的，素体排在电/坞
+   * 前面就会一直"攒一台装不了炮的素体"，而电和坞永远排不上（实测 40 回合
+   * 一台电站都没建，坞建了又被拆，素体 0）。
+   *
+   * 这条也让"顺序"回到了它该在的地方：素体是这条链的产出，不是起点。
+   */
+  value: (c) => {
+    if (c.era < 7) return 0;
+    const hasPower = c.count((d) => (d.armorPower ?? 0) > 0) > 0;
+    const hasDock = c.count(isArmorDockDef) > 0;
+    return hasPower && hasDock ? 1 : 0;
+  },
   steps: [
     {
       id: 'frames',
@@ -3212,8 +3232,10 @@ function rawBuildScore(
   _sea = 0,
   /** 局势现在打在第几代（Fields.era），只有带白名单的产兵点读它 */
   era = 0,
-  /** 局面吃紧（Fields.urgent）：产业链目标这时候不推进 */
+  /** 局面吃紧（Fields.urgent）：攒钱这时候不该继续 */
   urgent = false,
+  /** 威胁值（Fields.threat）：产业链靠它决定要不要放弃投资 */
+  threat = 0,
   /** 这一势力正在追的产业链（Fields.goalCommit） */
   goalCommit: AiCommit | null = null,
 ): number {
@@ -3252,7 +3274,7 @@ function rawBuildScore(
    * 这里只留"归目标管"的那一句。
    */
   if (ARMOR_SUPPORT_BUILDINGS.has(buildId)) {
-    const goalScore2 = goalBuildScore(s, unit, buildId, spot, era, urgent, goalCommit);
+    const goalScore2 = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit);
     return goalScore2 ?? -999;
   }
 
@@ -3320,7 +3342,7 @@ function rawBuildScore(
    * 这里只留一句"归产业链目标管"，具体分数搬到了下面的 `NAVY_GOAL`（2026-11-20）。
    * 判据仍然是数据（`buildOn` 里有水），核心不认识 `nv-dock` 这种 id。
    */
-  const goalScore = goalBuildScore(s, unit, buildId, spot, era, urgent, goalCommit);
+  const goalScore = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit);
   if (goalScore !== null) return goalScore;
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
@@ -3581,7 +3603,7 @@ function scoreBuild(
   all: Fields,
 ): number {
   const raw = rawBuildScore(
-    s, unit, buildId, spot, all.land, all.mood, all.sea, all.era, all.urgent, all.goalCommit,
+    s, unit, buildId, spot, all.land, all.mood, all.sea, all.era, all.urgent, all.threat, all.goalCommit,
   );
   if (raw <= -900) return raw;
 
@@ -3611,7 +3633,7 @@ function scoreBuild(
      * 认领的建筑只吃一半压制（−10），让它还有机会排上来，但绝不取消压制——
      * 真到了必须架桥的时候，桥仍然是第一位的。
      */
-    const strategic = goalClaimsBuild(s, unit, buildId, all.era, all.urgent, all.goalCommit);
+    const strategic = goalClaimsBuild(s, unit, buildId, all.era, all.urgent, all.threat, all.goalCommit);
     if (strategic) return raw - 10;
     return raw - (isProducer(s.unitTypes[buildId]) ? 20 : 45);
   }
@@ -4289,6 +4311,8 @@ export interface AiPlan {
    */
   goalOptions: Array<{ kind: string; cost: number; score: number; note: string }>;
   urgent: boolean;
+  /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
+  threat: number;
 }
 
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
@@ -4518,10 +4542,10 @@ function reviveIntent(
   }
   if (it.goal === 'goal' && it.goalId && it.stepId) {
     // 那一段还在推进吗？还要钱吗？两问都得答"是"才接着攒
-    const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), false, null));
+    const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), false, 0, null));
     const cur = live.find((x) => x.goal.id === it.goalId && x.step.id === it.stepId);
     if (!cur?.step.cost) return null;
-    const want = cur.step.cost(goalCtxOf(s, me, eraNowOf(s), false, null));
+    const want = cur.step.cost(goalCtxOf(s, me, eraNowOf(s), false, 0, null));
     if (!(want > ctx.gold)) return null; // 钱够了就该去花，而不是继续举牌子
     return { cost: want, note: `${it.goalId} · ${it.stepId}（接着攒）` };
   }
@@ -4539,6 +4563,40 @@ function reviveIntent(
  * （吃紧时不推进投资），所以抽出来。**判据只能有一处**：两处各写一遍，
  * 迟早出现"攒钱知道要收手、产业链还在往前拱"。
  */
+/**
+ * 威胁值：**能真正拆墙的战力**摸到自己城下有多少。
+ *
+ * 为什么不复用 `urgent`（2026-11-20 实测）：
+ * `urgent` 里有一条 `army < 3`，那是给"攒钱"写的——兵只剩一两个还在攒钱，
+ * 是拿命换经济。但产业链投资用它就成了死锁：开局兵本来就不够三个，
+ * 于是永远吃紧，承诺每回合被清空。实测装甲那条 `armor-frame` 在第 20 回合
+ * 被清掉，终局素体 0 台。**投资本来就是为了"以后有兵"，用"现在没兵"否决它，逻辑是反的。**
+ *
+ * 这里只认三件事：
+ *   · **能攻城**的单位（`atk > 0` 的战斗单位）——侦察兵、传令兵不算；
+ *   · **够得着**这座城（下回合就能摸到）；
+ *   · 只算**没放弃**的城。
+ *
+ * 返回的是"对该城每回合能砸出多少攻击力"的总和，阈值见 `THREAT_ATK`。
+ */
+function threatLevelOf(s: GameState, me: PlayerId, foe: Unit[], mood: AiMood): number {
+  const cities = citiesOf(s, me).filter((c) => !c.ruined && c.id !== mood.abandonedCityId);
+  if (cities.length === 0) return 0;
+  let worst = 0;
+  for (const c of cities) {
+    let power = 0;
+    for (const u of foe) {
+      const d = utype(s, u.type);
+      if (d.category !== 'combat' || (d.atk ?? 0) <= 0) continue;
+      // 下回合就能摸到城墙：移动 + 射程，再多给一格余量
+      if (distToCity(u, c) > (d.move ?? 0) + (d.range ?? 1) + 1) continue;
+      power += d.atk * (d.burst ?? 1);
+    }
+    if (power > worst) worst = power;
+  }
+  return worst;
+}
+
 function isUrgentNow(
   s: GameState,
   me: PlayerId,
@@ -4599,6 +4657,7 @@ function buildPlan(
     mood.metrics.earners >= 2 && foe.every(u =>
       utype(s,u.type).category !== 'combat' || distToCity(u,myCities[0]!) > effectiveRangeAgainst(s,u,tileAt(s,myCities[0]!.x,myCities[0]!.y))+2);
   const urgent = isUrgentNow(s, me, my, foe, mood);
+  const threatNow = threatLevelOf(s, me, foe, mood);
 
   // 没被打塌的敌城，和已经塌了等接管的废墟。
   //
@@ -4855,11 +4914,11 @@ function buildPlan(
      */
     const commit = s.aiCommit?.[me] ?? null;
     if (commit) {
-      const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), urgent, commit));
+      const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), urgent, threatNow, commit));
       const cur = live.find(
         (x) => x.goal.id === commit.goalId && x.step.id === commit.stepId,
       );
-      const want = cur?.step.cost?.(goalCtxOf(s, me, eraNowOf(s), urgent, commit)) ?? 0;
+      const want = cur?.step.cost?.(goalCtxOf(s, me, eraNowOf(s), urgent, threatNow, commit)) ?? 0;
       if (want > gold && reach(want, SAVE_HORIZON)) {
         goals.push({
           kind: 'goal',
@@ -5044,6 +5103,7 @@ function buildPlan(
     buildAllowance,
     targetGoalId,
     targetStepId,
+    threat: threatNow,
     goalScore,
     goalNote,
     goalOptions,
@@ -5237,7 +5297,7 @@ function recruitCandidate(
    * 产业链目标的读数：整次采购算一遍，别跟着每个兵种重算
    * （`goalStepsInPlay` 会问每个目标的价值，海军那条还要查水域）。
    */
-  const goalCtx = goalCtxOf(s, me, eraNowOf(s), plan.urgent, s.aiCommit?.[me] ?? null);
+  const goalCtx = goalCtxOf(s, me, eraNowOf(s), plan.urgent, plan.threat, s.aiCommit?.[me] ?? null);
   /*
    * 追踪设施放在过滤器**之前**：这些"候选池级"的拒绝（时代不够、英雄已有一个、
    * 没出兵格）以前根本没进统计，于是"某个兵没人造"永远查不到原因——
@@ -6092,7 +6152,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true, threat: 0 },
         null,
         mood,
       );
@@ -6540,6 +6600,7 @@ function aiNextActionCoreInner(
     sea: seaDemand(view, me),
     era: eraNowOf(view),
     urgent: isUrgentNow(view, me, unitsOf(view, me), foeUnits, mood),
+    threat: threatLevelOf(view, me, foeUnits, mood),
     // 承诺在下面算完再填（它要读 fields.era，而 fields 正在构造中）
     goalCommit: null,
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
@@ -6559,7 +6620,7 @@ function aiNextActionCoreInner(
    */
   {
     const prevCommit = s.aiCommit?.[me] ?? null;
-    const baseCtx = goalCtxOf(view, me, fields.era, fields.urgent, prevCommit);
+    const baseCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.threat, prevCommit);
     const nextCommit = resolveCommit(baseCtx, prevCommit);
     fields.goalCommit = nextCommit;
     if (depth === 0) {
@@ -6691,7 +6752,7 @@ function aiNextActionCoreInner(
    * 扩展写的 handler 抛错只警告一次、跳过——一个写坏的目标不该把整局打死。
    */
   {
-    const goalCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.goalCommit);
+    const goalCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.threat, fields.goalCommit);
     for (const { step } of goalStepsInPlay(goalCtx)) {
       if (!step.actions) continue;
       try {
@@ -6792,7 +6853,7 @@ function aiNextActionCoreInner(
        * 所以只放目标认领的那一种，磨坊照样冻结。
        */
       const forGoal = plan.savingFor === 'goal' && goalClaimsBuildOf(
-        view, me, action.unitType, fields.era, fields.urgent, fields.goalCommit,
+        view, me, action.unitType, fields.era, fields.urgent, fields.threat, fields.goalCommit,
       );
       if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges && !forGoal) candidates.splice(i,1);
     }
