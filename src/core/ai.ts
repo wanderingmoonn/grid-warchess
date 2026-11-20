@@ -96,8 +96,15 @@ import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from '.
 import type { UnitAiBinding } from './unit-ai.ts';
 import type { UnitAiResult } from './expansions.ts';
 import { SKILL_AI_HINTS } from './skill-hooks.ts';
-import { DEFAULT_GOAL_BUILD_SCORE, goalStepsInPlay, registerCoreGoal } from './ai-goal.ts';
+import {
+  COMMIT_BUILD_BONUS,
+  DEFAULT_GOAL_BUILD_SCORE,
+  goalStepsInPlay,
+  registerCoreGoal,
+  resolveCommit,
+} from './ai-goal.ts';
 import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
+import type { AiCommit } from './types.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -1660,6 +1667,19 @@ interface Fields {
    */
   focusTargetId: string | null;
   /**
+   * 局面吃紧（和 `plan.urgent` 同一个口径：兵少于 3 个，或者敌人摸到城下 3 格）。
+   *
+   * 产业链目标在吃紧时不推进——那时候还在攒"将来的战力"，是拿命换经济。
+   */
+  urgent: boolean;
+  /**
+   * 这一回合在追哪条产业链（`AiCommit`），没有就是 null。
+   *
+   * 整回合算一次：承诺要写回真状态，而候选生成一回合要跑几百次，
+   * 每次现算会变成"同一步里反复改主意"。
+   */
+  goalCommit: AiCommit | null;
+  /**
    * 这张图值不值得养海军（0~1，见 `seaDemand`）。
    *
    * 建造评分要用它：船坞造不造，取决于"船是不是唯一的路"，而不是"离敌人多近"。
@@ -2888,13 +2908,21 @@ function onWaterDef(def: UnitTypeDef): boolean {
 }
 
 /** 把局面读成目标要的样子。每次决策算一次，别让每个目标各算一遍 */
-function goalCtxOf(s: GameState, me: PlayerId, era: number): AiGoalCtx {
+function goalCtxOf(
+  s: GameState,
+  me: PlayerId,
+  era: number,
+  urgent: boolean,
+  commit: AiCommit | null,
+): AiGoalCtx {
   const mine = unitsOf(s, me);
   const cities = citiesOf(s, me);
   return {
     state: s,
     me,
     era,
+    urgent,
+    commit,
     cityCount: cities.length,
     count: (pred) => mine.filter((u) => pred(utype(s, u.type))).length,
     buildSpots: (buildId, builder) => buildSpots(s, builder, s.unitTypes[buildId]),
@@ -2915,10 +2943,17 @@ function goalCtxOf(s: GameState, me: PlayerId, era: number): AiGoalCtx {
  * （`scoreBuild` 里过河压制要不要减半）。合成一个函数会让后者为了一个布尔
  * 去算一遍分数，读起来莫名其妙。
  */
-function goalClaimsBuild(s: GameState, unit: Unit, buildId: string, era: number): boolean {
+function goalClaimsBuild(
+  s: GameState,
+  unit: Unit,
+  buildId: string,
+  era: number,
+  urgent: boolean,
+  commit: AiCommit | null,
+): boolean {
   const def = s.unitTypes[buildId];
   if (!def) return false;
-  const ctx = goalCtxOf(s, unit.owner, era);
+  const ctx = goalCtxOf(s, unit.owner, era, urgent, commit);
   for (const { step } of goalStepsInPlay(ctx)) {
     if (step.claimsBuild?.(def)) return true;
   }
@@ -2938,13 +2973,15 @@ function goalBuildScore(
   buildId: string,
   spot: { x: number; y: number; terrain: Terrain },
   era: number,
+  urgent: boolean,
+  commit: AiCommit | null,
 ): number | null {
   const def = s.unitTypes[buildId];
   if (!def) return null;
-  const ctx = goalCtxOf(s, unit.owner, era);
+  const ctx = goalCtxOf(s, unit.owner, era, urgent, commit);
   let claimed = false;
   let best: number | null = null;
-  for (const { step } of goalStepsInPlay(ctx)) {
+  for (const { step, committed } of goalStepsInPlay(ctx)) {
     if (!step.claimsBuild?.(def)) continue;
     claimed = true;
     let v: number | null = null;
@@ -2955,7 +2992,9 @@ function goalBuildScore(
       v = null;
     }
     if (v === null) continue;
-    best = best === null ? v : Math.max(best, v);
+    // 已经在追的那一段再加一把：让它不至于"每回合重新竞争"被挤掉
+    const scored = committed ? v + COMMIT_BUILD_BONUS : v;
+    best = best === null ? scored : Math.max(best, scored);
   }
   if (!claimed) return null;
   return best === null ? -999 : best;
@@ -3031,6 +3070,10 @@ function rawBuildScore(
   _sea = 0,
   /** 局势现在打在第几代（Fields.era），只有带白名单的产兵点读它 */
   era = 0,
+  /** 局面吃紧（Fields.urgent）：产业链目标这时候不推进 */
+  urgent = false,
+  /** 这一势力正在追的产业链（Fields.goalCommit） */
+  goalCommit: AiCommit | null = null,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
@@ -3133,7 +3176,7 @@ function rawBuildScore(
    * 这里只留一句"归产业链目标管"，具体分数搬到了下面的 `NAVY_GOAL`（2026-11-20）。
    * 判据仍然是数据（`buildOn` 里有水），核心不认识 `nv-dock` 这种 id。
    */
-  const goalScore = goalBuildScore(s, unit, buildId, spot, era);
+  const goalScore = goalBuildScore(s, unit, buildId, spot, era, urgent, goalCommit);
   if (goalScore !== null) return goalScore;
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
@@ -3404,7 +3447,9 @@ function scoreBuild(
   spot: { x: number; y: number; terrain: Terrain },
   all: Fields,
 ): number {
-  const raw = rawBuildScore(s, unit, buildId, spot, all.land, all.mood, all.sea, all.era);
+  const raw = rawBuildScore(
+    s, unit, buildId, spot, all.land, all.mood, all.sea, all.era, all.urgent, all.goalCommit,
+  );
   if (raw <= -900) return raw;
 
 
@@ -3433,7 +3478,7 @@ function scoreBuild(
      * 认领的建筑只吃一半压制（−10），让它还有机会排上来，但绝不取消压制——
      * 真到了必须架桥的时候，桥仍然是第一位的。
      */
-    const strategic = goalClaimsBuild(s, unit, buildId, all.era);
+    const strategic = goalClaimsBuild(s, unit, buildId, all.era, all.urgent, all.goalCommit);
     if (strategic) return raw - 10;
     return raw - (isProducer(s.unitTypes[buildId]) ? 20 : 45);
   }
@@ -4339,6 +4384,40 @@ function reviveIntent(
   return { cost: price, unitId: def.id, note: `${def.name}（接着攒）` };
 }
 
+/**
+ * 局面吃紧吗——`plan.urgent` 和产业链目标共用这一份判据。
+ *
+ * 以前这两句写在 `buildPlan` 里，只有"攒钱"读它。产业链目标也要读同一件事
+ * （吃紧时不推进投资），所以抽出来。**判据只能有一处**：两处各写一遍，
+ * 迟早出现"攒钱知道要收手、产业链还在往前拱"。
+ */
+function isUrgentNow(
+  s: GameState,
+  me: PlayerId,
+  my: Unit[],
+  foe: Unit[],
+  mood: AiMood,
+): boolean {
+  const myCities = citiesOf(s, me).filter((c) => !c.ruined);
+  const army = my.filter((u) => utype(s, u.type).category === 'combat').length;
+  // 城下有人：半径 3 是"下回合就能摸到城墙"的量级。放弃掉的那座城不算。
+  const threaten = foe.some((u) =>
+    myCities.some((c) => c.id !== mood.abandonedCityId && distToCity(u, c) <= 3),
+  );
+  // 只剩一座城、经营权重够高、经济单位够多，且没有敌人打得着它：安全后方
+  const developingRear =
+    myCities.length === 1 &&
+    mood.weight.boom >= ABANDON_AT &&
+    mood.metrics.earners >= 2 &&
+    foe.every(
+      (u) =>
+        utype(s, u.type).category !== 'combat' ||
+        distToCity(u, myCities[0]!) >
+          effectiveRangeAgainst(s, u, tileAt(s, myCities[0]!.x, myCities[0]!.y)) + 2,
+    );
+  return (army < 3 && !developingRear && !mood.abandonedCityId) || threaten;
+}
+
 function buildPlan(
   s: GameState,
   me: PlayerId,
@@ -4371,7 +4450,7 @@ function buildPlan(
   const developingRear = myCities.length === 1 && mood.weight.boom >= ABANDON_AT &&
     mood.metrics.earners >= 2 && foe.every(u =>
       utype(s,u.type).category !== 'combat' || distToCity(u,myCities[0]!) > effectiveRangeAgainst(s,u,tileAt(s,myCities[0]!.x,myCities[0]!.y))+2);
-  const urgent = (army < 3 && !developingRear && !mood.abandonedCityId) || threaten;
+  const urgent = isUrgentNow(s, me, my, foe, mood);
 
   // 没被打塌的敌城，和已经塌了等接管的废墟。
   //
@@ -6256,6 +6335,9 @@ function aiNextActionCoreInner(
     // 海军需求 / 局势时代：同样整回合算一次，建造评分每个候选格都要读
     sea: seaDemand(view, me),
     era: eraNowOf(view),
+    urgent: isUrgentNow(view, me, unitsOf(view, me), foeUnits, mood),
+    // 承诺在下面算完再填（它要读 fields.era，而 fields 正在构造中）
+    goalCommit: null,
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
@@ -6263,6 +6345,32 @@ function aiNextActionCoreInner(
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
   };
+  /*
+   * 产业链承诺：每回合算一次，写回**真状态**。
+   *
+   * 和 `aiIntent` 走同一条路（见下面那段注释）：判断在雾图副本上做，
+   * 记忆必须落在真状态上，否则下次再从真状态切一份新副本，记忆就丢了。
+   *
+   * `depth > 0` 时只读不写：那是"推演对手下一步"的分支，不该顺手改我方的账本。
+   */
+  {
+    const prevCommit = s.aiCommit?.[me] ?? null;
+    const baseCtx = goalCtxOf(view, me, fields.era, fields.urgent, prevCommit);
+    const nextCommit = resolveCommit(baseCtx, prevCommit);
+    fields.goalCommit = nextCommit;
+    if (depth === 0) {
+      if (nextCommit) {
+        if (nextCommit !== prevCommit) {
+          s.aiCommit = { ...(s.aiCommit ?? {}), [me]: nextCommit };
+        }
+      } else if (prevCommit) {
+        const bag = { ...s.aiCommit };
+        delete bag[me];
+        s.aiCommit = bag;
+      }
+    }
+  }
+
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
   const plan = buildPlan(view, me, unitsOf(view, me), foeUnits, mood);
@@ -6379,7 +6487,7 @@ function aiNextActionCoreInner(
    * 扩展写的 handler 抛错只警告一次、跳过——一个写坏的目标不该把整局打死。
    */
   {
-    const goalCtx = goalCtxOf(view, me, fields.era);
+    const goalCtx = goalCtxOf(view, me, fields.era, fields.urgent, fields.goalCommit);
     for (const { step } of goalStepsInPlay(goalCtx)) {
       if (!step.actions) continue;
       try {

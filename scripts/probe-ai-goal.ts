@@ -86,6 +86,9 @@ function run(seed: number) {
   }
 
   const hash = createHash('sha1').update(acts.join('|')).digest('hex').slice(0, 12);
+  const shipyards = [...built.entries()]
+    .filter(([t]) => /dock|shipyard|yard/.test(t))
+    .reduce((n, [, v]) => n + v, 0);
   const fmt = (m: Map<string, number>) =>
     [...m.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -100,6 +103,7 @@ function run(seed: number) {
     winner: s.winner ?? '-',
     turn: s.turn,
     rejected,
+    shipyards,
   };
 }
 
@@ -170,6 +174,8 @@ for (const seed of SEEDS) {
     `指纹 ${r.hash} · 建造 ${r.built} · 招兵 ${r.recruited} · 终局 ${r.winner}/${r.turn}`;
   lines.push(line);
   console.log(line);
+  // 机制计数：胜率之外，证明"它真的在玩这个东西"
+  console.log(`        机制计数：船坞 ${r.shipyards}`);
   for (const bad of r.rejected) {
     /*
      * 已知的一类：雾里朝"自己看不见的敌人"所在格架桥。

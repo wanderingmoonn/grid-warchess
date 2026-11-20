@@ -1795,6 +1795,30 @@ export interface DraftState {
  * 只记"在攒什么、为谁攒、几回合前立的"，不记分值：分值是每一回合重算的，
  * 记下来只会让昨天的局面决定今天的判断。
  */
+/**
+ * 产业链目标的**承诺**：AI 正在追哪一条链的哪一段。
+ *
+ * 和 `AiIntent`（攒钱目标）不是一回事，但同族：那个记"我要攒钱买什么"，
+ * 这个记"我在推进哪条产业链"。分开存是因为它们的生命周期完全不同——
+ * 攒钱买到就结束，产业链要跨很多回合、中间还要能被打断。
+ *
+ * 为什么必须存在局面里：AI 每一步都是从零重算的，没有这份记忆，
+ * "这回合想建船坞、下回合被走位挤掉、下下回合又从头开始"就会一直循环。
+ */
+export interface AiCommit {
+  goalId: string;
+  stepId: string;
+  /** 哪一回合立下的 */
+  since: number;
+  /**
+   * 立下时那个目标值多少分。
+   *
+   * 退出用**相对**判据（掉到它的几成以下才放弃），而不是绝对门槛：
+   * 海军的目标值是 0~0.5，修真可能是 0~100，绝对门槛只能照顾一家。
+   */
+  valueAt: number;
+}
+
 export interface AiIntent {
   goal: 'unit' | 'hero' | 'era' | 'rebuild';
   /** `goal === 'unit'` 时攒的是哪个兵种 */
@@ -2199,6 +2223,11 @@ export interface GameState {
    * 语义正好等于"没有正在攒的目标"，不影响继续玩。
    */
   aiIntent?: Partial<Record<PlayerId, AiIntent>>;
+  /**
+   * 产业链目标的承诺（见 `AiCommit`）。旧存档没有这个字段，读出来是 undefined，
+   * 语义正好等于"没有在追任何产业链"。
+   */
+  aiCommit?: Partial<Record<PlayerId, AiCommit>>;
   /**
    * 僵持计数（AI 用，2026-11-15）。
    *

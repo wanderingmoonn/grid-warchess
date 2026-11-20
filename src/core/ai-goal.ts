@@ -30,7 +30,7 @@
  */
 
 import { EXPANSIONS } from './expansions.ts';
-import type { Action, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, AiCommit, GameState, PlayerId, Terrain, Unit, UnitTypeDef } from './types.ts';
 
 /**
  * 目标拿到的局面读数。
@@ -58,6 +58,16 @@ export interface AiGoalCtx {
   dist: (a: { x: number; y: number }, b: { x: number; y: number }) => number;
   /** 离自家最近的城市有多远；没有城时返回 Infinity */
   distToNearestCity: (p: { x: number; y: number }) => number;
+  /**
+   * 局面吃紧（复用 `plan.urgent` 的口径：兵少于 3 个，或者有敌人摸到城下 3 格）。
+   *
+   * 吃紧时**不推进产业链**：这时候还在攒"将来的战力"，是拿命换经济。
+   * 注意这个口径对"打断承诺"偏敏感（一个侦察兵摸到城边就算），
+   * 细化计划见 docs/PLAN-AI-GOAL-2026-11-20.md 的"待办"。
+   */
+  urgent: boolean;
+  /** 这个势力现在在追哪条链（`AiCommit`），没有就是 null */
+  commit: AiCommit | null;
 }
 
 /** 目标里的一段。核心每回合只推进第一段没完成的。 */
@@ -152,8 +162,14 @@ export function resetAiGoalWarnings(): void {
  * 段内的顺序保证每条链只推进"下一步"，而要不要限制同时追几条，
  * 是标定问题，等有了两条以上的扩展目标再谈（现在只有核心的两条）。
  */
-export function goalStepsInPlay(c: AiGoalCtx): Array<{ goal: AiGoal; step: AiGoalStep; value: number }> {
-  const out: Array<{ goal: AiGoal; step: AiGoalStep; value: number }> = [];
+export function goalStepsInPlay(c: AiGoalCtx): Array<{
+  goal: AiGoal;
+  step: AiGoalStep;
+  value: number;
+  /** 这一段就是当前承诺要推进的那一段 */
+  committed: boolean;
+}> {
+  const out: Array<{ goal: AiGoal; step: AiGoalStep; value: number; committed: boolean }> = [];
   for (const goal of allAiGoals()) {
     let v = 0;
     try {
@@ -171,7 +187,59 @@ export function goalStepsInPlay(c: AiGoalCtx): Array<{ goal: AiGoal; step: AiGoa
       continue;
     }
     if (!step) continue; // 全做完了，这个目标不再出牌
-    out.push({ goal, step, value: v });
+    out.push({
+      goal,
+      step,
+      value: v,
+      committed: c.commit?.goalId === goal.id && c.commit?.stepId === step.id,
+    });
   }
   return out;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ * 承诺：进去容易、出来难
+ *
+ * 每回合重算价值是必须的（局势会变），但"要不要放弃已经在做的事"不能
+ * 和"要不要开始做"用同一个门槛——那样一来，对面派两个骑兵骚扰一下，
+ * 攒到一半的东西就被判"不值"了，而实际上再攒两个回合就能成型。
+ *
+ * 所以：立承诺时记下当时的价值，之后**只有掉到它的六成才放弃**；
+ * 中间那四成是死区，小扰动跨不过去。
+ * 真要撤也有专门的出口——`urgent`（大军压境）直接打断，不看分数。
+ * ══════════════════════════════════════════════════════════════════ */
+
+/** 价值掉到立约时的几成才放弃。0.6 = 中间四成是死区 */
+export const COMMIT_KEEP_RATIO = 0.6;
+
+/**
+ * 承诺中的那一段给多少额外分。
+ *
+ * 15 的量级参考：一次普通建造 40~80，一个兵 20~50。够把"差一点点就排不上"
+ * 的那一步顶上去，又不够让明显不划算的东西翻盘。
+ */
+export const COMMIT_BUILD_BONUS = 15;
+
+/**
+ * 算这一回合的承诺。纯函数：只读 `prev` 和局面，返回"下一回合该记什么"。
+ *
+ * 三种情况返回 null（放弃）：
+ *   · 局面吃紧（`urgent`）——大军压境时一切投资让位；
+ *   · 那条链已经做完/没价值了（不在 `goalStepsInPlay` 里了）；
+ *   · 价值掉到立约时的六成以下。
+ */
+export function resolveCommit(c: AiGoalCtx, prev: AiCommit | null): AiCommit | null {
+  if (c.urgent) return null;
+  const live = goalStepsInPlay({ ...c, commit: prev });
+  if (prev) {
+    const still = live.find((x) => x.goal.id === prev.goalId && x.step.id === prev.stepId);
+    if (!still) return null;
+    if (still.value < prev.valueAt * COMMIT_KEEP_RATIO) return null;
+    return prev;
+  }
+  // 没在追任何东西：挑当前最值的那一段立项
+  let best: (typeof live)[number] | null = null;
+  for (const x of live) if (!best || x.value > best.value) best = x;
+  if (!best) return null;
+  return { goalId: best.goal.id, stepId: best.step.id, since: c.state.turn, valueAt: best.value };
 }
