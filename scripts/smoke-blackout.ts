@@ -86,6 +86,10 @@ function boot(expansionIds) {
   const errs = [];
   window.addEventListener('error', (e) => errs.push(e.error ?? e.message));
   window.eval(code);
+  // 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」
+  window.document.querySelector('[data-title="continue"]')?.dispatchEvent(
+    new window.MouseEvent('click', { bubbles: true }),
+  );
   return { window, st, errs };
 }
 

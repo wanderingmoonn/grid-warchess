@@ -4329,6 +4329,10 @@ check('指挥官模式下点自己的部队能看属性，遣散按钮也在', (
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
 
   const d = w.document;
   const el = d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`);
@@ -6101,6 +6105,10 @@ await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它�
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
 
   const d = w.document;
   const btn = d.querySelector<HTMLElement>('[data-act="god-run-dead"]');
@@ -6509,6 +6517,10 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
 
   const d = w.document;
   const mineEl = d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`);
@@ -6568,6 +6580,10 @@ check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
 
   const d = w.document;
   d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`)?.dispatchEvent(
@@ -6693,6 +6709,10 @@ check('存档里有一条对不上的兵种，页面仍然能起来（不白屏�
   let thrown: unknown = null;
   try {
     w.eval(code);
+    /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+    w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }),
+    );
   } catch (err) {
     thrown = err;
   }
@@ -6731,6 +6751,10 @@ check('地址栏带 ?fresh=1 能清掉本机存档重开', () => {
   st.h = 20;
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
   assert.equal(
     w.document.querySelectorAll('.tile').length,
     DEFAULT_CONFIG.size * DEFAULT_CONFIG.size,
@@ -6811,6 +6835,10 @@ function bootWith(st: unknown) {
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
   return w;
 }
 
@@ -8616,6 +8644,10 @@ check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡�
     (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
   }
   w.eval(code);
+  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
+  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
+    new w.MouseEvent('click', { bubbles: true }),
+  );
   const d = w.document;
 
   const entry = d.querySelector<HTMLElement>('[data-title="tutorial"]');
