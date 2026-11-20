@@ -267,6 +267,9 @@ export function goalStepsInPlay(c: AiGoalCtx): Array<{
 /** 价值掉到立约时的几成才放弃。0.6 = 中间四成是死区 */
 export const COMMIT_KEEP_RATIO = 0.6;
 
+/** 另一个目标值到当前承诺的几倍才改投。小波动不换，免得来回横跳 */
+export const COMMIT_SWITCH_RATIO = 1.5;
+
 /**
  * 净威胁到多少就放弃投资。
  *
@@ -321,6 +324,29 @@ export function resolveCommit(c: AiGoalCtx, prev: AiCommit | null): AiCommit | n
     const still = live.find((x) => x.goal.id === prev.goalId && x.step.id === prev.stepId);
     if (!still) return null;
     if (still.value < prev.valueAt * COMMIT_KEEP_RATIO) return null;
+    /*
+     * **可以改投更好的目标**（2026-11-20 补）。
+     *
+     * 原来的规则是"只要还成立就不换"。实测后果：24×24 的内陆图上，
+     * 开局第 1 代时海军那条（`seaDemand` 0.2~0.5）先立了约，
+     * 之后修真这条（值 1）起来了却永远轮不到——承诺一路挂到第 140 回合，
+     * 而那张图根本造不出船坞，等于整局空转。
+     *
+     * 判据用 1.5 倍：小波动不换（免得来回横跳），明显更值才换。
+     * 这个数没有实测标定，先按"换一次不亏"的直觉取值，后面拿数据再调。
+     */
+    const better = live.reduce<(typeof live)[number] | null>(
+      (best, x) => (!best || x.value > best.value ? x : best),
+      null,
+    );
+    if (better && better.value > still.value * COMMIT_SWITCH_RATIO) {
+      return {
+        goalId: better.goal.id,
+        stepId: better.step.id,
+        since: c.state.turn,
+        valueAt: better.value,
+      };
+    }
     return prev;
   }
   // 没在追任何东西：挑当前最值的那一段立项

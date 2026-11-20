@@ -61,11 +61,20 @@ export const CULTIVATION_AI_GOALS: AiGoal[] = [
       {
         id: 'fields',
         done: (c) => countOf(c, isField) >= WANT_FIELDS,
-        claimsBuild: isField,
-        // 灵田同时产金币和灵石，所以它比纯经济建筑值钱一点点
-        buildScore: (c, _id, spot, def) => buildScoreFor(c, spot, def) + 8,
-        cost: (c) => c.state.unitTypes[UNIT_IDS.SPIRIT_FIELD]?.cost ?? 0,
-        saveScore: 9,
+        /*
+         * **不认领灵田的建造**（2026-11-20 改）。
+         *
+         * 灵田是"经济建筑"，通用的经济评分比我能写的好得多：
+         * `rawBuildScore` 会拿一个探针单位试算 `unitYield`，
+         * 挑**这一格真能产多少**——森林产灵石、平原产金币，它自己会选；
+         * 一格产出为 0 的地直接 -999。
+         *
+         * 我一开始认领了它，用的是"46 − 危险×30 − 造价"，等于把那套
+         * 地形判断**盖掉**了：两块地同分，AI 可能把灵田盖在只产金币的平原上。
+         *
+         * 这一步只保留"完成判据"：链要知道有没有两座田，但怎么盖、盖哪、
+         * 值多少，交给本来就擅长这件事的那条线。
+         */
       },
       {
         id: 'sect',
