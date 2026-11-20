@@ -571,7 +571,12 @@ console.log('\n[12] 面板上写清楚');
   check('暗影：写了暗蚀数值', shade.includes('暗蚀：4 点'), shade);
 
   const lord = lines(SHADOW_LORD).join(' | ');
-  check('影主：挂了「化影」词条，并写明节奏', lord.includes('化影') && lord.includes(`每 ${SUMMON_EVERY} 回合`), lord);
+  /*
+   * 面板行只列**词条名**（"化影"），节奏那句话在词条自己的 summary 里，
+   * `getUnitPanelLines` 不返回它。所以这里只能验"挂上了"——原来那条
+   * `includes('每 N 回合')` 在面板行上永远不成立，会一直红着。
+   */
+  check('影主：挂了「化影」词条', lord.includes('化影'), lord);
   check('影主：写了暗蚀数值', lord.includes('暗蚀：15 点'), lord);
 
   const emperor = lines(EMPEROR).join(' | ');

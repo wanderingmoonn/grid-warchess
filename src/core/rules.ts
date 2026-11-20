@@ -631,6 +631,29 @@ export function hurtPhysical(
   return dealt;
 }
 
+/**
+ * 一次"被水淹没"的结算：**不直接移除，而是受一次大伤害**（2026-11-20）。
+ *
+ * 为什么改成伤害而不是直接消失：玩家看到的是"水来了，人凭空没了"——
+ * 中间少了一个可以理解的环节。给它一次伤害，至少有三件事能解释得通：
+ *   · 血厚的能扛住（活下来的由调用方挤到岸边）；
+ *   · 装甲模块的额外生命能吸收（"密封的素体泡在水里没死"）；
+ *   · 战报里有一条具体的"谁被水吞没"。
+ *
+ * `attrition: true` 是刻意的：溺水不是"挨打"，守御阵不该替人挡、也不该触发反击。
+ * 同时也意味着**不吃护盾**——护盾是法术给的外层，不是氧气瓶。
+ *
+ * 返回值：还活着吗。调用方决定"活着就挤上岸 / 死了从场上移除"。
+ */
+const DROWN_SHALLOW = 20;
+const DROWN_DEEP = 999;
+function drownUnit(s: GameState, u: Unit, deadly: boolean): boolean {
+  const name = utype(s, u.type).name;
+  const dmg = deadly ? DROWN_DEEP : DROWN_SHALLOW;
+  hurtUnit(s, u, dmg, { attrition: true, logText: `${name}${deadly ? '掉进深水' : '被水冲倒'}` });
+  return u.hp > 0;
+}
+
 /** 一条钩子 + 它挂在谁身上、站在哪一边 */
 interface BoundHook<C> {
   stage: number;
@@ -5287,10 +5310,27 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
      * 会凭空出现在岸上——玩家看到的是"水来了，人没事还传送了"。
      * 会水的（船）不受影响，它们本来就该在水里。
      */
-    const here = tileAt(s, u.x, u.y)?.terrain;
+    const here = tileUnder(s, u)?.terrain;
     if ((here === 'water' || here === 'deep') && utype(s, u.type).domain !== 'water') {
-      gone.push(u);
-      say(`${name}落水`);
+      /*
+       * 水来了：先受一次大伤害，活下来的被冲到岸上（2026-11-20 改）。
+       *
+       * 原来这里直接 `gone.push(u)`——"水来了人凭空没了"。和桥塌那条路
+       * （`syncBridges`）一样改成"先淹一次"，两条路的处理才对得上。
+       */
+      if (!drownUnit(s, u, here === 'deep')) {
+        gone.push(u);
+        continue;
+      }
+      const spot = freeSpotWithin(s, u, u.type, 6);
+      if (spot) {
+        u.x = spot.x;
+        u.y = spot.y;
+        say(`${name}被冲上岸 (${spot.x}, ${spot.y})`);
+      } else {
+        gone.push(u);
+        say(`${name}没能上岸`);
+      }
       continue;
     }
     // 桥挪不了：地没了，桥就是没了
@@ -5561,16 +5601,32 @@ function syncBridges(s: GameState): void {
     return !canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true });
   });
   if (drowned.length === 0) return;
-  for (const u of drowned) {
-    pushLog(s, u.owner, `桥被摧毁，${utype(s, u.type).name} 落水`, true);
-  }
-  const gone = new Set(drowned.map((u) => u.id));
   /*
-   * 这里刻意**不走** `killUnit`：落水不是"被击杀"——没有凶手，
-   * 也不该跑亡语（一个自爆兵掉进河里不该再炸一次）。
-   * "死亡"与"移除"的分界写在 killUnit 的注释里：有亡语的走前者，纯粹消失的走后者。
+   * 和事件改地形**走同一个结算**（2026-11-20）：先受一次大伤害，
+   * 活下来的被冲到岸上。两条路以前各写一套（那边直接删、这边也直接删），
+   * 表现都是"水来了人凭空没了"。
+   *
+   * 刻意**不走** `killUnit`：淹死不是"被击杀"——没有凶手，也不该跑亡语
+   * （一个自爆兵掉进河里不该再炸一次）。"死亡"与"移除"的分界写在 killUnit
+   * 的注释里：有亡语的走前者，纯粹消失的走后者。
    */
-  s.units = s.units.filter((u) => !gone.has(u.id));
+  const gone = new Set<string>();
+  for (const u of drowned) {
+    const deadly = tileUnder(s, u)?.terrain === 'deep';
+    if (!drownUnit(s, u, deadly)) {
+      gone.add(u.id);
+      continue;
+    }
+    const spot = freeSpotWithin(s, u, u.type, 6);
+    if (spot) {
+      u.x = spot.x;
+      u.y = spot.y;
+      pushLog(s, u.owner, `${utype(s, u.type).name} 被冲上岸 (${spot.x}, ${spot.y})`, true);
+    } else {
+      gone.add(u.id);
+    }
+  }
+  if (gone.size > 0) s.units = s.units.filter((u) => !gone.has(u.id));
 }
 
 /**

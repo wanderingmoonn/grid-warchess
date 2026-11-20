@@ -877,7 +877,10 @@ line('21. 改地形：桥塌、水退、兵被挤走');
           {
             id: 'quake',
             when: { kind: 'turn', at: 2 },
-            do: [{ kind: 'terrain', zone: { x0: 0, y0: 0, x1: 4, y1: 4 }, to: 'deep' }],
+            // 只改左上角一小块：这块同时用来测"城格不被改"。
+            // 范围必须**避开 (5,5) 周围的落点**——flood 会把 (5,5) 的兵冲上岸，
+            // 落点若落在这片深水里，紧接着就会被淹死，测的就不是"挤走"了
+            do: [{ kind: 'terrain', zone: { x0: 0, y0: 0, x1: 1, y1: 1 }, to: 'deep' }],
           },
         ],
         {
@@ -907,7 +910,11 @@ line('21. 改地形：桥塌、水退、兵被挤走');
     );
     // 用 ignoreUnits：他自己就站在那一格上，带着占用去问永远是否
     check(!!him && canStandAt(st, him.x, him.y, him.type, { ignoreUnits: true }), '挤到的那一格是站得住的');
-    check(st.log.some((l) => l.text.includes('被挤到')), '挤走也说了句人话');
+    check(
+      st.log.some((l) => l.text.includes('被冲上岸') || l.text.includes('被挤到')),
+      '冲上岸也说了句人话',
+      st.log.map((l) => l.text).join(' | ').slice(-90),
+    );
     // 城格不在改动之列
     const city = st.cities.find((c) => c.owner === 'A')!;
     check(st.tiles[city.y * st.w + city.x]?.terrain === 'city', '城格没有被改成深水');
