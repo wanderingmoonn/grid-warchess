@@ -3052,6 +3052,78 @@ const NAVY_GOAL: AiGoal = {
 };
 
 registerCoreGoal(NAVY_GOAL);
+/**
+ * 「装甲」：两段前置——先有电，再有坞。
+ *
+ * 分数与判据逐字照搬自 `armorSupportNudge`（2026-11-20 迁移）。原来那一段
+ * 写在 `rawBuildScore` 的一个特判分支里，注释记着它为什么必须早于所有 −999：
+ * 电站/坞不产兵、不产钱、不是桥，会掉进"工事/塔"那条线，而那条线要求
+ * 离敌人 7 格内——老家后院的电站永远拿不到分，于是"没电 → 素体断电 →
+ * 采购被挡 → 更不会盖电站"是一个死结。
+ *
+ * 迁移之后这个死结由**段内顺序**表达：第一段没完成时，电站就是当前那一步，
+ * 排在所有 −999 之前；建好电站才轮到坞。
+ */
+const ARMOR_VALUE = (c: AiGoalCtx): number => {
+  // 一台素体都没有、也还没到第 7 代：别把钱砸在基建上
+  const frames = c.count((d) => d.armorFrame === true);
+  return frames > 0 || c.era >= 7 ? 1 : 0;
+};
+
+/**
+ * 电：没有任何电站时最急（70），已经有了但余电不足 40 时还值 40，其余不建。
+ *
+ * 注意电站和坞是**两条并行支线**，不是先后置。第一版把它们写成同一个目标的
+ * 两段（先电后坞），实测坞从 4 座掉到 1 座——因为"余电不足"会让第一段长期
+ * 不算完成，第二段永远排不上。而旧代码里两者各查各的条件，本来就是并行的。
+ * 顺序链留给修真（宗门→藏经阁→研发，那是真的硬前置）。
+ */
+const ARMOR_POWER_GOAL: AiGoal = {
+  id: 'armor-power',
+  value: ARMOR_VALUE,
+  steps: [
+    {
+      id: 'plant',
+      done: (c) =>
+        c.count((d) => (d.armorPower ?? 0) > 0) > 0 &&
+        energyReport(c.state, c.me).headroom >= 40,
+      claimsBuild: (d) => (d.armorPower ?? 0) > 0,
+      buildScore: (c, _buildId, spot, def) => {
+        const plants = c.count((d) => (d.armorPower ?? 0) > 0);
+        const need = plants === 0 ? 70 : energyReport(c.state, c.me).headroom < 40 ? 40 : -25;
+        if (need <= 0) return null;
+        return 40 + need - (c.inDanger(spot.x, spot.y) ? 30 : 0) - def.cost * 0.01;
+      },
+    },
+  ],
+};
+
+/** 坞：一座起步；素体多起来（每三台一座）再要第二座 */
+const ARMOR_DOCK_GOAL: AiGoal = {
+  id: 'armor-dock',
+  value: ARMOR_VALUE,
+  steps: [
+    {
+      id: 'dock',
+      done: (c) => {
+        const frames = c.count((d) => d.armorFrame === true);
+        return c.count(isArmorDockDef) >= Math.max(1, Math.floor(frames / 3));
+      },
+      claimsBuild: isArmorDockDef,
+      buildScore: (c, _buildId, spot, def) => {
+        const frames = c.count((d) => d.armorFrame === true);
+        const docks = c.count(isArmorDockDef);
+        const need = docks === 0 ? (frames > 0 ? 65 : 35) : 10;
+        if (need <= 0) return null;
+        return 40 + need - (c.inDanger(spot.x, spot.y) ? 30 : 0) - def.cost * 0.01;
+      },
+    },
+  ],
+};
+
+registerCoreGoal(ARMOR_POWER_GOAL);
+registerCoreGoal(ARMOR_DOCK_GOAL);
+
 
 function rawBuildScore(
   s: GameState,
@@ -3105,11 +3177,13 @@ function rawBuildScore(
    * 而那条线要求"离敌人 7 格内"——老家后院的电站永远拿不到分，直接 -999。
    * 结果是：AI 一台素体都造不出来的死结（没电 → 素体全断电 → 采购被挡 →
    * 更不会盖电站）。这一条是打这个死结的唯一位置：早于所有 -999。
+   *
+   * 2026-11-20：分数搬进 `ARMOR_GOAL`（两段前置：先电、后坞）。
+   * 这里只留"归目标管"的那一句。
    */
   if (ARMOR_SUPPORT_BUILDINGS.has(buildId)) {
-    const need = armorSupportNudge(s, unit.owner, buildId);
-    if (need <= 0) return need;
-    return 40 + need - (risky ? 30 : 0) - def.cost * 0.01;
+    const goalScore2 = goalBuildScore(s, unit, buildId, spot, era, urgent, goalCommit);
+    return goalScore2 ?? -999;
   }
 
   // 桥：跨得过去、对岸通向敌方城市才值得架
@@ -3319,22 +3393,11 @@ function rawBuildScore(
 /** 装甲基建。它们既不产兵也不产钱，普通建造评分永远排不上 */
 const ARMOR_SUPPORT_BUILDINGS = new Set(['armor_coal', 'armor_fusion', 'armor_dock', 'armor_yard']);
 
-function armorSupportNudge(s: GameState, me: PlayerId, buildId: string): number {
-  if (!ARMOR_SUPPORT_BUILDINGS.has(buildId)) return 0;
-  const mine = unitsOf(s, me);
-  const frames = mine.filter((u) => utype(s, u.type).armorFrame);
-  // 一台素体都没有、也还没到第 7 代：别把钱砸在基建上
-  if (frames.length === 0 && eraNowOf(s) < 7) return 0;
-  const plants = mine.filter((u) => (utype(s, u.type).armorPower ?? 0) > 0).length;
-  const docks = mine.filter((u) => u.type === 'armor_dock' || u.type === 'armor_yard').length;
-  if (buildId === 'armor_coal' || buildId === 'armor_fusion') {
-    if (plants === 0) return 70;
-    return energyReport(s, me).headroom < 40 ? 40 : -25;
-  }
-  // 坞：先有一座；素体多起来再考虑第二座
-  if (docks === 0) return frames.length > 0 ? 65 : 35;
-  return docks < Math.max(1, Math.floor(frames.length / 3)) ? 10 : -25;
+/** 装配坞（含升级档）：装甲基建里"不是电站"的那一半 */
+function isArmorDockDef(d: UnitTypeDef): boolean {
+  return ARMOR_SUPPORT_BUILDINGS.has(d.id) && (d.armorPower ?? 0) <= 0;
 }
+
 
 /**
  * 一台素体"装完之后"值多少分。

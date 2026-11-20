@@ -12,6 +12,7 @@
  *
  * 用法：
  *   node --experimental-strip-types scripts/ai-duel.ts --era 1 --games 40 --seed 900
+ *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --exp armor-era7 --games 20
  *   node --experimental-strip-types scripts/ai-duel.ts --era 2 --games 40 --no-swap
  *   node --experimental-strip-types scripts/ai-duel.ts --era 3 --games 40 --old ./baselines/ai-6c3c992.ts
  * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z。
@@ -90,7 +91,13 @@ const LEVEL = argOf('level', 'tactic') as 'basic' | 'advanced' | 'tactic';
 /** 同一颗种子两边各打一局：paired，方差最小 */
 const SWAP = !has('no-swap');
 /** 空扩展开关：只在排查"是不是规则把对局拖进拉锯"时才用 */
-const EXP = has('bare') ? [] : [...DEFAULT_CONFIG.expansionIds];
+const EXP = has('bare')
+  ? []
+  : argOf('exp', '')
+      .split(',')
+      .filter(Boolean)
+      .concat([...DEFAULT_CONFIG.expansionIds])
+      .filter((id, i, a) => a.indexOf(id) === i);
 
 type Ai = typeof newAi;
 
