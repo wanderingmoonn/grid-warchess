@@ -1048,7 +1048,14 @@ line('24. 玩家关：孤城 / 斩首 / 黄雀 / 护送 / 邪龙');
     '夹具被删了：探针二十多段会一起失效',
   );
 
-  for (const lv of menu) {
+  /*
+   * 只冒烟**主线**关卡。
+   *
+   * 2026-11-20：黑暗动乱那 11 张支线图（含 32×32 的满潮、64×64 的帝骸渡）也在这里
+   * 各跑 24 步，把这条探针顶到 34 秒——而它们验的东西（建局、部署、能跑不炸）
+   * 已经交给 `probe:dark-turmoil` 了。这里留着只会让每次全量测试多等半分钟。
+   */
+  for (const lv of menu.filter((l) => l.chapter !== '黑暗动乱' && !String(l.chapter ?? '').startsWith('黑暗动乱'))) {
     const v = validateLevel(lv);
     if (!v.ok) {
       bad(`${lv.name}：校验通过`, v.errors.slice(0, 3).join('；'));
