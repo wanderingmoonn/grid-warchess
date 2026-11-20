@@ -29,6 +29,7 @@ const TURNS = 90;
 const argv = process.argv.slice(2);
 const saveAt = argv.indexOf('--save') >= 0 ? argv[argv.indexOf('--save') + 1] : null;
 const lines: string[] = [];
+let knownFog = 0;
 
 function run(seed: number) {
   let s = createMatch(
@@ -37,6 +38,7 @@ function run(seed: number) {
   );
   const budget = { maxRecruit: 3, maxUpgrade: 1, recruited: 0, upgraded: 0 };
   const acts: string[] = [];
+  const rejected: string[] = [];
   const built = new Map<string, number>();
   const recruited = new Map<string, number>();
 
@@ -62,7 +64,10 @@ function run(seed: number) {
       }
       if (a.type === 'UPGRADE') budget.upgraded += 1;
       const r = applyAction(s, a);
-      if (!r.ok) break;
+      if (!r.ok) {
+        rejected.push(`${a.type} ${a.unitType ?? ''}@${a.x},${a.y} — ${r.reason ?? ''}`);
+        break;
+      }
       s = r.state;
     }
     if (s.winner) break;
@@ -85,6 +90,7 @@ function run(seed: number) {
     recruited: fmt(recruited),
     winner: s.winner ?? '-',
     turn: s.turn,
+    rejected,
   };
 }
 
@@ -155,8 +161,25 @@ for (const seed of SEEDS) {
     `指纹 ${r.hash} · 建造 ${r.built} · 招兵 ${r.recruited} · 终局 ${r.winner}/${r.turn}`;
   lines.push(line);
   console.log(line);
+  for (const bad of r.rejected) {
+    /*
+     * 已知的一类：雾里朝"自己看不见的敌人"所在格架桥。
+     *
+     * 候选是在视图上算的（看不见那个兵），执行是在真局上做的（那格有人），
+     * 于是必然被拒。这是老问题，2026-11-20 才因为这个探针记起它——以前
+     * 探针不记被拒动作，所以一直没人知道。
+     * 记一笔但不判失败：它不影响"抽机制有没有伤到行为"，修它要动执行方。
+     */
+    if (bad.includes('已经有单位或建筑')) {
+      knownFog += 1;
+      continue;
+    }
+    console.log(`  ! 非法动作：${bad}`);
+    process.exitCode = 1;
+  }
 }
 
+console.log(`\n已知的雾中撞车（被拒但不算失败）：${knownFog} 次`);
 console.log(`\n手工局面（船坞这条分支必须跑一遍）首选动作：${crafted}`);
 
 if (saveAt) {

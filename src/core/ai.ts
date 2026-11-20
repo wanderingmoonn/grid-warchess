@@ -2909,6 +2909,23 @@ function goalCtxOf(s: GameState, me: PlayerId, era: number): AiGoalCtx {
 }
 
 /**
+ * 这个建筑是不是某个**正在推进中**的产业链目标当前要建的东西。
+ *
+ * 和 `goalBuildScore` 分开是因为它有两个用处：算分（那个）和判断"能不能让路"
+ * （`scoreBuild` 里过河压制要不要减半）。合成一个函数会让后者为了一个布尔
+ * 去算一遍分数，读起来莫名其妙。
+ */
+function goalClaimsBuild(s: GameState, unit: Unit, buildId: string, era: number): boolean {
+  const def = s.unitTypes[buildId];
+  if (!def) return false;
+  const ctx = goalCtxOf(s, unit.owner, era);
+  for (const { step } of goalStepsInPlay(ctx)) {
+    if (step.claimsBuild?.(def)) return true;
+  }
+  return false;
+}
+
+/**
  * 这个建筑归不归某个产业链管：归就返回分数，不归返回 null。
  *
  * 返回 `-999` 表示"归某个目标管，但它现在不该建"（前置没完成、离城太远、
@@ -2977,7 +2994,19 @@ const NAVY_GOAL: AiGoal = {
         const docks = c.count((d) => isProducer(d) && onWaterDef(d));
         // 海上工地会挨舰炮，但没有陆上工地那么致命（水面上摸过来的兵少）
         const risky = c.inDanger(spot.x, spot.y);
-        return 70 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
+        /*
+         * 基准 70 → 95（2026-11-20，迁进目标表时重标的）。
+         *
+         * 70 是当年定的，那时它的对手是"工程兵朝桥头挪一格"（四十几分）。
+         * 现在桥拿的是 `needBridge` +24 和"接上自己那截" +26，分数到了八十几，
+         * 70 分连一次都排不上。实测 4 局 20×20 纵河（海军包）：
+         *   · 70 分 + 过河压制 −20 → 船坞 0 座
+         *   · 95 分 + 过河压制 −10 → 船坞 2 座，桥和营的数量没变
+         * 这仍然是"每局半座"的量级，不够多；但这是**真实需要**的问题
+         * （城里本来就能造一部分 nv_ 船，船坞只是高阶船的门槛），
+         * 不是靠继续加分数能解决的——再往上是拿桥换船坞。
+         */
+        return 95 + sea * 30 - nearOwn * 0.6 - docks * 45 - def.cost * 0.03 - (risky ? 12 : 0);
       },
     },
   ],
@@ -3389,8 +3418,23 @@ function scoreBuild(
   if (all.needBridge && s.unitTypes[buildId]?.bridges) return raw + 24;
 
   if (all.needBridge && canBridge && !s.unitTypes[buildId]?.bridges) {
-    // 过河阶段压别的建造，但不能一刀切：军营是"过了河立刻用得上"的东西，
-    // 压满 45 分等于整条河岸一个产兵点都没有，兵只能从老家一趟趟往前线跑。
+    /*
+     * 过河阶段压别的建造，但不能一刀切：军营是"过了河立刻用得上"的东西，
+     * 压满 45 分等于整条河岸一个产兵点都没有，兵只能从老家一趟趟往前线跑。
+     *
+     * 2026-11-20：**产业链目标当前要建的东西再让一档**。
+     *
+     * 实测（`diag-build --exp naval --map river-v`）：两局 20×20，49 次建造里
+     * 40 次是桥，船坞一次都没有。船坞拿的是产兵点那档 −20，而桥在 `needBridge`
+     * 时额外 +24、接上自己那截再 +26——两边分差只有个位数，工兵又全被桥占着，
+     * 于是"过河"这个**临时战术需求**把一条**战略投资**永久压死了。
+     *
+     * 两者不是一回事：桥是这一回合的通行证，产业链是这一局的路线。所以目标
+     * 认领的建筑只吃一半压制（−10），让它还有机会排上来，但绝不取消压制——
+     * 真到了必须架桥的时候，桥仍然是第一位的。
+     */
+    const strategic = goalClaimsBuild(s, unit, buildId, all.era);
+    if (strategic) return raw - 10;
     return raw - (isProducer(s.unitTypes[buildId]) ? 20 : 45);
   }
   return raw;
