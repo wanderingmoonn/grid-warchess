@@ -11,6 +11,7 @@
  */
 
 import { DEFAULT_PLAYER_NAMES } from '../core/setup.ts';
+import { isAiSide } from '../core/ai-meta.ts';
 import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId } from '../core/types.ts';
 import {
@@ -33,9 +34,21 @@ export interface OnlineHost {
   /** 进入房间：把云端那一局装进本地 */
   enter(seat: RoomSeat, snapshot: RoomSnapshot): void;
   /** 以观战身份进入：不占座、不写云端，只看（两个席位都有人的时候用） */
-  watch(code: string, snapshot: RoomSnapshot): void;
+  watch(code: string, snapshot: RoomSnapshot, notice?: string): void;
   /** 退出房间，回到本机对局 */
   leave(): void;
+  /**
+   * 一句话说清"要上传的是哪一局"（2026-11-19）。
+   *
+   * 用户报过"一进联机就被锁在一张不认识的图上"：那不是联机的错，
+   * 是他本机还停着上一次的关卡存档，创建房间时被原样传了上去。
+   * 面板必须先把这件事说清，再让人点创建。
+   */
+  describe(): string;
+  /** 放弃当前这局，去开一局新的（关卡/对局面板） */
+  newGame(): void;
+  /** 建房前整理这一局（普通对局要把电脑关掉，否则 B 席是"电脑的座"，真人坐不进去） */
+  prepareRoom(mode: 'standard' | 'current'): GameState;
 }
 
 export function openOnlinePanel(host: OnlineHost): void {
@@ -131,9 +144,14 @@ export function openOnlinePanel(host: OnlineHost): void {
                 会以你现在执的一方入座，顺便把这局原样传上去。
                 之后每一步都在本机走，点「结束回合」才提交给对方。
               </div>
+              <div class="online-current">当前这局：<b>${escapeHtml(host.describe())}</b></div>
               <button class="btn btn-primary btn-block" data-act="create" ${busy ? 'disabled' : ''}>
-                ${busy ? '正在创建…' : '创建房间'}
+                ${busy ? '正在创建…' : '创建房间（标准双人局 12×12）'}
               </button>
+              <button class="btn btn-block" data-act="create-current" ${busy ? 'disabled' : ''}>
+                用上面这局建房（房主自己挑的图/关卡）
+              </button>
+              <button class="btn btn-block" data-act="new-game">不是这局——去开一局新的</button>
             </section>
 
             <section class="field">
@@ -229,7 +247,7 @@ export function openOnlinePanel(host: OnlineHost): void {
             </div>
             <div class="field-hint">
               ${snap ? (allSeated ? '人都到齐了。' : `还有 ${emptySeats.length} 个席位空着。`) : ''}
-              ${isWatcher ? '观战位不占座，多几个人同时看也不会互相挤掉。' : '换设备时，重新打开邀请链接就能回到你自己的席位。'}
+              ${isWatcher ? '观战位不占座，多几个人同时看也不会互相挤掉。' : '同一浏览器刷新会回到原席；新浏览器会安排到空席，不会复制房主身份。'}
             </div>
           </section>
 
@@ -263,14 +281,33 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (!closed) paint();
   };
 
-  const doCreate = async () => {
+  /** 建房模式：standard = 现造一局标准双人局；current = 用房主本机这局 */
+  let busyMode: 'standard' | 'current' = 'standard';
+
+  const doCreate = async (mode: 'standard' | 'current' = 'standard') => {
+    busyMode = mode;
     busy = true;
     error = '';
     paint();
-    const state = host.currentState();
+    /*
+     * 默认**现造一局标准双人局**（2026-11-19）。
+     * 用本机那局要显式选——否则房间里装的可能是上次的关卡存档，
+     * 客人进来就是一张谁都没打算打的图。
+     */
+    const state = host.prepareRoom(busyMode ?? 'standard');
     try {
       const token = newToken();
-      const seat = await createRoom(state, state.current, token);
+      /*
+       * **房主固定坐 A**（2026-11-19 修"断开再开始时席位会变"）。
+       *
+       * 原来传的是 `state.current`——那是"轮到谁走"，不是"我是谁"。
+       * 于是房主在哪一回合建房就坐哪一席：这局轮到 B，房主就成了 B，
+       * 重开一次又变回 A，对面看到的席位一直在跳。
+       *
+       * A 归电脑（关卡里的单人对局）时才退到 B。
+       */
+      const mySeat = isAiSide(state, 'A') ? ('B' as const) : ('A' as const);
+      const seat = await createRoom(state, mySeat, token);
       host.enter(seat, {
         code: seat.code,
         state,
@@ -310,56 +347,55 @@ export function openOnlinePanel(host: OnlineHost): void {
     try {
       const snapshotNow = await fetchRoom(code);
       if (!snapshotNow) {
+        snapshot = null;
         error = `没有找到代码为 ${code} 的房间`;
-      } else {
-        // 优先回到自己原来的席位（靠本机存的令牌），否则坐空位。
-        // 观战记录不能拿来抢座：那条记录里的 seat 是占位用的 'A'，不是真的坐过 A。
-        const saved = loadSeat(code);
-        const mine = saved && !saved.spectator ? saved : null;
-        const token = saved?.token ?? newToken();
-        // 这张桌子有几个座，由房间里的 config 决定（老房间没有 playerCount = 两人局）
-        const seats = seatsOf(snapshotNow.state);
-        /*
-         * **电脑席位不给真人坐**（2026-11-18）。
-         *
-         * 关卡用 `config.aiSeats` 声明"这一席是电脑"（比如 `["C"]`）。原来这里
-         * 只按"空着就坐"来抢座，于是退出再进一次的人可能坐进 AI 那一席——
-         * 一坐下 `aiControl` 就把它变成真人操作，原本该由电脑打的一方从此不动，
-         * 看上去就是"联机把关卡玩坏了"。
-         *
-         * 现在：先按原席位/席位顺序找**非电脑**的空位；一个都没有就转观战，
-         * 而不是把电脑的席位抢过来。
-         */
-        const aiSeats: PlayerId[] = Array.isArray(snapshotNow.state.config.aiSeats)
-          ? (snapshotNow.state.config.aiSeats as PlayerId[])
-          : [];
-        const order: PlayerId[] = (mine
-          ? [mine.seat, ...seats.filter((x) => x !== mine!.seat)]
-          : seats
-        ).filter((x) => !aiSeats.includes(x));
-        let seated: PlayerId | null = null;
-        for (const seat of order) {
-          if ((await claimSeat(code, seat, token)) === 'ok') {
-            seated = seat;
-            break;
-          }
+        return;
+      }
+
+      // 优先回到自己原来的席位；观战记录里的 A 只是视角占位，不能拿来抢座。
+      const saved = loadSeat(code);
+      const mine = saved && !saved.spectator ? saved : null;
+      const token = saved?.token ?? newToken();
+      const aiSeats: PlayerId[] = Array.isArray(snapshotNow.state.config.aiSeats)
+        ? (snapshotNow.state.config.aiSeats as PlayerId[])
+        : [];
+      const pc = Number(snapshotNow.state.config.playerCount ?? 2) || 2;
+      const allSeats: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(
+        0,
+        Math.max(2, Math.min(4, pc)),
+      );
+      const order: PlayerId[] = (mine && allSeats.includes(mine.seat)
+        ? [mine.seat, ...allSeats.filter((x) => x !== mine!.seat)]
+        : allSeats
+      ).filter((x) => !aiSeats.includes(x));
+      let seated: PlayerId | null = null;
+      let lastTaken: PlayerId | null = null;
+      for (const seat of order) {
+        // taken 才继续找下一席；网络/权限异常必须停止并报告，不能伪装成满员。
+        let r = await claimSeat(code, seat, token);
+        if (r !== 'ok') r = await claimSeat(code, seat, token);
+        if (r === 'ok') {
+          seated = seat;
+          break;
         }
-        if (!seated) {
-          // 两个座位都满了——别再拦人，直接转观战
-          host.watch(code, snapshotNow);
-          close();
-          return;
-        }
-        host.enter({ code, seat: seated, token }, snapshotNow);
+        lastTaken = seat;
+      }
+      if (!seated) {
+        const reason = lastTaken ? `${lastTaken} 等席位已被占用` : '没有可入座的真人席位';
+        host.watch(code, snapshotNow, `没有空席位（${reason}），已切到观战`);
         close();
         return;
       }
+      host.enter({ code, seat: seated, token }, snapshotNow);
+      close();
     } catch (err) {
-      error = err instanceof Error ? err.message : '进入失败';
+      error = `进入失败：${err instanceof Error ? err.message : '网络或云端权限异常'}。请重试，不会自动转成观战。`;
       void runProbe();
+    } finally {
+      // 所有提前 return 都必须解除 busy；否则输错一次代码，面板就永久锁死。
+      busy = false;
+      if (!closed) paint();
     }
-    busy = false;
-    if (!closed) paint();
   };
 
   /** 只看：不抢座，任何房间只要存在就能进去看 */
@@ -400,11 +436,17 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (!act) return;
 
     if (act === 'close') close();
-    if (act === 'create') void doCreate();
+    if (act === 'create') void doCreate('standard');
+    if (act === 'create-current') void doCreate('current');
     if (act === 'join') void doJoin();
     if (act === 'watch') void doWatch();
     if (act === 'refresh') void refresh();
     if (act === 'probe') void runProbe();
+    if (act === 'new-game') {
+      close();
+      host.newGame();
+      return;
+    }
     if (act === 'leave') {
       host.leave();
       close();

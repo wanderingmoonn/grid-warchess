@@ -27,7 +27,7 @@ import { goalText, validateLevel } from './core/level.ts';
 import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
-import { cardTypeId, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
+import { buildableTypes, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
 import { ELITE_UNIT_MAP } from './core/roguelike/elites.ts';
 import { actLabel, isBossStage } from './core/roguelike/stages.ts';
 import { openCardChoice, openRestPanel, openRunPanel, openSettlePanel } from './ui/roguelike/run-screen.ts';
@@ -175,6 +175,7 @@ import {
   submitDraft,
   submitTurn,
   submitTurnForce,
+  RoomRequestGate,
   type RoomSeat,
   type RoomSnapshot,
 } from './net/room.ts';
@@ -268,6 +269,15 @@ let pendingDevice: { unitId: string; deviceId: string } | null = null;
 function inviteLink(code: string): string {
   const url = new URL(location.href);
   url.searchParams.set('room', code);
+  /*
+   * 邀请链接只带房间码，绝不在 URL 里复制自己的席位令牌。
+   *
+   * 2026-11-19 之前这里附带 s/t，房主把选卡邀请发给客人后，客人会拿着同一
+   * 个令牌坐进同一席：两端都执 A，B 仍为空。旧链接的回座参数仍由入房逻辑
+   * 兼容读取，但新生成的公开邀请不再携带任何私人身份。
+   */
+  url.searchParams.delete('s');
+  url.searchParams.delete('t');
   return url.toString();
 }
 
@@ -391,8 +401,21 @@ if (new URLSearchParams(location.search).has('fresh')) {
   console.info('[存档] 已按 ?fresh=1 清掉本机存档');
 }
 
-let hasRealSave = loadMatch() !== null;
-let state: GameState = loadMatch() ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+/*
+ * **开机不再把上次那局当成"当前局"**（2026-11-19 用户报"一进联机就是那张图"）。
+ *
+ * 原来这里是 `loadMatch() ?? createMatch(...)`：开机就把存档读进 `state`。
+ * 于是"创建房间"上传的是上次那局（比如某个关卡），玩家看到的是一张
+ * 他从没打算打的图，而且换房间码也没用——传上去的都是同一张。
+ *
+ * 现在：内存里先放一局**全新的默认对局**当占位，存档只在你点
+ * 「继续上一局」时才装进来。在点之前**挂起自动存档**，
+ * 否则这局占位会立刻覆盖掉真正的存档（那才是灾难）。
+ */
+const bootSave = loadMatch();
+let hasRealSave = bootSave !== null;
+let state: GameState = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+if (hasRealSave) suspendSaves(true);
 
 /*
  * 棋盘视图的开关：悬停看一眼，点一下钉住。
@@ -996,6 +1019,16 @@ let room: RoomSeat | null = null;
  */
 let dirty = false;
 let roomTimer = 0;
+const roomRequests = new RoomRequestGate();
+/** 所有房间写入都走这层：让在途旧轮询失效，避免旧响应回滚新回合。 */
+async function withRoomWrite<T>(write: () => Promise<T>): Promise<T> {
+  roomRequests.beginWrite();
+  try {
+    return await write();
+  } finally {
+    roomRequests.endWrite();
+  }
+}
 /** 诊断用：进房以来成功提交过几次（?debug=1 里看） */
 let pushOkCount = 0;
 /** 诊断用：最近一次拉到云端快照的时刻与它的 updated_at */
@@ -1016,10 +1049,19 @@ let watchCount = 0;
 /** 记住"我现在在哪一局房间里"，刷新页面能自己回到那一局 */
 const ROOM_KEY = 'warchess:room-current';
 
+/** 会话级标记：这一趟会话是不是在这个房间里（关标签页即失效） */
+const IN_ROOM_KEY = 'warchess:in-room';
+
 function rememberRoom(code: string | null): void {
   try {
-    if (code) localStorage.setItem(ROOM_KEY, code);
-    else localStorage.removeItem(ROOM_KEY);
+    if (code) {
+      localStorage.setItem(ROOM_KEY, code);
+      // 这一趟会话里是在房间中：刷新可以回房，重新打开不会
+      sessionStorage.setItem(IN_ROOM_KEY, code);
+    } else {
+      localStorage.removeItem(ROOM_KEY);
+      sessionStorage.removeItem(IN_ROOM_KEY);
+    }
   } catch {
     // 隐私模式无所谓，顶多刷新之后要重新输一次代码
   }
@@ -1035,9 +1077,18 @@ function resumeRoom(): boolean {
   try {
     const code = localStorage.getItem(ROOM_KEY);
     if (!code) return false;
+    /*
+     * **只有"同一标签页里刷新"才自动回房**（2026-11-19）。
+     *
+     * 原来只看 localStorage，于是关掉浏览器、第二天打开，人还被塞回
+     * 上次那个房间和那张旧图里，看着像"一进联机就锁死在这张图"。
+     * sessionStorage 在关标签页时自动清空，正好表达"这一趟会话"。
+     */
+    if (sessionStorage.getItem(IN_ROOM_KEY) !== code) return false;
     const seat = loadSeat(code);
     if (!seat) return false;
     room = seat;
+    roomRequests.invalidate();
     setSaveScope(code);
     const draft = loadMatch();
     if (draft) state = draft;
@@ -3020,7 +3071,7 @@ async function pushDraft(
   draftBusy = true;
   try {
     for (let attempt = 0; attempt < 4; attempt++) {
-      const ok = await submitDraft(seat.code, state, prevSeq);
+      const ok = await withRoomWrite(() => submitDraft(seat.code, state, prevSeq));
       if (ok) {
         dirty = false;
         draftStuck = false;
@@ -3070,8 +3121,19 @@ async function pushDraft(
 /** 把云端快照无提示地装进本机（BP 用；对局中的那次在 pollRoom 里带 toast） */
 function takeSnapshot(snapshot: RoomSnapshot): void {
   const fog = state.fog;
+  /*
+   * 进房间 = **采用房主那张棋盘**（2026-11-19）。
+   *
+   * 本地可能正开着自己的局：地盘、地形、单位全都不是一起的。
+   * 之前静默替换，玩家看到的就是"怎么跑到一张不认识的图上了"。
+   * 换了 seed 就明说一句，让人知道自己被同步了，而不是以为出了 bug。
+   */
+  const prevSeed = state.seed;
   dropHeatFlash();
   state = snapshot.state;
+  if (room?.spectator !== true && prevSeed !== state.seed) {
+    toast(`已同步房主的棋局（第 ${state.turn} 回合）`);
+  }
   state.aiControl = undefined;
   state.fog = fog;
   clearSelection();
@@ -3656,22 +3718,20 @@ function dispatch(action: Action): boolean {
        * 所以挂在 `.then()` 上：提交成功 → 再驱动电脑。
        */
       /*
-       * 房间里**有电脑**的时候用强制提交（2026-11-16）。
-       *
-       * 带乐观锁的写法在这里会静默失败：`prevTurn` 是"我以为云端停在几"，
-       * 而这局里云端还会被电脑那一轮推着前进，一旦对不上 `.eq('turn', …)`
-       * 就一行也更新不到——房主本地照样打，观战端永远停在上一帧。
-       * 带 AI 的房间里只有本机会写，不存在合法的并发冲突，所以直接覆盖。
+       * 只有单真人 + AI 的房间才允许强制覆盖：这种局只有本机会写。
+       * 多真人合作房仍必须走乐观锁，否则两个真人同时提交会互相覆盖。
        */
-      const done = anyAiSide(state)
-        ? submitTurnForce(room.code, state).then((ok) => {
+      const singleWriter = seatsOf(state).filter((p) => !isAiSide(state, p)).length <= 1;
+      const activeRoom = room;
+      const done = anyAiSide(state) && singleWriter
+        ? withRoomWrite(() => submitTurnForce(activeRoom.code, state)).then((ok) => {
             if (ok) {
               dirty = false;
               pushOkCount += 1;
               render();
             }
           })
-        : pushTurn(room, prevTurn);
+        : pushTurn(activeRoom, prevTurn);
       /*
        * **不管提交成没成功，都要把电脑点起来**（2026-11-16）。
        *
@@ -5189,8 +5249,53 @@ function handleAction(act: string, el: HTMLElement): void {
         currentState: () => state,
         room: () => room,
         enter: (seat, snapshot) => applyRoom(seat, snapshot),
-        watch: (code, snapshot) => watchRoom(code, snapshot),
+        watch: (code, snapshot, notice) => watchRoom(code, snapshot, notice),
         leave: () => leaveRoom(),
+        describe: () => {
+          /*
+           * "要上传的是哪一局"（2026-11-19）。
+           *
+           * 玩家报过"一进联机就被锁在一张不认识的图上"——本机还停着上次的
+           * 关卡存档，创建房间时被原样传上去。把这一行摆在按钮上面，
+           * 至少他点之前知道自己在传什么。
+           */
+          const lv = state.config.level?.name;
+          const mine = state.units.filter((u) => u.owner === me()).length;
+          const cv = state.cities.filter((c) => c.owner === me()).length;
+          return `第 ${state.turn} 回合 · ${state.w}×${state.h} · ${lv ? `关卡「${lv}」` : '普通对局'} · 我 ${mine} 兵 ${cv} 城`;
+        },
+        newGame: () => newGameFlow(),
+        prepareRoom: (mode) => {
+          /*
+           * 建房先在内存里准备状态，云端创建成功后 applyRoom 才切换本机对局。
+           * 不提前改写全局 state、不挂起自动存档：创建失败时本机那局原样保留。
+           */
+          if (mode === 'standard') {
+            return createMatch(
+              {
+                ...DEFAULT_CONFIG,
+                size: 12,
+                playerCount: 2,
+                aiOpponent: false,
+                aiSeats: [],
+                level: undefined,
+                godMode: false,
+              } as typeof DEFAULT_CONFIG,
+              randomSeed(),
+              loadCustomUnits(),
+            );
+          }
+
+          /* 普通 AI 局建房时，给真人的 B 席留出位置；关卡自带的 AI 席位保留。 */
+          if (!state.config.level && state.config.aiOpponent) {
+            return {
+              ...state,
+              config: { ...state.config, aiOpponent: false, aiSeats: [] },
+              aiControl: undefined,
+            };
+          }
+          return state;
+        },
       });
       return;
     }
@@ -5652,8 +5757,9 @@ async function runAiLoop(): Promise<void> {
    * 电脑这一方只有本机会写，不存在合法的并发冲突，所以可以放心覆盖。
    */
   if (pushing && room) {
+    const activeRoom = room;
     try {
-      const ok = await submitTurnForce(room.code, state);
+      const ok = await withRoomWrite(() => submitTurnForce(activeRoom.code, state));
       if (ok) {
         dirty = false;
         pushOkCount += 1;
@@ -6018,6 +6124,12 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     onRogue: openRoguelike,
     onTutorial: startTutorial,
     onContinue: () => {
+      // 存档在开机时被挂起了，这里才真正装进来（见 bootSave 那段注释）
+      const saved = loadMatch();
+      if (saved) state = saved;
+      suspendSaves(false);
+      refreshMemory(state);
+      clearSelection();
       render();
       kickAiIfNeeded();
     },
@@ -6042,10 +6154,28 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
  * 不先 confirm：打开面板本身就说明了意图，点"取消"等于没放弃。
  * 只有点了面板里的"开始对局"才会覆盖当前存档。
  */
+
+/**
+ * 换了新的一局：如果正挂着房间，**立刻把新棋局推上去**（2026-11-19）。
+ *
+ * 房间里的 state 只在"结束回合"时提交。房主换了关卡/新开一局之后，
+ * 云端还停着上一张图，客人拉下来就是一张"不知名地图"——
+ * 两侧各自在自己的图上打，谁都不知道对方在打什么。
+ */
+function pushRoomAfterNewMatch(): void {
+  const activeRoom = room;
+  if (!activeRoom || activeRoom.spectator) return;
+  void withRoomWrite(() => submitTurnForce(activeRoom.code, state)).catch(() => {
+    // 推不上去不影响本地，下一手结束还会再推一次
+  });
+}
+
 function newGameFlow(): void {
   void openSetupPanel(state.config, randomSeed()).then((result) => {
     if (!result) return;
+    suspendSaves(false);
     state = createMatch(result.config, result.seed, loadCustomUnits());
+    pushRoomAfterNewMatch();
     /*
      * 托管是**这一局**的临时授权，不该跟着开下一局（2026-11-18）。
      * 不清的话：玩家上一局点过一次"托管"，新开一局自己那一席仍是电脑，
@@ -6172,15 +6302,12 @@ function startRogueStage(): void {
    * 卡加成不再覆盖原兵种（否则敌人同兵种一起变强），
    * 所以玩家能造的必须是 `militia~L2` 这种专属类型。
    */
-  const allowed = [
-    ...new Set([
-      ...rogue.run.roster.map((u) => u.type),
-      ...Object.entries(rogue.run.cards).map(([id, n]) => {
-        const lv = cardLevel(n);
-        return lv > 0 ? cardTypeId(id, lv) : id;
-      }),
-    ]),
-  ];
+  /*
+   * 可造清单按**兵种**归并，只留最高级（2026-11-20）。
+   * 以前同一兵种会出现 `民兵 +1` 和 `民兵 +2` 两个选项，
+   * 点错档位就会觉得"升了级但数值没变"。
+   */
+  const allowed = buildableTypes(rogue.run);
   const buildable = allowed.length > 0 ? allowed : ['militia', 'archer'];
   state = createMatch(
     {
@@ -6192,6 +6319,17 @@ function startRogueStage(): void {
       recruitOnly: buildable,
       // 整备关加固过城墙 → 城更大（兵额 4 → 9）
       citySize: citySizeFor(rogue.run.wallProgress),
+      /*
+       * **Boss 关：Boss 只守不出，占它的城不收重建费**（2026-11-20）。
+       *
+       * 前一条：Boss 有城就会一回合一个地补兵，玩家打掉一个又出来一个，
+       * 这关永远清不完。禁的是"生产"，不是"行动"——它照样会打你。
+       * 后一条：肉鸽里占领敌城没有任何回报（这一关打完就结束），
+       * 还按普通对局收"城血 × 2.5"的重建费，等于赢了倒贴。
+       */
+      ...(stageAt(rogue.run.node).meta.slot === 3
+        ? { noProduceSeats: ['B'], freeRebuild: true }
+        : {}),
     },
     randomSeed(),
     units,
@@ -6877,6 +7015,7 @@ function showRogueEnd(): void {
 function playtestLevel(level: LevelDef): void {
   try {
     state = createMatch({ ...DEFAULT_CONFIG, level }, randomSeed(), loadCustomUnits());
+    pushRoomAfterNewMatch();
     state.aiControl = undefined; // 同上：试玩不该继承上一局的托管
     dropHeatFlash();
     detachRoom();
@@ -8562,6 +8701,7 @@ function peersAllSeated(snapshot: RoomSnapshot, me: PlayerId): boolean {
 
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
+  roomRequests.invalidate();
   room = seat;
   peerSeated = seat.spectator === true ? true : peersAllSeated(snapshot, seat.seat);
   saveSeat(seat);
@@ -8591,6 +8731,8 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   aiToken += 1;
   aiPaused = false;
   dirty = false;
+  // 房间作用域已经切好，可以恢复自动存档了
+  suspendSaves(false);
   closeHandoff();
   // 换了一局就是换了一张图：上一局放大到 3× 拖着看的位置，到这一局毫无意义
   resetZoom();
@@ -8629,6 +8771,7 @@ function leaveRoom(): void {
 /** 只断开房间、不载入本机对局：换局或导入存档时用 */
 function detachRoom(): void {
   if (!room) return;
+  roomRequests.invalidate();
   window.clearInterval(roomTimer);
   roomTimer = 0;
   window.clearInterval(presenceTimer);
@@ -8644,7 +8787,7 @@ function detachRoom(): void {
 /** 提交这一回合。expectedTurn 是提交前本机的回合数，用来发现"两边同时提交" */
 async function pushTurn(seat: RoomSeat, expectedTurn: number, okText?: string): Promise<void> {
   try {
-    const ok = await submitTurn(seat.code, state, expectedTurn);
+    const ok = await withRoomWrite(() => submitTurn(seat.code, state, expectedTurn));
     if (!ok) {
       toast('云端已经是别的回合了（可能对面也提交过），点「联机 → 刷新状态」看一眼');
       return;
@@ -8751,9 +8894,10 @@ async function pollRoom(): Promise<void> {
   // 参谋部正在批量执行：这时云端的 turn 还是旧的，拉回来就是把刚走的一步抹掉
   if (commanderRunning) return;
 
+  const ticket = roomRequests.beginPoll();
   try {
     const snapshot = await fetchRoom(seat.code);
-    if (!snapshot || room?.code !== seat.code) return;
+    if (!snapshot || room?.code !== seat.code || !roomRequests.canApply(ticket)) return;
     lastSnapAt = Date.now();
     lastSnapUpdated = snapshot.updatedAt;
     lastSnapHead = `code=${snapshot.code} turn=${snapshot.turn} current=${snapshot.current}`;
@@ -8809,8 +8953,9 @@ async function pollRoom(): Promise<void> {
         turn: snapshot.turn,
         current: snapshot.current,
         winner: snapshot.state.winner ?? null,
+        seed: snapshot.state.seed,
       },
-      { turn: state.turn, current: state.current, winner: state.winner ?? null },
+      { turn: state.turn, current: state.current, winner: state.winner ?? null, seed: state.seed },
       { seat: seat.seat, spectator: seat.spectator === true, draft: dirty },
     );
     if (!decision.take) {
@@ -8894,12 +9039,42 @@ async function enterRoomFromUrl(code: string): Promise<void> {
       toast(`回到房间 ${code} 的观战视角`);
       return;
     }
-    const token = mine?.token ?? newToken();
+    /*
+     * 链接里带了身份就照它回原位（2026-11-19）：
+     * 即使本机没有记录（换设备、清缓存），也能坐回自己那一席。
+     */
+    const url = new URL(location.href);
+    const urlSeat = url.searchParams.get('s');
+    const urlToken = url.searchParams.get('t');
+    const fromLink =
+      urlSeat && urlToken
+        ? ({ code, seat: urlSeat as PlayerId, token: urlToken } as RoomSeat)
+        : null;
+    const known = fromLink ?? mine;
+    const token = known?.token ?? newToken();
     // 自己记着座位就先去抢回原位；没记着（换了设备/清了缓存）就从第一个空座开始试。
     // 三人、四人桌的座位数由这一局的 config 决定，不能再写死 A/B 两个。
-    const tableSeats = seatsOf(snapshot.state);
-    const order: PlayerId[] = mine
-      ? [mine.seat, ...tableSeats.filter((x) => x !== mine.seat)]
+    /*
+     * **四个座全试**（2026-11-19）。
+     *
+     * 手机上点邀请链接就是走这条路径。原来只试 `seatsOf(state)` 算出来的座，
+     * 那个函数读 `playerCount`；房间若是老版本建的、或关卡声明了别的席位数，
+     * 它就会算少，客人明明看到空位也只能被塞进观战。
+     */
+    /*
+     * **只坐这张桌子真实存在的席位**（2026-11-19 修）。
+     *
+     * 上一版为了绕开"算少了席位"，改成 A~D 全试——结果 2 人房里 B 写失败时
+     * 会一路试到 C/D，把人塞进一个本来不存在的座（用户就这样坐进了 C 席）。
+     * 现在按 `playerCount` 截断：2 人房只有 A、B。
+     */
+    const pc = Number(snapshot.state.config.playerCount ?? 2) || 2;
+    const tableSeats: PlayerId[] = (['A', 'B', 'C', 'D'] as PlayerId[]).slice(
+      0,
+      Math.max(2, Math.min(4, pc)),
+    );
+    const order: PlayerId[] = known && tableSeats.includes(known.seat)
+      ? [known.seat, ...tableSeats.filter((x) => x !== known.seat)]
       : tableSeats;
     for (const seat of order) {
       /*
@@ -8911,7 +9086,9 @@ async function enterRoomFromUrl(code: string): Promise<void> {
        * 这一方归电脑，观战者就该去观战位。
        */
       if (isAiSide(snapshot.state, seat)) continue;
-      const result = await claimSeat(code, seat, token);
+      let result = await claimSeat(code, seat, token);
+      // 抢座是竞态：对面刚刷新也可能在写同一列，失败就再试一次
+      if (result !== 'ok') result = await claimSeat(code, seat, token);
       if (result === 'ok') {
         applyRoom({ code, seat, token }, snapshot);
         toast(`已进入房间 ${code}，你执${DEFAULT_PLAYER_NAMES[seat]}`);
@@ -8926,8 +9103,9 @@ async function enterRoomFromUrl(code: string): Promise<void> {
 }
 
 /** 以观战身份进入一个房间：不占座、不写云端，只看 */
-function watchRoom(code: string, snapshot: RoomSnapshot): void {
+function watchRoom(code: string, snapshot: RoomSnapshot, notice?: string): void {
   applyRoom({ code, seat: 'A', token: newToken(), spectator: true }, snapshot);
+  if (notice) toast(notice);
 }
 
 // ---------- 房间聊天 ----------

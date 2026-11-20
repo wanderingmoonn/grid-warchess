@@ -10730,3 +10730,15 @@ a.btn {
   border-color: #d9d3c6;
   background: #fbf9f4;
 }
+
+/* 联机面板：提示"要上传的是哪一局" */
+.online-current {
+  margin: 8px 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fbf6e9;
+  border: 1px solid #e9dfc6;
+  font-size: 13px;
+  color: #5c5344;
+  line-height: 1.5;
+}

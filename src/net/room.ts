@@ -276,8 +276,17 @@ export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
     const rpc = await rpcDb.rpc('warchess_room_get', { code: code.toUpperCase() });
     if (!rpc.error && rpc.data) {
       const row = rpc.data as Row;
-      const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
-      return toSnapshot({ ...row, state });
+      /*
+       * RPC 回执不可信时，必须继续走下面的直查，不能把它当成"房间不存在"。
+       *
+       * 2026-11-19 实测：创建 QC7BQ4 成功，直查也能立刻读到；RPC 却始终返回
+       * 另一个旧房间 647B2K。上一版在这里 return null，导致每个新房都进不去。
+       * code 校验仍然保留，但它只负责否决这份 RPC 回执，不负责否决直查结果。
+       */
+      if (String(row.code ?? '').toUpperCase() === code.toUpperCase()) {
+        const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
+        return toSnapshot({ ...row, state });
+      }
     }
   } catch {
     /* 函数不存在 / 网络不通：落到下面的老路径 */
@@ -287,6 +296,7 @@ export async function fetchRoom(code: string): Promise<RoomSnapshot | null> {
   // 服务端是 jsonb 列，SDK 会直接反序列化成对象；个别环境会退回字符串
   const row = data as Row | null;
   if (!row) return null;
+  if (String(row.code ?? '').toUpperCase() !== code.toUpperCase()) return null;
   const state = typeof row.state === 'string' ? (JSON.parse(row.state) as GameState) : row.state;
   return toSnapshot({ ...row, state });
 }
@@ -435,6 +445,51 @@ export async function submitDraft(
  * **已经走完的一轮**，不存在偷看对面半回合的问题。真正要防的只有一件事：
  * 本机还有没交上去的走法（`draft`），那条仍然挡在最前面。
  */
+/**
+ * 房间读写请求闸门。
+ *
+ * 轮询会被定时器、焦点和可见性事件同时触发；提交又会和轮询并行。只检查房间码
+ * 挡不住"先发旧请求、后收到旧响应"：它会把刚提交的新回合覆盖掉。这里给每次
+ * 轮询发一张票，只有最新轮询、且期间没有任何房间写入时才允许采纳。
+ */
+export interface RoomPollTicket {
+  poll: number;
+  write: number;
+}
+
+export class RoomRequestGate {
+  private pollSeq = 0;
+  private writeSeq = 0;
+  private activeWrites = 0;
+
+  beginPoll(): RoomPollTicket {
+    return { poll: ++this.pollSeq, write: this.writeSeq };
+  }
+
+  beginWrite(): void {
+    this.writeSeq += 1;
+    this.activeWrites += 1;
+  }
+
+  endWrite(): void {
+    this.activeWrites = Math.max(0, this.activeWrites - 1);
+  }
+
+  /** 进房、退房或换房时，让所有在途旧响应失效 */
+  invalidate(): void {
+    this.pollSeq += 1;
+    this.writeSeq += 1;
+  }
+
+  canApply(ticket: RoomPollTicket): boolean {
+    return (
+      this.activeWrites === 0 &&
+      ticket.poll === this.pollSeq &&
+      ticket.write === this.writeSeq
+    );
+  }
+}
+
 export type AdoptDecision =
   | { take: false; why: 'same' | 'draft' }
   | { take: true; why: 'finished' | 'turn' };
@@ -443,6 +498,8 @@ export interface RemoteHead {
   turn: number;
   current: PlayerId;
   winner: PlayerId | null;
+  /** 棋盘种子：同房换了一局但 turn/current 恰好相同时，仍能识别出来 */
+  seed?: number;
 }
 
 export function adoptDecision(
@@ -451,6 +508,11 @@ export function adoptDecision(
   seat: { seat: Seat; spectator?: boolean; draft?: boolean },
 ): AdoptDecision {
   if (remote.winner && !local.winner) return { take: true, why: 'finished' };
+  // 房主换局可能仍然是 turn=1/current=A；seed 不同就不能再当"没变化"。
+  // 这条放在 draft 前面：房间已经换局，本机旧棋盘上没提交的走法也不再有效。
+  if (remote.seed !== undefined && local.seed !== undefined && remote.seed !== local.seed) {
+    return { take: true, why: 'turn' };
+  }
   if (seat.spectator) {
     const changed =
       remote.turn !== local.turn ||

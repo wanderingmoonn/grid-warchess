@@ -702,6 +702,11 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
    */
   if (state.config.level?.banUnits?.includes(typeId)) return false;
   /*
+   * 禁造席位（2026-11-20）：肉鸽 Boss 靠这条"只守不出"。
+   * 挂在这个共同出口上，产线面板、军营、AI 采购、建造单位会一起生效。
+   */
+  if (state.config.noProduceSeats?.includes(side)) return false;
+  /*
    * 肉鸽：只允许产"手上的兵"（花名册 ∪ 抽到的卡）。同样放在这个共同出口上，
    * 产线面板、军营、AI 采购、建造单位全都自动同一个口径。
    */

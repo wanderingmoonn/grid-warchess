@@ -7,6 +7,7 @@
  */
 
 import { test, assert } from '../support.ts';
+import { rebuildCost } from '../../../src/core/rules.ts';
 import {
   RUN_KEY,
   canRestart,
@@ -15,7 +16,7 @@ import {
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
 import { CARDS_PER_LEVEL, cardLevel, cardWeight, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
-import { PER_LEVEL_PCT, cardTypeId, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
+import { PER_LEVEL_PCT, buildableTypes, cardTypeId, compileUnits, mergeUnits } from '../../../src/core/roguelike/compile.ts';
 import { SETTLE, cityUpgradeCost, settleGold } from '../../../src/core/roguelike/rewards.ts';
 import { WALL_STEPS, cityCapacity, citySizeFor, isInsideCity, settleRoster } from '../../../src/core/roguelike/roster.ts';
 import { SLICE_STAGES, stageAt } from '../../../src/core/roguelike/stages.ts';
@@ -465,6 +466,39 @@ export function run() {
     assert.equal(canUseType(s, 'B', 'spearman'), true, 'Boss 不该被玩家的卡池卡住');
     // 玩家自己的原版兵被卡池挡着
     assert.equal(canUseType(s, 'A', 'spearman'), false);
+  });
+
+  test('肉鸽：同一兵种只给最高级那一档（+2 不会再出现 +1）', () => {
+    // 6 张 = 2 级；花名册里还带着上一关的 +1 老兵
+    const list = buildableTypes({ cards: { militia: 6 }, roster: [{ type: cardTypeId('militia', 1) }] });
+    assert.deepEqual(list, [cardTypeId('militia', 2)], '只应剩 +2 一档');
+    assert.ok(!list.includes(cardTypeId('militia', 1)), '不该再给 +1 的选项');
+
+    // 没卡但有老兵：给回它自己的档位，能补员
+    const onlyRoster = buildableTypes({ cards: {}, roster: [{ type: cardTypeId('archer', 1) }] });
+    assert.deepEqual(onlyRoster, [cardTypeId('archer', 1)]);
+
+    // 完全没卡没兵：给原版
+    assert.deepEqual(buildableTypes({ cards: {}, roster: [{ type: 'militia' }] }), ['militia']);
+  });
+
+  test('肉鸽：Boss 关禁生产且占领免费', () => {
+    const st = SLICE_STAGES[2]!; // 第 1 幕 Boss（带城）
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, level: r.level, noProduceSeats: ['B'], freeRebuild: true } as never,
+      55,
+    );
+    // Boss 什么都不能造
+    assert.equal(canUseType(s, 'B', 'militia'), false, 'Boss 不该能造兵');
+    assert.equal(canUseType(s, 'B', 'archer'), false);
+    // 玩家不受影响
+    assert.equal(canUseType(s, 'A', 'militia'), true);
+    // 占城不收重建费
+    const ruin = { id: 'x', x: 1, y: 1, size: 2, hp: 0, maxHp: 30, armor: 4, era: 1, owner: 'B' as const, ruined: true };
+    assert.equal(rebuildCost(ruin, true), 0, '肉鸽占城应当免费');
+    assert.ok(rebuildCost(ruin, false) > 0, '普通对局照旧收费');
   });
 
   test('肉鸽：城血跨关保留，修城下一关补满', () => {
