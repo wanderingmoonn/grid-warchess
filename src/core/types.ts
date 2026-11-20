@@ -1435,7 +1435,14 @@ export interface MatchConfig {
    *
    * 缺省＝'script'，所以老存档、老房间读出来一个字都不用改。
    */
-  aiBrain?: 'script' | 'net';
+  /**
+   * 用哪份 AI 内核。
+   *
+   *   · `script`：`core/ai.ts`（老 AI，冻结的参考实现）
+   *   · `goal`  ：`core/ai-v2.ts`（实验 AI，远期规划走目标状态机）
+   *   · `net`   ：策略网络（测试 AI，权重单独加载）
+   */
+  aiBrain?: 'script' | 'net' | 'goal';
   /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
