@@ -1820,7 +1820,10 @@ export interface AiCommit {
 }
 
 export interface AiIntent {
-  goal: 'unit' | 'hero' | 'era' | 'rebuild';
+  goal: 'unit' | 'hero' | 'era' | 'rebuild' | 'goal';
+  /** `goal === 'goal'` 时攒的是哪条产业链的哪一段 */
+  goalId?: string;
+  stepId?: string;
   /** `goal === 'unit'` 时攒的是哪个兵种 */
   unitId?: string;
   /** `goal === 'era'` 时的城、`goal === 'rebuild'` 时的废墟 */

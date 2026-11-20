@@ -100,6 +100,7 @@ import {
   COMMIT_BUILD_BONUS,
   DEFAULT_GOAL_BUILD_SCORE,
   DEFAULT_GOAL_UNIT_SCORE,
+  DEFAULT_GOAL_SAVE_SCORE,
   goalStepsInPlay,
   registerCoreGoal,
   resolveCommit,
@@ -2952,9 +2953,21 @@ function goalClaimsBuild(
   urgent: boolean,
   commit: AiCommit | null,
 ): boolean {
+  return goalClaimsBuildOf(s, unit.owner, buildId, era, urgent, commit);
+}
+
+/** 同上的 owner 版本：攒钱那一层只有 PlayerId，没有具体建造者 */
+function goalClaimsBuildOf(
+  s: GameState,
+  me: PlayerId,
+  buildId: string,
+  era: number,
+  urgent: boolean,
+  commit: AiCommit | null,
+): boolean {
   const def = s.unitTypes[buildId];
   if (!def) return false;
-  const ctx = goalCtxOf(s, unit.owner, era, urgent, commit);
+  const ctx = goalCtxOf(s, me, era, urgent, commit);
   for (const { step } of goalStepsInPlay(ctx)) {
     if (step.claimsBuild?.(def)) return true;
   }
@@ -3107,6 +3120,12 @@ const ARMOR_POWER_GOAL: AiGoal = {
         c.count((d) => (d.armorPower ?? 0) > 0) > 0 &&
         energyReport(c.state, c.me).headroom >= 40,
       claimsBuild: (d) => (d.armorPower ?? 0) > 0,
+      // 最便宜的那一档电站要多少钱：钱不够时进"攒钱"那张表
+      cost: (c) => {
+        const plants = Object.values(c.state.unitTypes).filter((d) => (d.armorPower ?? 0) > 0);
+        return plants.length > 0 ? Math.min(...plants.map((d) => d.cost ?? 0)) : 0;
+      },
+      saveScore: 10,
       buildScore: (c, _buildId, spot, def) => {
         const plants = c.count((d) => (d.armorPower ?? 0) > 0);
         const need = plants === 0 ? 70 : energyReport(c.state, c.me).headroom < 40 ? 40 : -25;
@@ -3161,6 +3180,12 @@ const ARMOR_FRAME_GOAL: AiGoal = {
       done: (c) => c.count((d) => d.armorFrame === true) >= 2,
       claimsUnit: (d) => d.armorFrame === true,
       unitScore: 30,
+      // 最便宜的那台素体要多少钱
+      cost: (c) => {
+        const frames = Object.values(c.state.unitTypes).filter((d) => d.armorFrame === true);
+        return frames.length > 0 ? Math.min(...frames.map((d) => d.cost ?? 0)) : 0;
+      },
+      saveScore: 12,
     },
   ],
 };
@@ -4228,9 +4253,12 @@ export interface AiPlan {
    * 2026-11-02 新增 `'unit'`：人类会"停手攒钱买一个大件"，而原来的三种目标
    * 只有英雄 / 升时代 / 收废墟，普通兵种永远吃不到这套预留机制。
    */
-  savingFor: 'hero' | 'era' | 'rebuild' | 'unit' | null;
+  savingFor: 'hero' | 'era' | 'rebuild' | 'unit' | 'goal' | null;
   /** savingFor === 'unit' 时，攒的是哪一个兵种 */
   targetUnitId: string | null;
+  /** savingFor === 'goal' 时，攒的是哪条产业链的哪一段 */
+  targetGoalId: string | null;
+  targetStepId: string | null;
   targetCost: number;
   /**
    * 攒钱期可动用的现金（每回合）。
@@ -4433,7 +4461,10 @@ export function savingAllowance(
  * 这样四个目标可以直接排大小，"为什么攒这个"就有据可查，而不是四条 if 的先后。
  */
 interface SaveGoal {
-  kind: 'hero' | 'era' | 'rebuild' | 'unit';
+  kind: 'hero' | 'era' | 'rebuild' | 'unit' | 'goal';
+  /** `kind === 'goal'` 时：哪条产业链的哪一段 */
+  goalId?: string;
+  stepId?: string;
   targetUnitId: string | null;
   /** 升时代 / 收废墟时对准的那座城（跨回合记忆要记它，不然复活时会认错目标） */
   cityId?: string | null;
@@ -4484,6 +4515,15 @@ function reviveIntent(
     const cost = rebuildCost(ruin);
     if (ctx.gold >= cost) return null;
     return { cost, cityId: ruin.id, note: '重建这座废墟（接着攒）' };
+  }
+  if (it.goal === 'goal' && it.goalId && it.stepId) {
+    // 那一段还在推进吗？还要钱吗？两问都得答"是"才接着攒
+    const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), false, null));
+    const cur = live.find((x) => x.goal.id === it.goalId && x.step.id === it.stepId);
+    if (!cur?.step.cost) return null;
+    const want = cur.step.cost(goalCtxOf(s, me, eraNowOf(s), false, null));
+    if (!(want > ctx.gold)) return null; // 钱够了就该去花，而不是继续举牌子
+    return { cost: want, note: `${it.goalId} · ${it.stepId}（接着攒）` };
   }
   const def = it.unitId ? s.unitTypes[it.unitId] : null;
   if (!def || def.category !== 'combat') return null;
@@ -4607,6 +4647,8 @@ function buildPlan(
   let savingFor: AiPlan['savingFor'] = null;
   let targetCost = 0;
   let targetUnitId: string | null = null;
+  let targetGoalId: string | null = null;
+  let targetStepId: string | null = null;
   let targetCityId: string | null = null;
   let goalScore = 0;
   let goalNote = '';
@@ -4804,6 +4846,33 @@ function buildPlan(
       });
     }
 
+    /*
+     * 产业链：正在追的那一段如果要的钱还差着，就把它排进同一张表。
+     *
+     * 和上面四条**共用一把尺子**（`score` 是"每金战力"量级），所以
+     * "攒英雄"和"攒宗门"能直接比大小，不需要再写一段"谁优先"的 if。
+     * 分怎么来由扩展给（`saveScore`），核心不替它定价。
+     */
+    const commit = s.aiCommit?.[me] ?? null;
+    if (commit) {
+      const live = goalStepsInPlay(goalCtxOf(s, me, eraNowOf(s), urgent, commit));
+      const cur = live.find(
+        (x) => x.goal.id === commit.goalId && x.step.id === commit.stepId,
+      );
+      const want = cur?.step.cost?.(goalCtxOf(s, me, eraNowOf(s), urgent, commit)) ?? 0;
+      if (want > gold && reach(want, SAVE_HORIZON)) {
+        goals.push({
+          kind: 'goal',
+          goalId: commit.goalId,
+          stepId: commit.stepId,
+          targetUnitId: null,
+          cost: want,
+          score: cur?.step.saveScore ?? DEFAULT_GOAL_SAVE_SCORE,
+          note: `${cur?.goal.id ?? commit.goalId} · ${commit.stepId}（${want} 金，差 ${want - gold}）`,
+        });
+      }
+    }
+
     goals.sort((a, b) => b.score - a.score);
     goalOptions = goals.map((g) => ({ kind: g.kind, cost: g.cost, score: g.score, note: g.note }));
     /*
@@ -4815,9 +4884,12 @@ function buildPlan(
      */
     let pick = goals[0];
     if (pick && prev) {
-      const held = goals.find(
-        (g) => g.kind === prev.goal && (prev.goal !== 'unit' || g.targetUnitId === (prev.unitId ?? null)),
-      );
+      const held = goals.find((g) => {
+        if (g.kind !== prev.goal) return false;
+        if (prev.goal === 'unit') return g.targetUnitId === (prev.unitId ?? null);
+        if (prev.goal === 'goal') return g.goalId === prev.goalId && g.stepId === prev.stepId;
+        return true;
+      });
       const fresh = s.turn - prev.since <= INTENT_TURNS;
       if (held && held !== pick && fresh && pick.score < held.score * INTENT_MARGIN) pick = held;
     }
@@ -4826,6 +4898,8 @@ function buildPlan(
       targetCost = pick.cost;
       targetUnitId = pick.targetUnitId;
       targetCityId = pick.cityId ?? null;
+      targetGoalId = pick.goalId ?? null;
+      targetStepId = pick.stepId ?? null;
       goalScore = pick.score;
       goalNote = pick.note;
       /*
@@ -4937,11 +5011,17 @@ function buildPlan(
    * 所以那边还要把它搬回真状态（见 aiNextAction 里的搬运用那几行）。
    */
   if (savingFor) {
-    const same = prev !== null && prev.goal === savingFor && (prev.unitId ?? null) === (targetUnitId ?? null);
+    const same =
+      prev !== null &&
+      prev.goal === savingFor &&
+      (prev.unitId ?? null) === (targetUnitId ?? null) &&
+      (savingFor !== 'goal' || (prev.goalId === targetGoalId && prev.stepId === targetStepId));
     s.aiIntent = {
       ...(s.aiIntent ?? {}),
       [me]: {
         goal: savingFor,
+        goalId: targetGoalId ?? undefined,
+        stepId: targetStepId ?? undefined,
         unitId: targetUnitId ?? undefined,
         cityId: targetCityId ?? undefined,
         cost: targetCost,
@@ -4962,6 +5042,8 @@ function buildPlan(
     targetUnitId,
     allowance,
     buildAllowance,
+    targetGoalId,
+    targetStepId,
     goalScore,
     goalNote,
     goalOptions,
@@ -6010,7 +6092,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true },
         null,
         mood,
       );
@@ -6701,7 +6783,18 @@ function aiNextActionCoreInner(
     if (rejected.has(aiActionKey(action))) { candidates.splice(i,1); continue; }
     if (action.type==='BUILD' && plan.savingFor && !plan.urgent) {
       const cost=recruitCost(view,me,utype(view,action.unitType));
-      if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges) candidates.splice(i,1);
+      /*
+       * 2026-11-20：产业链**自己那一步**的建筑不吃冻结。
+       *
+       * 建筑额度 `buildAllowance = 余额 − 目标价` 是二值的（见 AiPlan 里的注释：
+       * 放开过、结果 AI 把钱全铺成磨坊）。但这条对产业链是死结——"攒钱建宗门"
+       * 里，宗门既是攒钱的目标又是建筑，冻结它就等于永远建不了。
+       * 所以只放目标认领的那一种，磨坊照样冻结。
+       */
+      const forGoal = plan.savingFor === 'goal' && goalClaimsBuildOf(
+        view, me, action.unitType, fields.era, fields.urgent, fields.goalCommit,
+      );
+      if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges && !forGoal) candidates.splice(i,1);
     }
   }
   if (candidates.length === 0) return null;

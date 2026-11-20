@@ -110,6 +110,21 @@ export interface AiGoalStep {
    */
   unitScore?: number;
   /**
+   * 推进这一步大概要花多少**金**。要给 `cost` 才会进"攒钱"那张表。
+   *
+   * 不写＝不需要攒：那一步的钱当场掏得出来（比如已经有矿的灵田），
+   * 或者压根不花钱（研发只要灵石）。
+   */
+  cost?: (c: AiGoalCtx) => number;
+  /**
+   * 为了这一步停手攒钱，值多少（和英雄 / 升时代 / 大件**同一把尺子**）。
+   *
+   * 不写就用 `DEFAULT_GOAL_SAVE_SCORE`。这个数不是"重要程度"，是"每金战力"——
+   * 攒钱那张表里四条老候选（兵/英雄/升时代/收废墟）用的都是这个量纲，
+   * 混进一个"很重要所以 1000 分"会把它们全顶掉。
+   */
+  saveScore?: number;
+  /**
    * 不属于建造的推进手段（研发法术、研读、升级建筑……）。
    *
    * 返回的动作会和别的候选一起比分数——**没有插队，也没有后门**。
@@ -135,6 +150,14 @@ export const DEFAULT_GOAL_BUILD_SCORE = 70;
  * 这一档兵值得比同代常规兵优先"——但又不足以让一个明显不合适的兵翻盘。
  */
 export const DEFAULT_GOAL_UNIT_SCORE = 30;
+
+/**
+ * 目标没写 `saveScore` 时给的分。
+ *
+ * 参照攒钱表里其它几条的量级（一个兵 2~6、升时代 6~12、英雄十几），
+ * 8 的意思是"值得为它停手，但不至于压倒升时代"。
+ */
+export const DEFAULT_GOAL_SAVE_SCORE = 8;
 
 /**
  * 核心自己的目标（海军、装甲……）。
@@ -251,6 +274,17 @@ export const COMMIT_BUILD_BONUS = 15;
  *   · 价值掉到立约时的六成以下。
  */
 export function resolveCommit(c: AiGoalCtx, prev: AiCommit | null): AiCommit | null {
+  /*
+   * `urgent` 现在借的是 `plan.urgent`，里面有一条 **`army < 3`**（给攒钱写的：
+   * 兵只剩一两个还攒钱是拿命换经济）。
+   *
+   * 实测它会把产业链投资锁死：开局兵本来就少于三个 → 永远 urgent → 承诺每回合
+   * 被清掉。装甲那条 `armor-frame` 在第 20 回合就是这样被清空的（终局素体 0 台）。
+   *
+   * 逻辑上这是反的——投资本来就是为了"以后有兵"，用"现在没兵"去否决它说不通。
+   * 试过换成"只看城下有没有人"，但那一版连电站都少建了，效果没看清，
+   * 先退回原口径。**待办 T1 就是这件事**：威胁判据要单独一条，不要复用攒钱的。
+   */
   if (c.urgent) return null;
   const live = goalStepsInPlay({ ...c, commit: prev });
   if (prev) {
