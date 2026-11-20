@@ -80,7 +80,7 @@ import {
 } from './rules.ts';
 import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
 import { canUseType, eraWindowOk } from './draft.ts';
-import { orderDirectiveOf } from './rules.ts';
+import { isArmed, orderDirectiveOf } from './rules.ts';
 import { GOLD, canPay, payRes, resOf } from './resources.ts';
 import type { ResourceCost } from './resources.ts';
 import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
@@ -3215,6 +3215,13 @@ registerCoreGoal(ARMOR_POWER_GOAL);
 registerCoreGoal(ARMOR_DOCK_GOAL);
 
 
+/**
+ * 建造评分。
+ *
+ * ⚠️ **要给某套内容加"AI 会建它"，不要在这里加 if。**
+ * 写一个 `AiGoal`（见 `docs/GUIDE-AI-GOAL-2026-11-20.md`），
+ * 这个函数只负责把目标给的分接进来。
+ */
 function rawBuildScore(
   s: GameState,
   unit: Unit,
@@ -3959,6 +3966,12 @@ interface RecruitSource {
  * 早开一轮和晚开一轮的差别远小于"根本不开"。
  * 分数给得比普通动作高一点（20~40），因为技能不占行动：开了还能接着打。
  */
+/**
+ * 主动技能的候选。
+ *
+ * ⚠️ "AI 不会放某个技能"不要在这里加 case——用 `registerSkillAi`
+ * （见 `src/core/skill-hooks.ts` 的说明）。这里的 switch 是历史遗留。
+ */
 function heroSkillCandidate(view: GameState, u: Unit): Candidate | null {
   const def = utype(view, u.type);
   const skills = def.skills ?? [];
@@ -4564,35 +4577,43 @@ function reviveIntent(
  * 迟早出现"攒钱知道要收手、产业链还在往前拱"。
  */
 /**
- * 威胁值：**能真正拆墙的战力**摸到自己城下有多少。
+ * 威胁值：这座城**守不住多少**。
  *
- * 为什么不复用 `urgent`（2026-11-20 实测）：
- * `urgent` 里有一条 `army < 3`，那是给"攒钱"写的——兵只剩一两个还在攒钱，
- * 是拿命换经济。但产业链投资用它就成了死锁：开局兵本来就不够三个，
- * 于是永远吃紧，承诺每回合被清空。实测装甲那条 `armor-frame` 在第 20 回合
- * 被清掉，终局素体 0 台。**投资本来就是为了"以后有兵"，用"现在没兵"否决它，逻辑是反的。**
+ * 三件事，缺一个就会误判（2026-11-20 第二版）：
  *
- * 这里只认三件事：
- *   · **能攻城**的单位（`atk > 0` 的战斗单位）——侦察兵、传令兵不算；
- *   · **够得着**这座城（下回合就能摸到）；
- *   · 只算**没放弃**的城。
+ *   1. **谁在打**：`isArmed` 判据（规则层同一个函数），不是 `atk > 0`。
+ *      只看法术攻击的单位（`magicAtk > 0` 但 `atk = 0`）以前完全不算威胁——
+ *      修真接进来之后这是个真漏洞：一堆修士站在城下，AI 觉得没事。
+ *   2. **守不守得住**：拿**攻方战力减守方战力**，不是"有人靠近就算"。
+ *      城自己有攻击力，城内 5 格内的武装单位也算守军。守得住就不该打断投资。
+ *   3. **哪座城**：逐城算，取差值最大的那一座。不是把所有城的敌人加在一起。
  *
- * 返回的是"对该城每回合能砸出多少攻击力"的总和，阈值见 `THREAT_ATK`。
+ * 返回"净威胁"：> `THREAT_ATK` 才算真的要吃城。
  */
 function threatLevelOf(s: GameState, me: PlayerId, foe: Unit[], mood: AiMood): number {
   const cities = citiesOf(s, me).filter((c) => !c.ruined && c.id !== mood.abandonedCityId);
   if (cities.length === 0) return 0;
+  const mine = unitsOf(s, me);
+  /** 一支队伍每回合能砸出多少伤害（法术攻击也算，取高的那一项） */
+  const powerOf = (us: readonly Unit[]): number =>
+    us.reduce((n, u) => {
+      const d = utype(s, u.type);
+      return n + Math.max(d.atk ?? 0, d.magicAtk ?? 0) * (d.burst ?? 1);
+    }, 0);
   let worst = 0;
   for (const c of cities) {
-    let power = 0;
-    for (const u of foe) {
+    const attackers = foe.filter((u) => {
       const d = utype(s, u.type);
-      if (d.category !== 'combat' || (d.atk ?? 0) <= 0) continue;
+      if (d.category !== 'combat' || !isArmed(s, u)) return false;
       // 下回合就能摸到城墙：移动 + 射程，再多给一格余量
-      if (distToCity(u, c) > (d.move ?? 0) + (d.range ?? 1) + 1) continue;
-      power += d.atk * (d.burst ?? 1);
-    }
-    if (power > worst) worst = power;
+      return distToCity(u, c) <= (d.move ?? 0) + (d.range ?? 1) + 1;
+    });
+    if (attackers.length === 0) continue;
+    const defenders = mine.filter((u) => distToCity(u, c) <= 5 && isArmed(s, u));
+    // 城自己也会还手，但 City 上没有 atk 字段（城墙的伤害在 rules 里），
+    // 这里不硬编，只算守军——保守一点，宁可多算一次威胁
+    const gap = powerOf(attackers) - powerOf(defenders);
+    if (gap > worst) worst = gap;
   }
   return worst;
 }
@@ -5267,6 +5288,13 @@ function valueContextOf(s: GameState, me: PlayerId, plan: AiPlan): ValueContext 
   return { tempo, visionCoverage: coverage, fog: s.fog !== false, waterShare: waterShare(s), era: eraNow };
 }
 
+/**
+ * 采购评分。
+ *
+ * ⚠️ **"AI 不会买某个兵"不要在这里加特判。**
+ * 写一个 `AiGoal` 的 `claimsUnit` + `unitScore`（见文档第 4 节）。
+ * 这里的 `royalComboBonus` 是历史遗留，新内容一律走目标。
+ */
 function recruitCandidate(
   s: GameState,
   src: RecruitSource,
