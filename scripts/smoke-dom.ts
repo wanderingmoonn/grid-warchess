@@ -85,7 +85,7 @@ const code = result.outputFiles[0]?.text;
 assert.ok(code, '打包失败');
 
 const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-  url: 'http://localhost/',
+  url: 'http://localhost/?loadSave=1',
   pretendToBeVisual: true,
   runScripts: 'outside-only',
 });
@@ -4320,7 +4320,7 @@ check('指挥官模式下点自己的部队能看属性，遣散按钮也在', (
   const name = UNIT_TYPES[mine.type]!.name;
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6092,7 +6092,7 @@ await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它�
   st.current = 'B'; // 让 B 先动手：这样蛋是在 B 的回合里留下的
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6500,7 +6500,7 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   const hpBefore = foe.hp;
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6559,7 +6559,7 @@ check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
   const hpBefore = foe.hp;
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6681,7 +6681,7 @@ check('存档里有一条对不上的兵种，页面仍然能起来（不白屏�
   });
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6802,7 +6802,7 @@ console.log('\n强制键');
 /** 用一份现成存档起一个新页面：这类用例需要精确摆位，不能靠随机开局 */
 function bootWith(st: unknown) {
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -8608,7 +8608,7 @@ check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡�
    * 而接线断了正是这种功能最容易出的问题（卡片能写，入口没人点得到）。
    */
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
