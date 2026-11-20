@@ -645,7 +645,7 @@ export function hurtPhysical(
  *
  * 返回值：还活着吗。调用方决定"活着就挤上岸 / 死了从场上移除"。
  */
-const DROWN_SHALLOW = 20;
+const DROWN_SHALLOW = 50;
 const DROWN_DEEP = 999;
 function drownUnit(s: GameState, u: Unit, deadly: boolean): boolean {
   const name = utype(s, u.type).name;
@@ -5311,6 +5311,18 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
      * 会水的（船）不受影响，它们本来就该在水里。
      */
     const here = tileUnder(s, u)?.terrain;
+    /*
+     * 水上单位脚下变陆地 → **搁浅**（2026-11-20）。
+     *
+     * 以前它走下面那条"挤走"：被挪到最近的水里，挤不到就消失。船凭空出现在
+     * 另一片水里同样说不通。现在留在原地、动不了、还能打——固定炮台。
+     * 地形变回水时解除（本函数末尾统一检查）。
+     */
+    if (utype(s, u.type).domain === 'water' && here !== 'water' && here !== 'deep') {
+      u.stranded = true;
+      say(`${name}搁浅了`);
+      continue;
+    }
     if ((here === 'water' || here === 'deep') && utype(s, u.type).domain !== 'water') {
       /*
        * 水来了：先受一次大伤害，活下来的被冲到岸上（2026-11-20 改）。
@@ -5352,6 +5364,15 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
   if (gone.length > 0) {
     const ids = new Set(gone.map((u) => u.id));
     s.units = s.units.filter((u) => !ids.has(u.id));
+  }
+
+  /*
+   * 搁浅的船：水回来了就重新浮起来（2026-11-20）。
+   * 不解除的话，地形改回来之后那条船永远动不了。
+   */
+  for (const u of s.units) {
+    if (!u.stranded) continue;
+    if (canStandAt(s, u.x, u.y, u.type, { ignoreUnits: true })) delete u.stranded;
   }
 
   // 地形影响视野（高地看得远），改完要重新算一遍雾
@@ -5658,6 +5679,11 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const unit = unitById(s, unitId);
   if (!unit) return { ok: false, reason: '单位不存在' };
   if (unit.owner !== s.current) return { ok: false, reason: '这不是你的单位' };
+  /*
+   * 搁浅的船动不了（2026-11-20）。地形变回水会自动解除，
+   * 所以这不是一条死状态——作者用事件改出一条河道就能把它救回来。
+   */
+  if (unit.stranded) return { ok: false, reason: '这条船搁浅了，动不了' };
   /*
    * 走子按**单位所在的那张图**结算：月球上的兵走月球的格子。
    * `st` 是只读投影，变更仍然写在真的 `s` 上（单位对象本来就是同一个）。

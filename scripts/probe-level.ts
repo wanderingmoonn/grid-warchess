@@ -872,7 +872,8 @@ line('21. 改地形：桥塌、水退、兵被挤走');
           {
             id: 'flood',
             when: { kind: 'turn', at: 2 },
-            do: [{ kind: 'terrain', zone: { x0: 5, y0: 5, x1: 5, y1: 5 }, to: 'water' }],
+            // 区域盖住民兵（会死）和坦克（血厚，会活下来被冲上岸）
+            do: [{ kind: 'terrain', zone: { x0: 5, y0: 5, x1: 7, y1: 7 }, to: 'water' }],
           },
           {
             id: 'quake',
@@ -884,7 +885,11 @@ line('21. 改地形：桥塌、水退、兵被挤走');
           },
         ],
         {
-          A: [{ type: 'militia', x: 5, y: 5 }],
+          A: [
+            { type: 'militia', x: 5, y: 5 },
+            // 88 血：挨 50 点浅水伤害还活着，用来验证"活下来被冲上岸"
+            { type: 'tank', x: 7, y: 7 },
+          ],
           B: [{ type: 'militia', x: 10, y: 10 }],
         },
       ) as never,
@@ -900,16 +905,25 @@ line('21. 改地形：桥塌、水退、兵被挤走');
   check(r2.ok, '走到第 2 次行动');
   if (r2.ok) {
     const st = r2.state;
-    const him = st.units.find((u) => u.owner === 'A');
-    check(!!him, '被水淹的兵没有凭空消失');
+    /*
+     * 2026-11-20 改：浅水不再是"一定淹死也不是一定活"，而是**先受 50 点伤害**。
+     * 民兵 28 血必死；坦克 88 血活下来、被冲上岸。
+     */
+    const militiaman = st.units.find((u) => u.owner === 'A' && u.type === 'militia');
+    const tank = st.units.find((u) => u.owner === 'A' && u.type === 'tank');
+    check(!militiaman, '民兵扛不住 50 点，被水吞没');
+    check(!!tank, '坦克活下来了');
     check(st.tiles[5 * st.w + 5]?.terrain === 'water', '那一格确实变成水了');
     check(
-      !!him && (him.x !== 5 || him.y !== 5),
-      `兵被挤到旁边（${him?.x}, ${him?.y}）`,
+      !!tank && (tank.x !== 7 || tank.y !== 7),
+      `活下来的被冲上岸（${tank?.x}, ${tank?.y}）`,
       '还站在水里：寻路和攻击判定都会错乱',
     );
     // 用 ignoreUnits：他自己就站在那一格上，带着占用去问永远是否
-    check(!!him && canStandAt(st, him.x, him.y, him.type, { ignoreUnits: true }), '挤到的那一格是站得住的');
+    check(
+      !!tank && canStandAt(st, tank.x, tank.y, tank.type, { ignoreUnits: true }),
+      '冲上岸的那一格是站得住的',
+    );
     check(
       st.log.some((l) => l.text.includes('被冲上岸') || l.text.includes('被挤到')),
       '冲上岸也说了句人话',
@@ -1568,6 +1582,79 @@ console.log('');
 }
 
 /* ------------------------------------------------------------------ */
+/* 水淹：船搁浅 / 桥不跟着消失（2026-11-20）                            */
+/* ------------------------------------------------------------------ */
+
+{
+  /*
+   * A. 船搁浅
+   *
+   * 用平地关，**在地图数据里挖一格水**（直接改运行时 tiles 不可靠：
+   * 建局之后那份数组不一定还能写）。船放在 (0,0)，事件把那一格改回平原。
+   */
+  const flat = levelById('level:probe-flat')!;
+  const rows = [...flat.map.rows];
+  rows[0] = `~${(rows[0] ?? '').slice(1)}`;
+  const lv = validateLevel({
+    ...structuredClone(flat),
+    id: 'level:tmp-flood',
+    name: '水淹探针',
+    map: { ...flat.map, rows },
+    deploy: { A: [{ type: 'boat', x: 0, y: 0 }], B: [] },
+    events: [{ id: 'drain', when: { kind: 'turn', at: 1 }, do: [{ kind: 'terrain', zone: { x0: 0, y0: 0, x1: 0, y1: 0 }, to: 'plain' }] }],
+  });
+  check(lv.ok, '水淹探针的关卡能通过校验', lv.ok ? '' : lv.errors[0]);
+  if (lv.ok) {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: lv.level }, 3);
+    const r = applyAction(st, { type: 'END_TURN' } as Action);
+    const after = r.ok ? r.state : st;
+    const ship = after.units.find((u) => u.type === 'boat');
+    check(!!ship, '船搁浅之后还在场上（不再被凭空挤走）');
+    check(!!ship?.stranded, '船被标成「搁浅」');
+    check(
+      after.tiles[0]?.terrain === 'plain',
+      '那一格确实变成陆地了',
+      String(after.tiles[0]?.terrain),
+    );
+    check(
+      after.log.some((l) => l.text.includes('搁浅')),
+      '搁浅有战报',
+      after.log.map((l) => l.text).slice(-3).join(' / '),
+    );
+    if (ship) {
+      const mv = applyAction(after, {
+        type: 'MOVE', unitId: ship.id, x: ship.x + 1, y: ship.y,
+      } as unknown as Action);
+      check(!mv.ok, '搁浅的船不能移动', (mv as { reason?: string }).reason ?? '');
+    }
+  }
+
+  /*
+   * B. 桥：桥下改成浅水，桥面应当还在（只有深水会冲垮桥）
+   */
+  const rear = levelById('level:rear-guard')!;
+  const lv2 = validateLevel({
+    ...structuredClone(rear),
+    id: 'level:tmp-flood2',
+    name: '桥存留探针',
+    events: [{ id: 'drain', when: { kind: 'turn', at: 1 }, do: [{ kind: 'terrain', zone: { x0: 0, y0: 0, x1: 13, y1: 13 }, to: 'shallow' }] }],
+  });
+  if (lv2.ok) {
+    const st = createMatch({ ...DEFAULT_CONFIG, level: lv2.level }, 3);
+    const bridge = (st.mapBridges ?? [])[0];
+    check(typeof bridge === 'number', '这一关有地图自带的桥');
+    if (typeof bridge === 'number') {
+      const r = applyAction(st, { type: 'END_TURN' } as Action);
+      const after = r.ok ? r.state : st;
+      check(
+        after.tiles[bridge]?.terrain === 'bridge',
+        '桥下改成浅水，桥面还在',
+        `实际 ${String(after.tiles[bridge]?.terrain)}`,
+      );
+    }
+  }
+}
+
 /* 事件条件的 lint：引用 / 环 / repeat（2026-11-17）                    */
 /* ------------------------------------------------------------------ */
 
