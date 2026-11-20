@@ -414,8 +414,21 @@ if (new URLSearchParams(location.search).has('fresh')) {
  */
 const bootSave = loadMatch();
 let hasRealSave = bootSave !== null;
-let state: GameState = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
-if (hasRealSave) suspendSaves(true);
+/*
+ * `?loadSave=1`：**开机就装存档**。
+ *
+ * 正常打开页面是"不自动读档"（2026-11-19 的约定：别把上次那局当成当前局）。
+ * 但无头冒烟（`scripts/smoke-dom.ts`）是把一局棋塞进 localStorage 再启动页面，
+ * 它依赖开机读档——少了这个开关，那 20 多条点击用例全都点在一个空棋盘上。
+ * 只在显式带参数时生效，线上行为不变。
+ */
+const forceLoadSave = new URLSearchParams(location.search).get('loadSave') === '1';
+let state: GameState = bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+if (hasRealSave && !forceLoadSave) {
+  // 占位局：别让它覆盖真正的存档
+  state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
+  suspendSaves(true);
+}
 
 /*
  * 棋盘视图的开关：悬停看一眼，点一下钉住。

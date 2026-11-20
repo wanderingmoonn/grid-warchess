@@ -45,7 +45,7 @@ const html = fs.readFileSync('index.html', 'utf8')
 const st = createMatch({ ...DEFAULT_CONFIG, size: SIZE, startEra: 1, expansionIds: [], godMode: true }, 771);
 st.current = 'A';
 
-const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://t.test/' });
+const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://t.test/?loadSave=1' });
 const { window } = dom;
 window.structuredClone = (v) => structuredClone(v);
 window.matchMedia = (q) => ({
@@ -75,10 +75,6 @@ window.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
 const errs = [];
 window.addEventListener('error', (e) => errs.push(e.error ?? e.message));
 window.eval(code);
-// 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」
-window.document.querySelector('[data-title="continue"]')?.dispatchEvent(
-  new window.MouseEvent('click', { bubbles: true }),
-);
 
 const tick = (ms) => new Promise((r) => window.setTimeout(r, ms));
 await tick(400);

@@ -85,7 +85,7 @@ const code = result.outputFiles[0]?.text;
 assert.ok(code, '打包失败');
 
 const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-  url: 'http://localhost/',
+  url: 'http://localhost/?loadSave=1',
   pretendToBeVisual: true,
   runScripts: 'outside-only',
 });
@@ -4320,7 +4320,7 @@ check('指挥官模式下点自己的部队能看属性，遣散按钮也在', (
   const name = UNIT_TYPES[mine.type]!.name;
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -4329,10 +4329,6 @@ check('指挥官模式下点自己的部队能看属性，遣散按钮也在', (
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
 
   const d = w.document;
   const el = d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`);
@@ -6096,7 +6092,7 @@ await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它�
   st.current = 'B'; // 让 B 先动手：这样蛋是在 B 的回合里留下的
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6105,10 +6101,6 @@ await checkAsync('不死鸟倒下不会让「打到全灭」提前收工：它�
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
 
   const d = w.document;
   const btn = d.querySelector<HTMLElement>('[data-act="god-run-dead"]');
@@ -6508,7 +6500,7 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   const hpBefore = foe.hp;
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6517,10 +6509,6 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
 
   const d = w.document;
   const mineEl = d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`);
@@ -6571,7 +6559,7 @@ check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
   const hpBefore = foe.hp;
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6580,10 +6568,6 @@ check('打不到的敌人还是只弹属性卡，不会凭空开火', () => {
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
 
   const d = w.document;
   d.querySelector<HTMLElement>(`.unit[data-id="${mine.id}"]`)?.dispatchEvent(
@@ -6697,7 +6681,7 @@ check('存档里有一条对不上的兵种，页面仍然能起来（不白屏�
   });
 
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6709,10 +6693,6 @@ check('存档里有一条对不上的兵种，页面仍然能起来（不白屏�
   let thrown: unknown = null;
   try {
     w.eval(code);
-    /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-    w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-      new w.MouseEvent('click', { bubbles: true }),
-    );
   } catch (err) {
     thrown = err;
   }
@@ -6751,10 +6731,6 @@ check('地址栏带 ?fresh=1 能清掉本机存档重开', () => {
   st.h = 20;
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
   assert.equal(
     w.document.querySelectorAll('.tile').length,
     DEFAULT_CONFIG.size * DEFAULT_CONFIG.size,
@@ -6826,7 +6802,7 @@ console.log('\n强制键');
 /** 用一份现成存档起一个新页面：这类用例需要精确摆位，不能靠随机开局 */
 function bootWith(st: unknown) {
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -6835,10 +6811,6 @@ function bootWith(st: unknown) {
   }
   w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
   return w;
 }
 
@@ -8636,7 +8608,7 @@ check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡�
    * 而接线断了正是这种功能最容易出的问题（卡片能写，入口没人点得到）。
    */
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/',
+    url: 'http://localhost/?loadSave=1',
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
@@ -8644,10 +8616,6 @@ check('新手教程：从首页点进去，棋盘换成 12×12 教学局，卡�
     (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
   }
   w.eval(code);
-  /* 2026-11-19 起开机先出标题页：要从存档进去，得点一下「继续上一局」 */
-  w.document.querySelector<HTMLElement>('[data-title="continue"]')?.dispatchEvent(
-    new w.MouseEvent('click', { bubbles: true }),
-  );
   const d = w.document;
 
   const entry = d.querySelector<HTMLElement>('[data-title="tutorial"]');
