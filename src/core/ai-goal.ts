@@ -78,6 +78,13 @@ export interface AiGoalCtx {
   threat: number;
   /** 这个势力现在在追哪条链（`AiCommit`），没有就是 null */
   commit: AiCommit | null;
+  /**
+   * 哪些非金币资源"供不上"（存量比上次回合开始时少了）。
+   *
+   * 判据是**趋势**不是绝对值：引擎没有"每回合消耗"的流量概念，
+   * 见 `GameState.aiResMark` 的说明。
+   */
+  scarce: ReadonlySet<string>;
 }
 
 /** 目标里的一段。核心每回合只推进第一段没完成的。 */

@@ -2232,6 +2232,14 @@ export interface GameState {
    */
   aiCommit?: Partial<Record<PlayerId, AiCommit>>;
   /**
+   * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
+   *
+   * 为什么不看绝对值：引擎里没有"每回合消耗多少粮/材"这个概念——支出是离散
+   * 事件（造一个兵、盖一座楼），不是流量。所以只能看**趋势**：
+   * 存量在掉 = 供不上，该补产出建筑了；持平或涨 = 够了。
+   */
+  aiResMark?: Partial<Record<PlayerId, { turn: number; stock: Record<string, number> }>>;
+  /**
    * 僵持计数（AI 用，2026-11-15）。
    *
    * "双方连着几个动作都没掉血"是这游戏最典型的死局前兆：两边都在集兵、

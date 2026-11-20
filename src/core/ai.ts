@@ -1677,6 +1677,8 @@ interface Fields {
   urgent: boolean;
   /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
   threat: number;
+  /** 哪些非金币资源供不上（`scarceResources`）：资源缺口目标靠它决定要不要补产出 */
+  scarce: ReadonlySet<string>;
   /**
    * 这一回合在追哪条产业链（`AiCommit`），没有就是 null。
    *
@@ -2920,6 +2922,7 @@ function goalCtxOf(
   urgent: boolean,
   threat: number,
   commit: AiCommit | null,
+  scarce: ReadonlySet<string> = new Set(),
 ): AiGoalCtx {
   const mine = unitsOf(s, me);
   const cities = citiesOf(s, me);
@@ -2930,6 +2933,7 @@ function goalCtxOf(
     urgent,
     threat,
     commit,
+    scarce,
     cityCount: cities.length,
     count: (pred) => mine.filter((u) => pred(utype(s, u.type))).length,
     buildSpots: (buildId, builder) => buildSpots(s, builder, s.unitTypes[buildId]),
@@ -2958,8 +2962,9 @@ function goalClaimsBuild(
   urgent: boolean,
   threat: number,
   commit: AiCommit | null,
+  scarce: ReadonlySet<string>,
 ): boolean {
-  return goalClaimsBuildOf(s, unit.owner, buildId, era, urgent, threat, commit);
+  return goalClaimsBuildOf(s, unit.owner, buildId, era, urgent, threat, commit, scarce);
 }
 
 /** 同上的 owner 版本：攒钱那一层只有 PlayerId，没有具体建造者 */
@@ -2971,10 +2976,11 @@ function goalClaimsBuildOf(
   urgent: boolean,
   threat: number,
   commit: AiCommit | null,
+  scarce: ReadonlySet<string>,
 ): boolean {
   const def = s.unitTypes[buildId];
   if (!def) return false;
-  const ctx = goalCtxOf(s, me, era, urgent, threat, commit);
+  const ctx = goalCtxOf(s, me, era, urgent, threat, commit, scarce);
   for (const { step } of goalStepsInPlay(ctx)) {
     if (step.claimsBuild?.(def)) return true;
   }
@@ -2997,10 +3003,11 @@ function goalBuildScore(
   urgent: boolean,
   threat: number,
   commit: AiCommit | null,
+  scarce: ReadonlySet<string>,
 ): number | null {
   const def = s.unitTypes[buildId];
   if (!def) return null;
-  const ctx = goalCtxOf(s, unit.owner, era, urgent, threat, commit);
+  const ctx = goalCtxOf(s, unit.owner, era, urgent, threat, commit, scarce);
   /*
    * "归不归目标管"和"现在轮不轮到它"是两件事，必须分开判（2026-11-20 修）。
    *
@@ -3223,6 +3230,115 @@ const ARMOR_FRAME_GOAL: AiGoal = {
 };
 
 registerCoreGoal(ARMOR_FRAME_GOAL);
+
+/* ══════════════════════════════════════════════════════════════════
+ * 资源缺口：缺粮/缺材/缺灵石时，去建**产出那种资源**的建筑（2026-11-20）
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────────
+ *
+ * 实测（城郭与物料，24×24 三局）：AI 会建粮仓和采石场，但**建得太多**——
+ * 某一局粮食存量 666、建材 1543，还在继续修采石场。因为通用经济评分只问
+ * "这一格能产多少值多少分"，从来不问"我还缺吗"，堆到"每城两座"的上限为止。
+ *
+ * ── 它怎么做到不认识扩展 ─────────────────────────────────────
+ *
+ * 三样全是数据：
+ *   · **缺什么**：把这一局所有非金币资源（从兵种表的 `costRes` 里扫出来）
+ *     逐个比对"存量 vs 每回合收入"；
+ *   · **谁能产**：建筑的 `yield` / `yieldByTerrain` 里有没有那种资源；
+ *   · **这格值多少**：`unitYield` 探针（和通用经济评分同一把尺子）。
+ *
+ * 核心不认识"粮食""灵石"这些词，只认识"资源 id"和"产出表"。
+ * ══════════════════════════════════════════════════════════════════ */
+
+
+/** 这一局所有**非金币**资源（从兵种成本表里扫，不写死名字） */
+function resourcesInPlay(s: GameState): string[] {
+  const out = new Set<string>();
+  for (const def of Object.values(s.unitTypes)) {
+    for (const id of Object.keys(def.costRes ?? {})) if (id !== 'gold') out.add(id);
+  }
+  return [...out];
+}
+
+/**
+ * 现在哪些资源"供不上"：**比上次回合开始时少了**。
+ *
+ * 判据是趋势而不是绝对值，理由见 `GameState.aiResMark`：
+ * 引擎没有"每回合消耗多少"的流量概念，只能看库存怎么变。
+ * 试过的另外两版都失败（留档 T18）：按"存量 < 收入×3"会形成反馈环
+ * （建了产出 → 收入变高 → 门槛变高 → 永远缺），按"产出为 0"又太保守
+ * （经济单位本来就产一点，永远不等于 0）。
+ */
+function scarceResources(
+  s: GameState,
+  me: PlayerId,
+  mark: { turn: number; stock: Record<string, number> } | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  if (!mark) return out; // 第一回合没有可比的对象
+  const stock = (s.players[me].res ?? {}) as Record<string, number | undefined>;
+  for (const id of resourcesInPlay(s)) {
+    const now = stock[id] ?? 0;
+    const before = mark.stock[id] ?? 0;
+    // 掉了一点就算"供不上"：上限压一压，免得国库几千时波动也触发
+    if (now < before - 1 && now < 320) out.add(id);
+  }
+  return out;
+}
+
+/** 这个建筑产出哪种非金币资源（取产出表里最大的那一项） */
+function producedResourceOf(def: UnitTypeDef): string | null {
+  const best = (bag: Record<string, number> | undefined): string | null => {
+    if (!bag) return null;
+    let id: string | null = null;
+    let n = 0;
+    for (const [k, v] of Object.entries(bag)) {
+      if (k === 'gold' || v <= n) continue;
+      id = k;
+      n = v;
+    }
+    return id;
+  };
+  return best(def.yield as Record<string, number> | undefined);
+}
+
+const RESOURCE_GAP_GOAL: AiGoal = {
+  id: 'resource-gap',
+  value: (c) => (c.scarce.size > 0 ? 1 : 0),
+  steps: [
+    {
+      id: 'producers',
+      done: (c) => c.scarce.size === 0,
+      // 认领所有"产非金币资源"的建筑：只有缺的时候才放行
+      claimsBuild: (d) => producedResourceOf(d) !== null,
+      buildScore: (c, _buildId, spot, def) => {
+        const scarce = c.scarce;
+        const res = producedResourceOf(def);
+        if (!res) return null;
+        // 不缺这一种（哪怕缺别的）就别建它
+        if (!scarce.has(res)) return null;
+        const probe: Unit = {
+          id: 'ai-res-probe',
+          type: def.id,
+          owner: c.me,
+          x: spot.x,
+          y: spot.y,
+          hp: def.maxHp,
+          kills: 0,
+          moved: true,
+          acted: true,
+        };
+        const inc = resourceValue(c.state, c.me, unitYield(c.state, probe));
+        // 这一格产不出东西就别提（和通用经济评分同一条口径）
+        if (inc <= 0) return null;
+        return inc * 4 + 8;
+      },
+    },
+  ],
+};
+
+registerCoreGoal(RESOURCE_GAP_GOAL);
 registerCoreGoal(ARMOR_POWER_GOAL);
 registerCoreGoal(ARMOR_DOCK_GOAL);
 
@@ -3255,6 +3371,8 @@ function rawBuildScore(
   urgent = false,
   /** 威胁值（Fields.threat）：产业链靠它决定要不要放弃投资 */
   threat = 0,
+  /** 哪些非金币资源供不上（Fields.scarce） */
+  scarce: ReadonlySet<string> = new Set(),
   /** 这一势力正在追的产业链（Fields.goalCommit） */
   goalCommit: AiCommit | null = null,
 ): number {
@@ -3293,7 +3411,7 @@ function rawBuildScore(
    * 这里只留"归目标管"的那一句。
    */
   if (ARMOR_SUPPORT_BUILDINGS.has(buildId)) {
-    const goalScore2 = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit);
+    const goalScore2 = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit, scarce);
     return goalScore2 ?? -999;
   }
 
@@ -3361,7 +3479,7 @@ function rawBuildScore(
    * 这里只留一句"归产业链目标管"，具体分数搬到了下面的 `NAVY_GOAL`（2026-11-20）。
    * 判据仍然是数据（`buildOn` 里有水），核心不认识 `nv-dock` 这种 id。
    */
-  const goalScore = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit);
+  const goalScore = goalBuildScore(s, unit, buildId, spot, era, urgent, threat, goalCommit, scarce);
   if (goalScore !== null) return goalScore;
 
   // 军营：把产兵点往前推，省下兵从后方跑到前线的那些回合。
@@ -3622,7 +3740,8 @@ function scoreBuild(
   all: Fields,
 ): number {
   const raw = rawBuildScore(
-    s, unit, buildId, spot, all.land, all.mood, all.sea, all.era, all.urgent, all.threat, all.goalCommit,
+    s, unit, buildId, spot, all.land, all.mood, all.sea, all.era,
+    all.urgent, all.threat, all.scarce, all.goalCommit,
   );
   if (raw <= -900) return raw;
 
@@ -3652,7 +3771,7 @@ function scoreBuild(
      * 认领的建筑只吃一半压制（−10），让它还有机会排上来，但绝不取消压制——
      * 真到了必须架桥的时候，桥仍然是第一位的。
      */
-    const strategic = goalClaimsBuild(s, unit, buildId, all.era, all.urgent, all.threat, all.goalCommit);
+    const strategic = goalClaimsBuild(s, unit, buildId, all.era, all.urgent, all.threat, all.goalCommit, all.scarce);
     if (strategic) return raw - 10;
     return raw - (isProducer(s.unitTypes[buildId]) ? 20 : 45);
   }
@@ -6771,6 +6890,25 @@ function aiNextActionCoreInner(
   /** 两翼分工：主攻方向定了才能分第二路 */
   const flank = flankSplit(view, me, land, mood.focusCityId);
 
+  /*
+   * 资源趋势：拿**上一回合开始时**的存量比现在。
+   *
+   * 只在 `depth === 0` 时往后写（推演分支不该改我方的账本），
+   * 而且只在一局的新回合第一次决策时写一次——一回合里有很多次决策，
+   * 每次都写就等于拿"上一步"比"这一步"，支出会被误判成"供不上"。
+   */
+  const prevMark = s.aiResMark?.[me];
+  const pendingScarce = scarceResources(view, me, prevMark);
+  if (depth === 0 && (!prevMark || prevMark.turn !== s.turn)) {
+    s.aiResMark = {
+      ...(s.aiResMark ?? {}),
+      [me]: {
+        turn: s.turn,
+        stock: { ...((s.players[me].res ?? {}) as Record<string, number>) },
+      },
+    };
+  }
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -6793,6 +6931,7 @@ function aiNextActionCoreInner(
     sea: seaDemand(view, me),
     era: eraNowOf(view),
     urgent: isUrgentNow(view, me, unitsOf(view, me), foeUnits, mood),
+    scarce: pendingScarce,
     threat: threatLevelOf(view, me, foeUnits, mood),
     // 承诺在下面算完再填（它要读 fields.era，而 fields 正在构造中）
     goalCommit: null,
@@ -7062,7 +7201,7 @@ function aiNextActionCoreInner(
        * 所以只放目标认领的那一种，磨坊照样冻结。
        */
       const forGoal = plan.savingFor === 'goal' && goalClaimsBuildOf(
-        view, me, action.unitType, fields.era, fields.urgent, fields.threat, fields.goalCommit,
+        view, me, action.unitType, fields.era, fields.urgent, fields.threat, fields.goalCommit, fields.scarce,
       );
       if (cost>plan.buildAllowance && !utype(view,action.unitType).bridges && !forGoal) candidates.splice(i,1);
     }
