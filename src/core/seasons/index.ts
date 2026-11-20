@@ -48,6 +48,21 @@ function visionBeforeFog(s: GameState, u: Unit): number {
   return r;
 }
 
+/**
+ * 维护费交不出来时掉多少血：**生命上限的 10%，但封顶 `WEATHER_UPKEEP_HP_CAP` 点**。
+ *
+ * 2026-11-19 修的一个真 bug：这条原来没有封顶，于是"交不出 4 金"对一个大单位来说
+ * 就是每回合掉 10% 血上限——尸骸仙帝 12000 血，潮湿天每回合掉 1200，
+ * 玩家看到的战报是"天气让 1 个部队共损失 1200 点生命"。一场雨把黑暗的源头淋死了。
+ *
+ * 这条的定位是**一笔小磨损**，不是一次打击：普通兵（20~100 血）本来就只掉 2~10 点，
+ * 封顶之后它们一点变化都没有，变的是那些"血条特别长"的东西。
+ */
+export const WEATHER_UPKEEP_HP_CAP = 10;
+export function weatherUpkeepHpLoss(maxHp: number, ratio = 0.1): number {
+  return Math.max(1, Math.min(WEATHER_UPKEEP_HP_CAP, Math.round(maxHp * ratio)));
+}
+
 export const SEASONS: Expansion = {
   id: 'seasons',
   name: '季节与气候',
@@ -278,7 +293,7 @@ export const SEASONS: Expansion = {
             p.gold -= fee;
             feeTotal[u.owner] = (feeTotal[u.owner] ?? 0) + fee;
           } else if (eff.upkeepHpRatio) {
-            const d = Math.max(1, Math.round((def.maxHp ?? 1) * eff.upkeepHpRatio));
+            const d = weatherUpkeepHpLoss(def.maxHp ?? 1);
             hurt(u, d);
             hurtTotal[u.owner] = (hurtTotal[u.owner] ?? 0) + d;
             hurtCount[u.owner] = (hurtCount[u.owner] ?? 0) + 1;
