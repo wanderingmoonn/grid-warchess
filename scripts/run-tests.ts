@@ -33,6 +33,7 @@ const PARALLEL_STEPS = [
   'test:net',
   'test:ai-optimization',
   'test:ui',
+  'probe:fold',
   'test:boot',
   'test:blackout',
   'test:marquee',

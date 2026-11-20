@@ -29,6 +29,7 @@ import { boardIdOf, boardOf, EARTH } from '../core/board.ts';
 import { hazardLines, hazardOn } from '../core/hazard.ts';
 import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
+import { foldLimit, foldRows } from './list-fold.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
 import {
   MODULES,
@@ -47,7 +48,7 @@ import {
   unitDraw,
 } from '../core/armor.ts';
 import { canProduce, isProducer, produceEveryTurns } from '../core/produce.ts';
-import { expansionById, unitSourceOf, activeExpansions } from '../core/expansions.ts';
+import { expansionById, unitSourceOf, activeExpansions, type UnitActionOption } from '../core/expansions.ts';
 import { canUseType, eraWindowOk, upgradeUnlocks } from '../core/draft.ts';
 import { PACK_ALL, packLabel, packOk, packRow, ERA_ALL, eraChipRow, eraLabel, eraOk } from './packs.ts';
 import { buildMatchReport, type ReportSide } from '../core/report.ts';
@@ -169,6 +170,14 @@ export interface PanelInput {
    * 常驻展开等于把「结束回合」和「认输」一路顶出屏幕。
    */
   logOpen?: boolean;
+  /**
+   * 长列表里哪些「还有 N 种」是展开着的（键是 `recruit:<城/营 id>:<分组>`）。
+   *
+   * 和 `logOpen` 同一个理由：面板每帧整块重建，`<details open>` 是 DOM 上的状态，
+   * 重建一次就没了。所以开合记在 main 那边，渲染时按这个集合把 `open` 加回去。
+   * 用集合而不是一个布尔，是因为一座城有三个类别分组，各开各的。
+   */
+  openFolds?: ReadonlySet<string>;
   /** 撤回栈里还有没有东西（联机局提交过也会清空）；不传按 false 处理 */
   canUndo?: boolean;
   /** 回合提示音的音量（0~1），按钮上直接显示档位 */
@@ -194,6 +203,21 @@ export interface PanelInput {
    * 和扩展包、搜索框都是**与**的关系——三个条件叠在一起才是最终那一屏。
    */
   recruitEra?: number;
+  /**
+   * 扩展按钮区（宗门大殿的 78 门法术、藏经阁的研读清单……）的搜索词。
+   *
+   * 和产兵那个分开存：两处同时存在的情况没有，但**切换选中**很频繁——
+   * 搜"回血"搜到一半点了个兵，回来时不该把刚打的字弄丢，也不该让产兵列表
+   * 跟着被搜空。
+   */
+  actionQuery?: string;
+  /**
+   * 扩展按钮区按哪一档筛（空串 = 全部）。
+   *
+   * 取值由扩展给（修真包现在是"最低境界"），界面只负责配对。换了单位、
+   * 这一档不存在时按"全部"处理——否则会留下一屏永远为空的死筛选。
+   */
+  actionFilter?: string;
   /**
    * 战报用谁的眼睛看：给一个 PlayerId 就只看这一方（+ 公开的战损），
    * 给 null 就是全都看得见。不传按"全都看得见"处理。
@@ -295,6 +319,38 @@ export interface PanelReport {
  * 摘要漏一个字段就会让面板停在旧内容上，那种 bug 比慢难查得多。
  */
 const panelHtmlCache = new WeakMap<HTMLElement, string>();
+
+/** 没有任何长列表被展开时的占位：省掉每个调用点都写 `?? new Set()` */
+const NO_FOLDS: ReadonlySet<string> = new Set();
+
+/**
+ * 「待放」那一页收起时留几条。
+ *
+ * 比产兵的 12 行小得多，因为两页的容量不是一回事：产兵列表一屏放二十行也只是
+ * "得多看两眼"，而"现在该做什么"超过五个，玩家就又开始挑不过来了。
+ */
+const MUST_CAST_KEEP = 5;
+
+/**
+ * 单位卡上「说明」超过几条就收起来。
+ *
+ * 6 是照普通兵种的条数定的：原版一个兵通常三到五条（近战反击、造价、来源），
+ * 收起来只是白让人点一次；而修士一上来就是十几条，收起来能省掉大半屏。
+ */
+const UNIT_NOTES_FOLD_AT = 6;
+
+/** 扩展按钮区的搜索/筛选/展开状态（三处调用共用一份口径） */
+function actionOptsOf(input: PanelInput): {
+  query: string;
+  filter: string;
+  folds: ReadonlySet<string>;
+} {
+  return {
+    query: input.actionQuery ?? '',
+    filter: input.actionFilter ?? '',
+    folds: input.openFolds ?? NO_FOLDS,
+  };
+}
 
 /**
  * 让缓存作废。
@@ -693,12 +749,33 @@ function renderReport(s: GameState, info: PanelInput['report']): string {
  * 现在修士、建筑也在用。函数名没改（改起来牵连一堆调用点），
  * 但**给玩家看的字里不许再出现"英雄"**。
  */
-function heroSkillBlock(s: GameState, units: Unit[]): string {
+function heroSkillBlock(
+  s: GameState,
+  units: Unit[],
+  opts?: {
+    /**
+     * 只列「别忘了放」且**现在就能放**的那几条（`SkillDef.mustCast`）。
+     *
+     * "没选中任何单位"那一页走这个模式：那一页原来把每个兵的每条技能都铺出来，
+     * 一回合几十个法术之后就是一面墙，真正要紧的那条反而没人看见。
+     * 现在只留"漏了就补不回来"的，其余的选中那个兵再看。
+     */
+    mustCastOnly?: boolean;
+    /** 收起状态（mustCastOnly 下条目也会多起来，走长列表收纳那套） */
+    open?: boolean;
+  },
+): string {
   const rows: string[] = [];
   for (const u of units) {
     const def = utype(s, u.type);
     if (!skillsOf(s, u) || skillsOf(s, u).length === 0) continue;
     for (const k of heroSkillsOf(s, u)) {
+      /*
+       * 「待放」那一页只要两样：作者标了 `mustCast`，而且**此刻就绪**。
+       * 没就绪的不列——这一页的语义是"现在该你出手了"，不是"技能一览"；
+       * 冷却中的那几条在选中这个兵之后照样是灰按钮，不会丢。
+       */
+      if (opts?.mustCastOnly && !(k.def.mustCast === true && k.ready)) continue;
       // 充能型技能要把"还剩几发"写在脸上：写成"就绪/冷却"会让人以为
       // 只能一次一次地等，而它其实是"攒着可以连开"的那一类。
       const chargeNote = k.chargeMax > 0 ? ` · ${k.charge}/${k.chargeMax} 发` : '';
@@ -720,9 +797,11 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
        *     （"灵力不足（40 / 60）" → "灵力不足"）；
        *   · `status` 全文塞进 title，鼠标停上去还能读到完整理由。
        *
-       * 为什么：状态那一格是 `white-space: nowrap` 的。法术的理由动辄二十几个字
-       * （"法术位满了（1 / 1）：境界再高一点，或者去静心阁忘掉一门"），
-       * 不截断就会把左边的技能说明挤成一列竖排的字——玩家读不出这是哪个法术。
+       * 为什么：状态那一格是 `white-space: nowrap` 的。法术的理由动辄十几个字
+       * （"灵力不足（40 / 60）"就是十一个字），不截断就会把左边的技能说明
+       * 挤成一列竖排的字——玩家读不出这是哪个法术。
+       * 2026-11-20：理由文案本身也压短了，`.price` 再加了宽度上限，这里只留
+       * "冒号前面那个词"，是三层里最外面的一层。
        */
       const statusBrief = status.split(/[（(：:]/)[0]!.trim();
       const inner =
@@ -766,6 +845,23 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
   // 菜单底下原来有一句"技能不占行动，每个英雄每回合最多一次"的总说明。
   // 现在技能五花八门（有的占移动、有的耗灵石、有的能连发），一句话概括不了，
   // 所以删掉——代价与冷却都写在每个按钮自己的小字上了。
+  if (opts?.mustCastOnly) {
+    /*
+     * 「待放」这一页的标题不写"技能"：它回答的是"现在该出手了吗"，
+     * 不是"这个兵会什么"。写得含糊，玩家还是会把它当成技能一览表划过去。
+     *
+     * 条数多起来的时候走长列表收纳（和产兵同一套零件）。这里的门槛比产兵小得多：
+     * 产兵一屏放得下二十行也不算多，而"待办"超过五个就已经看不过来了。
+     */
+    const body = foldRows(rows, {
+      key: 'skill:must-cast',
+      open: opts.open === true,
+      limit: MUST_CAST_KEEP,
+      noun: '个技能',
+    });
+    return `<div class="card-title" style="margin-top:14px">待放</div>
+    <div class="recruit-list">${body}</div>`;
+  }
   return `<div class="card-title" style="margin-top:14px">技能</div>
     <div class="recruit-list">${rows.join('')}</div>`;
 }
@@ -780,33 +876,118 @@ function heroSkillBlock(s: GameState, units: Unit[]): string {
  * 分层是"界面不认识任何扩展"。一个通用的按钮位比一条特例便宜得多，
  * 藏经阁之后的静心阁、宗门研发都能直接复用。
  */
-function unitActionBlock(s: GameState, u: Unit, me: PlayerId): string {
-  /** 按扩展给的 `group` 分组：同一组一个标题 */
-  const groups = new Map<string, string[]>();
+function unitActionBlock(
+  s: GameState,
+  u: Unit,
+  me: PlayerId,
+  opts: { query: string; filter: string; folds: ReadonlySet<string> },
+): string {
+  /** 先把所有扩展的按钮收齐，再统一筛、统一分组 */
+  const all: UnitActionOption[] = [];
   for (const e of activeExpansions(s)) {
-    const opts = e.hooks.unitActions?.({ state: s, unit: u, viewer: me }) ?? [];
-    for (const o of opts) {
-      const title = o.group ?? '研修';
-      const rows = groups.get(title) ?? [];
-      const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
-      rows.push(
-        `<button class="recruit-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''}>
+    all.push(...(e.hooks.unitActions?.({ state: s, unit: u, viewer: me }) ?? []));
+  }
+  if (all.length === 0) return '';
+
+  /*
+   * 搜索：和产兵那个搜索框同一套口径（空格分词、全部命中才算）。
+   * `detail` 也进搜索范围——法术的说明才是玩家真正记得住的那部分。
+   */
+  const words = opts.query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  const hay = (o: UnitActionOption) =>
+    `${o.label} ${o.detail ?? ''} ${o.search ?? ''}`.toLowerCase();
+  const pooled = words.length === 0 ? all : all.filter((o) => words.every((w) => hay(o).includes(w)));
+
+  /*
+   * 筛选：只有扩展给了 `filter` 的条目才分档。没给的（"服用丹药"这类不分档的
+   * 公共项）在筛选时**照样显示**——它们不属于任何一层，没理由被某一档连带藏掉。
+   */
+  const filters = new Map<string, { label: string; order: number }>();
+  for (const o of pooled) {
+    if (o.filter) filters.set(o.filter.value, { label: o.filter.label, order: o.filter.order ?? 0 });
+  }
+  const activeFilter = opts.filter !== '' && filters.has(opts.filter) ? opts.filter : '';
+  const shown =
+    activeFilter === ''
+      ? pooled
+      : pooled.filter((o) => !o.filter || o.filter.value === activeFilter);
+
+  /*
+   * 筛选栏只在"真的分得出两档以上"时出现。一档的时候摆一排按钮，
+   * 点下去一个都筛不掉——那比没有更让人困惑（和产兵的 packRow 同一条规矩）。
+   */
+  const chipRow =
+    filters.size < 2
+      ? ''
+      : `<div class="chip-row pack-row">
+           <button class="chip ${activeFilter === '' ? 'active' : ''}" data-act="action-filter" data-value="">全部 ${pooled.length}</button>
+           ${[...filters.entries()]
+             .sort((a, b) => a[1].order - b[1].order)
+             .map(([value, f]) => {
+               const n = pooled.filter((o) => o.filter?.value === value).length;
+               return `<button class="chip ${activeFilter === value ? 'active' : ''}" data-act="action-filter" data-value="${escapeHtml(value)}">${escapeHtml(f.label)} ${n}</button>`;
+             })
+             .join('')}
+         </div>`;
+
+  const queryBox =
+    all.length < 6
+      ? ''
+      : `<div class="recruit-search">
+           <input type="search" class="recruit-search-input" data-act="action-search"
+             value="${escapeHtml(opts.query)}" placeholder="搜索名称或效果" autocomplete="off" spellcheck="false" />
+           <span class="recruit-search-count">${shown.length}/${all.length}</span>
+         </div>`;
+
+  if (shown.length === 0) {
+    return `${queryBox}${chipRow}<div class="hint">没有匹配的条目。${
+      opts.query || activeFilter
+        ? '<button class="link-btn" data-act="action-clear" type="button">清掉筛选</button>'
+        : ''
+    }</div>`;
+  }
+
+  /** 按扩展给的 `group` 分组：同一组一个标题 */
+  const groups = new Map<string, UnitActionOption[]>();
+  for (const o of shown) {
+    const title = o.group ?? '研修';
+    groups.set(title, [...(groups.get(title) ?? []), o]);
+  }
+
+  /*
+   * 折叠门槛跟着**筛完之后**的条数走：搜到只剩三门法术时不该再折一次，
+   * 这和产兵那边是同一个判据（见 list-fold.ts）。
+   */
+  const keep = foldLimit(shown.length);
+  const blocks = [...groups.entries()]
+    .map(([title, rows]) => {
+      const key = `action:${u.id}:${title}`;
+      const body = foldRows(
+        rows.map((o) => {
+          const confirmAttr = o.confirm ? ` data-confirm="${escapeHtml(o.confirm)}"` : '';
+          /*
+           * `title` 里放全文：右边的理由格封了顶（见 style.css 的 .recruit-btn .price），
+           * 超长会打点。不把全文挂在这儿，玩家就只能看到一个"…"，比不显示更糟。
+           */
+          const tip = [o.label, o.detail, o.note].filter(Boolean).join('｜');
+          return `<button class="recruit-btn action-btn" data-act="unit-action" data-id="${u.id}" data-action="${escapeHtml(o.id)}"${confirmAttr} ${o.disabled ? 'disabled' : ''} title="${escapeHtml(tip)}">
            <span class="unit-chip ${u.owner === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${escapeHtml(o.label.slice(0, 1))}</span>
            <span class="meta"><b>${escapeHtml(o.label)}</b>${o.detail ? `<span>${escapeHtml(o.detail)}</span>` : ''}</span>
            <span class="price">${escapeHtml(o.note ?? '')}</span>
-         </button>`,
+         </button>`;
+        }),
+        { key, open: opts.folds.has(key), limit: keep, noun: '项' },
       );
-      groups.set(title, rows);
-    }
-  }
-  if (groups.size === 0) return '';
-  return [...groups.entries()]
-    .map(
-      ([title, rows]) =>
-        `<div class="card-title" style="margin-top:14px">${escapeHtml(title)}</div>
-    <div class="recruit-list">${rows.join('')}</div>`,
-    )
+      return `<div class="card-title" style="margin-top:14px">${escapeHtml(title)}</div>
+    <div class="recruit-list">${body}</div>`;
+    })
     .join('');
+
+  return `${queryBox}${chipRow}${blocks}`;
 }
 
 /**
@@ -965,6 +1146,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
 
   if (selectedUnit) {
     const def = utype(s, selectedUnit.type);
+    const actionOpts = actionOptsOf(input);
     const ratio = selectedUnit.hp / maxHpOf(s,selectedUnit);
     const spectator = input.spectator === true;
     const readOnly = spectator || input.commander === true;
@@ -994,10 +1176,6 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       .map((id) => s.unitTypes[id])
       .filter((x): x is UnitTypeDef => !!x);
     const notes = describeUnit(s, def, undefined, selectedUnit);
-    const noteBlock =
-      notes.length === 0
-        ? ''
-        : `<div class="unit-notes">${notes.map((n) => `<div>· ${n}</div>`).join('')}</div>`;
     // 收集所有扩展想在这个兵种面板上显示的文字
     const customLines: string[] = [];
     for (const e of activeExpansions(s)) {
@@ -1005,9 +1183,36 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         customLines.push(...e.hooks.getUnitPanelLines({ state: s, unit: selectedUnit, viewer: me }));
       }
     }
-    const customBlock = customLines.length > 0 
-      ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${customLines.map(l => `<div>· ${escapeHtml(l)}</div>`).join('')}</div>` 
-      : '';
+    /*
+     * 「说明」这一块按条数收起来（2026-11-20）。
+     *
+     * 兵种自身的说明（近战反击、造价来源）和扩展补的那几行（境界、灵力、法术位、
+     * 真元……）加起来，一个修士能到十几条——它把下面的技能、操作全顶出屏幕，
+     * 而玩家点开一个兵，最先要看的是血量攻防和"这一回合能干什么"，不是这一屏百科。
+     *
+     * 所以和战报用同一种折叠：超过 `UNIT_NOTES_FOLD_AT` 条就收起来，标题写着还有
+     * 几条。短说明（普通兵种三四行）原样铺着——给三行字加一次点击是纯添乱。
+     */
+    const noteLines = notes.map((n) => `<div>· ${n}</div>`).join('');
+    const extLines = customLines.map((l) => `<div>· ${escapeHtml(l)}</div>`).join('');
+    const notesFoldOpen = (input.openFolds ?? NO_FOLDS).has('unit:notes');
+    const totalNoteLines = notes.length + customLines.length;
+    const notesBlock =
+      totalNoteLines === 0
+        ? ''
+        : totalNoteLines > UNIT_NOTES_FOLD_AT
+          ? `<details class="card-fold unit-notes-fold" data-fold="unit:notes"${notesFoldOpen ? ' open' : ''}>
+               <summary class="card-title fold-head">说明 <span class="hint">${totalNoteLines} 条</span></summary>
+               ${notes.length > 0 ? `<div class="unit-notes">${noteLines}</div>` : ''}
+               ${
+                 customLines.length > 0
+                   ? `<div class="unit-notes ext">${extLines}</div>`
+                   : ''
+               }
+             </details>`
+          : `${notes.length > 0 ? `<div class="unit-notes">${noteLines}</div>` : ''}${
+              customLines.length > 0 ? `<div class="unit-notes ext" style="margin-top: 8px">${extLines}</div>` : ''
+            }`;
     /**
      * 遣散：指挥官模式下也留着。
      *
@@ -1324,11 +1529,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${mine && myTurn ? heroSkillBlock(s, [selectedUnit]) : ''}
       ${armorBlock(s, selectedUnit, mine && myTurn)}
       ${carrierBlock(s, selectedUnit, mine && myTurn)}
-      ${mine && myTurn ? unitActionBlock(s, selectedUnit, me) : ''}
+      ${mine && myTurn ? unitActionBlock(s, selectedUnit, me, actionOpts) : ''}
       ${cargoBlock}
       ${buildBlock}
-      ${noteBlock}
-      ${customBlock} 
+      ${notesBlock}
       ${
         mine && myTurn
           ? `<div class="force-row">
@@ -1357,10 +1561,23 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     `;
   }
 
-  // 没选中任何东西时的默认页：把自己的英雄技能摆出来。
+  // 没选中任何东西时的默认页：只列「别忘了放」的技能。
+  /*
+   * 以前这里列的是**所有**自己单位的**所有**技能。修真包上线之后这一页变成一面墙：
+   * 十个修士、每人四门法术，四十行铺下来，玩家真正该做的那件事（圣剑觉醒还没点、
+   * 招魂还能救一个人）就淹在中间了。
+   *
+   * 现在只留作者标了 `mustCast` 的，而且只要**此刻就绪**的。其余的选中那个兵再看——
+   * 它们一条都没少，只是不该占着"没选中任何东西"这一页。
+   */
   const myHeroes =
-    input.spectator !== true && myTurn ? unitsOf(s, me).filter((u) => skillsOf(s, u)) : [];
-  const heroBlock = heroSkillBlock(s, myHeroes);
+    input.spectator !== true && myTurn
+      ? unitsOf(s, me).filter((u) => skillsOf(s, u)?.some((k) => k.mustCast === true))
+      : [];
+  const heroBlock = heroSkillBlock(s, myHeroes, {
+    mustCastOnly: true,
+    open: (input.openFolds ?? NO_FOLDS).has('skill:must-cast'),
+  });
 
   return `
     ${heroBlock}
@@ -1574,6 +1791,14 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
   const cats = (['combat', 'economy', 'builder'] as const).filter((cat) =>
     shown.some((d) => d.category === cat),
   );
+  /*
+   * 长列表收纳（2026-11-20）。
+   *
+   * 判据用 `shown.length`（筛完之后的条数）而不是 `buildable.length`：
+   * 玩家搜了"弓"、只剩三行，那就该三行全给，不要再折一次。
+   */
+  const keep = foldLimit(shown.length);
+  const folds = input.openFolds ?? NO_FOLDS;
   const grouped = cats
     .map((cat) => {
       const items = shown.filter((d) => d.category === cat);
@@ -1585,9 +1810,12 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
        */
       const title =
         cats.length > 1 ? `<div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>` : '';
-      return `<div class="recruit-group">${title}<div class="recruit-list">${items
-        .map(unitButton)
-        .join('')}</div></div>`;
+      const key = `recruit:${city.id}:${cat}`;
+      const body = foldRows(
+        items.map(unitButton),
+        { key, open: folds.has(key), limit: keep, noun: '种' },
+      );
+      return `<div class="recruit-group">${title}<div class="recruit-list">${body}</div></div>`;
     })
     .join('');
 
@@ -1921,6 +2149,7 @@ const DIRS_4: ReadonlyArray<readonly [number, number]> = [
  */
 function renderCamp(input: PanelInput, myTurn: boolean): string {
   const { view, me, selectedCampId } = input;
+  const actionOpts = actionOptsOf(input);
   const s = view.state;
   const camp = selectedCampId ? s.units.find((u) => u.id === selectedCampId) : undefined;
   if (!camp) return '';
@@ -1987,50 +2216,66 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
   const eraFilter = input.recruitEra ?? ERA_ALL;
   const shown = buildable.filter((d) => matchRecruit(d, q) && packOk(d, pack) && eraOk(d, eraFilter));
 
+  // 长列表收纳：门槛和城市面板同一个口径（见 list-fold.ts）。军营的"还造不出来"
+  // 那组自己算自己的——它可能有四十条，而能造的三条不该跟着被折。
+  const folds = input.openFolds ?? NO_FOLDS;
+
   const grouped = (['combat', 'economy', 'builder'] as const)
     .map((cat) => {
       const items = shown.filter((d) => d.category === cat);
       if (items.length === 0) return '';
+      const key = `recruit:${camp.id}:${cat}`;
+      const body = foldRows(
+        items.map((d) => {
+          const slotsOk = slotsOf(d) > 0;
+          const extra =
+            d.domain === 'water'
+              ? waterSlots.length > 1
+                ? ` · ${waterSlots.length} 处水面可选`
+                : ' · 下水'
+              : '';
+          return recruitButton(
+            s,
+            me,
+            d,
+            ordering ? queueFull : !myTurn || !slotsOk,
+            extra,
+            ordering ? 'order' : 'recruit',
+            camp.id,
+            { kind: 'camp', camp },
+          );
+        }),
+        { key, open: folds.has(key), limit: foldLimit(shown.length), noun: '种' },
+      );
       return `<div class="recruit-group">
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
-        <div class="recruit-list">${items
-          .map((d) => {
-            const slotsOk = slotsOf(d) > 0;
-            const extra =
-              d.domain === 'water'
-                ? waterSlots.length > 1
-                  ? ` · ${waterSlots.length} 处水面可选`
-                  : ' · 下水'
-                : '';
-            return recruitButton(
-              s,
-              me,
-              d,
-              ordering ? queueFull : !myTurn || !slotsOk,
-              extra,
-              ordering ? 'order' : 'recruit',
-              camp.id,
-              { kind: 'camp', camp },
-            );
-          })
-          .join('')}</div>
+        <div class="recruit-list">${body}</div>
       </div>`;
     })
     .join('');
 
-  /** 白名单里有、但条件不满足的：按乙档灰着列出来，把原因写在按钮上 */
-  const gatedGroup =
-    gated.length === 0
-      ? ''
-      : `<div class="recruit-group">
+  /**
+   * 白名单里有、但条件不满足的：按乙档灰着列出来，把原因写在按钮上。
+   *
+   * 这一堆同样会很长（炼器炉能收几十种木器），所以走同一套收纳。
+   * 但它的门槛独立算：不能因为"能造的有 200 种"就把这堆也按 12 条切，
+   * 也不能因为它自己有 40 条就把能造的那几行也折了。
+   */
+  let gatedGroup = '';
+  if (gated.length > 0) {
+    const key = `recruit:${camp.id}:gated`;
+    const body = foldRows(
+      gated.map((d) => {
+        const v = verdictOf(d);
+        return recruitButton(s, me, d, true, ` · ${v.ok ? '' : v.reason}`);
+      }),
+      { key, open: folds.has(key), limit: foldLimit(gated.length), noun: '种' },
+    );
+    gatedGroup = `<div class="recruit-group">
         <div class="recruit-group-title">还造不出来</div>
-        <div class="recruit-list">${gated
-          .map((d) => {
-            const v = verdictOf(d);
-            return recruitButton(s, me, d, true, ` · ${v.ok ? '' : v.reason}`);
-          })
-          .join('')}</div>
+        <div class="recruit-list">${body}</div>
       </div>`;
+  }
 
   const groups =
     (buildable.length === 0
@@ -2088,7 +2333,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
               * 以前只画在详情卡上，于是宗门大殿永远只剩"招募弟子"——
               * 研发和遗弃两个按钮根本不存在。
               */
-             mine && myTurn ? unitActionBlock(s, camp, me) : ''
+             mine && myTurn ? unitActionBlock(s, camp, me, actionOpts) : ''
            }
            ${
              input.spawnPick

@@ -320,7 +320,7 @@ export function describeUnit(
   }
   if (isProducer(def)) {
     const spec = produceOf(def) ?? {};
-    lines.push('前线产兵点：兵从营门四邻的空地出来。它按自己的时代出兵，不随后方城市换代——想要新一档的兵，就再扎一座新营。');
+    lines.push('军营类：兵从营门四邻的空地出来，按自己的时代等级出兵。');
     if (spec.units?.length) {
       lines.push(`产能：只造 ${spec.units.map(nameOf).join('、')}。`);
     }
@@ -353,15 +353,10 @@ export function describeUnit(
     // 以前这句写死在"军营"那一段里，换成别的建筑就看不见了。
     const siteNeed = adjacentRequirementText(def, nameOf);
     if (siteNeed) {
-      lines.push(`${siteNeed}（占地那几格和它自己的四邻都算，所以建在山头上也算"挨着山"）`);
+      lines.push(`${siteNeed}`);
     }
     const cost = buildCostOf(def);
-    const power = buildPowerOf(def);
-    lines.push(
-      `建造点数 ${cost}：投不够就先落一个工地——看得见、挡得住、能被打，但开不了火也产不了兵。` +
-        `施工能力 ${power} 的工兵要 ${Math.max(1, Math.ceil(cost / power))} 个回合；` +
-        '两个工兵一起修，就是两次"建造"叠在同一个工地上，进度相加。',
-    );
+    lines.push(`建造点数 ${cost}`);
   }
   if ((def.builds ?? []).length > 0) {
     lines.push(
@@ -373,7 +368,7 @@ export function describeUnit(
   }
   if (def.garrison) {
     lines.push(
-      `可驻军：友军站上来额外 +${CONFIG.garrisonArmor} 护甲、并借用它的视野。这是"进驻"唯一的意义——站上去得有用。`,
+      `可驻军：友军站上来额外 +${CONFIG.garrisonArmor} 护甲、并借用它的视野。`,
     );
   }
 

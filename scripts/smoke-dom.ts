@@ -4785,17 +4785,44 @@ check('技能：面板列出技能，冷却中的置灰', () => {
   assert.equal(cold.hasAttribute('disabled'), true, '冷却中不能点');
   assert.ok(host.innerHTML.includes('1 回合'), '要显示还差几回合');
 
-  // 没选中任何东西时，默认页也要列出自己英雄的技能
+  // 没选中任何东西时，默认页**只**列「漏了就补不回来」的技能（SkillDef.mustCast）。
+  // 矮人王的投斧没标这个字段，所以它不该出现在那里——投斧是"什么时候用"的战术
+  // 选择，把它铺在待办页只会让真正要紧的那条（圣旗、招魂）淹掉。
   hero.skillCd = {};
-  renderPanel(host, {
-    view: playerView(st, 'A'),
-    me: 'A',
-    selectedUnit: null,
-    selectedCityId: null,
-    selectedCampId: null,
-    selectedTile: null,
-  });
-  assert.ok(host.querySelector('[data-act="hero-skill"]'), '默认页也要能看到今天能开什么');
+  const paintDefault = () =>
+    renderPanel(host, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+  paintDefault();
+  assert.equal(
+    host.querySelectorAll('[data-act="hero-skill"]').length,
+    0,
+    '没标 mustCast 的技能不该占着默认页',
+  );
+
+  // 标了 mustCast 的英雄（神圣骑士长的圣旗）：就绪时被顶到待放页
+  const banner: Unit = {
+    id: 'hero2',
+    type: 'holy-knight-lord',
+    owner: 'A',
+    x: 6,
+    y: 6,
+    hp: st.unitTypes['holy-knight-lord']?.maxHp ?? 170,
+    kills: 0,
+    moved: false,
+    acted: false,
+  };
+  st.units.push(banner);
+  paintDefault();
+  const top = host.querySelector<HTMLElement>('[data-act="hero-skill"]');
+  assert.ok(top, '标了 mustCast 的技能就绪时应该出现在待放页');
+  assert.equal(top!.dataset.skill, 'holy-banner', '待放页应该列出圣旗');
+  assert.ok(host.innerHTML.includes('待放'), '这一块要写清楚是"待放"，不是技能一览');
 });
 
 check('英雄面板：隐匿显示剩余发数，至尊法师显示当前属性', () => {

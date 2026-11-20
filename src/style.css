@@ -3650,6 +3650,31 @@ html[data-terrain='on'] .tile.t-mountain {
   line-height: 1.85;
 }
 
+/*
+ * 扩展往兵种卡上补的那几行（境界、灵力、法术位、真元……）。
+ * 换个颜色是为了让玩家一眼分清"这条是兵种表里本来就有的"和"这条是某个
+ * 扩展算出来的"——两者混成一色时，查数值差异会从第一行就开始看错。
+ */
+.unit-notes.ext {
+  color: #8b7eb6;
+}
+
+/*
+ * 「说明」被折起来的时候（条数超过 UNIT_NOTES_FOLD_AT）。
+ * 折叠标题本身已经有一条分隔线，里面的第一块就不该再画一条——两条虚线上下
+ * 夹着标题，看着像排版坏了。
+ */
+.unit-notes-fold .unit-notes {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+/* 兵种说明和扩展说明是两块，折起来之后仍然要隔开 */
+.unit-notes-fold .unit-notes.ext {
+  margin-top: 8px;
+}
+
 .hpbar {
   height: 6px;
   border-radius: 3px;
@@ -3795,6 +3820,53 @@ html[data-terrain='on'] .tile.t-mountain {
 }
 
 /*
+ * 长列表收起来的那一行（「还有 111 种」）。
+ *
+ * 画成一条虚线槽而不是按钮：它不是一个动作，是"这里还有东西、我替你收着了"的
+ * 标记。做成实心按钮会让人以为点它等于"全部买下"。
+ *
+ * 它本身是 `.recruit-list`（纵向 flex）里的一个子项，点开后里面再套一层
+ * `.recruit-list`，所以按钮的间距和上一排是同一套，不会突然变紧。
+ */
+.list-fold {
+  display: block;
+}
+
+.list-fold > .list-fold-head {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  padding: 7px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+}
+
+.list-fold > .list-fold-head::-webkit-details-marker {
+  display: none;
+}
+
+.list-fold > .list-fold-head:hover {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+/* 展开时才需要和下面的按钮拉开一点，收起时它自己就是最后一行 */
+.list-fold[open] > .list-fold-head {
+  margin-bottom: 7px;
+}
+
+.list-fold > .list-fold-head::after {
+  content: ' ⌄';
+}
+
+.list-fold[open] > .list-fold-head::after {
+  content: ' ⌃';
+}
+
+/*
  * 产兵按钮的浮层宿主。多包一层 span 不是为了排版，是因为 disabled 的按钮
  * 在部分浏览器里连 mouseover 都不派发——钱不够、不是自己回合时，玩家恰恰
  * 最需要看"这工兵能盖什么"。宿主不禁用，浮层就还在。
@@ -3837,6 +3909,8 @@ html[data-terrain='on'] .tile.t-mountain {
 
 .recruit-btn .meta {
   flex: 1;
+  /* 没有它，长条目的子项会按"内容宽度"撑开，挤旁边的格——见下面 .price 那段 */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -3864,6 +3938,28 @@ html[data-terrain='on'] .tile.t-mountain {
    */
   flex: 0 0 auto;
   white-space: nowrap;
+  /*
+   * 但"永远一行"还有下半句：**得有上限**（2026-11-20）。
+   *
+   * 宗门大殿那几十门法术，按不了的理由（"没有藏经阁：一门法术都研发不了……"）
+   * 比法术名字还长，nowrap 一撑，左边的说明被压成五行竖排——玩家读不出这是
+   * 哪门法术。所以这一格封顶，超了打点，全文放 `title` 里。
+   * 文案侧也同步改短了（见 spells.ts 的 researchProblem），这里是第二道保险。
+   */
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+/*
+ * 扩展声明的操作按钮（研发 / 研读 / 遗弃 / 服用……）。
+ *
+ * 内容和技能行一样是"标题 + 一到两行说明"，所以让图标和标记**贴着顶**排：
+ * 说明换成三行时，居中的价格会漂到中间，读起来像是另一行的东西。
+ */
+.action-btn {
+  align-items: flex-start;
 }
 
 /*
@@ -4158,6 +4254,33 @@ html[data-terrain='on'] .tile.t-mountain {
   flex-direction: column;
   gap: 8px;
   padding-top: 4px;
+}
+
+/*
+ * 桌面端也把这一排钉在侧栏底部（2026-11-20）。
+ *
+ * 原来只有手机窄屏才固定，理由是"那时侧栏是棋盘下面的一整条，滑动距离最长"。
+ * 但桌面上侧栏同样是**独立的滚动区**：产兵列表长到两三百行时，「结束行动」
+ * 被推到最底下，每回合都要先滑好几屏才能交棒——而这个按钮是每回合必经的动作，
+ * 它不该为"这一屏正好在选城市"付代价。
+ *
+ * 用 sticky 而不是 fixed：
+ *   · 它仍然在文档流里占着那一格，滚到底时就在原位，不会盖住最后一张卡；
+ *   · 内容短的时候靠上面的 `margin-top: auto` 自然沉底，不用另算高度；
+ *   · 手机那边保持原有的 fixed 方案（单列布局下 `#side` 不是滚动容器，
+ *     sticky 没有可吸附的对象），所以这条只对并排布局生效。
+ *
+ * 背景必须给：不加的话卡片会从它背后穿过去，字叠字。
+ */
+@media (min-width: 921px) {
+  .side-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 6;
+    padding-top: 10px;
+    background: var(--bg);
+    box-shadow: 0 -1px 0 var(--line);
+  }
 }
 
 /* 只装主按钮（结束行动 / 提交计划）的那一层。

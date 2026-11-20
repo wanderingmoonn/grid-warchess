@@ -2619,6 +2619,8 @@ const HERO_UNITS: UnitTypeDef[] = [
           '支付该兵种的生产价格，把**本轮**倒下的一名友军在自己身边复活（对手刚过去的回合与本回合都算；同时倒下好几个时救造价最高的那个）。复活的单位当回合不能行动；同一具遗体只能招一次，**英雄不在其列**。',
         effect: 'raise-dead',
         cooldown: 2,
+        // 只认**本轮**倒下的遗体，过时就没了——漏一回合是永久损失，所以顶到"待放"
+        mustCast: true,
       },
     ],
   },
@@ -2659,6 +2661,8 @@ const HERO_UNITS: UnitTypeDef[] = [
           '半径 2 内所有友军（含自己）护甲 +3、魔抗 +4，并获得**阵列**（免疫溅射）；持续到自己的下个回合开始。',
         effect: 'holy-banner',
         cooldown: 2,
+        // 两回合的持续时间 + 两回合的冷却：空着不点就是全队白亏 3 甲 4 魔抗
+        mustCast: true,
         radius: 2,
         armorUp: 3,
         magicResUp: 4,
@@ -2706,6 +2710,8 @@ const HERO_UNITS: UnitTypeDef[] = [
           '永久强化自身：攻击 +8、护甲 +2、魔法攻击 +8、魔法抗性 +2、生命上限 +30，并按新上限回复 30% 生命。可反复叠加，越打越硬。',
         effect: 'ascend',
         cooldown: 3,
+        // 永久叠加：早一回合觉醒，后面每一刀都多 8 攻。漏掉是永久亏
+        mustCast: true,
         power: 0.3,
         atkUp: 8,
         armorUp: 2,
@@ -2764,6 +2770,8 @@ const HERO_UNITS: UnitTypeDef[] = [
         // 不只是"砸人那一下"，所以不再要求落点周围有敌人。
         targeting: 'point',
         cooldown: 3,
+        // 卵要两回合才孵：早放早出兵，空着三回合等于白白少一条龙
+        mustCast: true,
         // 9 → 11（2026-11-10）：和视野同步，砸得到的地方＝看得见的地方
         radius: 11,
         power: 1,

@@ -351,8 +351,23 @@ sideEl.addEventListener(
   'toggle',
   (e) => {
     const el = e.target as HTMLElement | null;
-    if (!el || !el.classList.contains('card-fold')) return;
+    if (!el) return;
     const open = (el as HTMLDetailsElement).open;
+    /*
+     * 长列表的「还有 N 种」：键由面板生成（`recruit:<id>:<组>`），开合记进集合。
+     * 这一支必须放在 `card-fold` 判断**之前**吗？不必——两个 class 不会同时出现，
+     * 但先判哪一个都得用 classList，不能只看 `data-fold`：卡片的 data-fold 是
+     * `log`/`ops`，键的命名空间和这里不一样。
+     */
+    if (el.classList.contains('list-fold')) {
+      const key = el.dataset.fold;
+      if (key) {
+        if (open) openFolds.add(key);
+        else openFolds.delete(key);
+      }
+      return;
+    }
+    if (!el.classList.contains('card-fold')) return;
     // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
     if (el.dataset.fold === 'log') logOpen = open;
     else opsOpen = open;
@@ -657,6 +672,15 @@ let recruitPack = '';
  * "我只想看青铜的兵"是这一局的口味，不是对某座城的一时好奇。
  */
 let recruitEra = 0;
+/**
+ * 扩展按钮区（宗门大殿的研发清单、藏经阁的研读清单）的搜索词。
+ *
+ * 和产兵那一份**故意分开**：两块的用法不同（一个找兵买、一个找法术学），
+ * 共用一个变量会出现"在城里搜了个『弓』，回头点开宗门发现法术全被滤没了"。
+ */
+let actionQuery = '';
+/** 扩展按钮区按哪一档筛：'' = 全部。取值由扩展给（修真包＝最低境界） */
+let actionFilter = '';
 
 /**
  * 打击感的两个来源：**掉血的单位**与**刚出手的单位**。
@@ -1213,6 +1237,14 @@ function myTurn(): boolean {
 let opsOpen = false;
 let logOpen = false;
 /**
+ * 长列表里哪几个「还有 N 种」被点开了。
+ *
+ * 用集合而不是单个布尔：一座城按类别有三组（战斗/经济/建造），军营还多一组
+ * 「还造不出来」，它们各开各的。键里带着城/营的 id，所以换一座城是新的账，
+ * 不会串味。
+ */
+const openFolds = new Set<string>();
+/**
  * 上一次渲染时，这一局已经触发过哪些关卡事件（id）。
  *
  * 只用来判断"**刚刚**触发了哪几条"，进而在它们带 `say` 时把战报展开。
@@ -1360,12 +1392,15 @@ function panelInput(known?: PlayerView): PanelInput {
     star: starPanelInfo(),
     opsOpen,
     logOpen,
+    openFolds,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
     chimeVolume,
     recruitQuery,
     recruitPack,
     recruitEra,
+    actionQuery,
+    actionFilter,
     logSide: logScope(),
     spawnPick: spawnPlan ? { type: spawnPlan.type } : null,
     /*
@@ -5475,6 +5510,27 @@ function handleAction(act: string, el: HTMLElement): void {
     case 'recruit-era': {
       const v = Number(el.dataset.era ?? 0);
       recruitEra = recruitEra === v ? 0 : v;
+      render();
+      return;
+    }
+
+    /*
+     * 扩展按钮区（宗门大殿 78 门法术）的筛选档。
+     *
+     * 和时代 chip 同一条规矩：再点一次当前那一档＝回到全部。档位值由扩展给
+     * （修真包是"最低境界"），界面只是原样带回去——核心不解释它是什么。
+     */
+    case 'action-filter': {
+      const v = el.dataset.value ?? '';
+      actionFilter = actionFilter === v ? '' : v;
+      render();
+      return;
+    }
+
+    // 空结果里那颗「清掉筛选」：搜索词和档位一起放回全部
+    case 'action-clear': {
+      actionQuery = '';
+      actionFilter = '';
       render();
       return;
     }
@@ -9796,7 +9852,7 @@ topbarEl.addEventListener('mouseout', (e) => {
  * 这份逻辑**必须只有一份**：它里面那几条全是从"输入法把字打成乱码"里换来的，
  * 复制一遍就等于把同一个 bug 复制一遍。两个搜索框共用同一个 input 元素生命周期。
  */
-const SEARCH_ACTS: ReadonlySet<string> = new Set(['recruit-search', 'god-search']);
+const SEARCH_ACTS: ReadonlySet<string> = new Set(['recruit-search', 'god-search', 'action-search']);
 
 const isSearchInput = (el: EventTarget | null): el is HTMLInputElement =>
   el instanceof HTMLInputElement && SEARCH_ACTS.has(el.dataset.act ?? '');
@@ -9833,6 +9889,7 @@ function repaintSearchPanel(act: string): void {
 /** 把输入框里的字写回它对应的那份状态（产兵面板和货架各存一份） */
 function applySearchQuery(act: string, value: string): void {
   if (act === 'god-search') godQuery = value;
+  else if (act === 'action-search') actionQuery = value;
   else recruitQuery = value;
 }
 
