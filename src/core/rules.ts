@@ -1107,7 +1107,9 @@ export function cityAt(s: GameState, x: number, y: number): City | undefined {
 
 /** 某方控制的城市 */
 /** 接管一座废墟要花的重建费：按城市的耐久规模算，越高级的城越贵 */
-export function rebuildCost(city: City): number {
+export function rebuildCost(city: City, free = false): number {
+  // 肉鸽里占领敌城没有回报，再收重建费就是倒贴（见 MatchConfig.freeRebuild）
+  if (free) return 0;
   return Math.round(city.maxHp * 2.5);
 }
 
@@ -5575,7 +5577,7 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   const destTile = tileAt(st, x, y);
   const destCity = destTile?.cityId ? cityById(s, destTile.cityId) : null;
   if (destCity?.ruined) {
-    const price = rebuildCost(destCity);
+    const price = rebuildCost(destCity, s.config.freeRebuild === true);
     if (s.players[unit.owner].gold < price) {
       return { ok: false, reason: `接管这座废墟要 ${price} 金重建，金币不够` };
     }
@@ -5626,7 +5628,7 @@ function doMove(s: GameState, unitId: string, x: number, y: number): ActionResul
   }
 
   if (destCity?.ruined) {
-    const price = rebuildCost(destCity);
+    const price = rebuildCost(destCity, s.config.freeRebuild === true);
     const prevOwner = destCity.owner;
     s.players[unit.owner].gold -= price;
     destCity.owner = unit.owner;

@@ -185,7 +185,7 @@ export function dragoonNextAction(full: GameState, budget: AiBudget): Action | n
    * 于是谁也赢不了。人会走进去，脚本不会。见文件头的 ⑥。
    */
   const ruinedFoes = s.cities.filter((c) => c.owner !== me && c.ruined);
-  const cheapestRebuild = ruinedFoes.length > 0 ? Math.min(...ruinedFoes.map(rebuildCost)) : 0;
+  const cheapestRebuild = ruinedFoes.length > 0 ? Math.min(...ruinedFoes.map((c) => rebuildCost(c, s.config.freeRebuild === true))) : 0;
   const mustSaveForRebuild = ruinedFoes.length > 0 && gold < cheapestRebuild;
 
   // ① 攒够就买：只买龙骑兵，别的一概不买（要留重建费的时候先忍一回合）

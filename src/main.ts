@@ -6319,6 +6319,17 @@ function startRogueStage(): void {
       recruitOnly: buildable,
       // 整备关加固过城墙 → 城更大（兵额 4 → 9）
       citySize: citySizeFor(rogue.run.wallProgress),
+      /*
+       * **Boss 关：Boss 只守不出，占它的城不收重建费**（2026-11-20）。
+       *
+       * 前一条：Boss 有城就会一回合一个地补兵，玩家打掉一个又出来一个，
+       * 这关永远清不完。禁的是"生产"，不是"行动"——它照样会打你。
+       * 后一条：肉鸽里占领敌城没有任何回报（这一关打完就结束），
+       * 还按普通对局收"城血 × 2.5"的重建费，等于赢了倒贴。
+       */
+      ...(stageAt(rogue.run.node).meta.slot === 3
+        ? { noProduceSeats: ['B'], freeRebuild: true }
+        : {}),
     },
     randomSeed(),
     units,

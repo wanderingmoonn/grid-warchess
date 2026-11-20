@@ -7,6 +7,7 @@
  */
 
 import { test, assert } from '../support.ts';
+import { rebuildCost } from '../../../src/core/rules.ts';
 import {
   RUN_KEY,
   canRestart,
@@ -479,6 +480,25 @@ export function run() {
 
     // 完全没卡没兵：给原版
     assert.deepEqual(buildableTypes({ cards: {}, roster: [{ type: 'militia' }] }), ['militia']);
+  });
+
+  test('肉鸽：Boss 关禁生产且占领免费', () => {
+    const st = SLICE_STAGES[2]!; // 第 1 幕 Boss（带城）
+    const r = validateLevel(st.level);
+    assert.ok(r.ok);
+    const s = createMatch(
+      { ...DEFAULT_CONFIG, level: r.level, noProduceSeats: ['B'], freeRebuild: true } as never,
+      55,
+    );
+    // Boss 什么都不能造
+    assert.equal(canUseType(s, 'B', 'militia'), false, 'Boss 不该能造兵');
+    assert.equal(canUseType(s, 'B', 'archer'), false);
+    // 玩家不受影响
+    assert.equal(canUseType(s, 'A', 'militia'), true);
+    // 占城不收重建费
+    const ruin = { id: 'x', x: 1, y: 1, size: 2, hp: 0, maxHp: 30, armor: 4, era: 1, owner: 'B' as const, ruined: true };
+    assert.equal(rebuildCost(ruin, true), 0, '肉鸽占城应当免费');
+    assert.ok(rebuildCost(ruin, false) > 0, '普通对局照旧收费');
   });
 
   test('肉鸽：城血跨关保留，修城下一关补满', () => {
