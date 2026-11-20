@@ -99,6 +99,7 @@ import { SKILL_AI_HINTS } from './skill-hooks.ts';
 import {
   COMMIT_BUILD_BONUS,
   DEFAULT_GOAL_BUILD_SCORE,
+  DEFAULT_GOAL_UNIT_SCORE,
   goalStepsInPlay,
   registerCoreGoal,
   resolveCommit,
@@ -3001,6 +3002,24 @@ function goalBuildScore(
 }
 
 /**
+ * 买这个兵，产业链给多少分。
+ *
+ * 和 `goalBuildScore` 同一个形状，只是管的是兵种：目标说"为了这条链，
+ * 这个兵值得优先买"，采购那边把它加到自己的分上，剩下照旧参与比较。
+ * **没有插队**——加了分也可能输给更该买的东西。
+ */
+function goalUnitBonus(c: AiGoalCtx, def: UnitTypeDef): number {
+  let best = 0;
+  for (const { step, committed } of goalStepsInPlay(c)) {
+    if (!step.claimsUnit?.(def)) continue;
+    const v = step.unitScore ?? DEFAULT_GOAL_UNIT_SCORE;
+    const scored = committed ? v + COMMIT_BUILD_BONUS : v;
+    if (scored > best) best = scored;
+  }
+  return best;
+}
+
+/**
  * 「海军」：这张图有水、陆路又绕不过去，就攒一支舰队。
  *
  * 分数与判据**逐字照搬**自 `rawBuildScore` 里原来那段（2026-11-20 迁移），
@@ -3121,6 +3140,32 @@ const ARMOR_DOCK_GOAL: AiGoal = {
   ],
 };
 
+
+/**
+ * 素体：这条链真正花钱、也真正打仗的一环。
+ *
+ * 原来是断的——电站盖了、坞盖了，**素体一台都不买**，于是整条链没有任何产出。
+ * 原因很实在：素体面板 atk 只有 12~34（那只是撞击），按常规估值永远排不过
+ * 同代步兵；而它的价值在"装上一门炮之后"，那件事采购评分看不见。
+ *
+ * 这里不做定价，只表达一句话："这条链需要它"。加 30 分是采购基准（50~70）
+ * 的半档——够把素体从"排第五"抬到"排第一"，不够让更该买的东西翻盘。
+ */
+const ARMOR_FRAME_GOAL: AiGoal = {
+  id: 'armor-frame',
+  value: (c) => (c.era >= 7 ? 1 : 0),
+  steps: [
+    {
+      id: 'frames',
+      // 两台起：一台装不了"多兵种配合"，两台才谈得上编成
+      done: (c) => c.count((d) => d.armorFrame === true) >= 2,
+      claimsUnit: (d) => d.armorFrame === true,
+      unitScore: 30,
+    },
+  ],
+};
+
+registerCoreGoal(ARMOR_FRAME_GOAL);
 registerCoreGoal(ARMOR_POWER_GOAL);
 registerCoreGoal(ARMOR_DOCK_GOAL);
 
@@ -5107,6 +5152,11 @@ function recruitCandidate(
   const me = s.current;
   const gold = s.players[me].gold;
   /*
+   * 产业链目标的读数：整次采购算一遍，别跟着每个兵种重算
+   * （`goalStepsInPlay` 会问每个目标的价值，海军那条还要查水域）。
+   */
+  const goalCtx = goalCtxOf(s, me, eraNowOf(s), plan.urgent, s.aiCommit?.[me] ?? null);
+  /*
    * 追踪设施放在过滤器**之前**：这些"候选池级"的拒绝（时代不够、英雄已有一个、
    * 没出兵格）以前根本没进统计，于是"某个兵没人造"永远查不到原因——
    * 汇总里只会看到"池为空"或者一个都不 deny。
@@ -5588,6 +5638,15 @@ function recruitCandidate(
 
     // 配合：国王 + 精英骑兵（见 royalComboBonus）
     if (d.category === 'combat') score += royalComboBonus(s, me, d, myUnits, src);
+
+    /*
+     * 产业链目标认领的兵种：为了这条链，这个兵值得优先买。
+     *
+     * 装甲素体是第一个用它的：素体面板 atk 只有 12~34（那只是撞击），
+     * 按常规估值永远排在同代步兵后面——而它整条链的价值在"装上炮之后"。
+     * 目标说一句"我需要它"，比在采购里再写一条特判干净。
+     */
+    score += goalUnitBonus(goalCtx, d);
 
     if (traits.favorites.includes(d.id)) score += 9;
     // 高级的随机幅度更小：选择更"有主意"，不会因为噪声去造一个明显不合适的兵

@@ -96,6 +96,20 @@ export interface AiGoalStep {
     def: UnitTypeDef,
   ) => number | null;
   /**
+   * 这一段管的是哪些**兵种**（采购时加分）。
+   *
+   * 和 `claimsBuild` 对称：产业链不只需要房子，"为了这条链买这个兵"同样常见——
+   * 装甲要素体、修真要修士、海军要船。没有这一项，目标就只能管"建什么"，
+   * 而链上真正花钱的那一环（买兵）永远排不上。
+   */
+  claimsUnit?: (def: UnitTypeDef) => boolean;
+  /**
+   * 买这个兵给多少分（只对 `claimsUnit` 认领的兵种生效）。
+   *
+   * 不写就用 `DEFAULT_GOAL_UNIT_SCORE`。承诺中的那一段额外 +`COMMIT_BUILD_BONUS`。
+   */
+  unitScore?: number;
+  /**
    * 不属于建造的推进手段（研发法术、研读、升级建筑……）。
    *
    * 返回的动作会和别的候选一起比分数——**没有插队，也没有后门**。
@@ -113,6 +127,14 @@ export interface AiGoal {
 
 /** 目标没写 `buildScore` 时给的分：够高到能压过一次「挪一格」（四五十） */
 export const DEFAULT_GOAL_BUILD_SCORE = 70;
+
+/**
+ * 目标没写 `unitScore` 时给的分。
+ *
+ * 采购的基准是五十分上下、好兵六七十，所以 30 的意思是"为了这条链，
+ * 这一档兵值得比同代常规兵优先"——但又不足以让一个明显不合适的兵翻盘。
+ */
+export const DEFAULT_GOAL_UNIT_SCORE = 30;
 
 /**
  * 核心自己的目标（海军、装甲……）。
