@@ -268,6 +268,19 @@ check('按一档筛：只剩这一档，chip 变高亮', () => {
   assert.ok(active, '选中的那一档没有高亮');
 });
 
+check('按不了的理由要短（长句会把法术说明挤成竖排）', () => {
+  /*
+   * 实机反馈过的样子：右边那格写着"没有藏经阁：一门法术都研发不了（先盖一座
+   * 贴着宗门的藏经阁）"，nowrap 一撑，左边的说明被压成五行。所以这里守一条
+   * 上限——理由只回答"为什么按不了"，怎么办面板上别处写着。
+   */
+  const notes = [...sectHost.querySelectorAll('[data-act="unit-action"] .price')].map(
+    (n) => n.textContent ?? '',
+  );
+  const worst = notes.sort((a, b) => b.length - a.length)[0] ?? '';
+  assert.ok(worst.length <= 12, `最长的一条理由有 ${worst.length} 个字：「${worst}」`);
+});
+
 check('搜不到时给一颗「清掉筛选」，而不是只剩一句空话', () => {
   const h = mountDefault(cult, { selectedUnit: sect, actionQuery: '绝不可能存在的法术名' });
   assert.equal(h.querySelectorAll('[data-act="unit-action"]').length, 0);

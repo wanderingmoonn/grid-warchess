@@ -620,14 +620,20 @@ export function researchProblem(s: GameState, owner: PlayerId, spell: SpellDef):
   const cap = researchCapOf(s, owner);
   const used = researchedOf(s, owner).length;
   if (used >= cap) {
-    return cap <= 0
-      ? '没有藏经阁：一门法术都研发不了（先盖一座贴着宗门的藏经阁）'
-      : `研发额度满了（${used} / ${cap}）：多盖一座藏经阁，或者遗弃一门旧法术`;
+    /*
+     * 理由要短（2026-11-20 实机反馈）。
+     *
+     * 这两句原来是"没有藏经阁：一门法术都研发不了（先盖一座贴着宗门的藏经阁）"
+     * 这种一整句——它印在按钮右边那一格，长到能把左边的法术说明挤成竖排。
+     * 怎么办其实面板上写得更清楚（「本方研发 0 / 0（藏经阁 0 × 2）」），
+     * 这里只需要回答"为什么按不了"。
+     */
+    return cap <= 0 ? '缺少藏经阁' : `额度已满 ${used}/${cap}`;
   }
   const cost = researchCostOf(spell);
   const stones = resOf(s.players[owner], SPIRIT_STONE);
   if (stones < cost) {
-    return `灵石不足（要 ${cost}，现在 ${stones}）`;
+    return `灵石不足 ${stones}/${cost}`;
   }
   return null;
 }
@@ -653,7 +659,7 @@ export function spellLearnProblem(s: GameState, u: Unit, spell: SpellDef): strin
     return `已经会「${spell.skill.name}」了`;
   }
   if (!isResearched(s, u.owner, spell.skill.id)) {
-    return `本方还没研发「${spell.skill.name}」——先在宗门大殿里研发它`;
+    return '本方还没研发';
   }
   /*
    * 大道三千：参过这一门的人，学法术时**不受流派限制**。
@@ -669,17 +675,15 @@ export function spellLearnProblem(s: GameState, u: Unit, spell: SpellDef): strin
   // 放在藏经阁之前——"你境界不够"是比"你没站对地方"更根本的拒绝理由。
   const minRank = spell.minRank ?? 0;
   if (getRank(u) < minRank) {
-    return `境界不足：这门法术要 ${minRank} 期以上（你 ${getRank(u)} 期）`;
+    return `境界不足（要 ${minRank} 期）`;
   }
   if (!libraryNextTo(s, u)) {
-    return `要站在藏经阁旁边才能读（宗门没了，藏书楼也废了）`;
+    return '缺少藏经阁';
   }
   const cap = spellSlotsOf(u);
   const known = knownSpells(u).length;
   if (known >= cap) {
-    return cap <= 0
-      ? `境界不够：0～1 期没有法术位（至少 2 期）`
-      : `法术位满了（${known} / ${cap}）：境界再高一点，或者去静心阁忘掉一门`;
+    return cap <= 0 ? '境界太低（2 期才有法术位）' : `法术位已满（${known}/${cap}）`;
   }
   return null;
 }

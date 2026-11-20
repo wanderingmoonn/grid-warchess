@@ -3909,6 +3909,8 @@ html[data-terrain='on'] .tile.t-mountain {
 
 .recruit-btn .meta {
   flex: 1;
+  /* 没有它，长条目的子项会按"内容宽度"撑开，挤旁边的格——见下面 .price 那段 */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -3936,6 +3938,28 @@ html[data-terrain='on'] .tile.t-mountain {
    */
   flex: 0 0 auto;
   white-space: nowrap;
+  /*
+   * 但"永远一行"还有下半句：**得有上限**（2026-11-20）。
+   *
+   * 宗门大殿那几十门法术，按不了的理由（"没有藏经阁：一门法术都研发不了……"）
+   * 比法术名字还长，nowrap 一撑，左边的说明被压成五行竖排——玩家读不出这是
+   * 哪门法术。所以这一格封顶，超了打点，全文放 `title` 里。
+   * 文案侧也同步改短了（见 spells.ts 的 researchProblem），这里是第二道保险。
+   */
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+/*
+ * 扩展声明的操作按钮（研发 / 研读 / 遗弃 / 服用……）。
+ *
+ * 内容和技能行一样是"标题 + 一到两行说明"，所以让图标和标记**贴着顶**排：
+ * 说明换成三行时，居中的价格会漂到中间，读起来像是另一行的东西。
+ */
+.action-btn {
+  align-items: flex-start;
 }
 
 /*
