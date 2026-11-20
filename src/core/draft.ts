@@ -702,10 +702,16 @@ export function canUseType(state: GameState, side: PlayerId, typeId: string): bo
    */
   if (state.config.level?.banUnits?.includes(typeId)) return false;
   /*
-   * 禁造席位（2026-11-20）：肉鸽 Boss 靠这条"只守不出"。
-   * 挂在这个共同出口上，产线面板、军营、AI 采购、建造单位会一起生效。
+   * 禁造经济单位的席位（2026-11-20）：肉鸽 Boss 靠这条，不靠"什么都造不了"。
+   *
+   * 上一版把这个席位**所有**兵种都禁了——那是理解错需求：Boss 该出兵打人，
+   * 只是不该靠经济滚雪球（城里无限长农民 = 永远打不完）。
+   * 所以这里只挡 `category === 'economy'` 这一档。
    */
-  if (state.config.noProduceSeats?.includes(side)) return false;
+  if (state.config.noEconomySeats?.includes(side)) {
+    const def = state.unitTypes[typeId];
+    if (!def || def.category === 'economy') return false;
+  }
   /*
    * 肉鸽：只允许产"手上的兵"（花名册 ∪ 抽到的卡）。同样放在这个共同出口上，
    * 产线面板、军营、AI 采购、建造单位全都自动同一个口径。

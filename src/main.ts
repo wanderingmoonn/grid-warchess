@@ -6328,7 +6328,7 @@ function startRogueStage(): void {
        * 还按普通对局收"城血 × 2.5"的重建费，等于赢了倒贴。
        */
       ...(stageAt(rogue.run.node).meta.slot === 3
-        ? { noProduceSeats: ['B'], freeRebuild: true }
+        ? { noEconomySeats: ['B'], freeRebuild: true }
         : {}),
     },
     randomSeed(),
