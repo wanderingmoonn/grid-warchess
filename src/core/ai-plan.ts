@@ -59,6 +59,8 @@ export interface PlanCtx {
   enemyAtGate: boolean;
   /** 我方身价明显不如对面（< 0.75） */
   weaker: boolean;
+  /** 本回合的主攻城市（排序层可能改它——绕路就是换这一项） */
+  focusCityId: string | null;
   /** 主力走到最近敌城要几回合 */
   marchTurns: number;
   /** 投影比：到 T 回合后我方战力 ÷ 对面战力（对面按**可见信息**估） */
@@ -129,6 +131,21 @@ export interface PlanWeights {
   holdFire: boolean;
 }
 
+/**
+ * 计划对战术层下的"指令"：比权重更硬，一回合只认一条。
+ *
+ * 为什么单独一组：权重表达不了"换一座城打"和"全军压上去、别管路过的敌人"——
+ * 那两件事不是乘数，是**改目标**。集中突破和绕路都要它。
+ */
+export interface PlanOrders {
+  /** 全军压向主攻城市，不追路过的敌军 */
+  commit: boolean;
+  /** 主攻城市（覆盖 mood 算出来的那一座） */
+  focusCityId: string | null;
+  /** 集火目标（覆盖 pickFocusTarget 算出来的那一个）：可以是防御建筑或工人 */
+  focusUnitId: string | null;
+}
+
 /** 行动型计划吐出的一个动作（可带分） */
 export interface PlanAction {
   action: Action;
@@ -156,6 +173,13 @@ export interface AiPlan {
   next?(c: PlanCtx): PlanAction[];
   /** 权重型：这一步的乘数，只写要动的那几项。行动型不写 */
   weights?(c: PlanCtx): Partial<PlanWeights>;
+  /**
+   * 给战术层下的指令（改主攻城市、改是否全军压上、指定集火目标）。
+   *
+   * 权重表达不了"换一座城打"——那不是乘数，是**改目标**。
+   * 多条计划都给时，取价值最高的那一条（和 `focus` 同一套规则）。
+   */
+  orders?(c: PlanCtx): Partial<PlanOrders>;
   /**
    * 想让战术层去哪儿（渡口、集结点）。
    *
@@ -222,8 +246,22 @@ export const PLAN_TUNING = {
   /** 攒到多少解除：至少这么多人，且是对面的多少倍 */
   massMinArmy: 6,
   massRatio: 1.5,
-  /** 屯到第几回合放开冲一次（周期 30：6~25 屯，26~29 冲） */
-  massGiveUpTurns: 26,
+  /**
+   * 屯兵到第几回合交棒给"突破"（周期 30：0~5 正常、6~11 屯、12~29 冲）。
+   *
+   * **必须和 `breakStallTurns` 对齐**：两个计划同时当值时，一个要"别动"、
+   * 一个要"全军压上"，会互相抵消（第一版 6~26 都屯、8 起又突破，实测
+   * Q2/Q3 平局率反而上升）。
+   */
+  massGiveUpTurns: 12,
+  /**
+   * 僵持多少回合开始"换打法"（集中突破 / 绕路）。
+   *
+   * 和屯兵**错开而不重叠**（屯兵 6~11，突破 12 起）：两者同时当值会互相抵消。
+   */
+  breakStallTurns: 12,
+  /** 选定突破目标后粘多少回合再重选（换得太勤，部队会在两座城之间来回跑） */
+  breakStickTurns: 24,
   /** 计划日志最多留几条（每席每次换计划记一条） */
   traceCap: 200,
   /**
@@ -352,6 +390,8 @@ export interface PlanResolution {
   net: PlanWeights;
   /** 合成账本，给日志用 */
   ledger: PlanWeightLine[];
+  /** 当值计划下的指令（合并后的）；没有就是空对象 */
+  orders: Partial<PlanOrders>;
   /** 当值计划想让战术层去的那个点（目前只有过河用）；没有就是 null */
   focus: { x: number; y: number } | null;
   /** 上面那个点是哪条计划给的 */
@@ -486,6 +526,30 @@ export function resolvePlans(
    * 现在只有一条会给（过河），多条给了就取价值最高的那条——两条指不同方向
    * 本来就是设计错误，日志里能看见是哪条赢的。
    */
+  /*
+   * 指令：和落点一样，取"价值最高的那条计划"给的。
+   * 两条计划同时改主攻城市是没有意义的（会互相覆盖），日志里能看出是谁赢的。
+   */
+  let orders: Partial<PlanOrders> = {};
+  const orderCandidates = [chosen, ...weightPlans.map((x) => x.plan)].filter(Boolean) as AiPlan[];
+  orderCandidates.sort(
+    (a, b) =>
+      (live.find((x) => x.plan.id === b.id)?.value ?? 0) -
+      (live.find((x) => x.plan.id === a.id)?.value ?? 0),
+  );
+  for (const plan of orderCandidates) {
+    if (!plan.orders) continue;
+    try {
+      const o = plan.orders(ctxFor(plan));
+      if (o && Object.keys(o).length > 0) {
+        orders = o;
+        break;
+      }
+    } catch {
+      // 写坏的计划不该打死整局
+    }
+  }
+
   let focus: { x: number; y: number } | null = null;
   let focusPlanId: string | null = null;
   const focusCandidates = [chosen, ...weightPlans.map((x) => x.plan)].filter(Boolean) as AiPlan[];
@@ -567,6 +631,7 @@ export function resolvePlans(
     weights: weightPlans.map((x) => x.plan),
     net: composed.net,
     ledger: composed.ledger,
+    orders,
     focus,
     focusPlanId,
     memo,
@@ -634,6 +699,7 @@ export function planCtxOf(
     threat: 0,
     enemyAtGate: false,
     weaker: false,
+    focusCityId: null,
     marchTurns: 0,
     projRatio: 1,
     intelKnown: false,

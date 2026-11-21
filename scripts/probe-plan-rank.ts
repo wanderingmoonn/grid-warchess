@@ -51,6 +51,7 @@ function ctxOf(turn: number): PlanCtx {
     threat: 0,
     enemyAtGate: false,
     weaker: false,
+    focusCityId: null,
     marchTurns: 0,
     projRatio: 1,
     intelKnown: false,

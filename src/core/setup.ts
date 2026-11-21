@@ -766,6 +766,7 @@ export function createMatch(
       ...(config.aiPosture === true ? { aiPosture: true } : {}),
       ...(config.aiDecisive === false ? { aiDecisive: false } : {}),
       ...(config.aiMass === false ? { aiMass: false } : {}),
+      ...(config.aiBreakthrough === false ? { aiBreakthrough: false } : {}),
       ...(typeof config.aiQualityScale === 'number' && config.aiQualityScale > 0
         ? { aiQualityScale: config.aiQualityScale }
         : {}),

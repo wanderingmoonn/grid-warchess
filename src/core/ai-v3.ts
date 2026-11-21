@@ -1621,8 +1621,26 @@ function crowdField(s: GameState, owner: PlayerId): Uint8Array {
  * 只在**看得见的**敌人里挑（`s` 是迷雾视图），不偷看。
  * 一个够得着的都没有就返回 null，攻击评分退回原来的"各自挑最优"。
  */
-function pickFocusTarget(s: GameState, me: PlayerId): string | null {
-  const foes = enemyUnitsOf(s, me).filter((u) => utype(s, u.type).category === 'combat');
+function pickFocusTarget(s: GameState, me: PlayerId, focusCityId: string | null = null): string | null {
+  /*
+   * 集火目标不只是"战斗单位"。
+   *
+   * 2026-11-21 用户点出来的：僵持之所以僵，通常是因为**防御建筑或远程单位
+   * 看住了那个关口**。只盯着战斗单位，就会一边挨炮一边和步兵对砍。
+   * 所以把两类也纳入候选：
+   *   · 防御建筑（有攻击、射程 ≥2）：塔/要塞/炮台/地堡，它们才是"看住通道"的东西；
+   *   · 会建造的工人：他能补塔、能修桥，是守方把僵持维持下去的手。
+   * 但权重按"能打掉多少价值"算：建筑不动、好集火，价值打 0.6 折；
+   * 工人本身不值钱，只在贴城时才算数（见下面的贴城加成）。
+   */
+  const isGuard = (u: { type: string }): boolean => {
+    const d = utype(s, u.type);
+    if (d.category === 'combat') return true;
+    if (d.category === 'building' && (d.atk ?? 0) > 0 && (d.range ?? 0) >= 2) return true;
+    if (d.category === 'economy' && (d.builds ?? []).length > 0) return true;
+    return false;
+  };
+  const foes = enemyUnitsOf(s, me).filter(isGuard);
   if (foes.length === 0) return null;
   const mine = unitsOf(s, me).filter(
     (u) => utype(s, u.type).category === 'combat' && !u.acted,
@@ -1639,7 +1657,11 @@ function pickFocusTarget(s: GameState, me: PlayerId): string | null {
       if (distance(u, f) <= Math.max(1, ud.move) + (ud.range ?? 1) + 1) reach += 1;
     }
     if (reach === 0) continue;
-    const worth = (def.cost ?? 50) * (1 + Math.max(0, 1 - f.hp / Math.max(1, def.maxHp)) * 1.5);
+    // 建筑不动、好集火；工人本身不值钱，只有"贴着主攻城"时才值得先拔掉
+    const discount = def.category === 'building' ? 0.6 : def.category === 'economy' ? 0.35 : 1;
+    let worth = (def.cost ?? 50) * discount * (1 + Math.max(0, 1 - f.hp / Math.max(1, def.maxHp)) * 1.5);
+    const city = focusCityId ? s.cities.find((c) => c.id === focusCityId) : null;
+    if (city && distToCity(f, city) <= 3) worth *= 1.5;
     const score = (worth * reach) / Math.max(1, f.hp);
     if (!best || score > best.score) best = { id: f.id, score };
   }
@@ -1813,8 +1835,14 @@ interface Fields {
  * 这是"该不该造桥"的总开关：能走过去，桥就只是捷径；
  * 走不过去，桥就是唯一的通路，全军的行动目标都得换。
  */
-function canReachEnemyByLand(s: GameState, owner: PlayerId): boolean {
-  const foe = s.cities.filter((c) => c.owner !== owner);
+function canReachEnemyByLand(s: GameState, owner: PlayerId, onlyCityId?: string): boolean {
+  /*
+   * `onlyCityId`：只问"能不能走到**这一座**城"。
+   *
+   * 绕路要用它：换到另一座城之后，那条路可能要过河。按"任意敌城可达"判，
+   * 只要最近那座能走到就不架桥，于是换了目标也过不去。
+   */
+  const foe = s.cities.filter((c) => c.owner !== owner && (!onlyCityId || c.id === onlyCityId));
   if (foe.length === 0) return true;
 
   /*
@@ -2232,6 +2260,91 @@ function stallOf(c: PlanCtx): { turns: number; median: number } {
   return { turns, median };
 }
 
+/* ---------------- 集中突破 / 绕路（2026-11-21） ---------------- */
+
+/**
+ * 哪座敌城"最软"：按**守军价值**排序（守军包括战斗单位、防御建筑、会建造的工人）。
+ *
+ * 这是"绕路"的判据：僵持点打不动，就换一座守军更少的城。
+ * 同时也是"集中突破"的判据：如果最软的就是当前那座，那就把全军压上去打穿它。
+ * 两条路共用同一个选择——**永远打最软的那座**，是绕路还是突破由结果决定。
+ *
+ * 迷雾下的守军看不见，会估成 0 → 挑它。这是必然的（现在没有侦察），
+ * 但方向不算错：看不见的地方通常就是没被重点守的地方。
+ */
+function softestCityOf(view: GameState, me: PlayerId): { id: string; guard: number } | null {
+  const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
+  if (foes.length === 0) return null;
+  const guards = enemyUnitsOf(view, me);
+  let best: { id: string; guard: number } | null = null;
+  for (const city of foes) {
+    let guard = 0;
+    for (const u of guards) {
+      if (distToCity(u, city) > 4) continue;
+      const d = utype(view, u.type);
+      const w = d.category === 'building' ? 0.6 : d.category === 'economy' ? 0.3 : 1;
+      guard += (d.cost ?? 50) * w;
+    }
+    if (!best || guard < best.guard) best = { id: city.id, guard };
+  }
+  return best;
+}
+
+/**
+ * 集中突破 / 绕路：僵持久了自己换打法，而不是继续往同一个点磨。
+ *
+ * 用户 2026-11-21 的原话：僵持通常是被**防御建筑或远程单位**看住了，
+ * 所以集中突破就是集中摧毁这些（工人也算目标）；要绕就绕远一点、换另一座城，
+ * 那条路可能要过河——**过河计划自然会跟着立起来**（因为 `crossing` 现在按
+ * 主攻城市判可达，见它的 value）。
+ *
+ * 它只下三条指令，不产生动作：
+ *   · `commit`：全军压向主攻城市，不追路过的敌军（引擎里本来就有这个开关）；
+ *   · `focusCityId`：换成"最软的那座城"——**这一项就是绕路**；
+ *   · `focusUnitId`：集火那座城附近的守军/防御建筑（见 pickFocusTarget）。
+ */
+const BREAKTHROUGH_PLAN: RankedPlan = {
+  id: 'breakthrough',
+  kind: 'weights',
+  strength: PLAN_TUNING.strength.breakthrough ?? 1,
+  value: (c) => {
+    if (c.view.config.aiBreakthrough === false) return 0;
+    const st = stallOf(c);
+    if (st.turns < PLAN_TUNING.breakStallTurns) return 0;
+    if (c.army < 5) return 0;
+    return 1 + st.turns / 12;
+  },
+  done: () => false,
+  orders: (c) => {
+    /*
+     * 目标要**粘住**：选定了就打到底，别每回合重算。
+     *
+     * 第一版每回合都挑"最软的城"，实测换手 17 次——部队在两座城之间来回跑，
+     * 一座也没打下来（Q3 seed 32）。粘 24 回合之后再重选：那时如果还是打不动，
+     * 说明真的该换（这就是"绕路"的触发点）。
+     */
+    const prev = c.keep.breakCity as string | undefined;
+    const prevAt = Number(c.keep.breakAt ?? 0);
+    const prevAlive =
+      prev !== undefined &&
+      c.view.cities.some((x) => x.id === prev && x.owner !== c.me && !x.ruined) &&
+      c.view.turn - prevAt < PLAN_TUNING.breakStickTurns;
+    const soft = softestCityOf(c.view, c.me);
+    if (!soft) return {};
+    const target = prevAlive ? prev! : soft.id;
+    if (!prevAlive) {
+      c.keep.breakCity = target;
+      c.keep.breakAt = c.view.turn;
+    }
+    return {
+      // 人不够就别"全军压城"：那只是让全军排队去送
+      commit: c.army >= 8,
+      focusCityId: target,
+      focusUnitId: pickFocusTarget(c.view, c.me, target),
+    };
+  },
+};
+
 /**
  * 屯兵：僵持太久就别再往里添油，把产能攒成一次打击。
  *
@@ -2287,6 +2400,7 @@ const MASS_PLAN: RankedPlan = {
  * 走排序层的权重，这样它和其他计划一样有立约、价值、日志。
  */
 registerAiPlan(MASS_PLAN);
+registerAiPlan(BREAKTHROUGH_PLAN);
 
 const DEFEND_PLAN: RankedPlan = {
   id: 'defend',
@@ -8024,7 +8138,7 @@ function aiNextActionCoreInner(
     // 弃城期不派人守那座城（传进去，pickGuardCity 会跳过它）
     guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
     // 集火目标：整回合算一次，所有单位的攻击候选都看它
-    focusTargetId: pickFocusTarget(view, me),
+    focusTargetId: pickFocusTarget(view, me, mood.focusCityId),
     // 海军需求 / 局势时代：同样整回合算一次，建造评分每个候选格都要读
     sea: seaDemand(view, me),
     era: eraNowOf(view),
@@ -8121,8 +8235,16 @@ function aiNextActionCoreInner(
      * 有情报时只换估计器，不动判决——见 `PlanCtx.intelKnown` 那个口子。
      */
     const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land);
+    /*
+     * 计划层的主攻城市：上一回合 `breakthrough` 定的那一座（存在 keep 里）优先，
+     * 否则用 mood 算的。**必须是上一回合的**——`resolvePlans` 还没跑，
+     * 这一回合的指令要等它算完才知道；一回合的延迟换"过河计划能跟着换目标"。
+     */
+    const plannedCity =
+      ((focusOf(s, me).plan?.keep?.breakCity as string | undefined) ?? mood.focusCityId) || null;
     const planCtx = planCtxOf(view, me, {
-      canReach: !fields.needBridge,
+      focusCityId: plannedCity,
+      canReach: canReachEnemyByLand(view, me, plannedCity ?? undefined),
       threat: fields.threat,
       weaker: myValNow < foeValNow * 0.75,
       enemyAtGate: foeUnits.some((u) => citiesOf(view, me).some((c) => distToCity(u, c) <= 3)),
@@ -8134,6 +8256,18 @@ function aiNextActionCoreInner(
      * 落点：过河计划钉住的渡口。走位、建房评分、工程队那道闸都认它，
      * **不要各读各的状态**——两处各挑一个点，就会出现"人往东走、桥往西修"。
      */
+    /*
+     * 指令：集中突破 / 绕路。三条都是"改目标"，不是乘数。
+     *
+     * 改了主攻城市之后要**重算集火目标**——不重算的话，
+     * 部队会朝着新城市走，火力还锁在旧城那边。
+     */
+    if (resolved.orders.focusCityId) {
+      fields.focusCityId = resolved.orders.focusCityId;
+      fields.focusTargetId =
+        resolved.orders.focusUnitId ?? pickFocusTarget(view, me, resolved.orders.focusCityId);
+    }
+    if (resolved.orders.commit) fields.commit = true;
     fields.crossingSite = resolved.focus;
     fields.weights = resolved.net;
     fields.pullHome = resolved.net.pullHome;
