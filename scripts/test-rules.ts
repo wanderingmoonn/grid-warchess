@@ -362,6 +362,7 @@ import {
 import { buildBattleCard } from '../src/core/battle-card.ts';
 import { logEventSays } from '../src/ui/log-fold.ts';
 import { playerView, onlyVisibleCells } from '../src/core/fog.ts';
+import { canSeeTile } from '../src/core/rules.ts';
 import { SKILL_TARGET_CELLS } from '../src/core/skill-hooks.ts';
 import { addMark, marksAt, marksOf, registerMarkKind } from '../src/core/marks.ts';
 import { exportMatch, importMatch } from '../src/storage/save.ts';
@@ -5279,6 +5280,54 @@ test('playerView 裁掉视野外的敌方单位', () => {
   const view = playerView(s, 'A');
   assert.equal(view.state.units.filter((u) => u.owner === 'B').length, 0);
   assert.equal(view.state.units.filter((u) => u.owner === 'A').length, 7);
+});
+
+test('关掉迷雾不等于 AI/攻击能全知：视野和显示是两件事', () => {
+  const s = fresh();
+  // 把两边拉到对角，保证互相看不见
+  let ai = 0;
+  let bi = 0;
+  for (const u of s.units) {
+    if (u.owner === 'A') {
+      u.x = 1 + (ai % 3);
+      u.y = s.h - 3 + Math.floor(ai / 3);
+      ai += 1;
+    } else {
+      u.x = s.w - 3 + (bi % 3);
+      u.y = 1 + Math.floor(bi / 3);
+      bi += 1;
+    }
+  }
+  s.fog = false; // "我要看全图"
+  s.config.aiVision = undefined; // 默认：AI 仍受视野限制
+
+  // 显示层能看全图（玩家想看就给他看）
+  assert.equal(playerView(s, 'A').state.units.filter((u) => u.owner === 'B').length > 0, true);
+  // 规则层（clipByVision）仍然裁掉看不见的
+  const clipped = playerView(s, 'A', false, true);
+  assert.equal(clipped.state.units.filter((u) => u.owner === 'B').length, 0, 'AI 仍然看不见视野外');
+
+  // 显式允许 AI 全知时才放开
+  s.config.aiVision = false;
+  const blind = playerView(s, 'A', false, s.config.aiVision !== false);
+  assert.equal(blind.state.units.filter((u) => u.owner === 'B').length > 0, true);
+});
+
+test('看不见的格子不能作为打击目标（关迷雾也一样）', () => {
+  const s = fresh();
+  const a = s.units.find((u) => u.owner === 'A')!;
+  a.x = 1;
+  a.y = s.h - 2;
+  s.fog = false; // "我要看全图"——显示看得到，但打击判据不吃这个字段
+
+  // 远角：视野外
+  assert.equal(canSeeTile(s, 'A', s.w - 1, 0), false, '视野外的格子不该算看得见');
+  // 自己脚下：看得见
+  assert.equal(canSeeTile(s, 'A', a.x, a.y), true);
+
+  // 城市是公开信息：城格永远看得见，攻城不受这条限制
+  const city = s.cities.find((c) => c.owner === 'B')!;
+  assert.equal(canSeeTile(s, 'A', city.x, city.y), true, '城格永远看得见');
 });
 
 test('城市对双方都是公开信息', () => {

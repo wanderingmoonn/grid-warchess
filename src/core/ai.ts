@@ -6054,8 +6054,14 @@ function aiNextActionCoreInner(
    */
 
   const me = s.current;
-  // 关键：只看自己看得见的东西，跟玩家同等信息
-  const view = playerView(s, me).state;
+  /*
+   * 关键：只看自己看得见的东西，跟玩家同等信息。
+   *
+   * `clipByVision` 必须给：否则玩家一按"看全图"（`s.fog = false`），
+   * AI 也跟着全知，能打到视野外的单位。默认恒为真，
+   * 只有 `config.aiVision === false` 的调试局才让它全知。
+   */
+  const view = playerView(s, me, false, s.config.aiVision !== false).state;
 
   /**
    * 指挥官模式：产线和升级都由序列决定，所以调用方给的 maxRecruit / maxUpgrade

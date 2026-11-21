@@ -70,6 +70,11 @@ import {
   citiesOf,
   cityById,
   cityName,
+  canAttack,
+  canMove,
+  isArmed,
+  movePower,
+  underConstruction,
   cityRegenOf,
   cityTiles,
   disbandRefundOf,
@@ -153,6 +158,8 @@ export interface PanelInput {
    * 触屏和鼠标党点这两个按钮。状态放在 main 里，面板只负责显示"现在是哪一档"。
    */
   forceMode?: 'move' | 'attack' | null;
+  combatInspectMode?: boolean;
+  combatTargetCount?: number;
   /**
    * 「操作」说明卡是不是展开着。
    *
@@ -367,8 +374,23 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const html = panelHtml(input);
   // firstChild 一起看：侧栏被清空过（但没走 invalidatePanel）时不能凭缓存跳过
   if (panelHtmlCache.get(el) === html && el.firstChild) return;
+  const folds = new Map(
+    Array.from(el.querySelectorAll<HTMLDetailsElement>('[data-panel-fold]')).map(
+      (fold) => [fold.dataset.panelFold!, fold.open] as const,
+    ),
+  );
   panelHtmlCache.set(el, html);
   el.innerHTML = html;
+  for (const fold of el.querySelectorAll<HTMLDetailsElement>('[data-panel-fold]')) {
+    const open = folds.get(fold.dataset.panelFold!);
+    if (open !== undefined && !fold.hasAttribute('data-force-open')) fold.open = open;
+  }
+}
+
+function panelFold(key: string, title: string, body: string, forceOpen = false, className = '', label = title): string {
+  return `<details class="card-fold panel-fold${className ? ` ${className}` : ''}" data-fold="${key}" data-panel-fold="${key}"${forceOpen ? ' open data-force-open' : ''}>
+    <summary class="card-title fold-head" aria-label="${escapeHtml(label)}">${title}</summary>${body}
+  </details>`;
 }
 
 function panelHtml(input: PanelInput): string {
@@ -518,10 +540,18 @@ function panelHtml(input: PanelInput): string {
 
   return `
     <div class="card card-seats">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div class="battle-turn">
         ${turnBadge}
         <span class="hint">第 ${s.turn} 次行动</span>
       </div>
+      ${!spectator ? `<div class="battle-resources" aria-label="本方资源概览">
+        <div><span>可用金币</span><strong>${s.players[me].gold}</strong></div>
+        <div><span>每回合收入</span><b>${escapeHtml(costLabel(incomeResOf(s, me)))}</b></div>
+        <div><span>控制城市</span><b>${citiesOf(s, me).length}<small> 座</small></b></div>
+      </div>` : ''}
+      ${!spectator ? `<div class="battle-extra-resources">${Object.entries(s.players[me].res ?? {})
+        .filter(([resource, amount]) => resource !== 'gold' && (amount ?? 0) > 0)
+        .map(([resource, amount]) => `<span>${escapeHtml(costLabel({ [resource]: amount }))}</span>`).join('')}</div>` : ''}
       ${
         /*
          * 撤回放在这里，不放在「结束回合」下面。
@@ -540,11 +570,11 @@ function panelHtml(input: PanelInput): string {
                <span class="hint">同一回合内可退，结束回合后就不能了</span>
              </div>`
       }
-      <div style="margin-top:12px">
+      ${panelFold('match', '对局与阵营', `<div class="battle-seats">
         ${seatRows}
       </div>
       <div class="meta-line">${s.fog ? '迷雾开启' : '迷雾关闭'} · 棋盘 ${s.w}×${s.h}</div>
-      <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
+      <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>`, spectator)}
       ${powerLine}
     </div>
 
@@ -636,11 +666,11 @@ function panelHtml(input: PanelInput): string {
              </button>`
       }
       </div>
-      <div class="side-actions"${input.replay ? ' hidden' : ''}>
+      ${input.replay ? '' : panelFold('match-actions', '对局管理', `<div class="side-actions">
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
           ${quit ? '已认输' : '认输'}
         </button>
-      </div>
+      </div>`)}
       <div class="hint" style="text-align:center">
         ${
           input.replay
@@ -1153,13 +1183,18 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const mine = !readOnly && selectedUnit.owner === me;
     // 残兵不给钱，按钮上就得写清楚——"回收 0 金"看着像程序出错
     const refund = disbandRefundOf(s, selectedUnit);
+    const readyToMove = canMove(selectedUnit) && movePower(s, selectedUnit) > 0 && !underConstruction(selectedUnit);
+    const readyToAttack = canAttack(selectedUnit) && isArmed(s, selectedUnit) && !underConstruction(selectedUnit);
     const status: string[] = [];
     if (spectator) {
       status.push('观战中 · 仅查看');
     } else if (mine) {
-      if (!selectedUnit.moved) status.push('可移动');
-      if (!selectedUnit.acted) status.push('可攻击');
-      if (selectedUnit.moved && selectedUnit.acted) status.push('本回合已行动完毕');
+      if (!myTurn) status.push('等待本方回合');
+      else if (underConstruction(selectedUnit)) status.push('施工中 · 无法行动');
+      else {
+        status.push(readyToMove ? '可移动' : selectedUnit.moved ? '移动已用' : '不可移动');
+        status.push(readyToAttack ? `可攻击 · 剩 ${attacksLeftOf(s, selectedUnit)} 次` : isArmed(s, selectedUnit) ? '攻击已用' : '无攻击能力');
+      }
     } else {
       // 别人的单位只给看：兵种一多，临场查对面射程/护甲是刚需，
       // 但这张卡上不该出现任何能按的东西
@@ -1392,9 +1427,15 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
         <div>
           <div class="unit-title">${def.name}</div>
-          <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${status.join(' / ')}</div>
+          <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${CATEGORY_NAME[def.category] ?? '单位'}</div>
         </div>
       </div>
+      <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
+      ${mine && myTurn ? `<p class="unit-next-action">${input.combatInspectMode ? '预览模式：点红框目标，查看结果后确认攻击。' : readyToMove && readyToAttack ? '点蓝色范围移动；悬停红框查看交锋，触屏先预览再确认。' : readyToMove ? '仍可移动：点蓝色范围选择落点。' : readyToAttack ? '仍可攻击：选择红框内的目标。' : '本回合没有可用的移动或攻击。'}</p>` : ''}
+      ${mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
+        aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
+        ${input.combatInspectMode ? '退出攻击预览' : '选择目标 · 预览攻击'}</button>
+        ${readyToAttack && input.combatTargetCount === 0 ? '<p class="hint">射程内暂无可攻击的可见目标。</p>' : ''}` : ''}
       ${
         underCamp
           ? `<button class="btn btn-sm btn-block" data-act="open-camp" data-id="${underCamp.id}" style="margin-top:10px">
@@ -1535,7 +1576,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${notesBlock}
       ${
         mine && myTurn
-          ? `<div class="force-row">
+          ? panelFold(`advanced-${selectedUnit.id}`, '进阶操作 · 强制移动 / 攻击', `<div class="force-row">
                <button class="force-btn${input.forceMode === 'move' ? ' armed' : ''}" data-act="force-move">
                  强制移动 <kbd>Alt</kbd>
                </button>
@@ -1543,19 +1584,14 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                  强制攻击 <kbd>Shift</kbd>
                </button>
              </div>
-             <div class="hint" style="margin-top:6px">
-               同一格压着多个目标时，<b>连点同一格会在它们之间轮换</b>。
-               <br /><br />
-               走不上桥、或者点不到身下那格时，按<b>强制移动</b>：期间点棋盘只有移动指令，再点一次按钮才退出。
-               按住 <kbd>Alt</kbd> 点可达格是同样的效果，只是只生效一次。
-             </div>`
+             <div class="hint">同格目标可连点切换。强制模式会持续生效，再点按钮退出；按住快捷键只执行一次。</div>`, !!input.forceMode)
           : ''
       }
       ${
         canDisband
-          ? `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband" style="margin-top:12px">
+          ? panelFold(`manage-${selectedUnit.id}`, '单位管理', `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband">
                ${refund > 0 ? `拆除（回收 ${refund} 金）` : '拆除（残兵不回收金币）'}
-             </button>`
+             </button>`)
           : ''
       }
     `;
@@ -1780,7 +1816,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id, {
       kind: 'city',
       city,
-    });
+    }, ordering ? '生产队列已满' : !myTurn ? '等待本方回合' : !slotsOk ? '没有可用出兵位置' : '');
   };
 
   const q = (input.recruitQuery ?? '').trim();
@@ -2088,6 +2124,7 @@ function recruitButton(
   site = '',
   /** 从哪儿造：定价要和 doRecruit 同源（宗门里招修士收灵石，城里收金币） */
   source?: ProduceSource,
+  disabledReason = '',
 ): string {
   const price = recruitResCost(s, me, def, source);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
@@ -2100,6 +2137,14 @@ function recruitButton(
   // 用当下的余额把按钮禁掉，等于逼玩家先把钱攒够再来排计划。
   const blocked =
     mode === 'order' ? disabled || aliveHere : disabled || aliveHere || !canPay(s.players[me], payCost);
+  const missing = Object.fromEntries(
+    Object.entries(payCost).map(([resource, amount]) => [resource, Math.max(0, (amount ?? 0) - (
+      resource === 'gold' ? s.players[me].gold : s.players[me].res?.[resource] ?? 0
+    ))]).filter(([, amount]) => Number(amount) > 0),
+  );
+  const reason = !blocked ? '' : aliveHere ? '场上已有该英雄'
+    : disabled ? disabledReason || extra.replace(/^ · /, '') || '当前无法生产'
+    : `还缺 ${costLabel(missing)}`;
   const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
   // 血量必须出现在购买清单里：攻甲移射都是"打得怎么样"，血是"挨得怎么样"，
   // 一个新兵站上前线能顶几刀，玩家在按下生产之前就该知道。
@@ -2108,8 +2153,6 @@ function recruitButton(
   const detail = `${unitStatLine(def)}${tag}`;
   const act = mode === 'order' ? 'order-add' : 'recruit';
   const siteAttr = mode === 'order' && site ? ` data-site="${site}"` : '';
-  const tail =
-    mode === 'order' ? `<span class="order-tag">＋队列</span>` : '';
   /*
    * 悬停详情卡：造出这个工兵**之前**就能看到它能盖什么，不必先花钱造出来、
    * 再点开属性卡，或者去翻规则书。数据写在隐藏节点里，由 main.ts 那套通用
@@ -2121,15 +2164,19 @@ function recruitButton(
       <span class="tip-row">${escapeHtml(detail)}</span>
       ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${escapeHtml(builds.names.join('、'))}（共 ${builds.names.length} 种）</span>` : ''}
     </span>`;
-  return `<span class="recruit-wrap" data-hover-tip>${tip}
+  const role = `${def.category === 'combat' ? def.range > 1 ? '远程作战' : '近战作战' : CATEGORY_NAME[def.category] ?? '单位'}${def.domain === 'water' ? ' · 水上' : airLayer(def) ? ' · 空中' : ''}${mode === 'order' ? ' · ＋队列' : ''}`;
+  return `<div class="recruit-wrap" data-hover-tip>${tip}
     <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
     <span class="meta">
       <b>${def.name}${sourceTag(def)}</b>
-      <span>${detail}${extra}</span>
+      <span>${escapeHtml(role)}${extra}</span>
+      ${reason ? `<span class="recruit-reason">${escapeHtml(reason)}</span>` : ''}
     </span>
-    <span class="price">${costLabel(payCost)}</span>${tail}
-  </button></span>`;
+    <span class="price">${costLabel(payCost)}</span>
+  </button>
+  ${panelFold(`recruit-${site}-${def.id}`, '详情', `<div class="recruit-spec">${escapeHtml(detail)}</div>${builds.names.length > 0 ? `<div class="hint">可建造：${escapeHtml(builds.names.join('、'))}</div>` : ''}`, false, 'recruit-fold', `${def.name}：属性与能力`)}
+  </div>`;
 }
 
 const DIRS_4: ReadonlyArray<readonly [number, number]> = [
@@ -2577,6 +2624,7 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
       <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
+      <button class="btn btn-sm" data-act="toggle-show-all" data-ref="show-all">看全图</button>
       <!--
         低频入口不再是顶栏按钮（2026-11-11 第二版）。
 

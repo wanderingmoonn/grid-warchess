@@ -51,6 +51,8 @@ export interface SettingsOptions {
   compact?: boolean;
   /** 迷雾开着吗（compact 时设置里要显示状态） */
   fog?: boolean;
+  /** 看全图（纯显示，不影响 AI 与规则） */
+  showAll?: boolean;
   /** 浓雾蔽野：迷雾锁定，开关只做说明 */
   blackout?: boolean;
   /** 联机房间码；null = 本机对局 */
@@ -157,13 +159,23 @@ export function settingsHtml(o: SettingsOptions): string {
             <span class="set-hint">${
               o.blackout
                 ? '这局开了「浓雾蔽野」，迷雾锁定开启，关不掉。'
-                : '关掉等于全图可见。自定义局里想看清楚时用，正常对局别关。'
+                : '这是**规则**开关：关掉之后双方都没有战争迷雾（残局自定义时用）。只想看清地图，用下面那个「看全图」。'
             }</span>
           </div>
           <div class="chip-row">
             <button class="chip${o.fog ? ' active' : ''}" data-act="toggle-fog" ${
               o.blackout ? 'disabled' : ''
             }>${o.fog ? '开' : '关'}</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="set-label">看全图
+            <span class="set-hint">只影响你看到的画面：AI 仍然只看得见它视野内的东西，规则不变。</span>
+          </div>
+          <div class="chip-row">
+            <button class="chip${o.showAll ? ' active' : ''}" data-act="toggle-show-all">${
+              o.showAll ? '开' : '关'
+            }</button>
           </div>
         </div>
         <div class="set-row">

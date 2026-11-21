@@ -26,7 +26,7 @@ import http from 'node:http';
 import path from 'node:path';
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
-const PORT = 9333;
+const PORT = 19000 + process.pid % 10000;
 
 /*
  * 尺寸：默认桌面 1440×900，加 `mobile` 参数换成 iPhone 14 的 390×844。
@@ -36,6 +36,8 @@ const PORT = 9333;
  * 不拍就只能在手机上被用户看见。
  */
 const ARGS = process.argv.slice(2);
+const ROOT_ARG = ARGS.find((arg) => arg.startsWith('root='));
+const OUT_ARG = ARGS.find((arg) => arg.startsWith('out='));
 const MOBILE = ARGS.includes('mobile');
 /* 只拍选卡（BP）一屏：它平时要先在开局面板里勾「选卡模式」才会出现 */
 const DRAFT = ARGS.includes('draft');
@@ -44,8 +46,9 @@ const DRAFT = ARGS.includes('draft');
  * 只会在某个具体宽度上出现——390 能放下不代表 360 能，差 30px 就是横滚。
  */
 const W_ARG = ARGS.find((a) => /^w=\d+$/.test(a));
+const H_ARG = ARGS.find((arg) => /^h=\d+$/.test(arg));
 const W = W_ARG ? Number(W_ARG.slice(2)) : MOBILE ? 390 : 1440;
-const H = MOBILE || W_ARG ? 844 : 900;
+const H = H_ARG ? Number(H_ARG.slice(2)) : MOBILE || W_ARG ? 844 : 900;
 /* 手机按 2 倍像素密度拍，否则 390 宽的字在图上糊成一团、看不清断行对不对 */
 const DPR = MOBILE || W_ARG ? 2 : 1;
 /* 自带静态服务：不依赖外部的 python http.server。
@@ -79,9 +82,9 @@ function startStatic(root: string): Promise<http.Server> {
   return new Promise((resolve) => server.listen(PORT_HTTP, '127.0.0.1', () => resolve(server)));
 }
 
-const staticServer = await startStatic('_publish');
+const staticServer = await startStatic(ROOT_ARG?.slice(5) || '_publish');
 const BASE = `http://127.0.0.1:${PORT_HTTP}/`;
-const OUT = '.tmp/shots';
+const OUT = OUT_ARG?.slice(4) || '.tmp/shots';
 
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -132,7 +135,8 @@ class Client {
 const proc = spawn(EDGE, [
   '--headless=new',
   `--remote-debugging-port=${PORT}`,
-  `--user-data-dir=${process.cwd()}/.tmp/edge-profile`,
+  `--user-data-dir=${process.cwd()}/.tmp/ui-shot-${process.pid}`,
+  '--disable-extensions',
   '--no-first-run',
   '--no-default-browser-check',
   '--hide-scrollbars',
@@ -167,6 +171,14 @@ async function goto(url: string) {
 }
 
 async function shot(name: string) {
+  if (ARGS.includes('phase1') || ARGS.includes('combat') || ARGS.includes('phase3')) {
+    const overflow = await evaluate(`(() => [...document.querySelectorAll('.recruit-wrap, .setup-preset, .battle-resources, .combat-preview, .action-feedback, .title-copy, .title-visual, .side-drawer')]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && (rect.left < -1 || rect.right > innerWidth + 1);
+      }).map((element) => element.className))()`);
+    if (overflow.length > 0) throw new Error('界面横向溢出：' + overflow.join(', '));
+  }
   const { data } = await page('Page.captureScreenshot', { format: 'png' });
   const file = path.join(OUT, `${name}.png`);
   fs.writeFileSync(file, Buffer.from(data, 'base64'));
@@ -214,13 +226,14 @@ async function click(selector: string) {
 
 const theme =
   (ARGS.includes('modern') ? '&ui=modern' : '') +
+  (ARGS.includes('reduced') ? '&motion=reduced' : '') +
   (ARGS.includes('art') ? '&art=on' : '') +
   (ARGS.includes('terrain') ? '&terrain=on' : '');
 const tag =
-  (theme ? 'modern' : 'legacy') +
+  (ARGS.includes('modern') ? 'modern' : 'legacy') +
   (MOBILE ? '-m' : '') +
   (W_ARG ? `-${W}` : '') +
-  (DRAFT ? '-draft' : '');
+  (DRAFT ? '-draft' : '') + (ARGS.includes('reduced') ? '-reduced' : '');
 
 /*
  * 每次运行前清一次本机存储。
@@ -232,6 +245,41 @@ const tag =
  */
 await goto(BASE);
 await evaluate('localStorage.clear()');
+
+if (ARGS.includes('combat')) {
+  const { createMatch, DEFAULT_CONFIG } = await import('../src/core/setup.ts');
+  const scene = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261123);
+  scene.fog = false;
+  scene.current = 'A';
+  for (const tile of scene.tiles) tile.terrain = 'plain';
+  scene.units = [
+    { id: 'forecast-own', type: 'militia', owner: 'A', x: 4, y: 5, hp: scene.unitTypes.militia.maxHp, moved: false, acted: false, kills: 0 },
+    { id: 'forecast-foe', type: 'militia', owner: 'B', x: 5, y: 5, hp: scene.unitTypes.militia.maxHp, moved: false, acted: false, kills: 0 },
+  ];
+  await evaluate(`localStorage.setItem('warchess:match:v1', ${JSON.stringify(JSON.stringify(scene))})`);
+  await goto(BASE + '?loadSave=1' + theme);
+  const titleOpen = await evaluate(`!!document.querySelector('.title-screen')`);
+  if (titleOpen) await click('[data-title="continue"]');
+  await click('.unit[data-id="forecast-own"]');
+  await shot(`11-combat-ready-${tag}`);
+  if (MOBILE) {
+    await evaluate(`document.querySelector('.unit[data-id="forecast-foe"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }))`);
+  } else {
+    await click('[data-act="combat-aim"]');
+  }
+  await click('.unit[data-id="forecast-foe"]');
+  const visible = await evaluate(`document.querySelector('#combat-preview')?.hidden === false`);
+  if (!visible) throw new Error('交锋预览没有显示');
+  await shot(`12-combat-preview-${tag}`);
+  await click('[data-combat="confirm"]');
+  const resultVisible = await evaluate(`document.querySelector('#action-feedback')?.hidden === false`);
+  if (!resultVisible) throw new Error('操作结果没有显示');
+  await shot(`13-combat-result-${tag}`);
+  proc.kill();
+  staticServer.close();
+  console.log('\n完成：', OUT);
+  process.exit(0);
+}
 
 if (ARGS.includes('manual')) {
   /*
@@ -271,6 +319,12 @@ if (ARGS.includes('manual')) {
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
 
+if (ARGS.includes('phase3')) {
+  await evaluate(`document.querySelector('.title-tools').open = true`);
+  await shot(`01b-title-more-${tag}`);
+  await evaluate(`document.querySelector('.title-tools').open = false`);
+}
+
 // 标题页 → 开始对局（按文字点，选择器在这个项目里不稳）
 if (!(await clickText('开始对局'))) console.log('  （标题页没找到「开始对局」）');
 await sleep(900);
@@ -286,6 +340,22 @@ await evaluate(`(() => {
 })()`);
 await sleep(350);
 await shot(`02b-setup-end-${tag}`);
+
+if (ARGS.includes('phase1')) {
+  await evaluate(`(() => {
+    const advanced = document.querySelector('.start-advanced');
+    if (!advanced) return;
+    advanced.open = true;
+    advanced.scrollIntoView({ block: 'start' });
+  })()`);
+  await shot(`02c-advanced-${tag}`);
+  await evaluate(`(() => {
+    const advanced = document.querySelector('.start-advanced');
+    if (advanced) advanced.open = false;
+    const body = document.querySelector('.modal-body');
+    if (body) body.scrollTop = 0;
+  })()`);
+}
 
 // 悬停态：`:hover` 只改背景、文字色却假设"底色不会反转"的地方，只有把指针真的
 // 移上去才看得见。合成 MouseEvent 不触发 :hover，必须走 CDP 的真鼠标事件。
@@ -358,6 +428,31 @@ await evaluate(`(() => {
 })()`);
 await sleep(700);
 await shot(`04-unit-${tag}`);
+
+if (ARGS.includes('phase3') && W <= 920) {
+  const verifyDrawer = async (expanded: boolean) => {
+    const issue = await evaluate(`(() => {
+      const board = document.querySelector('#board').getBoundingClientRect();
+      const viewport = document.querySelector('#board-wrap').getBoundingClientRect();
+      const drawer = document.querySelector('#side-drawer').getBoundingClientRect();
+      const footer = document.querySelector('.footer-main').getBoundingClientRect();
+      if (document.querySelector('#side-drawer').dataset.expanded !== '${expanded}') return '详情抽屉展开状态未更新';
+      if (document.querySelector('[data-act="drawer-toggle"]').getAttribute('aria-expanded') !== '${expanded}') return '详情抽屉无障碍状态未更新';
+      if (board.top < viewport.top - 1 || board.bottom > viewport.bottom + 1 || board.right > viewport.right + 1) return '棋盘超出可见战场';
+      if (drawer.bottom > footer.top + 1) return '详情抽屉与结束回合按钮重叠';
+      if (document.querySelector('#side').clientHeight < 40) return '详情内容区高度不足';
+      return '';
+    })()`);
+    if (issue) throw new Error(issue);
+  };
+  await verifyDrawer(false);
+  await click('[data-act="drawer-toggle"]');
+  await verifyDrawer(true);
+  await shot(`14-drawer-expanded-${tag}`);
+  await click('[data-act="drawer-toggle"]');
+  await verifyDrawer(false);
+  await shot(`15-drawer-compact-${tag}`);
+}
 
 if (ARGS.includes('clickswitch') || ARGS.includes('terrain')) {
   const probe = await evaluate(`(() => {
@@ -448,6 +543,22 @@ await evaluate(`(() => {
 })()`);
 await sleep(600);
 await shot(`07-city-${tag}`);
+
+if (ARGS.includes('phase3') && W <= 920) {
+  await click('[data-act="drawer-toggle"]');
+  await shot(`16-drawer-city-${tag}`);
+}
+
+if (ARGS.includes('phase1')) {
+  await evaluate(`(() => {
+    const details = document.querySelector('.recruit-fold');
+    if (details) {
+      details.open = true;
+      details.scrollIntoView({ block: 'center' });
+    }
+  })()`);
+  await shot(`07c-production-detail-${tag}`);
+}
 
 // 侧栏底部：产兵表尾巴 + 战报卡 + 结束回合。
 // 滚的是谁取决于断点：桌面是 #side 自己滚，手机是 .main（整条竖着滚）。

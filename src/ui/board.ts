@@ -34,12 +34,14 @@ import {
   utype,
   maxHpOf
 } from '../core/rules.ts';
+import { canAttack, canMove, isArmed, movePower } from '../core/rules.ts';
 import type { GameState, PlayerId, Unit } from '../core/types.ts';
 import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 import { unitArtUrl } from './unit-art.ts';
 import { uiTerrainOn } from './terrain-art.ts';
+import { unitInsignia, unitRole } from './unit-insignia.ts';
 
 export interface BoardUi {
   selectedId: string | null;
@@ -168,7 +170,13 @@ export interface BoardUi {
  * jsdom 里没有 `Element.animate`（单元测试就跑在那儿），这时直接跳过——
  * 动画是锦上添花，不该让"棋盘能不能渲染"依赖它。
  */
+function motionAllowed(node: HTMLElement): boolean {
+  return node.ownerDocument.documentElement.dataset.motion !== 'reduced' &&
+    !node.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
 function playImpact(node: HTMLElement, strength: number): void {
+  if (!motionAllowed(node)) return;
   const animate = node.animate;
   if (typeof animate !== 'function') return;
   const strong = strength >= 0.9;
@@ -380,6 +388,7 @@ function writeUnitNode(node: HTMLElement, it: UnitItem): void {
  * 同一次绘制里也不会演两遍。老环境没有 `animate` 就退回 CSS 类（能动就行）。
  */
 function playChip(lag: HTMLElement, fromPct: number, toPct: number): void {
+  if (!motionAllowed(lag)) return;
   const frames: Keyframe[] = [
     { width: `${fromPct}%`, opacity: 0.95, offset: 0 },
     { width: `${fromPct}%`, opacity: 0.95, offset: 0.4 },
@@ -1206,6 +1215,11 @@ export function renderBoard(
   unitsEl.querySelectorAll<HTMLElement>('.unit').forEach((node) => {
     const id = node.dataset.id;
     if (!id) return;
+    if (!motionAllowed(node)) {
+      slides.get(node)?.anim.cancel();
+      slides.delete(node);
+      return;
+    }
     const old = prevPos.get(id);
     if (!old) return;
     const nowX = Number(node.dataset.x);
@@ -1297,7 +1311,8 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const isTarget = ui.targets.includes(u.id);
   const fp = footprintOf(s, u);
 
-  const cls = ['unit', `owner-${u.owner}`, `cat-${def.category}`];
+  const role = unitRole(def);
+  const cls = ['unit', `owner-${u.owner}`, `cat-${def.category}`, `role-${role}`];
   // 空中层：缩一号 + 往左上挪一点，和脚底下那个兵能同时看见
   if (isAirborne(s, u)) cls.push('air');
   if (fp > 1) cls.push('wide');
@@ -1362,7 +1377,14 @@ function unitItem(s: GameState, u: Unit, ui: BoardUi): UnitItem {
   const glyph = artUrl
     ? `<img class="unit-art" src="${artUrl}" alt="" draggable="false" />`
     : def.short;
-  const inner = `<div class="unit-inner${artUrl ? ' has-art' : ''}">${glyph}${cargoBadge}
+  const moveReady = canMove(u) && movePower(s, u) > 0;
+  const attackReady = canAttack(u) && isArmed(s, u);
+  const readiness = ui.me === u.owner && u.owner === s.current && def.category !== 'building' &&
+    !site && (u.moved || u.acted)
+    ? `<span class="unit-action-mark" title="${moveReady ? '仍可移动' : attackReady ? '仍可攻击' : '本回合已行动完毕'}">${moveReady ? '移' : attackReady ? '攻' : '✓'}</span>` : '';
+  const inner = `<div class="unit-inner${artUrl ? ' has-art' : ''}"><span class="unit-glyph">${glyph}</span>${cargoBadge}
+      <span class="unit-insignia">${unitInsignia(role)}</span>
+      ${readiness}
       ${buildBar}
       <div class="unit-hp"><i class="hp-lag"></i><i class="hp-now ${hpClass(ratio)}" style="width:${Math.max(2, ratio * 100)}%"></i></div>
     </div>`;

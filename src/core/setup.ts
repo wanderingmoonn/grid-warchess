@@ -752,6 +752,7 @@ export function createMatch(
       ...(config.holdWinner === true ? { holdWinner: true } : {}),
       ...(Array.isArray(config.noEconomySeats) ? { noEconomySeats: [...config.noEconomySeats] } : {}),
       ...(config.freeRebuild === true ? { freeRebuild: true } : {}),
+      ...(config.aiVision === false ? { aiVision: false } : {}),
       // 关掉的那些也要活进 config：兵种池弹层靠它把"关着"的格子画回去，
       // 少了这一行，下一局打开面板会看到整排船又亮了起来。
       disabledUnits: Array.from(disabled).filter((id) => catalog[id]),

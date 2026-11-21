@@ -27,6 +27,9 @@ import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
+import { actionFeedback, forecastCombat } from '../src/ui/combat-feedback.ts';
+import { unitRole } from '../src/ui/unit-insignia.ts';
+import { drainDamageLedger, startDamageLedger } from '../src/core/rules.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import {
   applyAction,
@@ -2501,12 +2504,11 @@ check('产兵面板按战斗 / 经济 / 建造分组', () => {
   assert.ok(html.includes('平原 +') || html.includes('丘陵 +'), '经济单位应该标注地形产出');
 });
 
-check('产兵按钮上写着血量', () => {
-  // 攻甲移射都在按钮上，唯独血量缺席——新兵能顶几刀，是按下生产前的关键信息
-  const btns = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-btn'));
+check('生产前可以展开每种兵的血量属性', () => {
+  const btns = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-wrap'));
   assert.ok(btns.length > 0, '产兵面板应该开着');
-  const withHp = btns.filter((b) => /血 \d+/.test(b.textContent ?? ''));
-  assert.equal(withHp.length, btns.length, '每个产兵按钮都该带血量');
+  const withHp = btns.filter((entry) => /血 \d+/.test(entry.querySelector('.recruit-spec')?.textContent ?? ''));
+  assert.equal(withHp.length, btns.length, '每种兵都应当在生产前查看血量');
 });
 
 check('造兵之前悬停就能看到这个工兵能盖什么', () => {
@@ -2706,7 +2708,7 @@ check('数值行到处都带「视野」：产兵按钮 / 建造清单 / 棋子�
    */
   const recruit = doc.querySelector<HTMLElement>('.recruit-btn');
   assert.ok(recruit, '应该有产兵按钮');
-  const rText = recruit.textContent ?? '';
+  const rText = recruit.closest('.recruit-wrap')?.querySelector('.recruit-spec')?.textContent ?? recruit.textContent ?? '';
   assert.ok(/视野 \d+/.test(rText), `产兵按钮的数值行里要有视野：${rText}`);
   assert.ok(/射 \d+/.test(rText), '射程也要还在（别为了加视野把它挤掉）');
 
@@ -4249,20 +4251,19 @@ check('开局面板有"数据收集"开关，默认开', () => {
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
 });
 
-await checkAsync('战役页：地图条在最上面，数据收集紧随其后，而且会记住上次的选择', async () => {
-  /*
-   * 地图条（在哪张图上打）2026-11-17 提到第一块：自选图以前只能在「地图」页看，
-   * 选完回到战役页就只剩底部摘要一行小字。数据收集还是紧跟着它，仍然对局选项之前。
-   */
+await checkAsync('战役页：推荐开局在前，数据记录收进高级设置并记住选择', async () => {
   const blocks = [...doc.querySelectorAll('.modal-body > section')];
   assert.ok(
-    (blocks[0]?.textContent ?? '').includes('在哪张图上打'),
-    '第一块应当是"在哪张图上打"，实际：' + (blocks[0]?.textContent ?? '').trim().slice(0, 20),
+    blocks[0]?.querySelector('[data-preset="learn"]'),
+    '第一块应当提供可直接应用的推荐开局',
   );
   assert.ok(
-    blocks[1]?.querySelector('[data-field="record"]'),
-    '数据收集应当紧随其后，实际第二块是：' + (blocks[1]?.textContent ?? '').trim().slice(0, 20),
+    (blocks[1]?.textContent ?? '').includes('在哪张图上打'),
+    '推荐开局之后应当展示当前地图',
   );
+  const advanced = doc.querySelector<HTMLDetailsElement>('.start-advanced');
+  assert.equal(advanced?.open, false, '高级设置默认收起');
+  assert.ok(advanced?.querySelector('[data-field="record"]'), '记录设置应当在高级设置里');
 
   // 勾上 → 取消 → 重新打开，应当还是勾着的
   const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
@@ -10796,6 +10797,372 @@ check('画布不再给"没有城"的那一方摆城', () => {
 // 收尾
 topMask()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
 topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+
+check('信息层级：单位与对局管理默认收起，重绘保留展开状态', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261120);
+  const host = doc.createElement('div');
+  const unit = st.units.find((candidate) => candidate.owner === 'A' && st.unitTypes[candidate.type]?.category === 'combat')!;
+  const paint = (forceMode?: 'move') => renderPanel(host, {
+    view: playerView(st, 'A'), me: 'A', selectedUnit: unit,
+    selectedCityId: null, selectedCampId: null, selectedTile: null, forceMode,
+  });
+  st.players.A.res = { materials: 17 };
+  paint();
+  assert.ok(host.querySelector('.battle-resources')?.textContent?.includes(String(st.players.A.gold)));
+  assert.ok(host.querySelector('.battle-extra-resources')?.textContent?.includes('17'));
+  assert.ok(host.querySelector('.unit-readiness')?.textContent?.includes('可移动'));
+  const management = host.querySelector<HTMLDetailsElement>(`[data-panel-fold="manage-${unit.id}"]`)!;
+  const advanced = host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)!;
+  assert.equal(management.open, false);
+  assert.equal(advanced.open, false);
+  assert.ok(management.querySelector('[data-act="disband"]'));
+  assert.equal(host.querySelector<HTMLDetailsElement>('[data-panel-fold="match-actions"]')?.open, false);
+  advanced.open = true;
+  st.players.A.gold += 1;
+  paint();
+  assert.equal(host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)?.open, true);
+  host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)!.open = false;
+  paint('move');
+  assert.equal(host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)?.open, true);
+});
+
+check('生产列表：金币不足时解释原因，仍可展开完整属性', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261121);
+  st.players.A.gold = 0;
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'), me: 'A', selectedUnit: null,
+    selectedCityId: st.cities.find((city) => city.owner === 'A')!.id,
+    selectedCampId: null, selectedTile: null,
+  });
+  const entry = host.querySelector<HTMLElement>('.recruit-wrap')!;
+  assert.ok(entry.querySelector<HTMLButtonElement>('.recruit-btn')?.disabled);
+  assert.match(entry.querySelector('.recruit-reason')?.textContent ?? '', /还缺/);
+  const details = entry.querySelector<HTMLDetailsElement>('[data-panel-fold]')!;
+  details.open = true;
+  assert.match(details.textContent ?? '', /血 \d+/);
+  assert.match(details.textContent ?? '', /视野 \d+/);
+  assert.equal(entry.querySelector('.recruit-btn')?.contains(details), false);
+});
+
+for (const preset of [
+  { id: 'learn', era: 1, size: 12, ai: true, difficulty: 'basic' },
+  { id: 'standard', era: 2, size: 16, ai: true, difficulty: 'tactic' },
+  { id: 'hotseat', era: 1, size: 12, ai: false, difficulty: 'advanced' },
+]) {
+  await checkAsync(`推荐开局 ${preset.id}：应用配置并清除旧模式，保留记录偏好`, async () => {
+    const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: ['blackout'] }, 20261122);
+    st.config.aiSeats = ['B'];
+    st.config.disabledUnits = ['militia'];
+    const fresh = bootWith(st);
+    try {
+      fresh.localStorage.setItem('warchess.setup.record', '0');
+      const tap = (selector: string) => {
+        const element = fresh.document.querySelector<HTMLElement>(selector);
+        assert.ok(element, selector);
+        element.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+      };
+      tap('[data-act="settings"]');
+      tap('[data-act="new-match"]');
+      const advanced = fresh.document.querySelector<HTMLDetailsElement>('.start-advanced')!;
+      advanced.open = true;
+      tap('[data-role="commander"]');
+      assert.equal(fresh.document.querySelector<HTMLDetailsElement>('.start-advanced')?.open, true);
+      tap(`[data-preset="${preset.id}"]`);
+      tap('[data-act="start"]');
+      await wait(30);
+      const saved = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+      assert.equal(saved.config.size, preset.size);
+      assert.equal(saved.config.startEra, preset.era);
+      assert.equal(saved.config.aiOpponent, preset.ai);
+      assert.equal(saved.config.aiLevel, preset.difficulty);
+      assert.deepEqual(saved.config.aiSeats, preset.ai ? ['B'] : []);
+      assert.equal(saved.config.commanderMode, false);
+      assert.equal(saved.config.recordDetail, false);
+      assert.deepEqual(saved.config.expansionIds, DEFAULT_CONFIG.expansionIds);
+      assert.deepEqual(saved.config.disabledUnits ?? [], []);
+    } finally {
+      fresh.close();
+    }
+  });
+}
+
+function combatFixture() {
+  const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261123);
+  st.fog = false;
+  st.current = 'A';
+  for (const tile of st.tiles) tile.terrain = 'plain';
+  st.units = [
+    { id: 'forecast-own', type: 'militia', owner: 'A', x: 4, y: 5, hp: st.unitTypes.militia!.maxHp, moved: false, acted: false, kills: 0 },
+    { id: 'forecast-foe', type: 'militia', owner: 'B', x: 5, y: 5, hp: st.unitTypes.militia!.maxHp, moved: false, acted: false, kills: 0 },
+  ];
+  return st;
+}
+
+check('交锋预览：与真实结算一致，不修改局面、随机数和伤害账本', () => {
+  const st = combatFixture();
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  const view = playerView(st, 'A');
+  const snapshot = JSON.stringify(view);
+  startDamageLedger();
+  const forecast = forecastCombat(view, 'A', action);
+  assert.ok(forecast);
+  assert.equal(JSON.stringify(view), snapshot);
+  assert.deepEqual(drainDamageLedger(), []);
+  const actual = applyAction(st, action);
+  assert.ok(actual.ok);
+  assert.equal(forecast.target.after, actual.state.units.find((unit) => unit.id === 'forecast-foe')!.hp);
+  assert.equal(forecast.attacker.after, actual.state.units.find((unit) => unit.id === 'forecast-own')!.hp);
+});
+
+check('交锋预览：致命攻击和施工中目标不会预报虚假的反击', () => {
+  const st = combatFixture();
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  st.units[1]!.hp = 1;
+  const lethal = forecastCombat(playerView(st, 'A'), 'A', action)!;
+  assert.equal(lethal.target.removed, true);
+  assert.equal(lethal.attacker.after, st.units[0]!.hp);
+  st.units[1]!.type = 'tower';
+  st.units[1]!.hp = st.unitTypes.tower!.maxHp;
+  st.units[1]!.buildLeft = 2;
+  const construction = forecastCombat(playerView(st, 'A'), 'A', action)!;
+  assert.equal(construction.attacker.after, st.units[0]!.hp);
+});
+
+check('交锋预览：拒绝不可见目标、友军和已经用尽攻击的单位', () => {
+  const st = combatFixture();
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  const view = playerView(st, 'A');
+  view.state.units = view.state.units.filter((unit) => unit.id !== 'forecast-foe');
+  assert.equal(forecastCombat(view, 'A', action), null);
+  st.units[1]!.owner = 'A';
+  assert.equal(forecastCombat(playerView(st, 'A'), 'A', action), null);
+  st.units[1]!.owner = 'B';
+  st.units[0]!.acted = true;
+  assert.equal(forecastCombat(playerView(st, 'A'), 'A', action), null);
+});
+
+check('结算反馈：目标消失于视图时不假报零血或死亡', () => {
+  const st = combatFixture();
+  const before = playerView(st, 'A');
+  const after = playerView(st, 'A');
+  after.state.units = after.state.units.filter((unit) => unit.id !== 'forecast-foe');
+  const message = actionFeedback(before, after, { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' })!;
+  assert.match(message, /当前不可见/);
+  assert.ok(!message.includes('→ 0'));
+});
+
+check('交锋预览：正确计算额外生命吸收，不消耗真实的多次攻击次数', () => {
+  const st = combatFixture();
+  st.unitTypes['forecast-frame'] = { ...st.unitTypes.militia!, id: 'forecast-frame', armorFrame: true };
+  st.units[1]!.type = 'forecast-frame';
+  st.units[1]!.extraHp = 20;
+  st.units[0]!.attacksLeft = 2;
+  st.unitTypes.militia = { ...st.unitTypes.militia!, burst: 2 };
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  const forecast = forecastCombat(playerView(st, 'A'), 'A', action)!;
+  assert.ok(forecast);
+  assert.equal(forecast.target.after, st.units[1]!.hp);
+  assert.ok(forecast.target.extraAfter! < forecast.target.extraBefore!);
+  assert.equal(st.units[0]!.attacksLeft, 2);
+  const actual = applyAction(st, action);
+  assert.ok(actual.ok);
+  assert.equal(actual.state.units.find((unit) => unit.id === 'forecast-foe')!.extraHp, forecast.target.extraAfter);
+  assert.equal(actual.state.units.find((unit) => unit.id === 'forecast-own')!.attacksLeft, 1);
+});
+
+check('减少动态：受击和掉血补间停止，行动角标仍明确显示剩余操作', () => {
+  const st = combatFixture();
+  const host = doc.createElement('div');
+  const prototype = window.HTMLElement.prototype;
+  const original = prototype.animate;
+  const previousMotion = doc.documentElement.dataset.motion;
+  let animations = 0;
+  Object.defineProperty(prototype, 'animate', { configurable: true, writable: true, value: () => {
+    animations += 1;
+    return { cancel() {}, finished: Promise.resolve() };
+  } });
+  const ui: BoardUi = {
+    selectedId: null, selectedCityId: null, reach: [], targets: [], siegeTargets: [], placeable: [], threat: [],
+    me: 'A', impacts: new Map([['forecast-own', 1]]),
+  };
+  try {
+    doc.documentElement.dataset.motion = 'reduced';
+    st.units[0]!.moved = true;
+    renderBoard(host, playerView(st, 'A'), ui);
+    assert.equal(animations, 0);
+    assert.equal(host.querySelector('.unit[data-id="forecast-own"] .unit-action-mark')?.textContent, '攻');
+    st.units[0]!.acted = true;
+    renderBoard(host, playerView(st, 'A'), ui);
+    assert.equal(host.querySelector('.unit[data-id="forecast-own"] .unit-action-mark')?.textContent, '✓');
+    doc.documentElement.dataset.motion = 'full';
+    renderBoard(host, playerView(st, 'A'), ui);
+    assert.ok(animations > 0);
+  } finally {
+    if (original) prototype.animate = original;
+    else Reflect.deleteProperty(prototype, 'animate');
+    if (previousMotion) doc.documentElement.dataset.motion = previousMotion;
+    else delete doc.documentElement.dataset.motion;
+  }
+});
+
+check('攻城预览：城墙攻破与生命结果吻合，提示仍需入驻接管', () => {
+  const st = combatFixture();
+  const city = st.cities.find((entry) => entry.owner === 'B')!;
+  st.units[0]!.x = city.x > 0 ? city.x - 1 : city.x + city.size;
+  st.units[0]!.y = city.y;
+  city.hp = 1;
+  const action = { type: 'SIEGE', unitId: 'forecast-own', cityId: city.id } as const;
+  const before = playerView(st, 'A');
+  const forecast = forecastCombat(before, 'A', action)!;
+  assert.ok(forecast);
+  assert.equal(forecast.city, true);
+  assert.equal(forecast.target.after, 0);
+  assert.equal(forecast.target.removed, true);
+  const actual = applyAction(st, action);
+  assert.ok(actual.ok);
+  assert.match(actionFeedback(before, playerView(actual.state, 'A'), action) ?? '', /派兵接管/);
+});
+
+check('触屏攻击：首次点击仅预览，确认后才结算并显示结果', () => {
+  const st = combatFixture();
+  const fresh = bootWith(st);
+  try {
+    const tap = (selector: string) => {
+      const element = fresh.document.querySelector<HTMLElement>(selector)!;
+      assert.ok(element, selector);
+      element.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    };
+    tap('.unit[data-id="forecast-own"]');
+    const foe = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
+    const down = new fresh.MouseEvent('pointerdown', { bubbles: true, button: 0 });
+    Object.defineProperty(down, 'pointerType', { value: 'touch' });
+    foe.dispatchEvent(down);
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    tap('.unit[data-id="forecast-foe"]');
+    const preview = fresh.document.querySelector<HTMLElement>('#combat-preview')!;
+    assert.equal(preview.hidden, false);
+    assert.match(preview.textContent ?? '', /28 → 17/);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+    tap('[data-combat="confirm"]');
+    assert.equal(preview.hidden, true);
+    const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+    assert.equal(fresh.document.querySelector<HTMLElement>('#action-feedback')?.hidden, false);
+    assert.match(fresh.document.querySelector('#action-feedback')?.textContent ?? '', /28 → 17/);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('鼠标交锋：悬停只预览，直接点击目标仍可执行攻击', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const source = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!;
+    source.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    const target = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
+    const before = fresh.localStorage.getItem('warchess:match:v1');
+    target.dispatchEvent(new fresh.MouseEvent('mouseover', { bubbles: true }));
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
+    target.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('攻击预览模式：取消不会出手，移动后旧预览失效', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
+      .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    tap('.unit[data-id="forecast-own"]');
+    tap('[data-act="combat-aim"]');
+    tap('.unit[data-id="forecast-foe"]');
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
+    tap('[data-combat="cancel"]');
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    tap('.unit[data-id="forecast-foe"]');
+    tap('.tile[data-x="4"][data-y="6"]');
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    tap('[data-combat="confirm"]');
+    const saved = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(saved.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 28);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('兵种标识：兼容旧飞行字段，保留经济、建造与海军定位', () => {
+  const def = UNIT_TYPES.militia!;
+  assert.equal(unitRole({ ...def, layer: 'air' }), 'air');
+  assert.equal(unitRole({ ...def, flight: true }), 'air');
+  assert.equal(unitRole({ ...def, domain: 'water' }), 'naval');
+  assert.equal(unitRole({ ...def, range: 3 }), 'ranged');
+  assert.equal(unitRole({ ...def, category: 'economy' }), 'economy');
+  assert.equal(unitRole({ ...def, category: 'builder' }), 'builder');
+  assert.equal(unitRole({ ...def, category: 'building' }), 'building');
+});
+
+check('详情抽屉：选中更新摘要，展开与收起保留按钮焦点且不改存档', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
+      .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    const button = fresh.document.querySelector<HTMLButtonElement>('[data-act="drawer-toggle"]')!;
+    const title = () => fresh.document.querySelector('[data-ref="drawer-title"]')!.textContent;
+    const drawer = fresh.document.querySelector<HTMLElement>('#side-drawer')!;
+    assert.equal(title(), '战场概览');
+    tap('.unit[data-id="forecast-own"]');
+    assert.equal(title(), UNIT_TYPES.militia!.name);
+    assert.match(fresh.document.querySelector('[data-ref="drawer-caption"]')!.textContent!, /生命/);
+    const source = fresh.document.querySelector('.unit[data-id="forecast-own"]')!;
+    assert.ok(source.querySelector('.unit-glyph'));
+    assert.equal(source.querySelector('.unit-insignia svg')?.getAttribute('aria-hidden'), 'true');
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    button.focus();
+    tap('[data-act="drawer-toggle"]');
+    assert.equal(drawer.dataset.expanded, 'true');
+    assert.equal(button.getAttribute('aria-expanded'), 'true');
+    assert.equal(fresh.document.activeElement, button);
+    assert.equal(fresh.document.querySelector('[data-act="drawer-toggle"]'), button);
+    const city = fresh.document.querySelector<HTMLElement>('.city.own') ?? fresh.document.querySelector<HTMLElement>('.city');
+    assert.ok(city);
+    city.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    assert.notEqual(title(), UNIT_TYPES.militia!.name);
+    assert.equal(drawer.dataset.expanded, 'true');
+    tap('[data-act="drawer-toggle"]');
+    assert.equal(drawer.dataset.expanded, 'false');
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('首页更多：编辑器保留首页，导入与复盘入口仍能到达', () => {
+  for (const action of ['editor', 'import', 'replay'] as const) {
+    const host = doc.createElement('div');
+    let invoked = '';
+    const close = openTitle(host, {
+      hasSave: true, version: 'test', onNew() {}, onContinue() {}, onRogue() {}, onTutorial() {}, onOnline() {}, onManual() {},
+      onEditor() { invoked = 'editor'; }, onImport() { invoked = 'import'; }, onReplay() { invoked = 'replay'; },
+    });
+    try {
+      const more = host.querySelector<HTMLDetailsElement>('.title-tools')!;
+      assert.ok(more.querySelector('summary'));
+      more.open = true;
+      more.querySelector<HTMLButtonElement>(`[data-title="${action}"]`)!.click();
+      assert.equal(invoked, action);
+      assert.equal(!!host.querySelector('.title-screen'), action === 'editor');
+    } finally {
+      close();
+    }
+  }
+});
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*

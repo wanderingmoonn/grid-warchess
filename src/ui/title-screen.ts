@@ -15,6 +15,8 @@
  *     首页多一个开关，第一个按钮就晚一秒被看见。
  */
 
+import { unitInsignia, type UnitRole } from './unit-insignia.ts';
+
 export interface TitleOptions {
   /** 本机有没有可以接着打的对局 */
   hasSave: boolean;
@@ -56,6 +58,28 @@ const ERA_STRIP: Array<[string, string]> = [
   ['信息化', '#4a7fa6'],
 ];
 
+function titleSandtable(): string {
+  const terrain = ['pppppwpp', 'ppppwwhh', 'pffpwphh', 'pffwwppp', 'pppwpppp', 'pppwwppp', 'phppwppp', 'ppppwwpp'].join('');
+  const pieces: Array<{ x: number; y: number; team: string; glyph: string; role: UnitRole }> = [
+    { x: 1, y: 5, team: 'a', glyph: '戈', role: 'melee' },
+    { x: 2, y: 4, team: 'a', glyph: '弓', role: 'ranged' },
+    { x: 2, y: 6, team: 'a', glyph: '炮', role: 'ranged' },
+    { x: 5, y: 2, team: 'b', glyph: '骑', role: 'melee' },
+    { x: 6, y: 3, team: 'b', glyph: '坦', role: 'ranged' },
+    { x: 6, y: 1, team: 'b', glyph: '机', role: 'air' },
+  ];
+  return `<div class="title-visual" role="img" aria-label="跨时代沙盘示意：青铜军队与现代军队隔河对峙，不代表实际对局">
+    <div class="title-visual-head"><span>推演沙盘</span><span>青铜 → 信息化</span></div>
+    <div class="title-sandtable">
+      ${Array.from(terrain, (kind) => `<i class="hero-tile hero-${kind}"></i>`).join('')}
+      <span class="hero-city a" style="--x:0;--y:6">${unitInsignia('building')}</span>
+      <span class="hero-city b" style="--x:6;--y:0">${unitInsignia('building')}</span>
+      ${pieces.map((piece) => `<span class="hero-piece ${piece.team}" style="--x:${piece.x};--y:${piece.y}"><b>${piece.glyph}</b><i>${unitInsignia(piece.role)}</i></span>`).join('')}
+    </div>
+    <div class="title-visual-foot"><span>布阵 · 发展 · 破城</span><span>沙盘示意</span></div>
+  </div>`;
+}
+
 export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   // 用宿主自己的 document，而不是全局的那个：界面用例跑在 jsdom 里，
   // 那里没有全局 document（第一版就是这么红的：document is not defined）。
@@ -68,8 +92,10 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       return `<i style="--d:${(t / 12).toFixed(2)};--r:${(i * 37) % 100}"></i>`;
     }).join('')}</div>
     <div class="title-inner">
-      <h1 class="title-name">时代与回旋镖</h1>
-      <p class="title-sub">从青铜到信息化：六个时代的产兵、经济与攻城</p>
+      <div class="title-copy">
+      <p class="title-kicker">回合制 · 跨时代战棋</p>
+      <h1 class="title-name"><span>时代与</span><span>回旋镖</span></h1>
+      <p class="title-sub">从青铜到信息化。经营城市，调度军队，在方格之间推进你的时代。</p>
 
       <div class="title-actions">
         ${(() => {
@@ -85,23 +111,24 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
 
       <div class="title-links">
         <button data-title="rogue">肉鸽</button>
-        <span>·</span>
         <button data-title="online">联机对战</button>
-        <span>·</span>
         <button data-title="manual">规则手册</button>
-        <span>·</span>
+        <details class="title-tools">
+        <summary>更多</summary>
+        <div class="title-tools-menu">
         <button data-title="editor">兵种编辑器</button>
-        <span>·</span>
         <button data-title="import">导入对局</button>
-        <span>·</span>
         <button data-title="replay" title="选一份对局数据（.json）逐帧回看">复盘</button>
+        </div>
+        </details>
       </div>
       ${opts.latest ? '<p class="title-latest"></p>' : ''}
 
       <ol class="title-era" aria-label="六个时代">
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
-
+      </div>
+      ${titleSandtable()}
       <p class="title-foot">v${opts.version} · 支持三 / 四人局 · 二十余个扩展包 · AI 可调档</p>
     </div>
   `;

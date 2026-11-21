@@ -113,6 +113,8 @@ import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Uni
 import { lineBetween } from './core/grid-line.ts';
 import { cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard } from './ui/board.ts';
 import { toast } from './ui/toast.ts';
+import { actionFeedback, combatForecastHtml, forecastCombat } from './ui/combat-feedback.ts';
+import type { CombatAction, CombatForecast } from './ui/combat-feedback.ts';
 import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
@@ -298,6 +300,8 @@ appEl.innerHTML = `
     <div class="main">
       <div class="board-wrap" id="board-wrap">
         <div class="force-flag" id="force-flag" hidden></div>
+        <section class="combat-preview" id="combat-preview" hidden aria-label="攻击结果预览" aria-live="polite"></section>
+        <div class="action-feedback" id="action-feedback" hidden role="status" aria-atomic="true"></div>
         <div class="board-scroll" id="board-scroll">
           <div class="board" id="board"></div>
         </div>
@@ -309,13 +313,23 @@ appEl.innerHTML = `
         <div class="star-map" id="star-map" hidden></div>
         <div class="board-list" id="board-list"></div>
       </div>
-      <aside class="side" id="side"></aside>
+      <aside class="side-drawer" id="side-drawer" data-expanded="false">
+        <div class="mobile-drawer-head">
+          <button type="button" class="drawer-toggle" data-act="drawer-toggle" aria-expanded="false" aria-controls="side">
+            <span class="drawer-copy"><b data-ref="drawer-title">战场概览</b><small data-ref="drawer-caption"></small></span>
+            <span class="drawer-state" data-ref="drawer-state">展开详情</span>
+          </button>
+        </div>
+        <div class="side" id="side"></div>
+      </aside>
     </div>
     <div class="draft-mask" id="draft" hidden></div>
   </div>
 `;
 
 const boardEl = pick<HTMLElement>(appEl, '#board');
+const combatPreviewEl = pick<HTMLElement>(appEl, '#combat-preview');
+const actionFeedbackEl = pick<HTMLElement>(appEl, '#action-feedback');
 const draftEl = pick<HTMLElement>(appEl, '#draft');
 const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
 /**
@@ -340,6 +354,7 @@ const starMapEl = pick<HTMLElement>(appEl, '#star-map');
  */
 const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
+const drawerEl = pick<HTMLElement>(appEl, '#side-drawer');
 
 /*
  * 侧栏两张折叠卡（「操作」「战报」）的开合状态记录点。
@@ -370,7 +385,7 @@ sideEl.addEventListener(
     if (!el.classList.contains('card-fold')) return;
     // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
     if (el.dataset.fold === 'log') logOpen = open;
-    else opsOpen = open;
+    else if (!el.dataset.fold || el.dataset.fold === 'ops') opsOpen = open;
   },
   true,
 );
@@ -921,6 +936,11 @@ let handoffOpen = false;
  * 一次性的修饰键，两边互不干扰——老玩家的手感不动。
  */
 let forceMode: 'move' | 'attack' | null = null;
+let combatAim: { forecast: CombatForecast; source: GameState; sourceFog: boolean; sourceBoard: string; pinned: boolean } | null = null;
+let combatInspectMode = false;
+let touchCombatInput = false;
+let confirmingCombat = false;
+let actionFeedbackTimer = 0;
 /**
  * 同一格上压着好几个东西时的轮换位置。
  *
@@ -1235,6 +1255,7 @@ function myTurn(): boolean {
  * toggle 不冒泡，监听挂在 sideEl 上用捕获。
  */
 let opsOpen = false;
+let drawerExpanded = false;
 let logOpen = false;
 /**
  * 长列表里哪几个「还有 N 种」被点开了。
@@ -1371,7 +1392,7 @@ function panelInput(known?: PlayerView): PanelInput {
     for (const id of fired) lastFired.add(id);
   }
 
-  const view = known ?? playerView(state, me(), spectating());
+  const view = known ?? playerView(state, me(), spectating() || state.showAll === true);
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {
     view,
@@ -1423,6 +1444,8 @@ function panelInput(known?: PlayerView): PanelInput {
     planHotseat: commanderHotseat(),
     planReady: state.orderReady?.[me()] === true,
     forceMode,
+    combatInspectMode,
+    combatTargetCount: targets.length + siege.length,
     report: reportPanel(),
     /*
      * 战报卡只排一种情况：复盘。
@@ -1821,7 +1844,13 @@ function renderPaintedCells(cells: number[]): void {
     render();
     return;
   }
-  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating() || state.showAll === true);
+  updateDrawer(view);
+  if (combatAim && (combatAim.source !== state || combatAim.sourceFog !== state.fog || combatAim.sourceBoard !== activeBoardId ||
+    combatAim.forecast.action.unitId !== selectedId || state.config.commanderMode || godMode() || forceMode === 'move' ||
+    !myTurn() || watching() || replay || starOpen || buildPlan || pendingSkill || spawnPlan || loadPlan || unloadPlan)) {
+    clearCombatPreview();
+  }
   const ids = new Set<number>();
   for (const i of cells) {
     ids.add(i);
@@ -1856,8 +1885,9 @@ function render(): void {
    * "整局到底发生了什么"，所以这里直接给全局视野。不这么做还会撞上第二个问题：
    * 迷雾是按 `me()` 算的，而复盘里的双方都不是"我"，怎么算都是在替一方偷看。
    */
-  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating() || state.showAll === true);
   // 地图列表的待命数/敌人红点跟着视图走；签名没变就不重建 DOM
+  updateDrawer(view);
   syncBoardList(view);
   // 星图：盖在棋盘上的一层。没开就不画，开了才按当前视图算一遍
   starMapEl.hidden = !starOpen;
@@ -2207,7 +2237,9 @@ function fitBoard(): void {
 
   // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
   const viewportH = appEl.clientHeight || window.innerHeight;
-  const availH = viewportH - chrome - padY;
+  const availH = window.innerWidth <= 920 && boardWrapEl.clientHeight > 0
+    ? Math.min(viewportH - chrome - padY, boardWrapEl.clientHeight)
+    : viewportH - chrome - padY;
   /*
    * 先算一格多大，再反推外框——不能直接把 `min(宽, 可用高)` 当边长。
    * 那个写法只在正方形地图上成立；12×10 的图会被拉成长方格（玩家实机发现过）。
@@ -2819,6 +2851,8 @@ function refreshSelection(): void {
 }
 
 function clearSelection(): void {
+  clearCombatPreview();
+  combatInspectMode = false;
   recruitQuery = '';
   // 扩展包 / 时代筛选都不清：它们是"我这一局只想看哪几个包、哪几代"，
   // 换一个单位不该把它们重置掉
@@ -2940,10 +2974,13 @@ function computePlaceable(): number[] {
  * 但控制台里能查到），既不安全也不符合"只渲染 playerView"的约定。
  */
 function viewNow(): ReturnType<typeof playerView> {
-  return playerView(state, me(), spectating());
+  return playerView(state, me(), spectating() || state.showAll === true);
 }
 
 function selectUnit(u: Unit): void {
+  if (selectedId !== u.id) sideEl.scrollTop = 0;
+  clearCombatPreview();
+  combatInspectMode = false;
   selectedCityId = null;
   selectedCampId = null;
   selectedTile = null;
@@ -2962,6 +2999,7 @@ function selectUnit(u: Unit): void {
  * 只有自己（或同盟视角）的军营才这么处理，敌方的还是走普通单位面板看属性。
  */
 function selectCamp(u: Unit): void {
+  if (selectedCampId !== u.id) sideEl.scrollTop = 0;
   if (selectedCampId !== u.id) recruitQuery = '';
   selectedCityId = null;
   selectedTile = null;
@@ -2974,6 +3012,7 @@ function selectCamp(u: Unit): void {
 }
 
 function selectCity(cityId: string): void {
+  if (selectedCityId !== cityId) sideEl.scrollTop = 0;
   // 换了城就把搜索词清掉：上一座城搜的「龙」，套到下一座城上只会显示「没有匹配」。
   // 同一座城里连着买不清——连买三个弓手不该每次重新打字。
   if (selectedCityId !== cityId) recruitQuery = '';
@@ -3634,10 +3673,87 @@ function noteStrikeFlash(before: GameState, after: GameState): void {
  * 亮一块红，看起来像是刚有人在那边挨了打。
  */
 function dropHeatFlash(): void {
+  clearCombatPreview();
+  clearActionFeedback();
   heatFlash = null;
   if (heatFlashTimer) window.clearTimeout(heatFlashTimer);
   heatFlashTimer = 0;
 }
+
+function clearCombatPreview(): void {
+  combatAim = null;
+  combatPreviewEl.hidden = true;
+  if (actionFeedbackEl.textContent) actionFeedbackEl.hidden = false;
+}
+
+function clearActionFeedback(): void {
+  if (actionFeedbackTimer) window.clearTimeout(actionFeedbackTimer);
+  actionFeedbackTimer = 0;
+  actionFeedbackEl.hidden = true;
+  actionFeedbackEl.textContent = '';
+}
+
+function updateDrawer(view: PlayerView): void {
+  const unit = view.state.units.find((entry) => entry.id === selectedId || entry.id === selectedCampId);
+  const city = view.state.cities.find((entry) => entry.id === selectedCityId);
+  const title = starOpen ? '星图详情' : unit ? utype(view.state, unit.type).name : city ? cityName(city) : selectedTile ? '地形详情' : godMode() ? '沙盒兵种库' : '战场概览';
+  const caption = unit ? `生命 ${unit.hp} · ${view.state.players[unit.owner].name}`
+    : watching() || replay ? '观战视角 · 点棋盘查看详情'
+    : `${view.state.players[me()].gold} 金 · ${citiesOf(view.state, me()).length} 座城市 · ${myTurn() ? '轮到你行动' : '等待对方'}`;
+  drawerEl.dataset.expanded = String(drawerExpanded);
+  drawerEl.querySelector('[data-act="drawer-toggle"]')?.setAttribute('aria-expanded', String(drawerExpanded));
+  for (const [key, value] of [['title', title], ['caption', caption], ['state', drawerExpanded ? '收起详情' : '展开详情']]) {
+    const label = drawerEl.querySelector<HTMLElement>(`[data-ref="drawer-${key}"]`);
+    if (label && label.textContent !== value) label.textContent = value;
+  }
+}
+
+function showActionFeedback(message: string): void {
+  clearActionFeedback();
+  actionFeedbackEl.textContent = message;
+  actionFeedbackEl.hidden = false;
+  actionFeedbackTimer = window.setTimeout(clearActionFeedback, 4200);
+}
+
+function showCombatPreview(action: CombatAction, pinned: boolean): boolean {
+  if (!myTurn() || watching() || replay || state.config.commanderMode || godMode()) return false;
+  const key = JSON.stringify(action);
+  if (combatAim?.source === state && JSON.stringify(combatAim.forecast.action) === key) {
+    if (!pinned || combatAim.pinned) return true;
+    combatAim.pinned = true;
+  } else {
+    const forecast = forecastCombat(viewNow(), me(), action);
+    if (!forecast) return false;
+    combatAim = { forecast, source: state, sourceFog: state.fog, sourceBoard: activeBoardId, pinned };
+  }
+  combatPreviewEl.innerHTML = combatForecastHtml(combatAim.forecast, combatAim.pinned);
+  combatPreviewEl.hidden = false;
+  actionFeedbackEl.hidden = true;
+  return true;
+}
+
+combatPreviewEl.addEventListener('click', (event) => {
+  const action = (event.target as HTMLElement).closest<HTMLElement>('[data-combat]')?.dataset.combat;
+  if (!action) return;
+  event.stopPropagation();
+  if (action === 'cancel') {
+    clearCombatPreview();
+    return;
+  }
+  const aim = combatAim;
+  if (!aim || aim.source !== state || aim.sourceFog !== state.fog || aim.sourceBoard !== activeBoardId ||
+    aim.forecast.action.unitId !== selectedId) {
+    clearCombatPreview();
+    return;
+  }
+  clearCombatPreview();
+  confirmingCombat = true;
+  try {
+    dispatch(aim.forecast.action);
+  } finally {
+    confirmingCombat = false;
+  }
+});
 
 function dispatch(action: Action): boolean {
   /*
@@ -3695,11 +3811,18 @@ function dispatch(action: Action): boolean {
     return false;
   }
 
+  if ((action.type === 'ATTACK' || action.type === 'SIEGE') && !confirmingCombat &&
+    (touchCombatInput || combatInspectMode) && !godMode()) {
+    if (!showCombatPreview(action, true)) toast('当前无法预览这次攻击，请重新选择单位和目标');
+    return false;
+  }
+
   const prevTurn = state.turn;
   const actor = state.current;
   const prevWinner = state.winner;
   planMovePath(state, action);
   const before = state;
+  const feedbackBefore = ['MOVE', 'ATTACK', 'SIEGE', 'RECRUIT', 'BUILD', 'UPGRADE'].includes(action.type) ? viewNow() : null;
   const result = applyAction(state, action);
   if (!result.ok) {
     pendingMovePath = null;
@@ -3722,6 +3845,12 @@ function dispatch(action: Action): boolean {
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   }
   state = result.state;
+  clearCombatPreview();
+  combatInspectMode = false;
+  if (feedbackBefore) {
+    const message = actionFeedback(feedbackBefore, viewNow(), action);
+    if (message) showActionFeedback(message);
+  }
   // 这一下打到了哪：记账前后差出来的格子，闪一次就散（移动/招募差值为空，自然不闪）
   noteStrikeFlash(before, state);
   // 这一回合第一次出手：红格收起来。结束回合不算（那时已经轮不到自己看了）
@@ -3747,6 +3876,7 @@ function dispatch(action: Action): boolean {
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
+    clearActionFeedback();
     // 回合结束了，这个回合的走子就不许再撤——账已经结了
     undoStack = [];
     clearSelection();
@@ -4832,6 +4962,7 @@ function handleAction(act: string, el: HTMLElement): void {
       act === 'feedback' ||
       act === 'new-game' ||
       act === 'new-match' ||
+      act === 'drawer-toggle' ||
       act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -4842,6 +4973,19 @@ function handleAction(act: string, el: HTMLElement): void {
     if (act === 'new-game' || act === 'new-match') exitReplay();
   }
   switch (act) {
+    case 'drawer-toggle': {
+      drawerExpanded = !drawerExpanded;
+      boardDirty = true;
+      render();
+      return;
+    }
+    case 'combat-aim': {
+      combatInspectMode = !combatInspectMode;
+      clearCombatPreview();
+      render();
+      if (combatInspectMode) toast('点一个红框目标查看交锋结果，确认后再攻击');
+      return;
+    }
     case 'force-move':
     case 'force-attack': {
       // 点一下进入、再点同一下退出；点另一个就直接切过去。
@@ -5194,7 +5338,21 @@ function handleAction(act: string, el: HTMLElement): void {
       if (state.fog) refreshMemory(state);
       saveMatch(state);
       render();
-      toast(state.fog ? '战争迷雾已开启' : '战争迷雾已关闭');
+      toast(state.fog ? '战争迷雾已开启' : '战争迷雾已关闭（AI 仍然只看得见它视野内的东西）');
+      return;
+    }
+
+    /*
+     * 看全图：**只改显示**（2026-11-21）。
+     *
+     * 想看清整张地图不该等于"取消迷雾规则"——那样 AI 也跟着全知。
+     * 所以这是一个独立的开关，只影响玩家这边的渲染。
+     */
+    case 'toggle-show-all': {
+      state.showAll = !state.showAll;
+      saveMatch(state);
+      render();
+      toast(state.showAll ? '看全图：开（只影响显示）' : '看全图：关');
       return;
     }
 
@@ -10095,6 +10253,42 @@ replayEl.addEventListener('change', endSeek);
 replayEl.addEventListener('pointerup', endSeek);
 replayEl.addEventListener('pointercancel', endSeek);
 
+boardEl.addEventListener('pointerdown', (event) => {
+  touchCombatInput = event.pointerType === 'touch' || event.pointerType === 'pen';
+});
+
+boardEl.addEventListener('mouseover', (event) => {
+  if (touchCombatInput || combatAim?.pinned || !selectedId || !myTurn() || watching() || replay ||
+    state.config.commanderMode || godMode() || starOpen || pendingSkill || buildPlan ||
+    spawnPlan || loadPlan || unloadPlan || forceMode === 'move') return;
+  const coords = coordsFromEvent(event);
+  if (!coords) return;
+  const known = viewNow();
+  const directId = (event.target as HTMLElement).closest<HTMLElement>('.unit')?.dataset.id;
+  const target = known.state.units.find((unit) => unit.id === directId && targets.includes(unit.id)) ??
+    known.state.units.find((unit) => targets.includes(unit.id) && boardIdOf(unit) === activeBoardId &&
+      coversTile(known.state, unit, coords.x, coords.y));
+  const city = known.state.cities.find((entry) => siege.includes(entry.id) && boardIdOf(entry) === activeBoardId &&
+    cityTiles(entry).some((tile) => tile.x === coords.x && tile.y === coords.y));
+  const action: CombatAction | null = target
+    ? { type: 'ATTACK', unitId: selectedId, targetId: target.id, x: coords.x, y: coords.y }
+    : city ? { type: 'SIEGE', unitId: selectedId, cityId: city.id, x: coords.x, y: coords.y } : null;
+  if (action) showCombatPreview(action, false);
+  else clearCombatPreview();
+});
+
+boardWrapEl.addEventListener('mouseleave', () => {
+  if (!combatAim?.pinned) clearCombatPreview();
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || document.querySelector('.modal-mask, .title-screen')) return;
+  if (!combatAim && !combatInspectMode) return;
+  clearCombatPreview();
+  combatInspectMode = false;
+  render();
+});
+
 // 悬停可移动格时加深高亮
 boardEl.addEventListener('mouseover', (e) => {
   const target = e.target as HTMLElement | null;
@@ -10433,6 +10627,7 @@ function openSettings(): void {
       unitArt: uiArtOn(),
       terrainArt: uiTerrainOn(),
       replay: replay !== null,
+      showAll: state.showAll === true,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
       compact:

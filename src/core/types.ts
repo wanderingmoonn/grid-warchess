@@ -1598,6 +1598,13 @@ export interface MatchConfig {
    */
   noEconomySeats?: string[];
   /**
+   * AI 是否受战争迷雾限制（默认 **是**，2026-11-21）。
+   *
+   * 原来这条和 `state.fog`（玩家要不要看全图）是同一个字段，一关迷雾
+   * AI 就全知。现在分开：`fog` 只管显示，这条只管 AI 的视力。
+   */
+  aiVision?: boolean;
+  /**
    * 接管废墟不收重建费（2026-11-20）。
    *
    * 肉鸽里占领敌城没有任何回报（这一关打完就结束），还按普通对局收
@@ -2273,6 +2280,15 @@ export interface GameState {
   planStart?: PlayerId;
   nextUnitSeq: number;
   fog: boolean;
+  /**
+   * **看全图**（纯显示，2026-11-21）。
+   *
+   * 和 `fog` 分开：`fog` 是规则（这一局有没有战争迷雾），`showAll` 是
+   * "我想把整张图看清楚"。后者不改任何规则——AI 的视力、攻击的目标合法性
+   * 都不受影响。之所以要拆，是因为原来只有 `fog` 一个字段，
+   * 想看图就得关迷雾，一关 AI 全知，能打到视野外。
+   */
+  showAll?: boolean;
   winner: PlayerId | null;
   /**
    * 已经退出的席位（认输 / 判弃权）。

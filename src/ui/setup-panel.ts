@@ -60,6 +60,7 @@ import { openLevelManager } from './level-manager.ts';
 import { mapThumbSvg } from './map-thumb.ts';
 import {
   BOARD_SIZES,
+  DEFAULT_CONFIG,
   MAX_BOARD_SIZE,
   MIN_BOARD_SIZE,
   clampBoardSize,
@@ -356,6 +357,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      * 和"人数 / 对手 / 时代"这些一屏就放得下的开关不是一类东西。
      */
     let tab: 'battle' | 'levels' | 'editor' = 'battle';
+    let advancedOpen = false;
     /**
      * 关卡栏里两个可折叠分组（2026-11-18）：`true` = 展开。
      *
@@ -468,6 +470,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
     const paint = () => {
       autoFetchCloudLevels();
+      advancedOpen = mask.querySelector<HTMLDetailsElement>('.start-advanced')?.open ?? advancedOpen;
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
       // 点一个兵种就"弹回顶部"就是这么来的——所以先把两者记下来，画完再搬回去。
       const prevBody = mask.querySelector<HTMLElement>('.modal-body');
@@ -855,6 +858,15 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       })();
 
       const battleViewFull = `
+            ${!levelOn ? `<section class="setup-presets" aria-label="推荐开局">
+              <div class="setup-section-head"><b>推荐开局</b><span>应用后替换当前规则；仍可继续调整</span></div>
+              <div class="setup-preset-grid">
+                <button type="button" class="setup-preset" data-preset="learn"><b>入门人机</b><span>青铜 · 12 × 12 · 初级 AI</span></button>
+                <button type="button" class="setup-preset" data-preset="standard"><b>标准人机</b><span>铁器 · 16 × 16 · 中级 AI</span></button>
+                <button type="button" class="setup-preset" data-preset="hotseat"><b>本地双人</b><span>青铜 · 12 × 12 · 轮流操作</span></button>
+              </div>
+              <p class="field-hint">使用默认兵种与标准扩展，详细记录沿用你的选择。</p>
+            </section>` : ''}
             <section class="field">
               <div class="field-label">
                 在哪张图上打 <span class="field-hint">${
@@ -875,24 +887,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 </span>
                 <button class="btn btn-sm" data-act="pick-map">换图</button>
               </div>
-            </section>
-
-            <section class="field">
-              <div class="field-label">
-                数据收集 <span class="field-hint">会在下次开新局时沿用这次的选择</span>
-              </div>
-              <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
-                <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
-                <span class="expansion-body">
-                  <b>记录这局的详细数据（默认开启）</b>
-                  <span>
-                    记每回合的兵力 / 城防 / 金币，以及双方的出兵与行动次数，
-                    还有每一步的动作——这局能在本地逐帧重放。
-                    不记玩家名与房间码。取消勾选就不再记录（会记住你的选择）；
-                    上传仍要你在结算卡上点一下，不点不会发出去。
-                  </span>
-                </span>
-              </label>
             </section>
 
             <section class="field">
@@ -995,6 +989,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
             </section>
 
+            <details class="start-advanced"${advancedOpen ? ' open' : ''}>
+              <summary><span><b>高级设置</b><small>${config.expansionIds.length} 个扩展 · ${config.godMode ? '上帝模式' : config.commanderMode ? '指挥官模式' : '亲自指挥'}${config.draftMode ? ' · 已开选卡' : ''}</small></span><span class="setup-expand-label" aria-hidden="true"></span></summary>
+              <div class="start-advanced-body">
             <section class="field">
               <div class="field-label">
                 你的角色 <span class="field-hint">指挥官模式：只决定造什么兵，其余交给 AI</span>
@@ -1113,7 +1110,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <button class="btn btn-sm" data-act="reroll">换一张地图</button>
               </div>
               <div class="field-hint">同一个种子永远生成同一张地图，方便复盘和公平对战。</div>
-            </section>`;
+            </section>
+            <section class="field">
+              <div class="field-label">数据收集 <span class="field-hint">记住本机选择</span></div>
+              <label class="expansion-item ${config.recordDetail ? 'on' : ''}">
+                <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
+                <span class="expansion-body">
+                  <b>记录这局的详细数据</b>
+                  <span>在本机保存每一步动作与回合统计，供逐帧复盘。不记录玩家名与房间码；上传须在结算卡另行点击。取消后会记住你的选择。</span>
+                </span>
+              </label>
+            </section>
+              </div>
+            </details>`;
 
       /*
        * 关卡页：打哪一关。
@@ -1630,7 +1639,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                     ? `<h2>任务简报</h2>
                        <p>这一关的图、兵力、时代都由关卡定。唯一能改的是扩展包——换一套重打，难度会变。</p>`
                     : `<h2>战役</h2>
-                     <p>选好规则再开局。扩展规则会改变伤害、经济或视野的计算方式。</p>`
+                     <p>选择推荐开局，或调整地图、对手与时代。更多规则在高级设置中。</p>`
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
                        <p>主线与教学关：一关一关往下走。现在还在设计，选「自由对局」先自己开一局。</p>`
@@ -1757,6 +1766,30 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
     mask.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
+      const preset = target.closest<HTMLElement>('[data-preset]')?.dataset.preset;
+      if (preset === 'learn' || preset === 'standard' || preset === 'hotseat') {
+        const recordDetail = config.recordDetail;
+        for (const key of Object.keys(config)) Reflect.deleteProperty(config, key);
+        Object.assign(config, DEFAULT_CONFIG, {
+          enabledUnits: [...DEFAULT_CONFIG.enabledUnits],
+          expansionIds: [...DEFAULT_CONFIG.expansionIds],
+          disabledUnits: [],
+          playerCount: 2,
+          startEra: preset === 'standard' ? 2 : 1,
+          size: preset === 'standard' ? 16 : 12,
+          aiOpponent: preset !== 'hotseat',
+          aiAlly: false,
+          aiLevel: preset === 'learn' ? 'basic' : preset === 'standard' ? 'tactic' : 'advanced',
+          aiBrain: 'script',
+          firstSide: 'A',
+          recordDetail,
+        });
+        expNote = '';
+        poolView = null;
+        resetScroll = true;
+        paint();
+        return;
+      }
 
       // 点在小窗口的遮罩上＝关掉它（点在卡片里不算，卡片是它的子元素）
       if ((target as HTMLElement).dataset?.act === 'brief-backdrop') {

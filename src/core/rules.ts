@@ -5393,6 +5393,22 @@ function applyTerrainEvent(s: GameState, act: Extract<import('./level.ts').Level
   };
 }
 
+export function simulateCombat(s: GameState, action: Extract<Action, { type: 'ATTACK' | 'SIEGE' }>): ActionResult {
+  const ledger = damageLedger;
+  damageLedger = null;
+  try {
+    return applyAction({
+      ...s,
+      config: {
+        ...s.config,
+        level: s.config.level ? { ...s.config.level, events: [] } : undefined,
+      },
+    }, action);
+  } finally {
+    damageLedger = ledger;
+  }
+}
+
 export function applyAction(s: GameState, action: Action, actor?: PlayerId): ActionResult {
   if (s.winner) return { ok: false, reason: '对局已结束' };
 
@@ -5435,9 +5451,23 @@ export function applyAction(s: GameState, action: Action, actor?: PlayerId): Act
       case 'MOVE':
         return doMove(next, action.unitId, action.x, action.y);
       case 'ATTACK':
-        return doAttack(next, action.unitId, action.targetId, action.x, action.y, action.weapon);
-      case 'SIEGE':
-        return doSiege(next, action.unitId, action.cityId, action.x, action.y);
+      case 'SIEGE': {
+        /*
+         * 目标格必须**看得见**（2026-11-21）。
+         *
+         * 原来这条只靠界面挡：迷雾一关，玩家和 AI 都能打视野外。
+         * 现在规则层自己判——`state.fog` 只是显示偏好，不再决定打击范围。
+         */
+        const shooter = next.units.find((u) => u.id === action.unitId);
+        if (shooter && action.x !== undefined && action.y !== undefined) {
+          if (!canSeeTile(next, shooter.owner, action.x, action.y)) {
+            return { ok: false, reason: '看不见那个位置（视野外）' };
+          }
+        }
+        return action.type === 'ATTACK'
+          ? doAttack(next, action.unitId, action.targetId, action.x, action.y, action.weapon)
+          : doSiege(next, action.unitId, action.cityId, action.x, action.y);
+      }
       case 'RECRUIT':
         return doRecruit(
           next,
@@ -8665,6 +8695,30 @@ function forEachVisionSource(
  * `id` 缺省地球：绝大部分调用点（AI 威胁图、寻路、热度）只关心地球，
  * 保持原来的签名，行为一格不变。
  */
+
+/**
+ * 这一方**真正看得见**这一格吗（2026-11-21）。
+ *
+ * 和 `playerView` 的裁剪同源，但**不看 `state.fog` / `showAll`**：
+ * 那两个是"玩家想不想看全图"，不是"能不能打到"。
+ * 关掉迷雾之后双方都看得见整张地图，但打一个没人看见的目标依然不该成立——
+ * 这条判据就是"看全图 ≠ 能打全图"。
+ */
+export function canSeeTile(s: GameState, side: PlayerId, x: number, y: number): boolean {
+  if (s.config.godMode === true) return true;
+  /*
+   * **城市是公开信息**：城墙就在那儿，归属和耐久从不藏。
+   * 所以城格永远"看得见"——攻城不受视野限制，这一条和面板上的口径一致
+   * （"城市归属和耐久是公开信息"），否则迷雾里连城都拆不了。
+   */
+  const tile = s.tiles[y * s.w + x];
+  if (tile?.cityId) return true;
+  if ((s.revealed?.length ?? 0) > 0 && s.revealed!.some((r) => r.i === y * s.w + x && r.until >= s.turn)) {
+    return true;
+  }
+  return visibleTilesOn(s, side).has(y * s.w + x);
+}
+
 export function visibleTilesOn(s: GameState, p: PlayerId, id: BoardId = EARTH): Set<number> {
   const out = new Set<number>();
   const board = boardOf(s, id);
