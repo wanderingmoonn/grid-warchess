@@ -18,7 +18,16 @@
 import { BUILD_VERSION } from './build-info.ts';
 import { underConstruction } from './rules.ts';
 import { timelineSummary, type MatchTimeline } from './timeline.ts';
-import { seatsOf, type Action, type GameState, type MatchConfig, type PlayerId } from './types.ts';
+import {
+  seatsOf,
+  type Action,
+  type AiCallTrace,
+  type AiPlanTrace,
+  type AiSquadLog,
+  type GameState,
+  type MatchConfig,
+  type PlayerId,
+} from './types.ts';
 
 /**
  * 报告格式版本。加字段不一定动它，改语义一定要动。
@@ -148,6 +157,18 @@ export interface MatchReport {
    */
   actions?: LoggedAction[];
   /**
+   * AI 的"想法"（计划当值 / 决战判决 / 编队上报）。
+   *
+   * 复盘是**逐条重放动作**，重放时不跑 AI，所以这些日志在复盘里天然是空的。
+   * 想在看回放时知道"它当时在想什么"，只能整份存下来，UI 按回合查。
+   * 设为可选：老报告没有这一块，读出来就是 undefined。
+   */
+  aiTrace?: {
+    plans?: AiPlanTrace[];
+    calls?: AiCallTrace[];
+    squads?: AiSquadLog[];
+  };
+  /**
    * 开局那一份**完整配置**（v3 追加，可选）。
    *
    * 为什么非要有它：`seed` 只能重建"地图 + 城 + 开局兵"，重建不了"这一局都能造什么"。
@@ -240,6 +261,15 @@ export function buildMatchReport(
     playerCount: seats.length,
     expansions: [...s.config.expansionIds],
     packSize: Object.keys(s.unitTypes).length,
+    ...(s.aiPlanTrace || s.aiCalls || s.aiSquads
+      ? {
+          aiTrace: {
+            ...(s.aiPlanTrace ? { plans: s.aiPlanTrace } : {}),
+            ...(s.aiCalls ? { calls: s.aiCalls } : {}),
+            ...(s.aiSquads ? { squads: s.aiSquads } : {}),
+          },
+        }
+      : {}),
     ai: {
       opponent: s.config.aiOpponent === true,
       ally: s.config.aiAlly === true,

@@ -2313,7 +2313,9 @@ function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSqu
   // 1) 清理：成员死了、伤亡过重、或者已经没有敌城可打
   const kept: AiSquad[] = [];
   for (const sq of focus.squads ?? []) {
-    const alive = sq.memberIds.filter((id) => byId.has(id));
+    // 先 `Set` 去重：同一回合若 `squadTick` 被重复调用（`keep` 丢失时会发生），
+    // 成员 id 会被重复 push，报告里就出现"20 人"的编队（实际 12 人）。
+    const alive = [...new Set(sq.memberIds)].filter((id) => byId.has(id));
     const ratio = alive.length / Math.max(1, sq.want);
     if (alive.length === 0 || ratio < SQUAD_DISBAND_RATIO || foes.length === 0) continue;
     kept.push({ ...sq, memberIds: alive });
@@ -2330,7 +2332,9 @@ function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSqu
      * 不吸收的话就会出现实测那种"走 2 人"：编成时手头只有 3 个兵，
      * 之后就再也补不进来，队伍一直是残的。
      */
-    forming.memberIds.push(...free.map((u) => u.id));
+    // 只补到 want：不封顶的话会吸收成 20 人的巨型编队（实测 Q2 seed32 出现过）
+    const room = Math.max(0, forming.want - forming.memberIds.length);
+    forming.memberIds.push(...free.slice(0, room).map((u) => u.id));
   } else if (
     s.config.aiSquad !== false &&
     !forming &&
