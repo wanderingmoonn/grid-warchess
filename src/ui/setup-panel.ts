@@ -635,7 +635,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <button class="chip ${!netOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
             <button class="chip ${!netOn && config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
             <button class="chip ${!netOn && config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
-            <button class="chip is-brain ${goalOn ? 'active' : ''}" data-aibrain="goal" title="实验内核（core/ai-v2.ts）：远期规划走目标状态机，局部战术仍是老的启发式。和老 AI 是两个独立模型，改动互不影响">实验 AI</button>
+            <button class="chip is-brain ${goalOn ? 'active' : ''}" data-aibrain="goal" title="实验内核（core/ai-v3.ts，v3）：远期规划走目标状态机，局部战术仍是老的启发式。和老 AI 是两个独立模型，改动互不影响">实验 AI v3</button>
             ${
               netAllowed
                 ? `<button class="chip is-brain ${netOn ? 'active' : ''}" data-aibrain="net" title="自博弈训练出来的策略网络。自带全视野：开雾也看得见你的全部部队；只会一种打法节奏，没有档位">测试 AI · 全视野</button>`

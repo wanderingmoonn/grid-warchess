@@ -191,7 +191,7 @@ export function aiBrainOf(s: GameState): 'script' | 'net' | 'goal' {
 export function aiNameOf(s: GameState): string {
   const brain = aiBrainOf(s);
   if (brain === 'net') return '测试 AI';
-  if (brain === 'goal') return '实验 AI';
+  if (brain === 'goal') return '实验 AI v3';
   return `${aiLevelLabel(aiLevelOf(s))} AI`;
 }
 

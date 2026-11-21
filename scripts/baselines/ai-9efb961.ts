@@ -1,30 +1,4 @@
 /**
- * ⚠️ **实验 AI（v2）—— 老 AI 的完整副本，2026-11-21 fork。**
- *
- * ── 为什么复制而不是在 `ai.ts` 里开口子 ──────────────────────────
- *
- * 老 AI 是这几年攒下来的启发式，任何改动都可能悄悄改变它的行为。实验想法
- * （远期规划、目标状态机、决战时代、经济配比）要能**随便大改**，前提是
- * "改坏了也只坏这一份"。
- *
- * 所以这里是一份**独立文件**：`ai.ts` 冻结为参考实现与对照基线，
- * 新东西全在这份里长。两边不共享代码，也就不会互相影响。
- *
- * ── 代价（要认）──
- *
- * 同一处战术 bug 可能在两边各存在一次。约定：
- *   · **`ai.ts` 只修"影响对局正确性"的 bug**（会崩、会产生非法动作、会改存档语义），
- *     修完不往 v2 同步；
- *   · 玩法/策略上的改动**只进 v2**；
- *   · `ai-duel --old ./baselines/...` 用冻结的老版做对照，别用 `ai.ts`，
- *     否则"基线"会跟着漂。
- *
- * ── 现在和老的有什么不同 ──
- *
- * 暂时没有——这是**逐字复制**，用来先证明"换成另一份文件后行为一致"。
- * 真正的新算法从这里往下长。
- */
-/**
  * AI 对手。
  *
  * 战棋的状态空间大到别想全搜索：16×16、二十几个单位、每个单位十几种走法，
@@ -42,16 +16,16 @@
  *   4. 不做伤害玩家的特殊照顾。它就是一个贪心的、会算账的对手。
  */
 
-import { hasAbility } from './abilities.ts';
-import { enterMemoScope, exitMemoScope, memoByState, memoTable } from './memo.ts';
-import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
-import { hasHold, holdOf, holdRoom } from './carry.ts';
-import { isProducer, produceUsableCount } from './produce.ts';
-import { cityGap } from './geo.ts';
-import { playerView } from './fog.ts';
-import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
-import { nextEraLevelOf } from './era-routes.ts';
-import type { ValueContext } from './unit-value.ts';
+import { hasAbility } from '../../src/core/abilities.ts';
+import { enterMemoScope, exitMemoScope, memoByState, memoTable } from '../../src/core/memo.ts';
+import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from '../../src/core/config.ts';
+import { hasHold, holdOf, holdRoom } from '../../src/core/carry.ts';
+import { isProducer, produceUsableCount } from '../../src/core/produce.ts';
+import { cityGap } from '../../src/core/geo.ts';
+import { playerView } from '../../src/core/fog.ts';
+import { EFF_SCALE, unitEfficiency, unitPower } from '../../src/core/unit-value.ts';
+import { nextEraLevelOf } from '../../src/core/era-routes.ts';
+import type { ValueContext } from '../../src/core/unit-value.ts';
 import {
   abilityApi,
   armySize,
@@ -103,27 +77,27 @@ import {
   isAirborne,
   strikeDistance,
   sameTeam,
-} from './rules.ts';
-import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
-import { canUseType, eraWindowOk } from './draft.ts';
-import { isArmed, orderDirectiveOf } from './rules.ts';
-import { GOLD, canPay, payRes, resOf } from './resources.ts';
-import type { ResourceCost } from './resources.ts';
-import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
-import { terrainArmorOf } from './ability-registry.ts';
-import type { TacticalMap } from './ai-tactics.ts';
-import { seatsOf } from './types.ts';
-import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+} from '../../src/core/rules.ts';
+import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from '../../src/core/armor.ts';
+import { canUseType, eraWindowOk } from '../../src/core/draft.ts';
+import { isArmed, orderDirectiveOf } from '../../src/core/rules.ts';
+import { GOLD, canPay, payRes, resOf } from '../../src/core/resources.ts';
+import type { ResourceCost } from '../../src/core/resources.ts';
+import { economicYield, tacticalMap, unitValue } from '../../src/core/ai-tactics.ts';
+import { terrainArmorOf } from '../../src/core/ability-registry.ts';
+import type { TacticalMap } from '../../src/core/ai-tactics.ts';
+import { seatsOf } from '../../src/core/types.ts';
+import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from '../../src/core/types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
-import type { AiBudget } from './ai-meta.ts';
-import { NULL_STRATEGIST } from './ai-strategist.ts';
-import type { Strategist } from './ai-strategist.ts';
-import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
-import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from './unit-ai.ts';
-import type { UnitAiBinding } from './unit-ai.ts';
-import type { UnitAiResult } from './expansions.ts';
-import { SKILL_AI_HINTS } from './skill-hooks.ts';
+import type { AiBudget } from '../../src/core/ai-meta.ts';
+import { NULL_STRATEGIST } from '../../src/core/ai-strategist.ts';
+import type { Strategist } from '../../src/core/ai-strategist.ts';
+import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from '../../src/core/ai-meta.ts';
+import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from '../../src/core/unit-ai.ts';
+import type { UnitAiBinding } from '../../src/core/unit-ai.ts';
+import type { UnitAiResult } from '../../src/core/expansions.ts';
+import { SKILL_AI_HINTS } from '../../src/core/skill-hooks.ts';
 import {
   COMMIT_BUILD_BONUS,
   allAiGoals,
@@ -133,11 +107,11 @@ import {
   goalStepsInPlay,
   registerCoreGoal,
   resolveCommit,
-} from './ai-goal.ts';
-import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
-import type { AiCommit } from './types.ts';
+} from '../../src/core/ai-goal.ts';
+import type { AiGoalCtx, AiGoal } from '../../src/core/ai-goal.ts';
+import type { AiCommit } from '../../src/core/types.ts';
 
-export type { AiBudget } from './ai-meta.ts';
+export type { AiBudget } from '../../src/core/ai-meta.ts';
 
 const DIRS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],
@@ -7656,4 +7630,4 @@ export {
   aiStepCap,
   aiStallGuard,
   aiProgressFingerprint,
-} from './ai-meta.ts';
+} from '../../src/core/ai-meta.ts';
