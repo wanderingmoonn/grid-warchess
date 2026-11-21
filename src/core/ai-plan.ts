@@ -59,6 +59,18 @@ export interface PlanCtx {
   enemyAtGate: boolean;
   /** 我方身价明显不如对面（< 0.75） */
   weaker: boolean;
+  /** 主力走到最近敌城要几回合 */
+  marchTurns: number;
+  /** 投影比：到 T 回合后我方战力 ÷ 对面战力（对面按**可见信息**估） */
+  projRatio: number;
+  /**
+   * 对面这些数是不是"真的知道"。
+   *
+   * 现在恒为 false：AI 不会刺探，只能拿可见单位估。留着这个口子，
+   * 以后真做了侦察，把 `projRatio` 换成实测值、把这个置 true，
+   * 决战时机的判断就能随情报变化——现在它只随"看得见什么"变。
+   */
+  intelKnown: boolean;
   /** 折算收益的时间窗（回合） */
   horizon: number;
   /**
@@ -92,6 +104,14 @@ export interface PlanWeights {
    * 只能用"离家距离"。
    */
   pullHome: number;
+  /**
+   * 不许开火（压掉 ATTACK / SIEGE）。
+   *
+   * 和 `attack` 乘数的区别：乘数是"有多想打"，这个是"现在别打"的硬开关。
+   * 为什么需要它：把 attack 压到 1 以下会让双方一起龟缩（P4 实测），
+   * 而"兵还不够、先别送"只需要关掉开火这一件事。
+   */
+  holdFire: boolean;
 }
 
 /** 行动型计划吐出的一个动作（可带分） */
@@ -129,6 +149,13 @@ export interface AiPlan {
    * 返回值会存进这条计划的口袋（`state.focus`），下一回合可以读出来做粘性。
    */
   focus?(c: PlanCtx): { x: number; y: number } | null;
+  /**
+   * 这条计划想记住什么（写进它自己的口袋，下一回合从 `c.state` 读回来）。
+   *
+   * 有它，计划才能表达"再撑两回合"这种带时间的行为——否则所有状态都得
+   * 挤进 `focus` 那一个出口。回滞、驻留、连击计数这类都靠它。
+   */
+  save?(c: PlanCtx): Record<string, unknown>;
 }
 
 /**
@@ -235,7 +262,7 @@ export function allAiPlans(): AiPlan[] {
 }
 
 export function neutralWeights(): PlanWeights {
-  return { attack: 1, build: 1, econ: 1, save: 1, pullHome: 0 };
+  return { attack: 1, build: 1, econ: 1, save: 1, pullHome: 0, holdFire: false };
 }
 
 /** 合成账本的一行：谁给了什么、生效后是多少 */
@@ -276,6 +303,7 @@ export function composeWeights(list: Array<{ plan: AiPlan; asked: Partial<PlanWe
     if (asked.econ !== undefined) net.econ *= mix(asked.econ);
     if (asked.save !== undefined) net.save *= mix(asked.save);
     // 回撤是"谁要求谁生效"的强度：两条都要收缩时取并集，不是相乘
+    if (asked.holdFire === true) net.holdFire = true;
     if (asked.pullHome !== undefined) {
       net.pullHome = 1 - (1 - net.pullHome) * (1 - s * clamp01(asked.pullHome));
     }
@@ -468,6 +496,16 @@ export function resolvePlans(
   for (const id of activeIds) {
     const pocket = { ...(pocketsIn[id] ?? {}) };
     if (focusPlanId === id && focus) pocket.focus = focus;
+    // 每条当值的计划都写自己的记忆（回滞、计数）——不是只有"记忆持有者"写。
+    // 行动型占着记忆位时，权重型的状态也得留着，否则它们的回滞每回合归零。
+    const def = REGISTRY.get(id);
+    if (def?.save) {
+      try {
+        Object.assign(pocket, def.save(ctxFor(def)) ?? {});
+      } catch {
+        // 写坏的计划不该打死整局
+      }
+    }
     pockets[id] = pocket;
   }
 
@@ -558,6 +596,9 @@ export function planCtxOf(
     threat: 0,
     enemyAtGate: false,
     weaker: false,
+    marchTurns: 0,
+    projRatio: 1,
+    intelKnown: false,
     horizon: PLAN_TUNING.horizon,
     state: {},
     ...patch,

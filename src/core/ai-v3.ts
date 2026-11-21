@@ -1692,6 +1692,8 @@ interface Fields {
    */
   /** 回撤强度（0~1）：defend 计划给的，不是布尔 */
   pullHome: number;
+  /** 不许开火（压 ATTACK/SIEGE）：决战时机判"发展且明显落后"时给 */
+  holdFire: boolean;
   /**
    * 优势期：兵力和身价都压过对面一截，这时候该做的是**破城**，不是清野。
    *
@@ -1917,8 +1919,8 @@ export interface DecisiveCall {
   foePower: number;
   myPerTurn: number;
   foePerTurn: number;
-  /** 只有两档：打 / 发展。第三档"守"在实现里并进"发展"（不主动推） */
-  call: 'attack' | 'develop';
+  /** 投影比：到 horizon 回合后我方 ÷ 对面 */
+  ratio: number;
   why: string;
 }
 
@@ -1937,8 +1939,6 @@ function decisiveOf(
   view: GameState,
   me: PlayerId,
   land: Map<string, number[]>,
-  /** 上一回合的承诺：用来做回滞，不给就按首次判决处理 */
-  prev: { call: 'attack' | 'develop'; since: number; ratioAt: number } | null = null,
 ): DecisiveCall | null {
   const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
   if (foes.length === 0) return null;
@@ -1990,47 +1990,18 @@ function decisiveOf(
   const foeProj = foeSeat ? solvedProjection(view, foeSeat, horizon).power : foePower;
   const ratioNow = myProj / Math.max(1, foeProj);
 
-  /*
-   * 回滞（双阈值）：**进入比退出难**。
-   *
-   *   · 还没承诺：投影比 ≥ 1.15 且行军 ≤ 14 → 打，否则发展；
-   *   · 已经承诺"打"：掉到 0.90 以下才放弃（0.90~1.15 这段不动摇）；
-   *   · 已经承诺"发展"：要涨到 1.30 才改打（1.15~1.30 这段不动摇）。
-   *
-   * 这么定是因为"打不打"是个承诺问题，不是每回合重新投票：
-   * 实测不设回滞时 4 局翻了 128 次 attack↔develop，等于没有决定。
-   */
-  const prevCall = prev?.call ?? null;
-  const canAttack = marchTurns <= 14;
-  const enter = 1.15;
-  const keepAttack = 0.9;
-  const switchToAttack = 1.3;
-  const call: 'attack' | 'develop' =
-    prevCall === 'attack'
-      ? ratioNow >= keepAttack && canAttack ? 'attack' : 'develop'
-      : prevCall === 'develop'
-        ? ratioNow >= switchToAttack && canAttack ? 'attack' : 'develop'
-        : ratioNow >= enter && canAttack ? 'attack' : 'develop';
-  /*
-   * 最短驻留：刚立的约 3 回合内不许翻，除非局面变化很大（比值挪了 0.5 以上）。
-   * 光有双阈值还不够——双阈值管的是"同一档内别乱动"，管不住"来回穿线"。
-   */
-  const dwell = prev !== null && view.turn - prev.since < 3 && Math.abs(ratioNow - prev.ratioAt) < 0.5;
-  if (dwell && prevCall) {
-    return {
-      marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn,
-      call: prevCall,
-      why: `驻留：${prevCall}（刚立 ${view.turn - prev.since} 回合，局面没大变）`,
-    };
-  }
 
-  const why =
-    call === 'attack'
-      ? `打：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）、行军 ${marchTurns} 回合`
-      : `发展：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）${canAttack ? '' : '、行军太远'}`;
   return {
-    marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call, why,
+    marchTurns,
+    cityId,
+    myPower,
+    foePower,
+    myPerTurn,
+    foePerTurn,
+    ratio: ratioNow,
+    why: `投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）、行军 ${marchTurns} 回合`,
   };
+
 }
 
 /**
@@ -2199,11 +2170,69 @@ const DEFEND_PLAN: RankedPlan = {
   id: 'defend',
   kind: 'weights',
   strength: PLAN_TUNING.strength.defend ?? 0.85,
-  value: (c) => (c.enemyAtGate && c.weaker && c.army >= 3 ? 1 : 0),
-  done: (c) => !c.enemyAtGate,
+  /*
+   * 回滞：威胁消失后再撑 3 回合才放。
+   *
+   * 不加这个，敌人进/出"3 格线"就会让计划每两回合翻一次（实测 seed 24 终局
+   * `defend@254 → 无@256 → defend@256`），部队在城门口来回走。
+   * 计数存在计划自己的口袋里（`save`），不需要往 AiFocus 加字段。
+   */
+  value: (c) => {
+    const fresh = c.enemyAtGate && c.weaker && c.army >= 3;
+    if (fresh) return 1;
+    const held = Number(c.state.held ?? 0);
+    return c.state.on === true && held < 3 && c.army >= 2 ? 1 : 0;
+  },
+  done: () => false,
+  save: (c) => {
+    const fresh = c.enemyAtGate && c.weaker && c.army >= 3;
+    if (fresh) return { on: true, held: 0 };
+    const held = Number(c.state.held ?? 0) + 1;
+    return { on: c.state.on === true && held < 3 && c.army >= 2, held };
+  },
   weights: () => ({ pullHome: 1 }),
 };
 registerAiPlan(DEFEND_PLAN);
+
+/**
+ * 决战时机的**判决**（从"旁路闸门"升成计划，2026-11-21）。
+ *
+ * 它只做一件事：在"打不动"的时候把开火闸门关上（`holdFire`）。
+ * 不压进攻乘数——P4 的教训是压低乘数会让双方一起龟缩，而"先别送"只需要关火。
+ *
+ * 回滞和驻留都存在它自己的口袋里（`save`），所以换计划、重开一局都不会丢。
+ * 将来有侦察了，要换的只是 **上游的估计器**（`projRatio` 从"按可见单位估"
+ * 换成"实测值"），判决这一层一行都不用动——`PlanCtx.intelKnown` 就是那个口子。
+ */
+function decideCallOf(c: PlanCtx): 'attack' | 'develop' {
+  const prev = (c.state.call as 'attack' | 'develop' | undefined) ?? null;
+  const since = Number(c.state.since ?? 0);
+  const ratio = c.projRatio;
+  const canAttack = c.marchTurns > 0 && c.marchTurns <= 14;
+  let call: 'attack' | 'develop';
+  if (prev === 'attack') call = ratio >= 0.9 && canAttack ? 'attack' : 'develop';
+  else if (prev === 'develop') call = ratio >= 1.3 && canAttack ? 'attack' : 'develop';
+  else call = ratio >= 1.15 && canAttack ? 'attack' : 'develop';
+  const ratioAt = Number(c.state.ratioAt ?? ratio);
+  const dwell = prev !== null && c.view.turn - since < 3 && Math.abs(ratio - ratioAt) < 0.5;
+  return dwell && prev ? prev : call;
+}
+
+const DECISIVE_PLAN: RankedPlan = {
+  id: 'decisive',
+  kind: 'weights',
+  strength: 1,
+  // 价值就是投影比：不是 0/1，日志里能直接看出"差多少"
+  value: (c) => c.projRatio,
+  done: () => false,
+  save: (c) => {
+    const call = decideCallOf(c);
+    const prev = c.state.call as 'attack' | 'develop' | undefined;
+    return { call, since: prev === call ? Number(c.state.since ?? c.view.turn) : c.view.turn, ratioAt: c.projRatio };
+  },
+  weights: (c) => ({ holdFire: decideCallOf(c) === 'develop' && c.projRatio < 0.85 }),
+};
+registerAiPlan(DECISIVE_PLAN);
 
 const CROSSING_PLAN: RankedPlan = {
   id: 'crossing',
@@ -7789,6 +7818,7 @@ function aiNextActionCoreInner(
     air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
     crossingSite: null,
+    holdFire: false,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -7888,11 +7918,18 @@ function aiNextActionCoreInner(
     const foeValNow = foeUnits
       .filter((u) => utype(view, u.type).category === 'combat')
       .reduce((n, u) => n + (utype(view, u.type).cost ?? 0), 0);
+    /*
+     * 决战时机的**估计**先算（投影比、行军回合），判决本身由 `DECISIVE_PLAN`
+     * 拥有（回滞 + 驻留记在它自己的口袋里）。估计和判决分开，是为了以后
+     * 有情报时只换估计器，不动判决——见 `PlanCtx.intelKnown` 那个口子。
+     */
+    const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land);
     const planCtx = planCtxOf(view, me, {
       canReach: !fields.needBridge,
       threat: fields.threat,
       weaker: myValNow < foeValNow * 0.75,
       enemyAtGate: foeUnits.some((u) => citiesOf(view, me).some((c) => distToCity(u, c) <= 3)),
+      ...(decisive ? { marchTurns: decisive.marchTurns, projRatio: decisive.ratio } : {}),
     });
     const prevPlan = focusOf(s, me).plan ?? null;
     const resolved = resolvePlans(planCtx, prevPlan, { urgent: fields.urgent });
@@ -7903,6 +7940,7 @@ function aiNextActionCoreInner(
     fields.crossingSite = resolved.focus;
     fields.weights = resolved.net;
     fields.pullHome = resolved.net.pullHome;
+    fields.holdFire = resolved.net.holdFire;
     if (resolved.focus) fields.bridgeSite = resolved.focus;
     for (const item of planActions(resolved.action, planCtx)) {
       candidates.push({ action: item.action, score: item.score ?? PLAN_TUNING.actionScore });
@@ -7910,6 +7948,28 @@ function aiNextActionCoreInner(
     if (depth === 0) {
       if (resolved.memo !== prevPlan) setFocus(s, me, { ...focusOf(s, me), plan: resolved.memo });
       notePlanTrace(s, me, resolved);
+      // 判决由 `DECISIVE_PLAN` 拥有（回滞记在它口袋里），这里只记日志
+      if (decisive) {
+      const call = (resolved.memo?.pockets['decisive']?.call ?? null) as 'attack' | 'develop' | null;
+    if (call) {
+      const list = (s.aiCalls ??= []);
+      const last = [...list].reverse().find((x) => x.me === me);
+      if (!last || last.call !== call) {
+        list.push({
+          turn: s.turn,
+          me,
+          marchTurns: decisive.marchTurns,
+          myPower: Math.round(decisive.myPower),
+          foePower: Math.round(decisive.foePower),
+          myPerTurn: Math.round(decisive.myPerTurn),
+          foePerTurn: Math.round(decisive.foePerTurn),
+          call,
+          why: decisive.why,
+        });
+        if (list.length > 300) list.splice(0, list.length - 300);
+      }
+    }
+  }
     }
   }
 
@@ -7920,32 +7980,6 @@ function aiNextActionCoreInner(
    * 不用来"催"它去打——催的教训在 P4：任何把进攻权重压到 1 以下的改动，
    * 都会让双方一起龟缩。
    */
-  const prevDecide = focusOf(s, me).decide ?? null;
-  const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land, prevDecide);
-  if (depth === 0 && decisive && decisive.call !== (prevDecide?.call ?? null)) {
-    setFocus(s, me, {
-      ...focusOf(s, me),
-      decide: { call: decisive.call, since: s.turn, ratioAt: decisive.myPower / Math.max(1, decisive.foePower) },
-    });
-  }
-  if (depth === 0 && decisive) {
-    const list = (s.aiCalls ??= []);
-    const last = [...list].reverse().find((x) => x.me === me);
-    if (!last || last.call !== decisive.call) {
-      list.push({
-        turn: s.turn,
-        me,
-        marchTurns: decisive.marchTurns,
-        myPower: Math.round(decisive.myPower),
-        foePower: Math.round(decisive.foePower),
-        myPerTurn: Math.round(decisive.myPerTurn),
-        foePerTurn: Math.round(decisive.foePerTurn),
-        call: decisive.call,
-        why: decisive.why,
-      });
-      if (list.length > 300) list.splice(0, list.length - 300);
-    }
-  }
   /*
    * 换家：不守了，全军去啃最软的那座城。
    *
@@ -8144,8 +8178,8 @@ function aiNextActionCoreInner(
    * 判据是"越等越强、而且现在兵力还不到对面八成半"。不满足就不拦——
    * 拦得太宽会让双方一起龟缩（P4 的教训），所以这条闸故意开得很窄。
    */
-  const outmatched = decisive !== null && decisive.call === 'develop' && decisive.myPower < decisive.foePower * 0.85;
-  const mayAttack = strategist.mayAttack(s, me) && !outmatched;
+  // 开火闸门由 `DECISIVE_PLAN` 给（`holdFire`），不再是这里临时算的一个布尔
+  const mayAttack = strategist.mayAttack(s, me) && !fields.holdFire;
   for (let i=candidates.length-1;i>=0;i--) {
     const action=candidates[i]!.action;
     if (!mayAttack && (action.type === 'ATTACK' || action.type === 'SIEGE')) {
