@@ -1475,6 +1475,15 @@ export interface MatchConfig {
    */
   aiCrossing?: boolean;
   /**
+   * 战略姿态（2 维：x 打不打 / y 发展还是军费）。**默认关**。
+   *
+   * 2026-11-21 试了三档区间，每一档都会让"baseline 刚好打赢"的那几张图
+   * 变成平局——全局乘数太钝，它只会让已经在打的一方更凶或更软，
+   * 不会改变"要不要打"。所以先留机制、默认关，等有战力估值再谈启用。
+   * 打开方式：`--posture`（跑批）或配置里写 true。
+   */
+  aiPosture?: boolean;
+  /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
    *
@@ -1915,6 +1924,8 @@ export interface AiPlanTrace {
   reason: string;
   /** 当时各条的估值（取整），按高到低 */
   values: Array<{ id: string; value: number }>;
+  /** 当时合成出来的净权重（战略姿态就是从这里读 x / y） */
+  net?: { attack: number; build: number; econ: number; save: number; holdLine: boolean };
 }
 
 /**

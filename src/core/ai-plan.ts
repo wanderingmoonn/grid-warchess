@@ -53,6 +53,8 @@ export interface PlanCtx {
   gold: number;
   /** 陆路够不够得着敌城（只影响执行） */
   canReach: boolean;
+  /** 威胁值（净攻城战力，见 ai-v3 的 threatLevelOf）：越大越该收着打 */
+  threat: number;
   /** 折算收益的时间窗（回合） */
   horizon: number;
   /**
@@ -155,6 +157,35 @@ export const PLAN_TUNING = {
   actionScore: 900,
   /** 计划日志最多留几条（每席每次换计划记一条） */
   traceCap: 200,
+  /**
+   * 战略姿态的两个维度（见 docs 第十九节）：
+   *   x = 派不派兵进攻（0 = 完全不推，1 = 全力压上）
+   *   y = 钱花在发展上还是军费上（0 = 全买兵，1 = 全投经济）
+   * 姿态计划只把这两个数换算成权重，不在别处再判断一次。
+   */
+  posture: {
+    /** 兵力比到 xAtLow 算不敢打，到 xAtHigh 算敢打 */
+    xAtLow: 0.8,
+    xAtHigh: 1.6,
+    /** 权重 = base + slope × 维度 */
+    /*
+     * 第一版给的区间是 0.4~1.6 / 0.7~2.0，跑出来 seed 20 从 74 回合的胜局
+     * 变成 261 回合平——进攻权重压到 1 以下，双方都不肯攻城，双向龟缩。
+     * 所以**下界不许低于 1 太多**：姿态只能"更愿意打"，不能"不肯打"；
+     * 真要收手应该由行动型计划（屯兵/防御）明说，而不是靠压低一个乘数。
+     */
+    /*
+     * 第二版：**只加不减**。实测任何小于 1 的进攻乘数都会让双方更不肯攻城，
+     * 而 baseline 本来就在"刚好打得动"的边上，压一点就变成 261 回合平。
+     * 所以区间定在 1.0~1.3（进攻）和 0.95~1.15（经济）。
+     */
+    attackBase: 1,
+    attackSlope: 0.3,
+    econBase: 0.95,
+    econSlope: 0.2,
+    /** x 低于这个就守线（不越过中线）。先设 0 = 不启用：龟缩风险太大 */
+    holdLineBelow: 0,
+  },
   /** 每条计划的话有多算数，0~1 */
   strength: {
     reclaim: 1,
@@ -504,6 +535,7 @@ export function planCtxOf(
     income: incomeOf(view, me),
     gold: view.players[me].gold,
     canReach: true,
+    threat: 0,
     horizon: PLAN_TUNING.horizon,
     state: {},
     ...patch,
@@ -541,6 +573,7 @@ export function notePlanTrace(
     plan: key,
     reason: res.reason,
     values: res.values.map((v) => ({ id: v.id, value: Math.round(v.value) })),
+    net: { ...res.net },
   });
   if (list.length > PLAN_TUNING.traceCap) list.splice(0, list.length - PLAN_TUNING.traceCap);
 }

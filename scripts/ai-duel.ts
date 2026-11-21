@@ -141,6 +141,8 @@ const ERA_MODEL: 'const' | 'foe' | undefined =
 
 /** `--no-crossing`：关掉 v3 的过河投送计划（做 A/B 用） */
 const NO_CROSSING = has('no-crossing');
+/** `--posture`：打开 v3 的战略姿态（2 维权重，默认关） */
+const POSTURE = has('posture');
 
 const REPLAY_PATH = argOf('replay', '');
 const REPLAY_SEED = argOf('replay-seed', '');
@@ -191,6 +193,7 @@ function playOne(
       ...(UNIT_CAP === undefined ? {} : { unitCap: UNIT_CAP }),
       ...(ERA_MODEL === undefined ? {} : { aiEraModel: ERA_MODEL }),
       ...(NO_CROSSING ? { aiCrossing: false } : {}),
+      ...(POSTURE ? { aiPosture: true } : {}),
     },
     seed,
   );

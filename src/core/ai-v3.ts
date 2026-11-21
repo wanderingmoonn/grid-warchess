@@ -139,12 +139,14 @@ import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
 import type { AiCommit } from './types.ts';
 import {
   PLAN_TUNING,
+  neutralWeights,
   notePlanTrace,
   planActions,
   planCtxOf,
   registerAiPlan,
   resolvePlans,
 } from './ai-plan.ts';
+import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
@@ -1642,6 +1644,8 @@ interface Fields {
    * 这个点是**计划钉住的**那一格，建造评分和工程队走位都认它。
    */
   crossingSite: { x: number; y: number } | null;
+  /** 排序层合成的净权重（见 ai-plan 的 composeWeights）。默认全 1 */
+  weights: PlanWeights;
   /**
    * 本回合的主攻方向：血最少的那座敌方城市。
    *
@@ -1992,6 +1996,55 @@ function crossingPointOf(view: GameState, me: PlayerId): { x: number; y: number 
  * 三个"给桥让路"的老补丁（两道数量上限、工程队 mine<6 闸）现在都读这个点，
  * 而不是各读各的 `focusOf().crossing`。
  */
+/**
+ * 战略姿态：把"打不打"和"钱花在哪"压成两个连续的维度。
+ *
+ * 这是 2026-11-21 用户提的模型：战略上其实只有两件事要定——
+ *   · x = 派不派兵进攻（0 完全不推，1 全力压上）
+ *   · y = 钱花在发展上还是军费上（0 全买兵，1 全投经济）
+ * 四个角：x高y高=散兵骚扰后方发展、x低y高=全力发展、
+ * x高y低=全力进攻、x低y低=全力防守。
+ *
+ * 它只做一件事：把 (x,y) 换算成权重。**不在别处再判一次"该不该打"**——
+ * 两处都判就会互相打脸（走位往东、采购往西）。
+ *
+ * 为什么不做成"发展/进攻/防守"三条独立计划：那等于用两条通路表达同一个决定，
+ * 排序层会同时让它们当值、权重互相抵消。姿态是**一个连续的控制器**，
+ * 不是一个要投票的表决项。
+ */
+function postureOf(c: PlanCtx): { x: number; y: number; why: string } {
+  const t = PLAN_TUNING.posture;
+  // x：兵力比。0.8 以下不敢打，1.6 以上敢打
+  const ratio = c.army / Math.max(1, c.foeArmy);
+  const x = clamp01((ratio - t.xAtLow) / Math.max(0.01, t.xAtHigh - t.xAtLow));
+  // y：时代落后、收入低、局面吃紧，都往"发展"那边推
+  const eraGap = c.foeEra - c.era;
+  let y = 0.45 + 0.22 * eraGap + (c.income < 22 ? 0.15 : 0) - Math.min(0.45, c.threat / 260);
+  y = clamp01(y);
+  return { x, y, why: `x=${x.toFixed(2)}(兵力比 ${ratio.toFixed(2)}) y=${y.toFixed(2)}(差 ${eraGap} 代)` };
+}
+
+const POSTURE_PLAN: RankedPlan = {
+  id: 'posture',
+  kind: 'weights',
+  strength: 1,
+  // 默认关：见 types.ts 的 `aiPosture`（三档区间都把胜局变成平局）
+  value: (c) => (c.view.config.aiPosture === true ? 1 : 0),
+  done: () => false,
+  weights: (c) => {
+    const t = PLAN_TUNING.posture;
+    const { x, y } = postureOf(c);
+    return {
+      attack: t.attackBase + t.attackSlope * x,
+      econ: t.econBase + t.econSlope * y,
+      build: 1,
+      save: y > 0.6 ? 1.1 : 0.9,
+      holdLine: x < t.holdLineBelow,
+    };
+  },
+};
+registerAiPlan(POSTURE_PLAN);
+
 const CROSSING_PLAN: RankedPlan = {
   id: 'crossing',
   kind: 'weights',
@@ -4133,11 +4186,13 @@ function scoreBuild(
   spot: { x: number; y: number; terrain: Terrain },
   all: Fields,
 ): number {
-  const raw = rawBuildScore(
+  const rawBuildScoreValue = rawBuildScore(
     s, unit, buildId, spot, all.land, all.mood, all.sea, all.era,
     all.urgent, all.threat, all.scarce, all.goalCommit, all.crossingSite,
   );
-  if (raw <= -900) return raw;
+  if (rawBuildScoreValue <= -900) return rawBuildScoreValue;
+  // 战略姿态的"建造权重"：先在原始分上乘，再走下面那几条过河/产业的加减
+  const raw = rawBuildScoreValue * all.weights.build;
 
 
   const canBridge = (utype(s, unit.type).builds ?? []).includes('bridge');
@@ -4527,13 +4582,14 @@ function unitCandidates(
       if (def.armorFrame && !wpn) continue; // 没有一件打得动这个目标
       out.push({
         action: { type: 'ATTACK', unitId: unit.id, targetId: t.id, ...(wpn ? { weapon: wpn } : {}) },
-        score: scoreAttack(s, unit, t, all),
+        // 战略姿态的"进攻权重"：不压 0 就是允许开火，大于 1 是更愿意换血
+        score: scoreAttack(s, unit, t, all) * all.weights.attack,
       });
     }
     for (const c of siegeTargets(s, unit)) {
       out.push({
         action: { type: 'SIEGE', unitId: unit.id, cityId: c.id },
-        score: scoreSiege(s, unit, c, all.focusCityId, all.mood, all.foeEcon),
+        score: scoreSiege(s, unit, c, all.focusCityId, all.mood, all.foeEcon) * all.weights.attack,
       });
     }
     /*
@@ -6203,6 +6259,13 @@ function recruitCandidate(
    * 与其在换血那段再抄一遍采购评分，不如把上限这一条做成开关。
    */
   ignoreCap = false,
+  /**
+   * 战略姿态的"经济权重"：只管经济单位，兵一分不动。
+   *
+   * 为什么只乘经济那一侧：兵价和经济单位价不是一个量级，两边同时乘
+   * 等于把"相对偏好"放大成平方，越调越偏。
+   */
+  econWeight = 1,
 ): Candidate | null {
   // 没传就是"不带战术倾向"（指挥官模式排产草稿、单元测试都会走这条），
   // 权重全零时下面每一条加成都是 0，行为和改动前一模一样。
@@ -6752,6 +6815,7 @@ function recruitCandidate(
         ? { type: 'RECRUIT', unitId: src.id, unitType: d.id }
         : { type: 'RECRUIT', cityId: src.id, unitType: d.id };
 
+    if (d.category === 'economy') score *= econWeight;
     if (tracing) scored.push(d.id);
     if (!best || score > best.score) best = { action, score };
   }
@@ -7556,6 +7620,7 @@ function aiNextActionCoreInner(
     air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
     crossingSite: null,
+    weights: neutralWeights(),
     focusCityId: mood.focusCityId,
     flankCityId: flank.flankCityId,
     flank: flank.flank,
@@ -7657,6 +7722,7 @@ function aiNextActionCoreInner(
      * **不要各读各的状态**——两处各挑一个点，就会出现"人往东走、桥往西修"。
      */
     fields.crossingSite = resolved.focus;
+    fields.weights = resolved.net;
     if (resolved.focus) fields.bridgeSite = resolved.focus;
     for (const item of planActions(resolved.action, planCtx)) {
       candidates.push({ action: item.action, score: item.score ?? PLAN_TUNING.actionScore });
@@ -7812,6 +7878,8 @@ function aiNextActionCoreInner(
         order,
         mood,
         seaDemandNow,
+        undefined,
+        fields.weights.econ,
       );
       if (c) candidates.push(c);
     }
@@ -7830,6 +7898,8 @@ function aiNextActionCoreInner(
           order,
           mood,
           seaDemandNow,
+          undefined,
+          fields.weights.econ,
         );
         if (c) candidates.push(c);
       }
