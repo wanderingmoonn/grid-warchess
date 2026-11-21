@@ -136,7 +136,7 @@ import {
   resolveCommit,
 } from './ai-goal.ts';
 import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
-import type { AiCommit, AiSquadReport } from './types.ts';
+import type { AiCommit, AiSquad, AiSquadReport } from './types.ts';
 import {
   PLAN_TUNING,
   neutralWeights,
@@ -1780,6 +1780,10 @@ interface Fields {
    * 城格那点回血/护甲换不来"整支军队停摆"，所以这些城里的兵必须让位。
    */
   chokedCities: string[];
+  /** 编队成员 → 目标城：编队认编队目标，散兵认全局目标（见 `SQUAD` 那一段） */
+  squadTarget: Map<string, string>;
+  /** 编队缺口：还在收拢的编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
+  squadNeed: number;
   /** 视野里有多少敌方单位带溅射：决定"挨着站"该罚多重 */
   foeSplash: number;
   /** 对面还剩几个经济单位。零 = 纯战斗阵容（见 scoreSiege 的加分与僵持破局） */
@@ -2220,70 +2224,180 @@ registerAiPlan(POSTURE_PLAN);
  * 每回合只更新一次（`keep.stallTurn` 去重）——`value` 每步决策都会被调，
  * 不去重会把同一回合算十几次，计数直接失真。
  */
-/* ---------------- 编队：编制 + 上报（2026-11-21） ---------------- */
+/* ---------------- 编队：组建 / 出发 / 解散 + 上报（2026-11-21） ---------------- */
+
+/** 编队最少几个人才出发。不够就等，同时把缺口报给生产端 */
+const SQUAD_WANT = 6;
+/** 伤亡超过这个比例就解散：人快打光了还不散，等于把残兵拖死 */
+const SQUAD_DISBAND_RATIO = 0.4;
+/** 同时最多几支：一支在打、一支在后面组。多了就是散兵线 */
+const SQUAD_MAX = 2;
+/** 收拢最多等几回合：凑不够也走，否则钱一紧就永远不出兵 */
+const SQUAD_FORM_TIMEOUT = 10;
 
 /**
- * 编队上报：把战斗单位按"到主攻城的距离"分成前 / 中 / 后三段，
- * 每段报四件事——几个人、最前面到哪、连续几回合没动、这一回合掉了几个人。
+ * 每回合维护编队：清理 → 组建 → 出发。
  *
- * 为什么要它：现在只有"计划往下发指令"这一条通道，下面从不回话。
- * 计划因此是瞎的：它不知道前队被打残、中队堵在河边、后队根本没动。
- * 这是**反向通道的雏形**——
+ * 2026-11-21 用户重新定义了编队（否掉了"按到主攻城的死距离分段"那一版）：
  *
- * 分段为什么按距离而不是固定成员：单位每回合都在动，固定分组会立刻散架。
- * 这一段的意义不是"这几个人是谁"，而是"**这一段整体在推进还是在挨打**"。
+ * > 计划层会尝试组建一个进攻编队，收拢符合条件的现存无编队单位；不够就反馈
+ * > 请求生产端生产合适的单位；组建好就出发；后方可以继续组建下一个，
+ * > 但这个组建好的编队就出发，直到全部阵亡 / 收到撤退 / 死伤过重就取消。
+ *
+ * 关键差别：
+ *   · **成员固定**（编成时锁定），不再每回合按距离重新分段——
+ *     分段那套在 32×32 上所有人都是"后队"，高时代射程远时"后队"和前队一样能打；
+ *   · **队形用相对数**（最前和最后差几格），不用"离城的绝对距离"；
+ *   · **可以有缺口**：人不够就先攒着，缺口报给生产端。
  */
-function squadsOf(
-  s: GameState,
-  me: PlayerId,
-  focusCityId: string | null,
-): { cityId: string | null; squads: AiSquadReport[] } {
+function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSquadReport[] {
+  const focus = focusOf(s, me);
   const combat = unitsOf(s, me).filter(
     (u) => utype(s, u.type).category === 'combat' && utype(s, u.type).domain !== 'water',
   );
-  const focused = focusCityId ? s.cities.find((c) => c.id === focusCityId) : null;
-  // 没指定主攻城就取"离我主力最近的那座"（编队总得有个参照）
-  const city =
-    focused ??
-    s.cities
-      .filter((c) => c.owner !== me && !c.ruined)
-      .map((c) => ({ c, d: Math.min(...combat.map((u) => distToCity(u, c)), Infinity) }))
-      .sort((a, b) => a.d - b.d)[0]?.c ??
-    null;
-  if (!city) return { cityId: null, squads: [] };
-  if (combat.length === 0) return { cityId: city.id, squads: [] };
+  const byId = new Map(combat.map((u) => [u.id, u]));
+  const foes = s.cities.filter((c) => c.owner !== me && !c.ruined);
 
-  const bands: Record<AiSquadReport['band'], number[]> = { front: [], mid: [], rear: [] };
-  for (const u of combat) {
-    const d = distToCity(u, city);
-    const band = d <= 4 ? 'front' : d <= 10 ? 'mid' : 'rear';
-    bands[band].push(d);
+  // 1) 清理：成员死了、伤亡过重、或者已经没有敌城可打
+  const kept: AiSquad[] = [];
+  for (const sq of focus.squads ?? []) {
+    const alive = sq.memberIds.filter((id) => byId.has(id));
+    const ratio = alive.length / Math.max(1, sq.want);
+    if (alive.length === 0 || ratio < SQUAD_DISBAND_RATIO || foes.length === 0) continue;
+    kept.push({ ...sq, memberIds: alive });
   }
 
-  // 上回合的上报存在 keep 里（跨计划退场，因为是"下面"的状态，不属于某条计划）
-  const prev = (s.aiFocus?.[me]?.plan?.keep?.squads ?? {}) as Record<
+  // 2) 组建：把"没编队"的单位拢成一支。已有正在收拢的那支就不再开新的
+  const assigned = new Set(kept.flatMap((sq) => sq.memberIds));
+  const free = combat.filter((u) => !assigned.has(u.id));
+  const forming = kept.find((sq) => sq.role === 'attack' && sq.state === 'forming') ?? null;
+  if (s.config.aiSquad !== false && forming && free.length > 0) {
+    /*
+     * 正在收拢的编队**持续吸收新造出来的单位**，直到凑够 `want` 才出发。
+     *
+     * 不吸收的话就会出现实测那种"走 2 人"：编成时手头只有 3 个兵，
+     * 之后就再也补不进来，队伍一直是残的。
+     */
+    forming.memberIds.push(...free.map((u) => u.id));
+  } else if (
+    s.config.aiSquad !== false &&
+    !forming &&
+    kept.length < SQUAD_MAX &&
+    free.length >= 3 &&
+    foes.length > 0
+  ) {
+    kept.push({
+      id: `atk-${(s.aiFocus?.[me]?.squads ?? []).length + 1}-${s.turn}`,
+      role: 'attack',
+      state: 'forming',
+      memberIds: free.map((u) => u.id),
+      targetCityId: null,
+      since: s.turn,
+      want: SQUAD_WANT,
+      requested: [],
+    });
+  }
+
+  // 3) 目标 + 出发：目标用"守军最少的那座"（换城就是绕路，见 softestCityOf）
+  const reports: AiSquadReport[] = [];
+  const prevAll = (focus.plan?.keep?.squadPrev ?? {}) as Record<
     string,
     { count: number; lead: number; stalled: number }
   >;
+  const nextPrev: Record<string, { count: number; lead: number; stalled: number }> = {};
 
-  const out: AiSquadReport[] = [];
-  const next: Record<string, { count: number; lead: number; stalled: number }> = {};
-  for (const band of ['front', 'mid', 'rear'] as const) {
-    const dists = bands[band].sort((a, b) => a - b);
+  for (const sq of kept) {
+    /*
+     * 目标**跟计划层走**，编队不自己挑。
+     *
+     * 第一版让编队自己挑"守军最少的城"，实测掉得厉害（配对改善 4 / 变差 8）：
+     * 编队和全局主攻方向打架——部队被拉去远处那座，正面反而空了。
+     * 编队是执行者，选哪座城是计划的活。
+     */
+    if (!sq.targetCityId || !foes.some((c) => c.id === sq.targetCityId)) {
+      sq.targetCityId =
+        (planCityId && foes.some((c) => c.id === planCityId) ? planCityId : null) ??
+        softestCityOf(s, me)?.id ??
+        foes[0]?.id ??
+        null;
+    }
+    /*
+     * 出发：凑够 `want` 就走；凑不够等 10 回合也走（有多少走多少）。
+     * 只等"凑够"的话，钱不够时会永远不出兵——那和"没有编队"一样。
+     */
+    if (
+      sq.state === 'forming' &&
+      (sq.memberIds.length >= sq.want || s.turn - sq.since >= SQUAD_FORM_TIMEOUT)
+    ) {
+      sq.state = 'marching';
+    }
+    const city = sq.targetCityId ? s.cities.find((c) => c.id === sq.targetCityId) ?? null : null;
+    const dists = sq.memberIds
+      .map((id) => byId.get(id))
+      .filter((u): u is Unit => u !== undefined)
+      .map((u) => (city ? distToCity(u, city) : 0))
+      .sort((a, b) => a - b);
     const count = dists.length;
-    const lead = count === 0 ? 0 : dists.reduce((n, d) => n + d, 0) / count;
-    const p = prev[band];
-    // 前进 0.5 格以上才算动：平均数抖动不该算"推进"
-    // 上限 99：不加就是个死循环（实测溢出到 554 → 屯兵价值 56 → 永久不推进）
-    const stalled = !p ? 0 : count > 0 && lead >= p.lead - 0.5 ? Math.min(99, p.stalled + 1) : 0;
+    const lead = dists[0] ?? 0;
+    const spread = count > 1 ? (dists[count - 1] as number) - lead : 0;
+    const p = prevAll[sq.id];
+    const stalled = !p ? 0 : count > 0 && lead >= p.lead - 1 ? Math.min(99, p.stalled + 1) : 0;
     const lost = p ? Math.max(0, p.count - count) : 0;
     const note: AiSquadReport['note'] =
-      count === 0 ? 'thin' : count < 2 ? 'thin' : stalled >= 4 ? 'blocked' : lost >= 2 ? 'attrition' : 'advance';
-    out.push({ band, count, lead: Math.round(lead * 10) / 10, stalled, lost, note });
-    next[band] = { count, lead, stalled };
+      count < 3 ? 'thin' : stalled >= 4 ? 'blocked' : lost >= 2 ? 'attrition' : 'advance';
+    reports.push({
+      id: sq.id,
+      state: sq.state,
+      count,
+      lead: Math.round(lead * 10) / 10,
+      spread: Math.round(spread * 10) / 10,
+      stalled,
+      lost,
+      note,
+    });
+    nextPrev[sq.id] = { count, lead, stalled };
   }
-  return { cityId: city.id, squads: out };
+
+  if ((focus.squads ?? null) !== null || kept.length > 0) {
+    setFocus(s, me, { ...focus, squads: kept });
+  }
+  const f2 = focusOf(s, me);
+  if (f2.plan) {
+    f2.plan.keep = { ...(f2.plan.keep ?? {}), squadPrev: nextPrev };
+  }
+  return reports;
 }
+
+/** 编队成员 → 目标城（走位用：编队成员认编队目标，散兵认全局目标） */
+function squadTargetsOf(s: GameState, me: PlayerId): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const sq of focusOf(s, me).squads ?? []) {
+    if (!sq.targetCityId) continue;
+    for (const id of sq.memberIds) out.set(id, sq.targetCityId);
+  }
+  return out;
+}
+
+/** 编队缺几个人（反馈给生产端：不够就赶紧造兵） */
+function squadShortfallOf(s: GameState, me: PlayerId): number {
+  let need = 0;
+  for (const sq of focusOf(s, me).squads ?? []) {
+    if (sq.state !== 'forming') continue;
+    need += Math.max(0, sq.want - sq.memberIds.length);
+  }
+  return need;
+}
+
+/**
+ * 僵持指数：我方战斗单位到最近敌城的"中位距离"连续几回合没缩小。
+ *
+ * 为什么用中位数而不是"最靠前那个兵"：一个侦察兵冲进去又被打死，
+ * 最小值会来回跳；中位数代表**整支部队**有没有整体压上去。
+ *
+ * 每回合只更新一次（`keep.stallTurn` 去重）——`value` 每步决策都会被调，
+ * 不去重会把同一回合算十几次，计数直接失真。
+ */
+/* ---------------- 编队：编制 + 上报（2026-11-21） ---------------- */
 
 function stallOf(c: PlanCtx): { turns: number; median: number } {
   const turn = c.view.turn;
@@ -2444,10 +2558,13 @@ const MASS_PLAN: RankedPlan = {
      * 这条上报把那个死循环掐断：前队空 + 后队连续二十回合没前进 → 不是僵持，
      * 是根本没过河/没出门，这时候该做的是"往前压"，不是"继续屯"。
      */
-    const sq = c.keep.squads as Record<string, { count: number; stalled: number }> | undefined;
-    if (sq && (sq.front?.count ?? 0) === 0 && (sq.rear?.count ?? 0) >= 8 && (sq.rear?.stalled ?? 0) >= 20) {
-      return 0;
-    }
+    /*
+     * 上报的消费：**所有编队都连续 20 回合没推进 → 不是僵持，是根本没动**。
+     * 这时候该往前压，不是继续攒（第一版按"前队空/后队多"判，已被否掉：
+     * 那是按死距离分段的产物，32×32 上人人都是"后队"）。
+     */
+    const reps = c.keep.squads as AiSquadReport[] | undefined;
+    if (reps && reps.length > 0 && reps.every((r) => r.stalled >= 20)) return 0;
     const st = stallOf(c);
     if (st.turns < PLAN_TUNING.massStallTurns) return 0;
     // 周期后段放开冲一次：屯久了必须试一把，否则就成了"永久不推进"
@@ -2902,7 +3019,11 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * 一个目标，于是所有人挤一条线压同一座城——对面只要把主力摆在那一座前面，
    * 剩下几座城就等于不存在。人不会这么打：一路压正面，另一路去牵制/绕后。
    */
-  const objective = all.flank.has(unit.id) && all.flankCityId ? all.flankCityId : all.focusCityId;
+  // 编队成员朝**编队的目标城**走（整队一个方向，所以不会散）；
+  // 散兵（守家、经济护卫、新造出来还没编队的）仍按全局目标
+  const objective =
+    all.squadTarget.get(unit.id) ??
+    (all.flank.has(unit.id) && all.flankCityId ? all.flankCityId : all.focusCityId);
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,objective,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,objective,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
@@ -8232,6 +8353,8 @@ function aiNextActionCoreInner(
     chokedCities: citiesOf(view, me)
       .filter((c) => !c.ruined && spawnCellCountOf(view, c) === 0)
       .map((c) => c.id),
+    squadTarget: squadTargetsOf(view, me),
+    squadNeed: squadShortfallOf(view, me),
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
@@ -8368,29 +8491,31 @@ function aiNextActionCoreInner(
        */
       /*
        * `depth === 0` 只表示"不是递归推演"，**每次出动作都会进来**（一回合十几次）。
-       * 不去重的话"连续几回合没前进"会被算成"连续十几次"，实测溢出到 554，
-       * 于是屯兵价值 = 1 + 554/10，永久当值、永久不推进。用 `squadTurn` 去重。
+       * 编队维护每回合只做一次：不去重的话"成员死了要清理"会被重复执行，
+       * 而"连续几回合没推进"会被算成"连续十几次"（实测溢出到 554）。
        */
       const focusNow = focusOf(s, me);
       const sameTurn = Number(focusNow.plan?.keep?.squadTurn ?? -1) === s.turn;
-      const sq = sameTurn ? null : squadsOf(s, me, fields.focusCityId);
-      if (sq && focusNow.plan) {
-        focusNow.plan.keep = {
-          ...(focusNow.plan.keep ?? {}),
-          squads: Object.fromEntries(
-            sq.squads.map((x) => [x.band, { count: x.count, lead: x.lead, stalled: x.stalled }]),
-          ),
-          squadTurn: s.turn,
-        };
-      }
-      if (sq && sq.squads.length > 0) {
-        const sig = sq.squads.map((x) => `${x.band}:${x.note}:${x.count}`).join('|');
-        const log = (s.aiSquads ??= []);
-        const last = [...log].reverse().find((x) => x.me === me);
-        const lastSig = last ? last.squads.map((x) => `${x.band}:${x.note}:${x.count}`).join('|') : '';
-        if (sig !== lastSig) {
-          log.push({ turn: s.turn, me, cityId: sq.cityId, squads: sq.squads });
-          if (log.length > 200) log.splice(0, log.length - 200);
+      if (!sameTurn) {
+        const reps = squadTick(s, me, fields.focusCityId);
+        const f2 = focusOf(s, me);
+        if (f2.plan) {
+          f2.plan.keep = { ...(f2.plan.keep ?? {}), squads: reps, squadTurn: s.turn };
+        }
+        if (reps.length > 0) {
+          const sig = reps.map((x) => `${x.id}:${x.note}:${x.count}`).join('|');
+          const log = (s.aiSquads ??= []);
+          const last = [...log].reverse().find((x) => x.me === me);
+          const lastSig = last ? last.squads.map((x) => `${x.id}:${x.note}:${x.count}`).join('|') : '';
+          if (sig !== lastSig) {
+            log.push({
+              turn: s.turn,
+              me,
+              cityId: focusOf(s, me).squads?.[0]?.targetCityId ?? null,
+              squads: reps,
+            });
+            if (log.length > 200) log.splice(0, log.length - 200);
+          }
         }
       }
       // 判决由 `DECISIVE_PLAN` 拥有（回滞记在它口袋里），这里只记日志

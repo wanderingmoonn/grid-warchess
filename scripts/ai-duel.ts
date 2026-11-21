@@ -149,6 +149,8 @@ const NO_DECISIVE = has('no-decisive');
 const NO_MASS = has('no-mass');
 /** `--no-breakthrough`：关掉集中突破/绕路（做 A/B 用） */
 const NO_BREAKTHROUGH = has('no-breakthrough');
+/** `--no-squad`：关掉编队（做 A/B 用） */
+const NO_SQUAD = has('no-squad');
 /** `--quality-scale N`：采购质量信号的放大倍数（默认 2.5，1 = 老行为） */
 const QUALITY_SCALE = argOf('quality-scale', '');
 /** `--recruit-cap auto|N`：放开每回合产兵名额（默认仍是 2） */
@@ -211,6 +213,7 @@ function playOne(
       ...(NO_DECISIVE ? { aiDecisive: false } : {}),
       ...(NO_MASS ? { aiMass: false } : {}),
       ...(NO_BREAKTHROUGH ? { aiBreakthrough: false } : {}),
+      ...(NO_SQUAD ? { aiSquad: false } : {}),
     },
     seed,
   );
@@ -285,16 +288,17 @@ function planFlipsOf(s: GameState, p: PlayerId): number {
   return (s.aiPlanTrace ?? []).filter((t) => t.me === p).length;
 }
 
-/** 编队上报摘要：`前3/中5/后12` + 后队连续几回合没动（最常出问题的就是它） */
+/**
+ * 编队摘要：`2支[atk-1走6人/atk-2组3人]`。
+ * 组 = 还在收拢（缺口就是报给生产端的那个数），走 = 已出发。
+ */
 function squadSummaryOf(s: GameState, p: PlayerId): string {
   const last = [...(s.aiSquads ?? [])].reverse().find((x) => x.me === p);
-  if (!last) return '无';
-  const by = Object.fromEntries(last.squads.map((x) => [x.band, x]));
-  const cell = (b: 'front' | 'mid' | 'rear'): string => {
-    const v = by[b];
-    return v ? `${v.count}${v.note === 'blocked' ? '堵' : v.note === 'attrition' ? '损' : ''}` : '-';
-  };
-  return `前${cell('front')}/中${cell('mid')}/后${cell('rear')}`;
+  if (!last || last.squads.length === 0) return '无';
+  const body = last.squads
+    .map((x) => `${x.id.replace(/-\d+$/, '')}${x.state === 'forming' ? '组' : '走'}${x.count}人`)
+    .join('/');
+  return `${last.squads.length}支[${body}]`;
 }
 
 function planSummaryOf(s: GameState, p: PlayerId): string {
