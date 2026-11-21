@@ -1784,6 +1784,14 @@ interface Fields {
   squadTarget: Map<string, string>;
   /** 编队缺口：还在收拢的编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
   squadNeed: number;
+  /**
+   * 编队成员 → 队形信息（目标城、自己到目标、全队最前/最后、允许的密集度）。
+   *
+   * 用它替代老的"协同前进"（`aheadOfLine` 比全局战线）：队形该多紧由**编队**定，
+   * 不再由一条全图共用的"战线"定。队形在密集度以内就全员推进；超了最前面的停。
+   * 这样"跑得快的等跑得慢的"是密集度约束的副产品，不用另写一条。
+   */
+  squadInfo: Map<string, { cityId: string; lead: number; leadMin: number; leadMax: number; spread: number }>;
   /** 视野里有多少敌方单位带溅射：决定"挨着站"该罚多重 */
   foeSplash: number;
   /** 对面还剩几个经济单位。零 = 纯战斗阵容（见 scoreSiege 的加分与僵持破局） */
@@ -2226,14 +2234,57 @@ registerAiPlan(POSTURE_PLAN);
  */
 /* ---------------- 编队：组建 / 出发 / 解散 + 上报（2026-11-21） ---------------- */
 
-/** 编队最少几个人才出发。不够就等，同时把缺口报给生产端 */
-const SQUAD_WANT = 6;
 /** 伤亡超过这个比例就解散：人快打光了还不散，等于把残兵拖死 */
 const SQUAD_DISBAND_RATIO = 0.4;
-/** 同时最多几支：一支在打、一支在后面组。多了就是散兵线 */
-const SQUAD_MAX = 2;
 /** 收拢最多等几回合：凑不够也走，否则钱一紧就永远不出兵 */
 const SQUAD_FORM_TIMEOUT = 10;
+
+/**
+ * 战略层的最小版：把"进攻 / 发展"两个意愿换成**配额**（不是乘数）。
+ *
+ * P4 试过做成 `attack` 乘数，三次调参都把胜局调成平局——乘数太钝，
+ * 只能让"已经在打的更凶"，改变不了"打不打"。
+ *
+ * 配额是硬的，而且编队直接吃它：
+ *   · x 高 → 编队大（4~12 人）、可以两支并行、队形更密；
+ *   · x 低 → 编队小、只准一支、队形更散（守/牵制的形态）。
+ *
+ * 仍然只有两个维度（用户的原模型）：x = 打不打，y = 钱花在发展还是军费。
+ * y 目前只用来定"经济单位的相对偏好"，还没做成预算硬上限。
+ */
+function postureBudgetOf(
+  s: GameState,
+  me: PlayerId,
+): { x: number; y: number; squadSize: number; maxSquads: number; spread: number } {
+  const mine = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'combat').length;
+  let foe = 0;
+  for (const u of s.units) {
+    if (u.owner !== me && utype(s, u.type).category === 'combat') foe += 1;
+  }
+  const eraOf = (p: PlayerId): number =>
+    Math.max(1, ...s.cities.filter((c) => c.owner === p && !c.ruined).map((c) => c.era));
+  const foeEra = Math.max(1, ...[...new Set(s.cities.filter((c) => c.owner !== me).map((c) => c.owner))].map(eraOf));
+  const ratio = mine / Math.max(1, foe);
+  // 0.7 以下不敢打，1.6 以上敢打
+  const x = Math.min(1, Math.max(0, (ratio - 0.7) / 0.9));
+  // 落后越多越想发展
+  const y = Math.min(1, Math.max(0, 0.45 - 0.2 * (foeEra - eraOf(me))));
+  return {
+    x,
+    y,
+    /*
+     * 6~12 人：x=0 时小股试探，x=1 时大规模集结。
+     *
+     * 下限从 4 抬到 6：4 人编队打不动一座有守军的城（实测 Q4 从 5-1-0 掉到 2-3-1）。
+     * "小股"的用处是侦查和骚扰，那是以后的独立任务，不该由主攻编队兼任。
+     */
+    squadSize: Math.round(6 + 6 * x),
+    // 只有真的想打才开第二支；开太多就是散兵线
+    maxSquads: x >= 0.55 ? 2 : 1,
+    // 越激进越密集（主力互相掩护）；不想打时散开（少挨溅射、便于牵制）
+    spread: Math.round(6 - 3 * x),
+  };
+}
 
 /**
  * 每回合维护编队：清理 → 组建 → 出发。
@@ -2251,6 +2302,7 @@ const SQUAD_FORM_TIMEOUT = 10;
  *   · **可以有缺口**：人不够就先攒着，缺口报给生产端。
  */
 function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSquadReport[] {
+  const budget = postureBudgetOf(s, me);
   const focus = focusOf(s, me);
   const combat = unitsOf(s, me).filter(
     (u) => utype(s, u.type).category === 'combat' && utype(s, u.type).domain !== 'water',
@@ -2282,7 +2334,7 @@ function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSqu
   } else if (
     s.config.aiSquad !== false &&
     !forming &&
-    kept.length < SQUAD_MAX &&
+    kept.length < budget.maxSquads &&
     free.length >= 3 &&
     foes.length > 0
   ) {
@@ -2293,7 +2345,8 @@ function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSqu
       memberIds: free.map((u) => u.id),
       targetCityId: null,
       since: s.turn,
-      want: SQUAD_WANT,
+      want: budget.squadSize,
+      spread: budget.spread,
       requested: [],
     });
   }
@@ -2374,6 +2427,30 @@ function squadTargetsOf(s: GameState, me: PlayerId): Map<string, string> {
   for (const sq of focusOf(s, me).squads ?? []) {
     if (!sq.targetCityId) continue;
     for (const id of sq.memberIds) out.set(id, sq.targetCityId);
+  }
+  return out;
+}
+
+/** 编队成员 → 队形信息（见 Fields.squadInfo 的说明） */
+function squadInfoOf(
+  s: GameState,
+  me: PlayerId,
+): Map<string, { cityId: string; lead: number; leadMin: number; leadMax: number; spread: number }> {
+  const out = new Map<string, { cityId: string; lead: number; leadMin: number; leadMax: number; spread: number }>();
+  for (const sq of focusOf(s, me).squads ?? []) {
+    if (!sq.targetCityId) continue;
+    const city = s.cities.find((c) => c.id === sq.targetCityId);
+    if (!city) continue;
+    const members = sq.memberIds
+      .map((id) => s.units.find((u) => u.id === id))
+      .filter((u): u is Unit => u !== undefined);
+    if (members.length === 0) continue;
+    const leads = members.map((u) => distToCity(u, city));
+    const leadMin = Math.min(...leads);
+    const leadMax = Math.max(...leads);
+    for (const u of members) {
+      out.set(u.id, { cityId: city.id, lead: distToCity(u, city), leadMin, leadMax, spread: sq.spread });
+    }
   }
   return out;
 }
@@ -3047,8 +3124,19 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * 只在**没有压城**（`!commit`）时生效：全军已经决定强攻的时候还互相等，
    * 等于把优势让回去。水域单位不参与（它们的战线是另一套）。
    */
+  /*
+   * 编队成员用**队形密集度**代替全局战线（2026-11-21 用户提的）。
+   *
+   * 判据：队形被拉开超过 `spread` 时，最前面那一批停下等；否则全员推进。
+   * 老逻辑（`aheadOfLine` 比全图 `lineRef`）对编队不再生效——
+   * 它的问题是"所有人都在战线前面"时全都不动，而河/桥会把战线切成两段。
+   */
+  const sqInfo = all.squadInfo.get(unit.id) ?? null;
+  const squadTooSpread = sqInfo !== null && sqInfo.leadMax - sqInfo.leadMin > sqInfo.spread;
+  const aheadOfSquad = squadTooSpread && sqInfo !== null && sqInfo.lead <= sqInfo.leadMin + 1;
   const aheadOfLine =
     !all.commit &&
+    !sqInfo && // 编队成员不吃全局战线逻辑（上面那条更准）
     def.category === 'combat' &&
     def.domain !== 'water' &&
     // 空中的距离是"每格一步"，和地面的战线长度不是一个量纲：
@@ -3076,7 +3164,8 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    * 这一项乘的是**推进分**，不是开火——兵该还手还是还手，只是不再
    * "往前挪一格换 6 分"（那正是把部队一格一格填进绞肉机的原因）。
    */
-  const advanceWeight = (aheadOfLine ? lineHold : 1) * all.weights.advance;
+  const advanceWeight =
+    (aheadOfLine || aheadOfSquad ? lineHold : 1) * all.weights.advance;
   /*
    * 僵局压力（关卡级 `pressure`，默认 0 = 不启用）。
    *
@@ -8355,6 +8444,7 @@ function aiNextActionCoreInner(
       .map((c) => c.id),
     squadTarget: squadTargetsOf(view, me),
     squadNeed: squadShortfallOf(view, me),
+    squadInfo: squadInfoOf(view, me),
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
