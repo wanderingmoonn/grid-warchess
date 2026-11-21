@@ -970,6 +970,20 @@ function inDanger(s: GameState, owner: PlayerId, x: number, y: number): boolean 
 }
 
 /**
+ * 这座城还剩几个能出兵的空格（用最便宜的陆军战斗兵种探）。
+ *
+ * 0 = 城被自己人占满，**再也造不出兵**。这个数不是"产能估计"，
+ * 是规则层 `recruitSpawnCells` 的原话——它返回空，造兵动作就会被拒。
+ */
+function spawnCellCountOf(s: GameState, city: City): number {
+  const probe = Object.values(s.unitTypes)
+    .filter((d) => d.category === 'combat' && d.domain !== 'water')
+    .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+  if (!probe) return 0;
+  return recruitSpawnCells(s, city.id, undefined, probe.id).length;
+}
+
+/**
  * 地图有多"糙"：森林 + 丘陵占的比例。
  *
  * 这两种地形进门要 2 点移动力，所以 move 1 的单位一步都进不去。
@@ -1736,6 +1750,14 @@ interface Fields {
    * 这个图就是用来让部队保持间隔的——**集成度靠战线，间隔靠它**，两件事分开管。
    */
   crowd: Uint8Array;
+  /**
+   * 已经被自己人堵死产兵格的城市（`recruitSpawnCells` 为 0）。
+   *
+   * 2026-11-21 实测（seed 32，16×16 era3）：第 81 回合起两座城的产兵格都是 0、
+   * 城里蹲着 8 个人，之后 140 回合攒到 18900 金，**一个兵都没造出来**。
+   * 城格那点回血/护甲换不来"整支军队停摆"，所以这些城里的兵必须让位。
+   */
+  chokedCities: string[];
   /** 视野里有多少敌方单位带溅射：决定"挨着站"该罚多重 */
   foeSplash: number;
   /** 对面还剩几个经济单位。零 = 纯战斗阵容（见 scoreSiege 的加分与僵持破局） */
@@ -1819,11 +1841,14 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId): boolean {
     dist.set(i, 0);
     queue.push(i);
   };
+  /*
+   * 种子**只放城市**，不放"在场的陆军"。
+   *
+   * 2026-11-21：放陆军当种子会让这条判据随"侦察兵跑到对岸又被打死"来回翻——
+   * 一翻 `done` 就真、过河计划退场、口袋丢掉、'桥被拆几次'的计数从头开始
+   * （实测 seed 34 一局桥被拆 11 次还在修）。城市是稳定的锚点，够用了。
+   */
   for (const c of citiesOf(s, owner)) for (const t of cityTiles(c)) seed(t.x, t.y);
-  for (const u of unitsOf(s, owner)) {
-    if (utype(s, u.type).domain === 'water') continue;
-    seed(u.x, u.y);
-  }
   if (queue.length === 0) return false;
 
   for (let i = 0; i < queue.length; i++) {
@@ -2241,14 +2266,40 @@ const CROSSING_PLAN: RankedPlan = {
   value: (c) => {
     if (c.view.config.aiCrossing === false) return 0;
     if (!c.view.cities.some((x) => x.owner !== c.me && !x.ruined)) return 0;
-    // 能走过去就不需要计划：架桥只是捷径，交给逐回合的分数去决定
-    if (c.canReach) return 0;
+    /*
+     * **不要**因为 `canReach` 归零。归零 = 计划退场 = 口袋丢掉，
+     * 于是"桥被拆几次"的计数每翻一次就归零，放弃条件永远不成立
+     * （实测 seed 34 一局拆 11 次还在造）。陆路通了由 `done` 收场，
+     * 那时候任务已经结束，丢口袋是对的。
+     */
     // 兵都没凑够就先别修桥：那会变成"为了过河把家底掏空"
     if (c.army < 3) return 0;
     return 1;
   },
   done: (c) => c.canReach || !c.view.cities.some((x) => x.owner !== c.me && !x.ruined),
+  /*
+   * 桥被反复拆：这条路走不通，就别再把钱填进去。
+   *
+   * 2026-11-21 实测（seed 34，16×16 era3）：那一局桥被拆了 **7 次**——造一座、
+   * 对面拆一座、再造一座，后方一直不发展，钱全耗在河上。人不会这么打：
+   * 试两三次不行就换渡口、换船运，或者干脆先不打。
+   *
+   * 计数按"我方桥单位数下降"算（不看是谁拆的，也管不了，只看结果）。
+   * 每 15 回合没再被拆就忘掉一次——对面可能撤了，值得再试。
+   */
+  save: (c) => {
+    const mine = unitsOf(c.view, c.me).filter((u) => utype(c.view, u.type).bridges).length;
+    const prev = c.keep.bridges;
+    // 计数写进 `keep`（不随计划退场丢失），不写口袋——见 types 里 `keep` 的说明
+    if (typeof prev === 'number' && mine < prev) c.keep.lost = Number(c.keep.lost ?? 0) + 1;
+    c.keep.bridges = mine;
+    return {};
+  },
   focus: (c) => {
+    // 已经有陆路：不用修（这里给 null，不是让计划退场，见 value 的说明）
+    if (c.canReach) return null;
+    // 拆够两次就别修了：实测一局桥被拆 10 次、造了 12 座，钱全填河
+    if (Number(c.keep.lost ?? 0) >= 2) return null;
     // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
     const prev = c.state.focus as { x: number; y: number } | undefined;
     if (prev) {
@@ -4106,7 +4157,13 @@ function rawBuildScore(
       Math.max(0, 24 - gap.farDist) * 0.5 +
       (def.era - 1) * 5 -
       def.cost * 0.04 -
-      (risky ? 8 : 0)
+      /*
+       * 架在对面枪口下：造一座、被拆一座，钱全填河。
+       * 8 → 60（2026-11-21）：桥的基准分是 58，扣 8 等于没拦；
+       * 实测 seed 34 一局造 12 座、被打掉 10 座。扣 60 让它只在本图
+       * 别无他法（整条河都在射程内）时才冒险架桥。
+       */
+      (risky ? 60 : 0)
     );
   }
 
@@ -4849,6 +4906,25 @@ function unitCandidates(
        * 没有任何一条会把它往自家坞带。结果是：素体造出来了、模块买得起、
        * 坞就在后方——三件事齐了，就是永远装不上，一台平台到死只会撞击。
        */
+      /*
+       * 产兵格告急：自己人把城格占满 → 这座城再也造不出兵（规则层直接拒）。
+       *
+       * 2026-11-21 实测（seed 32，16×16 era3）：第 81 回合起两座城的产兵格都是 0、
+       * 城里 8 个人，之后 140 回合攒到 18900 金，一个兵都没造出来——整支军队停摆。
+       *
+       * 分要按**定额**给：僵持局面里走位评分常常是 -100 上下的推进负分
+       * （"出去也打不过"），加几十点压不住。量级照抄下面素体走向装配坞那段（120/80）。
+       */
+      if (def.category === 'combat' && all.chokedCities.length > 0) {
+        const home = citiesOf(s, me).find(
+          (c) =>
+            all.chokedCities.includes(c.id) &&
+            cityTiles(c).some((t) => t.x === unit.x && t.y === unit.y),
+        );
+        if (home && !cityTiles(home).some((t) => t.x === x && t.y === y)) {
+          score += 150;
+        }
+      }
       if (def.armorFrame && weaponsOf(unit).length === 0) {
         const dock = nearestOwnDock(s, me, unit);
         if (dock) {
@@ -7857,6 +7933,9 @@ function aiNextActionCoreInner(
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
+    chokedCities: citiesOf(view, me)
+      .filter((c) => !c.ruined && spawnCellCountOf(view, c) === 0)
+      .map((c) => c.id),
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,

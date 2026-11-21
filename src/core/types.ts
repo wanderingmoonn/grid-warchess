@@ -1941,6 +1941,16 @@ export interface PlanMemoLike {
   since: number;
   /** 每条计划自己的口袋：planId → 状态，互不干扰 */
   pockets: Record<string, Record<string, unknown>>;
+  /**
+   * 跨计划存活的计数器：**不随当值计划换人而清空**。
+   *
+   * 口袋（pockets）只保留"这一刻当值"的计划，计划一退场口袋就丢。
+   * 但有些计数必须活得比计划久——比如"这座桥被拆了几次"，它正是
+   * 用来决定"还要不要继续修"的；放口袋里就会每退场一次归零，
+   * 放弃条件永远不成立（2026-11-21 实测 seed 34：桥被拆 10 次，
+   * 计数只涨到 1 就被清回去了）。
+   */
+  keep?: Record<string, unknown>;
   cooldown?: Record<string, number>;
 }
 

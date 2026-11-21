@@ -56,6 +56,7 @@ function ctxOf(turn: number): PlanCtx {
     intelKnown: false,
     horizon: PLAN_TUNING.horizon,
     state: {},
+    keep: {},
   };
 }
 

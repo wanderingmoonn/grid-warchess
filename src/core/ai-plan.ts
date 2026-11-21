@@ -78,6 +78,13 @@ export interface PlanCtx {
    * 互不干扰——两条计划同时当值时，共用一份状态必然打架。
    */
   state: Record<string, unknown>;
+  /**
+   * 跨计划存活的计数器（引用，直接改）。
+   *
+   * 和 `state` 的分工：`state` 是"这条计划当值期间"的记忆，退场即丢；
+   * `keep` 活得比计划久，用来记"试过几次、被拆过几回"这种**放弃条件**。
+   */
+  keep: Record<string, unknown>;
 }
 
 /**
@@ -174,6 +181,8 @@ export interface PlanMemo {
    * 否则"收尾记城、过河记渡口"会互相覆盖。
    */
   pockets: Record<string, Record<string, unknown>>;
+  /** 跨计划存活的计数器（见 types 的 `PlanMemoLike.keep`） */
+  keep?: Record<string, unknown>;
   /** 冷却表：planId → 到期回合。刚放弃的短期内不重立，防抖 */
   cooldown?: Record<string, number>;
 }
@@ -360,7 +369,12 @@ export function resolvePlans(
    * 每条计划拿到的是**它自己的** ctx：`state` 换成它自己的口袋。
    * 两条计划同时当值时共用一份状态必然打架（一个记城、一个记渡口）。
    */
-  const ctxFor = (plan: AiPlan): PlanCtx => ({ ...ctx, state: pocketsIn[plan.id] ?? {} });
+  const keep = prev?.keep ?? {};
+  const ctxFor = (plan: AiPlan): PlanCtx => ({
+    ...ctx,
+    state: pocketsIn[plan.id] ?? {},
+    keep,
+  });
 
   const values: PlanResolution['values'] = [];
   const live: Array<{ plan: AiPlan; value: number }> = [];
@@ -516,12 +530,13 @@ export function resolvePlans(
           valueAt: prev && prev.id === memoryOf.id ? prev.valueAt : memoryValue,
           since: prev && prev.id === memoryOf.id ? prev.since : turn,
           pockets,
+          keep,
           ...(Object.keys(cooldown).length > 0 ? { cooldown } : {}),
         }
       : // 一条计划都不当值时，只要冷却还没过就得留一条空记录——
         // 否则 `prev` 变成 null，冷却表跟着丢掉，冷却等于没写
-        Object.keys(cooldown).length > 0
-        ? { id: '', valueAt: 0, since: turn, pockets, cooldown }
+        Object.keys(cooldown).length > 0 || Object.keys(keep).length > 0
+        ? { id: '', valueAt: 0, since: turn, pockets, keep, cooldown }
         : null;
 
   return {
@@ -601,6 +616,7 @@ export function planCtxOf(
     intelKnown: false,
     horizon: PLAN_TUNING.horizon,
     state: {},
+    keep: {},
     ...patch,
   };
 }
