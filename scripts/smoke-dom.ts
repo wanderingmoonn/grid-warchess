@@ -8430,6 +8430,11 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
   assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
 
   const side = (): HTMLElement => d.querySelector<HTMLElement>('#side')!;
+  const drawerButton = d.querySelector<HTMLButtonElement>('[data-act="drawer-toggle"]')!;
+  drawerButton.click();
+  assert.equal(drawerButton.getAttribute('aria-expanded'), 'true');
+  drawerButton.click();
+  assert.equal(drawerButton.getAttribute('aria-expanded'), 'false');
   /*
    * 打开一座城。
    *
@@ -11129,7 +11134,7 @@ check('详情抽屉：选中更新摘要，展开与收起保留按钮焦点且�
     assert.equal(button.getAttribute('aria-expanded'), 'true');
     assert.equal(fresh.document.activeElement, button);
     assert.equal(fresh.document.querySelector('[data-act="drawer-toggle"]'), button);
-    const city = fresh.document.querySelector<HTMLElement>('.city.own') ?? fresh.document.querySelector<HTMLElement>('.city');
+    const city = fresh.document.querySelector<HTMLElement>('.tile.t-city.own-A');
     assert.ok(city);
     city.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
     assert.notEqual(title(), UNIT_TYPES.militia!.name);
