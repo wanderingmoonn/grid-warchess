@@ -1435,7 +1435,14 @@ export interface MatchConfig {
    *
    * 缺省＝'script'，所以老存档、老房间读出来一个字都不用改。
    */
-  aiBrain?: 'script' | 'net';
+  /**
+   * 用哪份 AI 内核。
+   *
+   *   · `script`：`core/ai.ts`（老 AI，冻结的参考实现）
+   *   · `goal`  ：`core/ai-v2.ts`（实验 AI，远期规划走目标状态机）
+   *   · `net`   ：策略网络（测试 AI，权重单独加载）
+   */
+  aiBrain?: 'script' | 'net' | 'goal';
   /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
@@ -1802,8 +1809,55 @@ export interface DraftState {
  * 只记"在攒什么、为谁攒、几回合前立的"，不记分值：分值是每一回合重算的，
  * 记下来只会让昨天的局面决定今天的判断。
  */
+/**
+ * 产业链目标的**承诺**：AI 正在追哪一条链的哪一段。
+ *
+ * 和 `AiIntent`（攒钱目标）不是一回事，但同族：那个记"我要攒钱买什么"，
+ * 这个记"我在推进哪条产业链"。分开存是因为它们的生命周期完全不同——
+ * 攒钱买到就结束，产业链要跨很多回合、中间还要能被打断。
+ *
+ * 为什么必须存在局面里：AI 每一步都是从零重算的，没有这份记忆，
+ * "这回合想建船坞、下回合被走位挤掉、下下回合又从头开始"就会一直循环。
+ */
+export interface AiCommit {
+  goalId: string;
+  stepId: string;
+  /** 哪一回合立下的 */
+  since: number;
+  /**
+   * 立下时那个目标值多少分。
+   *
+   * 退出用**相对**判据（掉到它的几成以下才放弃），而不是绝对门槛：
+   * 海军的目标值是 0~0.5，修真可能是 0~100，绝对门槛只能照顾一家。
+   */
+  valueAt: number;
+}
+
+/**
+ * AI 的跨回合记忆：**一个对象装两件事**。
+ *
+ *   · `save`：这一回合为谁停手攒钱（每回合重选，可能为空）
+ *   · `chain`：我在追哪条产业链的哪一段（有粘性，跨回合）
+ *
+ * 为什么放在一起：它们回答的是同一个问题的两半——"我在为什么攒钱/投资"。
+ * 分成两个字段时，两处各搬一次（雾图副本 → 真状态），漏搬一处就是"攒到一半忘了"。
+ *
+ * **注意：这只是存储合并，不是语义合并。** 真正合成"一个位置、一次 argmax"
+ * 还有一步没做：现在攒钱目标（英雄/升时代）会把链承诺顶掉，两者仍是独立的判断。
+ * 要做那一步，得先决定"链的下一步"和"买英雄"谁优先——那是个需要实测的选择。
+ */
+export interface AiFocus {
+  /** 攒钱目标（形状沿用 `AiIntent`） */
+  save?: AiIntent | null;
+  /** 产业链承诺（形状沿用 `AiCommit`） */
+  chain?: AiCommit | null;
+}
+
 export interface AiIntent {
-  goal: 'unit' | 'hero' | 'era' | 'rebuild';
+  goal: 'unit' | 'hero' | 'era' | 'rebuild' | 'goal';
+  /** `goal === 'goal'` 时攒的是哪条产业链的哪一段 */
+  goalId?: string;
+  stepId?: string;
   /** `goal === 'unit'` 时攒的是哪个兵种 */
   unitId?: string;
   /** `goal === 'era'` 时的城、`goal === 'rebuild'` 时的废墟 */
@@ -2206,6 +2260,26 @@ export interface GameState {
    * 语义正好等于"没有正在攒的目标"，不影响继续玩。
    */
   aiIntent?: Partial<Record<PlayerId, AiIntent>>;
+  /**
+   * 产业链目标的承诺（见 `AiCommit`）。旧存档没有这个字段，读出来是 undefined，
+   * 语义正好等于"没有在追任何产业链"。
+   */
+  aiCommit?: Partial<Record<PlayerId, AiCommit>>;
+  /**
+   * AI 的跨回合记忆（2026-11-20 起两份记忆合并到这里）。
+   *
+   * `aiIntent` / `aiCommit` 是旧字段，只为老存档保留：读的时候如果 `aiFocus`
+   * 没有，就回落到它们；写一律写 `aiFocus`。等老存档自然淘汰了可以删。
+   */
+  aiFocus?: Partial<Record<PlayerId, AiFocus>>;
+  /**
+   * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
+   *
+   * 为什么不看绝对值：引擎里没有"每回合消耗多少粮/材"这个概念——支出是离散
+   * 事件（造一个兵、盖一座楼），不是流量。所以只能看**趋势**：
+   * 存量在掉 = 供不上，该补产出建筑了；持平或涨 = 够了。
+   */
+  aiResMark?: Partial<Record<PlayerId, { turn: number; stock: Record<string, number> }>>;
   /**
    * 僵持计数（AI 用，2026-11-15）。
    *

@@ -12,6 +12,7 @@
  *
  * 用法：
  *   node --experimental-strip-types scripts/ai-duel.ts --era 1 --games 40 --seed 900
+ *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --exp armor-era7 --size 28 --games 20
  *   node --experimental-strip-types scripts/ai-duel.ts --era 2 --games 40 --no-swap
  *   node --experimental-strip-types scripts/ai-duel.ts --era 3 --games 40 --old ./baselines/ai-6c3c992.ts
  * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z。
@@ -25,7 +26,7 @@
 import { applyAction } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiNextAction as newAi } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey, aiNextAction as newAi } from '../src/core/ai.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -76,6 +77,7 @@ const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '40'));
 const BASE_SEED = Number(argOf('seed', '900'));
 const CAP = Number(argOf('cap', '160'));
+const SIZE = Number(argOf('size', String(DEFAULT_CONFIG.size)));
 /**
  * 台子上测哪一档。
  *
@@ -90,7 +92,13 @@ const LEVEL = argOf('level', 'tactic') as 'basic' | 'advanced' | 'tactic';
 /** 同一颗种子两边各打一局：paired，方差最小 */
 const SWAP = !has('no-swap');
 /** 空扩展开关：只在排查"是不是规则把对局拖进拉锯"时才用 */
-const EXP = has('bare') ? [] : [...DEFAULT_CONFIG.expansionIds];
+const EXP = has('bare')
+  ? []
+  : argOf('exp', '')
+      .split(',')
+      .filter(Boolean)
+      .concat([...DEFAULT_CONFIG.expansionIds])
+      .filter((id, i, a) => a.indexOf(id) === i);
 
 type Ai = typeof newAi;
 
@@ -101,6 +109,13 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
       startEra: ERA,
       aiLevel: LEVEL,
       expansionIds: EXP,
+      /*
+       * 地图尺寸。默认 12×12 是 `DEFAULT_CONFIG` 的值，**对高时代不合适**：
+       * 时代越高作战半径越大，小图上"造出来的兵一回合就到对面城下"，
+       * 一切投资（电站、坞、素体）都没有回报空间，测出来的只是短兵相接。
+       * 验 5 代以上的内容请显式给 --size 24 或 28。
+       */
+      size: SIZE,
     },
     seed,
   );
@@ -111,11 +126,25 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
   while (!s.winner && s.turn <= CAP) {
     const ai = aiFor(s.current);
     const budget = { ...DEFAULT_BUDGET };
+    /*
+     * 被拒的动作记一笔、**接着找下一个**，不掐掉这一回合。
+     *
+     * 2026-11-20 改：原来是 `if (!r.ok) break`，一被拒就提前交棒。而实机
+     * （main.ts 的 runAiTurn）从 2026-11-19 起就是 `rejected.add(...) + continue`。
+     * 两边口径不一致的后果很实在：AI 在雾里朝"看不见的敌人"那格架桥会被拒，
+     * 实测 4 局就有 14 次——实机只是白费一步，跑批却直接少打半回合。
+     * 拿这种数去比胜率，比的是"谁更倒霉撞上这个 bug"。
+     */
+    const rejected = new Set<string>();
     for (let i = 0; i < AI_MAX_STEPS && !s.winner; i++) {
-      const a = ai(s, budget);
+      const a = ai(s, budget, rejected);
       if (!a) break;
       const r = applyAction(s, a);
-      if (!r.ok) break;
+      if (!r.ok) {
+        rejected.add(aiActionKey(a));
+        continue;
+      }
+      rejected.clear();
       s = r.state;
       if (a.type === 'RECRUIT') budget.recruited += 1;
       if (a.type === 'UPGRADE') budget.upgraded += 1;

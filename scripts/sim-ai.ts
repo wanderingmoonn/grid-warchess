@@ -11,7 +11,7 @@
  */
 
 import { isProducer } from '../src/core/produce.ts';
-import { AI_MAX_STEPS, aiNextAction } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../src/core/ai.ts';
 import { applyAction, citiesOf, distToCity } from '../src/core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
@@ -93,15 +93,23 @@ for (let turn = 1; turn <= TURNS; turn++) {
   budget.upgraded = 0;
 
   const rep: TurnReport = { turn, side, attacks: 0, sieges: 0, moves: 0, recruits: 0, units: 0 };
+  const rejected = new Set<string>();
 
   for (let step = 0; step < AI_MAX_STEPS; step++) {
-    const action = aiNextAction(s, budget);
+    const action = aiNextAction(s, budget, rejected);
     if (!action) break;
     const r = applyAction(s, action);
     if (!r.ok) {
-      console.log(`  ! 第 ${turn} 回合出现非法行动 ${JSON.stringify(action)}：${r.reason}`);
-      break;
+      /*
+       * 顺延，不是中断（2026-11-20 对齐实机口径）。
+       * main.ts 从 2026-11-19 起就是 `rejected.add + continue`，
+       * 这里以前 break，等于让"被规则拒一次"演变成"少打半回合"。
+       */
+      console.log(`  ! 第 ${turn} 回合非法行动 ${JSON.stringify(action)}：${r.reason}（已顺延）`);
+      rejected.add(aiActionKey(action));
+      continue;
     }
+    rejected.clear();
     s = r.state;
     if (action.type === 'ATTACK') rep.attacks += 1;
     if (action.type === 'SIEGE') rep.sieges += 1;

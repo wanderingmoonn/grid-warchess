@@ -31,6 +31,7 @@ import type { MarkKindDef } from './marks.ts';
 // 光环的声明式数据。同样只 import type：auras.ts 才是合并实现，
 // 而且它反过来要用 activeExpansions，写反了就是一个环。
 import type { AbilityApi, AuraSpec } from './ability-hooks.ts';
+import type { AiGoal } from './ai-goal.ts';
 // 五个时代兵种包放在单独文件里：六十多个单位的数据摆在这里会把钩子表淹掉。
 // 循环依赖是安全的——那边只 `import type`，运行时没有回指。
 import { ERA_ARMS } from './era-packs.ts';
@@ -1032,6 +1033,18 @@ export interface Expansion {
    * 就变成了"血很厚的杂兵"，而且查不出为什么）。
    */
   unitAi?: UnitAiProfile[];
+  /**
+   * 这个扩展的**产业链目标**：AI 跨回合的投资计划（见 `core/ai-goal.ts`）。
+   *
+   * 和 `unitAi` 差一层：那个管"一个兵这一回合干什么"，这个管"这个势力
+   * 这一阵子在攒什么"。海军要船坞、装甲要电站、修真要宗门和藏经阁——
+   * 它们的形状是同一个（目标值不值 → 缺哪一步 → 那一步给高分），
+   * 以前每种都在 `ai.ts` 里各写一份，现在由扩展自己声明。
+   *
+   * 核心不认识"宗门""法术"这些词，只说"这一段还没完成，去建它 / 去做这件事"。
+   * **写坏了是扩展的问题**：抛错按"没这个目标"处理，不会把整局打死。
+   */
+  aiGoals?: AiGoal[];
   /**
    * 这个扩展带来的**格子上留东西**的种类（水雷、地雷、火场……）。
    *
