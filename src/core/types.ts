@@ -1444,6 +1444,20 @@ export interface MatchConfig {
    */
   aiBrain?: 'script' | 'net' | 'goal';
   /**
+   * 实验 AI（v3）的编制上限。**只对 v3 生效**，v1 仍然写死 `CONFIG.maxUnits = 24`。
+   *
+   * 为什么要有这个开关：`CONFIG.maxUnits` 从来不是规则（规则层不拦玩家），
+   * 是 AI 给自己戴的帽子（见 config.ts 的注释与 rules.ts 的招募函数）。
+   * v3 要回答"没有编制上限时该怎么打"，就得让这条约束可调、可对照。
+   *
+   *   · 不写 = 24（等于现状，零行为变化）
+   *   · `'none'` = 不设上限
+   *
+   * 求解器（solve-economy）与战力估值必须读同一个值，否则会出现
+   * "AI 以为能无限堆、实际堆不上"。见 docs/PLAN-AI-V3-2026-11-21.md 第二节。
+   */
+  unitCap?: number | 'none';
+  /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
    *

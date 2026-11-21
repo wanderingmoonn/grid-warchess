@@ -15,7 +15,9 @@
  *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --exp armor-era7 --size 28 --games 20
  *   node --experimental-strip-types scripts/ai-duel.ts --era 2 --games 40 --no-swap
  *   node --experimental-strip-types scripts/ai-duel.ts --era 3 --games 40 --old ./baselines/ai-6c3c992.ts
- * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z。
+ *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --size 24 --symmetry mirror --games 20
+ * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z + 平局率。
+ * 平局的种子会额外打一行终局快照（城/兵/金），用来判断"谁其实占优"。
  *
  * `--old` 换对手：默认 ./baseline-ai.ts（冻结于 b36619a，几轮改动之前）。
  * 只想量"这一批改动本身值多少"时，用 `git show <当前 HEAD>:src/core/ai.ts` 抄一份
@@ -24,9 +26,10 @@
  */
 
 import { applyAction } from '../src/core/rules.ts';
+import { armySize } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey, aiNextAction as newAi } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -69,15 +72,44 @@ const scriptAi =
       : POLICY === 'greedy' || POLICY === 'script'
         ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
       : null;
-const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
-  ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
-) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
+const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as AiFn;
+
+/**
+ * "新版"那一侧用哪份内核。
+ *
+ * 以前写死 `../src/core/ai.ts`，于是这个台子只能测"老 AI 对老 AI 的冻结副本"。
+ * v3 独立成文件之后必须能指过去，否则所有 v3 的数字都是假的
+ * （测的一直是 v1，只是两边都是 v1 所以看不出错）。
+ *
+ *   --new ../src/core/ai-v3.ts        ← v3 的实验一律用这条
+ *   --new ../src/core/ai.ts           ← 默认，量 v1 自己
+ */
+const NEW_AI_FILE = argOf('new', '../src/core/ai.ts');
+const newAi = (await import(NEW_AI_FILE)).aiNextAction as unknown as AiFn;
 
 const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '40'));
 const BASE_SEED = Number(argOf('seed', '900'));
 const CAP = Number(argOf('cap', '160'));
 const SIZE = Number(argOf('size', String(DEFAULT_CONFIG.size)));
+/**
+ * 地形对称方式：`fair`（默认，两侧配额相同分布不同）/ `mirror`（完全镜像）。
+ *
+ * 为什么要能选：v3 的验收口径分两种——镜像图上"两边条件完全一样"，
+ * 打平是合理结果；非镜像图上打平说明有一方推不动，要算问题。
+ * 见 `docs/PLAN-AI-V3-2026-11-21.md` 的验收配方。
+ */
+const SYMMETRY = argOf('symmetry', 'fair') as 'fair' | 'mirror';
+/**
+ * 编制上限：`--unit-cap none` 或一个数字。不写 = 24（现状）。
+ *
+ * **只对 v3 生效**——v1 里这条是写死的（v1 冻结，不改）。所以想验它必须同时给
+ * `--new ../src/core/ai-v3.ts`，否则这个参数是空的。
+ * 见 `docs/PLAN-AI-V3-2026-11-21.md` 第二节。
+ */
+const UNIT_CAP_ARG = argOf('unit-cap', '');
+const UNIT_CAP: number | 'none' | undefined =
+  UNIT_CAP_ARG === '' ? undefined : UNIT_CAP_ARG === 'none' ? 'none' : Number(UNIT_CAP_ARG);
 /**
  * 台子上测哪一档。
  *
@@ -100,9 +132,13 @@ const EXP = has('bare')
       .concat([...DEFAULT_CONFIG.expansionIds])
       .filter((id, i, a) => a.indexOf(id) === i);
 
-type Ai = typeof newAi;
+type AiFn = (typeof import('../src/core/ai.ts'))['aiNextAction'];
+type Ai = AiFn;
 
-function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turns: number } {
+function playOne(
+  seed: number,
+  aIsNew: boolean,
+): { winner: PlayerId | null; turns: number; final: GameState } {
   let s: GameState = createMatch(
     {
       ...DEFAULT_CONFIG,
@@ -116,6 +152,8 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
        * 验 5 代以上的内容请显式给 --size 24 或 28。
        */
       size: SIZE,
+      mapSymmetry: SYMMETRY,
+      ...(UNIT_CAP === undefined ? {} : { unitCap: UNIT_CAP }),
     },
     seed,
   );
@@ -155,7 +193,27 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
     s = r.state;
   }
 
-  return { winner: s.winner ?? null, turns: s.turn };
+  return { winner: s.winner ?? null, turns: s.turn, final: s };
+}
+
+/**
+ * 终局快照：撞回合上限时，"谁其实占优"。
+ *
+ * 只数不判：城数、兵力、金币、编制是否顶满。平局的成因分几种，光看"平"这个字
+ * 分不出来——是两边都推不动（城多兵多但打不进去），还是钱花不出去（编制满），
+ * 还是一方早就该赢只是收不了尾。这份快照是为了让 S1 的诊断有据可依，
+ * 不参与胜负判定（不要用它把平局改判成胜）。
+ */
+function snapshotOf(s: GameState): string {
+  const side = (p: PlayerId): string => {
+    const cities = s.cities.filter((c) => c.owner === p).length;
+    const units = s.units.filter((u) => u.owner === p).length;
+    // 战斗单位单独数：编制上限只卡这一档，全数会把工人算进去，看不出"顶满"
+    const combat = armySize(s, p);
+    const gold = Math.round(s.players[p].gold);
+    return `${cities}城/${combat}战+${units - combat}工/${gold}金`;
+  };
+  return `A ${side('A')} · B ${side('B')}`;
 }
 
 let newWins = 0;
@@ -170,7 +228,7 @@ for (let i = 0; i < GAMES; i++) {
   const layouts = SWAP ? [true, false] : [i % 2 === 0];
 
   for (const aIsNew of layouts) {
-    const { winner, turns } = playOne(seed, aIsNew);
+    const { winner, turns, final } = playOne(seed, aIsNew);
     turnsSum += turns;
     played += 1;
 
@@ -185,7 +243,9 @@ for (let i = 0; i < GAMES; i++) {
       tag = winnerIsNew ? 'NEW' : 'old';
     }
     process.stderr.write(
-      `era${ERA} seed=${seed} ${aIsNew ? '新先手' : '新后手'} → ${tag} (${turns} 回合)\n`,
+      `era${ERA} seed=${seed} ${aIsNew ? '新先手' : '新后手'} → ${tag} (${turns} 回合)` +
+        (winner === null ? `  [终端快照 ${snapshotOf(final)}]` : '') +
+        '\n',
     );
   }
 }
@@ -201,5 +261,7 @@ console.log(
   `era${ERA} ${played} 局：新 AI ${newWins} 胜 / 旧 AI ${oldWins} 胜 / 平 ${draws}` +
     ` → 新胜率 ${(rate * 100).toFixed(1)}% (z=${zDecided.toFixed(2)})` +
     ` 计分 ${(score * 100).toFixed(1)}% (z=${zScore.toFixed(2)})` +
-    ` 均 ${(turnsSum / Math.max(1, played)).toFixed(0)} 回合  exp=[${EXP.join(',')}]`,
+    ` 平局率 ${((draws / Math.max(1, played)) * 100).toFixed(0)}%` +
+    ` 均 ${(turnsSum / Math.max(1, played)).toFixed(0)} 回合` +
+    ` ${SIZE}×${SIZE}/${SYMMETRY} cap=${CAP} exp=[${EXP.join(',')}]`,
 );

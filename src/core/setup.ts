@@ -740,7 +740,24 @@ export function createMatch(
        * 只在**两席局**里认：那个网络是在 2 人、10×10/12×12 上练的，
        * 三家四家的目标选择与席位顺序它一次都没见过——真让它上不叫测试。
        */
-      aiBrain: twoSeats && config.aiBrain === 'net' ? 'net' : 'script',
+      aiBrain:
+        config.aiBrain === 'net' && twoSeats
+          ? 'net'
+          : config.aiBrain === 'goal'
+            ? 'goal'
+            : 'script',
+      /*
+       * 编制上限：**只有 v3 读它**（v1 冻结，写死 24）。
+       *
+       * 必须抄进 state.config：这个对象是逐个白名单抄的，漏一个就等于
+       * 那个开关在开局瞬间被吃掉——`unitCap` 第一次加进来时就是漏在这里，
+       * 结果"撤编制"的实验跑出来和没撤一模一样（两边都还是 24 个兵）。
+       */
+      ...(config.unitCap === 'none'
+        ? { unitCap: 'none' as const }
+        : typeof config.unitCap === 'number' && config.unitCap > 0
+          ? { unitCap: config.unitCap }
+          : {}),
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。

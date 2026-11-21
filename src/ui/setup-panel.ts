@@ -139,9 +139,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiOpponent: initial.aiOpponent,
       aiAlly: initial.aiAlly,
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
-      // 内核跟着上一局走：连着跟测试 AI 打几局是常态（换阵营再来一把）。
+      // 内核跟着上一局走：连着跟测试 AI / 实验 AI 打几局是常态（换阵营再来一把）。
       // 缺省是手写引擎——老存档里没有这个字段，读出来就该是它。
-      aiBrain: initial.aiBrain === 'net' ? 'net' : 'script',
+      aiBrain:
+        initial.aiBrain === 'net' ? 'net' : initial.aiBrain === 'goal' ? 'goal' : 'script',
       // 人数跟着上一局走：连着开三人局是常态
       playerCount: initial.playerCount ?? 2,
       // 双城市开局跟着上一局走（和"人数"一样，是这一局的设定）

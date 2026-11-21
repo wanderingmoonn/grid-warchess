@@ -254,6 +254,25 @@ export function aiTraits(s: GameState): AiTraits {
 
 /* ---------------- 战术倾向：这一回合该打哪一种 ---------------- */
 
+/**
+ * 这一席的编制上限（v3 专用）。
+ *
+ * `CONFIG.maxUnits` 从来不是游戏规则——规则层的招募不拦玩家，那是 AI 给自己
+ * 戴的帽子（见 `core/config.ts` 的 `maxUnits` 注释与 `core/rules.ts` 的招募函数）。
+ * v3 要能回答"没有上限时该怎么打"，所以把这条约束做成了局面配置：
+ *
+ *   · `config.unitCap` 不写 = `CONFIG.maxUnits`（24，等于现状）
+ *   · `'none'` = 不设上限（用 Infinity，比较逻辑原样成立）
+ *
+ * 只有 v3 读它，v1 仍然写死 24——这样"撤编制"是一次可对照的实验，
+ * 不会悄悄改掉基线。见 `docs/PLAN-AI-V3-2026-11-21.md` 第二节。
+ */
+function unitCapOf(s: GameState): number {
+  const v = s.config.unitCap;
+  if (v === 'none') return Number.POSITIVE_INFINITY;
+  return typeof v === 'number' && v > 0 ? v : CONFIG.maxUnits;
+}
+
 /** 0~1 夹紧 */
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -5511,7 +5530,7 @@ function buildPlan(
   // 每回合只有两个产兵名额（AI 的编制上限也压着），所以只要手头比一个兵宽裕
   // （金 ≥ 1.2 回合收入）或者编制快满，就该往贵的、能打的上面花钱。
   // 攒钱期同理：钱是要攒着买好的，再拿线性单价惩罚去压大件等于自我否定。
-  const quality = savingFor !== null || gold >= inc * 1.2 || army >= CONFIG.maxUnits - 6;
+  const quality = savingFor !== null || gold >= inc * 1.2 || army >= unitCapOf(s) - 6;
   // 弃城期一律按"精兵"花钱：钱要攒着换时代/英雄，不该拆成一堆便宜兵。
   // 换家也一样：这时候每一分钱都要换成能打穿城墙的东西，不是铺散兵线。
   const elite = quality || mood.weight.boom > 0.5 || trade;
@@ -5803,7 +5822,7 @@ function recruitCandidate(
   };
 
   // 和 rules 一样只数作战单位：建筑不占编制，别让几座磨坊把产线堵死
-  if (!ignoreCap && armySize(s, me) >= CONFIG.maxUnits) {
+  if (!ignoreCap && armySize(s, me) >= unitCapOf(s)) {
     deny('编制已满', '*');
     return null;
   }
@@ -6410,7 +6429,7 @@ function swapOutCandidate(
   };
   // 初级不会换血：这一档连"谁更贵"都不算，让它拆自己的兵只会拆错。
   if (aiLevelOf(s) === 'basic') return bail('初级档');
-  if (armySize(s, me) < CONFIG.maxUnits) return bail('编制没满');
+  if (armySize(s, me) < unitCapOf(s)) return bail('编制没满');
   // 攒钱期不动编制：那笔钱是留给英雄/时代的，换一个兵等于把目标拆了。
   // 例外正是"攒的就是兵"——那时候目标被编制卡着，不换血就永远买不到。
   if (plan.savingFor && plan.savingFor !== 'unit') return bail('正在攒别的目标');
