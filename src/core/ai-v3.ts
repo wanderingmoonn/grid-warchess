@@ -1780,20 +1780,43 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId): boolean {
   const foe = s.cities.filter((c) => c.owner !== owner);
   if (foe.length === 0) return true;
 
-  const seen = new Set<number>();
+  /*
+   * 判据问的是"**能不能**走过去"，不是"有没有人已经在那儿"。
+   *
+   * 按现状判有两个毛病（2026-11-21 用户点出来的）：
+   *   · 开局还没出兵时队列是空的 → 判"过不去" → 计划立刻想架桥；
+   *   · 侦察兵过去又被打死 → 判据来回翻，计划跟着闪烁。
+   * 所以从**领地**出发（城市是稳定的锚点，加上在场的陆军），
+   * 问"从我的城能不能一路走到敌城边上"。
+   *
+   * 但纯粹的连通性太宽松：绕过整片湖走 49 步也算"能到"，
+   * 而战术层那条走位根本不会去绕（实测 seed 24 因此 0 座桥、261 回合平）。
+   * 所以加一道距离上限：**绕一整张图那么远，就等于过不去**。
+   * 上限取地图边长——24×24 上 24 步、12×12 上 12 步，随图缩放。
+   */
+  const limit = Math.min(s.w, s.h);
+  const dist = new Map<number, number>();
   const queue: number[] = [];
+  const seed = (x: number, y: number): void => {
+    if (!inBounds(s, x, y)) return;
+    const i = y * s.w + x;
+    if (dist.has(i)) return;
+    dist.set(i, 0);
+    queue.push(i);
+  };
+  for (const c of citiesOf(s, owner)) for (const t of cityTiles(c)) seed(t.x, t.y);
   for (const u of unitsOf(s, owner)) {
     if (utype(s, u.type).domain === 'water') continue;
-    const i = u.y * s.w + u.x;
-    if (seen.has(i)) continue;
-    seen.add(i);
-    queue.push(i);
+    seed(u.x, u.y);
   }
+  if (queue.length === 0) return false;
 
-  while (queue.length > 0) {
-    const i = queue.pop() as number;
-    const x = i % s.w;
-    const y = Math.floor(i / s.w);
+  for (let i = 0; i < queue.length; i++) {
+    const k = queue[i]!;
+    const d = dist.get(k)!;
+    if (d > limit) return false; // 剩下的一定更远，没必要再走
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
     if (foe.some((c) => distToCity({ x, y }, c) <= 1)) return true;
 
     for (const [dx, dy] of DIRS) {
@@ -1801,7 +1824,7 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId): boolean {
       const ny = y + dy;
       if (!inBounds(s, nx, ny)) continue;
       const j = ny * s.w + nx;
-      if (seen.has(j)) continue;
+      if (dist.has(j)) continue;
       const t = s.tiles[j];
       if (!t || !passable(t.terrain)) continue;
       // 敌城格不可通行，但"摸到它旁边"上面已经判过了
@@ -1809,7 +1832,7 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId): boolean {
         const c = cityById(s, t.cityId);
         if (c && c.owner !== owner) continue;
       }
-      seen.add(j);
+      dist.set(j, d + 1);
       queue.push(j);
     }
   }
@@ -2566,16 +2589,13 @@ function scoreMoveInner(
   if (def.category === 'builder') {
     let score: number;
     if ((def.builds ?? []).some((id) => s.unitTypes[id]?.bridges)) {
-      const site = all.bridgeSite;
-      const mine = unitsOf(s, unit.owner).filter((u) => utype(s, u.type).bridges).length;
       /*
-       * `mine < 6` 是"别把工程队全耗在修路"的闸。计划在追的情况下它必须让路：
-       * 实测 7 座桥（大多在无关的水塘上）之后这条闸就关掉了，工程队不再往
-       * 渡口走，剩下的回合全在岸边干别的——"造了一会就不造了"就是这么来的。
+       * 工程队往渡口走。原来这里有一道 `mine < 6` 的闸（"桥够多了就别修了"），
+       * 它和造桥那两条上限是同一个病：靠数桥数代替"过没过去"。
+       * 现在桥只由过河计划修，工程队只认那个渡口，闸没有对象了。
        */
-      // 计划钉住渡口期间，"桥够多了"这道闸让路（Fields.crossingSite，见 CROSSING_PLAN）
-      const underCrossingPlan = all.crossingSite != null;
-      if (site && (mine < 6 || underCrossingPlan)) {
+      const site = all.bridgeSite;
+      if (site) {
         const step = distance(unit, site) - distance({ x, y }, site);
         // 过河阶段：往桥头走就是当前最重要的任务，给一个压过"顺手盖个磨坊"的底分
         score = (all.needBridge ? 42 : 0) + step * 6;
@@ -3766,8 +3786,18 @@ function rawBuildScore(
     return goalScore2 ?? -999;
   }
 
-  // 桥：跨得过去、对岸通向敌方城市才值得架
+  /*
+   * 桥：**只给过河计划修**。
+   *
+   * 2026-11-21：以前这里是"逐回合打分 + 两道数量上限 + 一条工程队闸"，
+   * 三个补丁各管一头，合起来的结果是"铺到河心就不铺了"，而没计划的时候
+   * 又会在后院水塘上乱铺。现在反过来：**没有过河计划就不造桥**，
+   * 有计划就由计划自己管到走通为止（`done` = 陆路可达）。
+   *
+   * 这就是那三个补丁退休的方式——不是删掉它们的数字，是删掉它们存在的理由。
+   */
   if (def.bridges) {
+    if (crossingSite === null) return -999;
     const gap = bridgeGap(s, spot.x, spot.y, land);
     if (!gap) return -999;
 
@@ -3798,7 +3828,12 @@ function rawBuildScore(
      */
     // 渡口由排序层的过河计划给（见 `CROSSING_PLAN.focus`），不在这里自己算
     const onPlan = crossingSite !== null && distance(spot, crossingSite) <= 3;
-    if (near >= 5 && !chain && !onPlan) return -999;
+    /*
+     * 这里原来有一条硬上限："7 格内已有 5 座桥且不是接着自己桥面 → -999"。
+     * 现在桥只在过河计划里修，走廊由计划管，这条上限没有对象了，删。
+     * `near` 仍作为**软惩罚**留在分数里（-7/座）：一条河段上铺太多不划算，
+     * 但那是算出来的，不是一刀切禁掉。
+     */
 
     /*
      * 全局桥数上限：每城 3 座，最多 10 座。
@@ -3812,12 +3847,10 @@ function rawBuildScore(
      * 现在退回"按数量管"：不判断某座桥值不值，只限制总量。一座城市的设施区
      * 撑得住三座桥，再多就是在河上摆家具了。
      */
-    {
-      const cities = Math.max(1, citiesOf(s, unit.owner).length);
-      const total = unitsOf(s, unit.owner).filter((u) => utype(s, u.type).bridges).length;
-      // 同理：总量上限也不拦"正在往对岸递的那一格"
-      if (total >= Math.min(10, cities * 3) && !onPlan && !chain) return -999;
-    }
+    /*
+     * 全图总量上限（每城 3 座、最多 10 座）同样退休：理由和上一条一样，
+     * 它防的是"没计划时乱铺"，而那种情况现在根本不会发生。
+     */
     // 少铺几座优先；对岸越靠近敌方城市越值。
     // 档位加成：钢桥 120 耐久 / 6 护甲，被打塌要磨很久——同样一个建造回合，
     // 产出的是"不会下回合就被拆掉的路"，这才是打破"你拆我建"死循环的东西。

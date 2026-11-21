@@ -255,6 +255,16 @@ function playOne(
  * 或者被冷却挡在外面，表现都是"AI 一点反应都没有"，和没装一模一样。
  * 所以每一局都打一行，别只在出问题时去找。
  */
+/** 桥的数量（按兵种的 bridges 标记数，不看地形，避免升级/替换重复计数） */
+function bridgeCountOf(s: GameState, p: PlayerId): number {
+  return s.units.filter((u) => u.owner === p && s.unitTypes[u.type]?.bridges === true).length;
+}
+
+/** 计划换手次数：一局里换了多少次当值计划（含变空），衡量判据稳不稳 */
+function planFlipsOf(s: GameState, p: PlayerId): number {
+  return (s.aiPlanTrace ?? []).filter((t) => t.me === p).length;
+}
+
 function planSummaryOf(s: GameState, p: PlayerId): string {
   const list = (s.aiPlanTrace ?? []).filter((t) => t.me === p);
   if (list.length === 0) return '无';
@@ -335,6 +345,8 @@ for (let i = 0; i < GAMES; i++) {
     process.stderr.write(
       `era${ERA} seed=${seed} ${aIsNew ? '新先手' : '新后手'} → ${tag} (${turns} 回合)` +
         (winner === null ? `  [终端快照 ${snapshotOf(final)}]` : '') +
+        `  桥 A=${bridgeCountOf(final, 'A')} B=${bridgeCountOf(final, 'B')}` +
+        ` 换手 A=${planFlipsOf(final, 'A')} B=${planFlipsOf(final, 'B')}` +
         `  计划 A=${planSummaryOf(final, 'A')} B=${planSummaryOf(final, 'B')}` +
         '\n',
     );
