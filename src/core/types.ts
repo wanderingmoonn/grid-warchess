@@ -1858,6 +1858,23 @@ export interface AiFocus {
   save?: AiIntent | null;
   /** 产业链承诺（形状沿用 `AiCommit`） */
   chain?: AiCommit | null;
+  /**
+   * 收尾计划：正在派人去接管哪座废墟（见 ai-v3 的 `reclaimTargetOf`）。
+   *
+   * 为什么单独立一个字段：它不是"攒钱目标"，也不是"产业链承诺"——
+   * 它是一条**动作计划**（把兵走过去、掏钱、接管），要跨回合，而且
+   * 不花钱在别处。以后有多条计划时，这里会扩成 `{ id, valueAt, since }`
+   * 并配双阈值；现在只有一条，所以只记"追哪座城"。
+   */
+  expedition?: AiExpedition | null;
+}
+
+/** 收尾计划（接管废墟）的跨回合记忆 */
+export interface AiExpedition {
+  /** 还剩几座废墟，先追哪一座 */
+  cityId: string;
+  /** 哪一回合立的 */
+  since: number;
 }
 
 export interface AiIntent {

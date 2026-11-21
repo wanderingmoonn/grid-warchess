@@ -4162,14 +4162,133 @@ function goalApproachCandidate(
   };
 }
 
+/* ---------------- 收尾计划：派兵接管废墟 ---------------- */
+
+/** 踩进废墟（接管）的分：比常规走位高一个量级，"再走一步就赢"不该输给站位调整 */
+const RECLAIM_ENTER_SCORE = 1000;
+/** 朝废墟靠近一步的分：高于常规走位，但不至于压过开火 */
+const RECLAIM_APPROACH_SCORE = 260;
+
+/**
+ * 收尾计划的目标：对面**已经没有完好的城**，只剩废墟。
+ *
+ * 为什么只收这一种局面：
+ *   · 这是规则里唯一"打完了还结束不了"的死角——废墟不能再攻城，只有派兵
+ *     走进去掏重建费才算接管（见 `doMove` 的入驻段与 `blockedFor` 的注释）；
+ *   · 只在"对面一座好城都不剩"时触发，所以它抽不走正面战场的兵，也不会
+ *     改变常规对局的一步棋（`probe:ai-goal` 的四条指纹就是这样验的）。
+ *
+ * 以后可以放宽到"任何敌废墟都值得收"（多一座城多一份收入），但那会改变
+ * 中局走位，得单独验一批，别顺手开口子。
+ */
+function reclaimTargetOf(view: GameState, me: PlayerId): City | null {
+  const foes = view.cities.filter((c) => c.owner !== me);
+  if (foes.length === 0) return null;
+  // 还有一座好城就不算收尾：那时候该做的是打城，不是捡废墟
+  if (foes.some((c) => !c.ruined)) return null;
+  const ruins = foes.filter((c) => c.ruined);
+  if (ruins.length === 0) return null;
+  // 多座废墟时先收便宜的：重建费按城血上限算，贵的可能一辈子攒不出来
+  return [...ruins].sort((a, b) => rebuildCost(a) - rebuildCost(b) || a.id.localeCompare(b.id))[0] ?? null;
+}
+
+/**
+ * 从城的四格往外做一次 BFS：每一格离"能踩进去的那一格"还有几步。
+ *
+ * 用格子步数而不是直线距离：隔一条河的两格直线 1 步、实际要绕十步，
+ * 按直线走会把全军带到岸边排队。BFS 只看地形可走、**不看单位**——
+ * 单位会动，把它算进去等于每回合重算一张图，而且拥堵时会把兵卡在原地。
+ */
+function stepsToCityTiles(view: GameState, city: City): Map<number, number> {
+  const dist = new Map<number, number>();
+  const queue: number[] = [];
+  for (const t of cityTiles(city)) {
+    if (!inBounds(view, t.x, t.y)) continue;
+    const k = t.y * view.w + t.x;
+    if (dist.has(k)) continue;
+    dist.set(k, 0);
+    queue.push(k);
+  }
+  for (let i = 0; i < queue.length; i++) {
+    const k = queue[i]!;
+    const d = dist.get(k)!;
+    const x = k % view.w;
+    const y = Math.floor(k / view.w);
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(view, nx, ny)) continue;
+      const nk = ny * view.w + nx;
+      if (dist.has(nk)) continue;
+      const tile = view.tiles[nk];
+      if (!tile || !passable(tile.terrain)) continue;
+      dist.set(nk, d + 1);
+      queue.push(nk);
+    }
+  }
+  return dist;
+}
+
+/**
+ * 收尾计划的出口：给每个还能动的兵一条 MOVE。
+ *
+ * 两种走法：
+ *   · 这一回合就能踩进废墟、而且掏得出重建费 → 直接走进去（`doMove` 会接管）；
+ *   · 够不着或钱不够 → 朝"离废墟最近的可达格"挪一步。
+ *
+ * 钱不够时**不许踩进去**：规则会在动之前就拒（"接管要 N 金"），
+ * 提出来只会白费一步。先靠近，钱什么时候够什么时候进。
+ */
+function reclaimCandidates(
+  view: GameState,
+  me: PlayerId,
+  target: City,
+  rejected: ReadonlySet<string>,
+): Candidate[] {
+  const dist = stepsToCityTiles(view, target);
+  const cost = rebuildCost(target);
+  const gold = view.players[me].gold;
+  const targets = new Set(cityTiles(target).map((t) => t.y * view.w + t.x));
+  const out: Candidate[] = [];
+  for (const u of unitsOf(view, me)) {
+    if (u.moved || u.acted) continue;
+    if (utype(view, u.type).category === 'building') continue;
+    const reach = reachableTiles(view, u);
+    if (reach.size === 0) continue;
+    let enterKey = -1;
+    let stepKey = -1;
+    let stepD = Infinity;
+    const hereD = dist.get(u.y * view.w + u.x) ?? Infinity;
+    for (const [k] of reach) {
+      if (targets.has(k)) {
+        enterKey = k;
+        continue;
+      }
+      const d = dist.get(k);
+      if (d === undefined) continue;
+      // 只往**更近**的格子走：不更近就不动，免得原地来回蹭
+      if (d < stepD && d < hereD) {
+        stepD = d;
+        stepKey = k;
+      }
+    }
+    const into = enterKey >= 0 && gold >= cost;
+    const key = into ? enterKey : stepKey;
+    if (key < 0) continue;
+    const action: Action = { type: 'MOVE', unitId: u.id, x: key % view.w, y: Math.floor(key / view.w) };
+    if (rejected.has(aiActionKey(action))) continue;
+    out.push({ action, score: into ? RECLAIM_ENTER_SCORE : RECLAIM_APPROACH_SCORE });
+  }
+  return out;
+}
+
 function unitCandidates(
   s: GameState,
   unit: Unit,
   all: Fields,
   traits: AiTraits,
   rejected: ReadonlySet<string>,
-): Candidate[] {
-  const out: Candidate[] = [];
+): Candidate[] {  const out: Candidate[] = [];
   const def = utype(s, unit.type);
 
   // 施工中的工地不能开火、不能围城、不能造东西（规则层会拒），
@@ -7181,6 +7300,35 @@ function aiNextActionCoreInner(
   // 不然钱被冻着、升级又没得升，这一回合等于白过——而且连着几个回合都白过。
   if (!mayUpgrade && plan.savingFor === 'era') plan.savingFor = null;
   fields.hold = plan.stance === 'turtle';
+
+  /*
+   * 收尾计划：对面只剩废墟时，派人去接管。
+   *
+   * 这一条是"计划 → 动作"的第一个出口，和攒钱/选目标那些分开：
+   *   · 判据每回合重算（局面会变），记忆只记"我盯的是哪座城"；
+   *   · 立约/改投的双阈值现在用不上——只有一条计划，没有第二家可投。
+   *     等计划清单长到两三条，这里换成 `{ id, valueAt }` + `COMMIT_KEEP_RATIO`
+   *     那一套（见 docs/PLAN-AI-V3 的 S2 与第八节）；现在多写一个阈值只是
+   *     多一处没人验的常数。
+   *   · 只在 `depth === 0` 写记忆：推演分支不该改我方的账本。
+   */
+  const reclaimTarget = reclaimTargetOf(view, me);
+  if (reclaimTarget) {
+    candidates.push(...reclaimCandidates(view, me, reclaimTarget, rejected));
+  }
+  if (depth === 0) {
+    const prevExpedition = focusOf(s, me).expedition ?? null;
+    if (reclaimTarget) {
+      if (!prevExpedition || prevExpedition.cityId !== reclaimTarget.id) {
+        setFocus(s, me, {
+          ...focusOf(s, me),
+          expedition: { cityId: reclaimTarget.id, since: s.turn },
+        });
+      }
+    } else if (prevExpedition) {
+      setFocus(s, me, { ...focusOf(s, me), expedition: null });
+    }
+  }
   /*
    * 换家：不守了，全军去啃最软的那座城。
    *
