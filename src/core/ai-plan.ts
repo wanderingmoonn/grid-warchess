@@ -26,7 +26,7 @@
  * 所以 `ai-v3` 里那一句调用被 `planCount() === 0` 挡在外面，对局一步没变。
  * 计划本身从 P2 开始搬（见 docs/PLAN-AI-V3 第十五节）。
  */
-import type { Action, GameState, PlayerId } from './types.ts';
+import type { Action, AiPlanTrace, GameState, PlayerId } from './types.ts';
 import { armySize, incomeOf } from './rules.ts';
 
 /**
@@ -76,6 +76,12 @@ export interface PlanWeights {
   holdLine: boolean;
 }
 
+/** 行动型计划吐出的一个动作（可带分） */
+export interface PlanAction {
+  action: Action;
+  score?: number;
+}
+
 export interface AiPlan {
   id: string;
   kind: 'weights' | 'action';
@@ -88,8 +94,13 @@ export interface AiPlan {
   value(c: PlanCtx): number;
   /** 完成了吗：成立之后不再重立（产业链踩过"无限重建"的坑） */
   done(c: PlanCtx): boolean;
-  /** 行动型：这一步要提的动作。权重型不写 */
-  next?(c: PlanCtx): Action[];
+  /**
+   * 行动型：这一步要提的动作。
+   *
+   * 带可选的分：同一条计划里也可能有"这一步就赢"和"再靠近一点"两档
+   * （收尾就是这样）。不写就用 `PLAN_TUNING.actionScore`。
+   */
+  next?(c: PlanCtx): PlanAction[];
   /** 权重型：这一步的乘数，只写要动的那几项。行动型不写 */
   weights?(c: PlanCtx): Partial<PlanWeights>;
 }
@@ -123,6 +134,10 @@ export const PLAN_TUNING = {
   cooldown: 3,
   /** 折算收益的时间窗（回合） */
   horizon: 8,
+  /** 行动型计划吐出的动作，没写分时的默认分 */
+  actionScore: 900,
+  /** 计划日志最多留几条（每席每次换计划记一条） */
+  traceCap: 200,
   /** 每条计划的话有多算数，0~1 */
   strength: {
     reclaim: 1,
@@ -329,7 +344,7 @@ export function resolvePlans(
    * 它明明被换掉了，下一回合又能立刻抢回来，等于每回合换口味。
    */
   const cooldown: Record<string, number> = { ...(prev?.cooldown ?? {}) };
-  if (prev) {
+  if (prev && prev.id !== '') {
     const prevStillActive =
       prevLive !== null && (prevLive.plan.kind === 'action' ? chosen?.id === prev.id : true);
     if (!prevStillActive) cooldown[prev.id] = turn + PLAN_TUNING.cooldown;
@@ -339,16 +354,20 @@ export function resolvePlans(
   for (const [id, until] of Object.entries(cooldown)) if (until <= turn) delete cooldown[id];
 
   const memo: PlanMemo | null =
-    memoryOf === null
-      ? null
-      : {
+    memoryOf !== null
+      ? {
           id: memoryOf.id,
           valueAt: prev && prev.id === memoryOf.id ? prev.valueAt : memoryValue,
           since: prev && prev.id === memoryOf.id ? prev.since : turn,
           // 计划自己的口袋：换计划就换口袋，同一条计划继续沿用
           state: prev && prev.id === memoryOf.id ? prev.state : {},
           ...(Object.keys(cooldown).length > 0 ? { cooldown } : {}),
-        };
+        }
+      : // 一条计划都不当值时，只要冷却还没过就得留一条空记录——
+        // 否则 `prev` 变成 null，冷却表跟着丢掉，冷却等于没写
+        Object.keys(cooldown).length > 0
+        ? { id: '', valueAt: 0, since: turn, state: {}, cooldown }
+        : null;
 
   return {
     action: chosen,
@@ -405,3 +424,47 @@ export function planCtxOf(
   };
 }
 
+
+/**
+ * 把"这一回合当值的是哪条计划"记进局面（只记变化，不每回合记）。
+ *
+ * 为什么记在 state 里而不是直接打印：AI 要保持纯函数（不碰 IO），
+ * 而"计划有没有被用上"这件事必须能从跑批结果里看出来——
+ * 否则一个计划写错了 value，表现就是"AI 完全没反应"，和"没装"一模一样。
+ * 跑批脚本负责把它打成 sidecar（`<回放>.plans.jsonl`）。
+ */
+export function notePlanTrace(
+  s: GameState,
+  me: PlayerId,
+  res: PlanResolution,
+): void {
+  const list = (s.aiPlanTrace ??= []);
+  const planId = res.action?.id ?? res.weights.map((p) => p.id).sort().join('+') ?? null;
+  const key = planId === '' ? null : planId;
+  let last: AiPlanTrace | undefined;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i]!.me === me) {
+      last = list[i];
+      break;
+    }
+  }
+  if (last && last.plan === key) return;
+  list.push({
+    turn: s.turn,
+    me,
+    plan: key,
+    reason: res.reason,
+    values: res.values.map((v) => ({ id: v.id, value: Math.round(v.value) })),
+  });
+  if (list.length > PLAN_TUNING.traceCap) list.splice(0, list.length - PLAN_TUNING.traceCap);
+}
+
+/** 安全地取一条计划的动作：写坏的 next 按"没动作"处理，不打死整局 */
+export function planActions(plan: AiPlan | null, ctx: PlanCtx): PlanAction[] {
+  if (!plan?.next) return [];
+  try {
+    return plan.next(ctx) ?? [];
+  } catch {
+    return [];
+  }
+}

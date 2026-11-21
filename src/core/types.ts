@@ -1885,6 +1885,13 @@ export interface AiFocus {
    */
   expedition?: AiExpedition | null;
   /**
+   * 计划排序层当值的那一条（P2 起）。`state` 是计划自己的口袋。
+   *
+   * 和上面的 `expedition` / `crossing` 是过渡期的两套：那两个是 P1 之前
+   * 各写一份的产物，等 P3 把过河也搬进来之后可以删。
+   */
+  plan?: PlanMemoLike | null;
+  /**
    * 过河投送计划：这一局从哪个渡口过河。
    *
    * 只在"陆路完全走不到敌城、且主力已经成军"时立。**选定就不换**——
@@ -1911,6 +1918,32 @@ export interface AiExpedition {
   cityId: string;
   /** 哪一回合立的 */
   since: number;
+}
+
+/**
+ * 排序层记忆的形状（和 `ai-plan.ts` 的 `PlanMemo` 一致）。
+ *
+ * 在 types 里重写一份而不是 import：`ai-plan.ts` 依赖 types，反过来 import
+ * 会成环。两边字段必须同步，改一处记得改另一处（探针会撞出来）。
+ */
+export interface PlanMemoLike {
+  id: string;
+  valueAt: number;
+  since: number;
+  state: Record<string, unknown>;
+  cooldown?: Record<string, number>;
+}
+
+/** 计划当值的一条记录（换计划时记一条） */
+export interface AiPlanTrace {
+  turn: number;
+  me: PlayerId;
+  /** 当值的计划；null = 这一回合没有任何计划（权重型多条时用 + 连起来） */
+  plan: string | null;
+  /** 为什么是它 */
+  reason: string;
+  /** 当时各条的估值（取整），按高到低 */
+  values: Array<{ id: string; value: number }>;
 }
 
 /**
@@ -2363,6 +2396,11 @@ export interface GameState {
    * 回放只能看"它做了什么"，看不到"它为什么"——这一列就是补后半句的。
    */
   aiDecisions?: AiDecision[];
+  /**
+   * 计划当值记录（只记变化）。给"计划有没有被真的用上"提供可查的证据：
+   * 一条计划 value 写坏了，表现就是"AI 一点反应都没有"，和没装一模一样。
+   */
+  aiPlanTrace?: AiPlanTrace[];
   /**
    * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
    *

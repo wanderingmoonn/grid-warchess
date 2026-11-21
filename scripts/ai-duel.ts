@@ -248,6 +248,19 @@ function playOne(
  * 还是一方早就该赢只是收不了尾。这份快照是为了让 S1 的诊断有据可依，
  * 不参与胜负判定（不要用它把平局改判成胜）。
  */
+/**
+ * 计划使用摘要："无→reclaim@48→无@52"。
+ *
+ * 这是"计划有没有被真的用上"的唯一证据：value 写错了、注册漏了、
+ * 或者被冷却挡在外面，表现都是"AI 一点反应都没有"，和没装一模一样。
+ * 所以每一局都打一行，别只在出问题时去找。
+ */
+function planSummaryOf(s: GameState, p: PlayerId): string {
+  const list = (s.aiPlanTrace ?? []).filter((t) => t.me === p);
+  if (list.length === 0) return '无';
+  return list.map((t) => `${t.plan ?? '无'}@${t.turn}`).join('→');
+}
+
 function snapshotOf(s: GameState): string {
   const side = (p: PlayerId): string => {
     const cities = s.cities.filter((c) => c.owner === p).length;
@@ -301,6 +314,12 @@ for (let i = 0; i < GAMES; i++) {
         writeFileSync(sidecar, decisions.map((d) => JSON.stringify(d)).join('\n') + '\n');
         process.stderr.write(`  判决日志：${sidecar}（${decisions.length} 条）\n`);
       }
+      const planTrace = final.aiPlanTrace ?? [];
+      if (planTrace.length > 0) {
+        const sidecar = REPLAY_PATH.replace(/\.json$/i, '.plans.jsonl');
+        writeFileSync(sidecar, planTrace.map((d) => JSON.stringify(d)).join('\n') + '\n');
+        process.stderr.write(`  计划日志：${sidecar}（${planTrace.length} 条）\n`);
+      }
     }
 
     let tag: string;
@@ -316,6 +335,7 @@ for (let i = 0; i < GAMES; i++) {
     process.stderr.write(
       `era${ERA} seed=${seed} ${aIsNew ? '新先手' : '新后手'} → ${tag} (${turns} 回合)` +
         (winner === null ? `  [终端快照 ${snapshotOf(final)}]` : '') +
+        `  计划 A=${planSummaryOf(final, 'A')} B=${planSummaryOf(final, 'B')}` +
         '\n',
     );
   }

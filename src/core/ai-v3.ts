@@ -137,6 +137,17 @@ import {
 } from './ai-goal.ts';
 import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
 import type { AiCommit } from './types.ts';
+import {
+  PLAN_TUNING,
+  notePlanTrace,
+  planActions,
+  planCtxOf,
+  registerAiPlan,
+  resolvePlans,
+} from './ai-plan.ts';
+// 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
+// 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
+import type { AiPlan as RankedPlan } from './ai-plan.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -4416,6 +4427,30 @@ function reclaimCandidates(
   return out;
 }
 
+/**
+ * 收尾计划（P2 起由排序层管，不再是一段 if）。
+ *
+ * `value` 给 `1e9` 是"这局赢定了"的约定值，不是金币当量——排序用比值比，
+ * 差九个数量级不影响谁当值，只影响日志好看不好看（见 15.12）。
+ *
+ * `done` 写"目标不在了就算完成"：对面重建出一座好城、或者废墟被我接管，
+ * 这条计划就该退场。注意"目标暂时不在"也会让 done 为真——冷却表负责
+ * 别让它下一回合立刻又立起来。
+ */
+const RECLAIM_PLAN: RankedPlan = {
+  id: 'reclaim',
+  kind: 'action',
+  strength: PLAN_TUNING.strength.reclaim ?? 1,
+  value: (c) => (reclaimTargetOf(c.view, c.me) ? 1e9 : 0),
+  done: (c) => reclaimTargetOf(c.view, c.me) === null,
+  next: (c) => {
+    const target = reclaimTargetOf(c.view, c.me);
+    // 分档不变：踩进去 1000，靠近 260（见 reclaimCandidates 的说明）
+    return target ? reclaimCandidates(c.view, c.me, target, new Set()) : [];
+  },
+};
+registerAiPlan(RECLAIM_PLAN);
+
 function unitCandidates(
   s: GameState,
   unit: Unit,
@@ -7594,21 +7629,25 @@ function aiNextActionCoreInner(
    *     多一处没人验的常数。
    *   · 只在 `depth === 0` 写记忆：推演分支不该改我方的账本。
    */
-  const reclaimTarget = reclaimTargetOf(view, me);
-  if (reclaimTarget) {
-    candidates.push(...reclaimCandidates(view, me, reclaimTarget, rejected));
-  }
-  if (depth === 0) {
-    const prevExpedition = focusOf(s, me).expedition ?? null;
-    if (reclaimTarget) {
-      if (!prevExpedition || prevExpedition.cityId !== reclaimTarget.id) {
-        setFocus(s, me, {
-          ...focusOf(s, me),
-          expedition: { cityId: reclaimTarget.id, since: s.turn },
-        });
-      }
-    } else if (prevExpedition) {
-      setFocus(s, me, { ...focusOf(s, me), expedition: null });
+  {
+    /*
+     * 计划排序层（P2）：先只把"收尾"接进来。
+     *
+     * 判据、动作、分档全部沿用搬之前那份实现，所以这一步应当**零变化**——
+     * 验收看 seed 906 仍是 76 回合、以及动作指纹逐条相同。
+     *
+     * `canReach` 填 `!fields.needBridge`：可达性只影响执行、不影响价值，
+     * 现在只给收尾用（它不看这个字段），等"决战"接进来才会读到。
+     */
+    const planCtx = planCtxOf(view, me, { canReach: !fields.needBridge });
+    const prevPlan = focusOf(s, me).plan ?? null;
+    const resolved = resolvePlans(planCtx, prevPlan, { urgent: fields.urgent });
+    for (const item of planActions(resolved.action, planCtx)) {
+      candidates.push({ action: item.action, score: item.score ?? PLAN_TUNING.actionScore });
+    }
+    if (depth === 0) {
+      if (resolved.memo !== prevPlan) setFocus(s, me, { ...focusOf(s, me), plan: resolved.memo });
+      notePlanTrace(s, me, resolved);
     }
   }
   /*
