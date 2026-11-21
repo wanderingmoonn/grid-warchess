@@ -2181,6 +2181,101 @@ const POSTURE_PLAN: RankedPlan = {
 };
 registerAiPlan(POSTURE_PLAN);
 
+/* ---------------- 僵持 → 屯兵（2026-11-21） ---------------- */
+
+/**
+ * 僵持指数：我方战斗单位到最近敌城的"中位距离"连续几回合没缩小。
+ *
+ * 为什么用中位数而不是"最靠前那个兵"：一个侦察兵冲进去又被打死，
+ * 最小值会来回跳；中位数代表**整支部队**有没有整体压上去。
+ *
+ * 每回合只更新一次（`keep.stallTurn` 去重）——`value` 每步决策都会被调，
+ * 不去重会把同一回合算十几次，计数直接失真。
+ */
+function stallOf(c: PlanCtx): { turns: number; median: number } {
+  const turn = c.view.turn;
+  const cached = c.keep.stallMedian;
+  if (c.keep.stallTurn === turn && typeof cached === 'number') {
+    return { turns: Number(c.keep.stallTurns ?? 0), median: cached };
+  }
+  const foes = c.view.cities.filter((x) => x.owner !== c.me && !x.ruined);
+  const mine = unitsOf(c.view, c.me).filter((u) => utype(c.view, u.type).category === 'combat');
+  let median = 0;
+  let turns = Number(c.keep.stallTurns ?? 0);
+  if (foes.length > 0 && mine.length > 0) {
+    const dists = mine
+      .map((u) =>
+        Math.min(
+          ...foes.map((x) =>
+            Math.max(
+              0,
+              Math.max(x.x - u.x, u.x - (x.x + 1), 0) + Math.max(x.y - u.y, u.y - (x.y + 1), 0),
+            ),
+          ),
+        ),
+      )
+      .sort((a, b) => a - b);
+    median = dists[Math.floor(dists.length / 2)] ?? 0;
+    const prev = Number(c.keep.stallMedian ?? median);
+    /*
+     * 前进 2 格以上才算"有进展"：一格的空间不算，那可能只是换了个站位。
+     *
+     * 僵持计数是**周期**的（0~29）：0~5 正常推进、6~25 屯兵、26~29 放开冲一次，
+     * 然后归零重来。不这么做的话，一个永远过不去的局面会让 turns 一直涨，
+     * 屯兵条件（turns >= 6）之后永远成立——变成"永久不推进"。
+     */
+    turns = median <= prev - 2 ? 0 : turns >= 29 ? 0 : turns + 1;
+  }
+  c.keep.stallTurn = turn;
+  c.keep.stallMedian = median;
+  c.keep.stallTurns = turns;
+  return { turns, median };
+}
+
+/**
+ * 屯兵：僵持太久就别再往里添油，把产能攒成一次打击。
+ *
+ * 用户 2026-11-21 的原话："如果一个地方一直僵持，就会选择把剩余产能转向屯兵，
+ * 而不是添油；之后屯的兵不论是再次突破同一点，还是绕路包抄。"
+ *
+ * 老 AI（以及逐字继承它的 v3）的问题是**每个兵单独决策**：谁离得近谁上，
+ * 于是永远在"一个兵走一格、被打死、再来一个"。启发式短视算法自己解决不了
+ * 这件事——它必须**立约、跨回合**：这段时间不推进，只攒人。
+ *
+ * 出口只有两个：
+ *   · `advance` 压到 0.15 —— 兵不再往前顶（但还手照旧）；
+ *   · `holdFire`（只在敌人没贴脸时）—— 别隔着河/隔着射程对射换血。
+ *
+ * 解除条件是可观测的：**兵攒够了**（≥ 对面 × 1.5，且至少 6 个）或者
+ * **僵持解除**（中位距离前进 2 格）。解除之后 `advance` 回 1，
+ * 全军的推进分同时恢复——这就是"集中突破同一点"。
+ */
+const MASS_PLAN: RankedPlan = {
+  id: 'mass',
+  kind: 'weights',
+  strength: PLAN_TUNING.strength.mass ?? 0.9,
+  value: (c) => {
+    if (c.view.config.aiMass === false) return 0;
+    const st = stallOf(c);
+    if (st.turns < PLAN_TUNING.massStallTurns) return 0;
+    // 周期后段放开冲一次：屯久了必须试一把，否则就成了"永久不推进"
+    if (st.turns >= PLAN_TUNING.massGiveUpTurns) return 0;
+    // 兵已经明显多于对面，屯的意义就没了——打不动不是人不够
+    if (c.army >= Math.max(PLAN_TUNING.massMinArmy, c.foeArmy * PLAN_TUNING.massRatio) && st.turns < 20)
+      return 0;
+    return 1 + st.turns / 10;
+  },
+  done: () => false,
+  /*
+   * 只压推进，**不关火**。
+   *
+   * 第一版同时给了 `holdFire`，实测反而更弱（seed 32 从 221 回合平变成 158 回合输）：
+   * 停火是全局的，敌人走到 4 格开外就能白打——"不主动送"和"不还手"是两件事。
+   * 添油的根源是"往前挪一格换 6 分"，压这一项就够了。
+   */
+  weights: () => ({ advance: PLAN_TUNING.massAdvance }),
+};
+
 /**
  * 防守计划：敌人已经打到城下、而我还不如对面能打，就收回来守。
  *
@@ -2191,6 +2286,8 @@ registerAiPlan(POSTURE_PLAN);
  * 以前的写法是 `stance === 'turtle'` 直接设 `fields.hold`，现在改成
  * 走排序层的权重，这样它和其他计划一样有立约、价值、日志。
  */
+registerAiPlan(MASS_PLAN);
+
 const DEFEND_PLAN: RankedPlan = {
   id: 'defend',
   kind: 'weights',
@@ -2659,7 +2756,13 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   const cohesion = Math.min(2, Math.max(0, tuning?.cohesion ?? 1));
   // 1 → 0.15（默认惩罚），0 → 1（不惩罚），2 → 更狠（夹到 0.05）
   const lineHold = cohesion <= 1 ? 1 - (1 - 0.15) * cohesion : Math.max(0.05, 0.15 - (cohesion - 1) * 0.1);
-  const advanceWeight = aheadOfLine ? lineHold : 1;
+  /*
+   * 战略层的"推进权重"：屯兵时把它压下去，兵就不再一个个往前顶（添油）。
+   *
+   * 这一项乘的是**推进分**，不是开火——兵该还手还是还手，只是不再
+   * "往前挪一格换 6 分"（那正是把部队一格一格填进绞肉机的原因）。
+   */
+  const advanceWeight = (aheadOfLine ? lineHold : 1) * all.weights.advance;
   /*
    * 僵局压力（关卡级 `pressure`，默认 0 = 不启用）。
    *

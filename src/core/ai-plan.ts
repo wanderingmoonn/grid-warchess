@@ -112,6 +112,14 @@ export interface PlanWeights {
    */
   pullHome: number;
   /**
+   * 推进权重（0~1）：乘在"往敌城方向前进"的那一项上。
+   *
+   * 和 `attack` 乘数的分工：`attack` 管"打不打"，它管"往不往前挪"。
+   * 屯兵需要的是后者——兵不是不敢打，是**不该一个个往前送**（添油）。
+   * 0.15 时推进分几乎不值钱，兵会停在前线附近等，产能继续攒人。
+   */
+  advance: number;
+  /**
    * 不许开火（压掉 ATTACK / SIEGE）。
    *
    * 和 `attack` 乘数的区别：乘数是"有多想打"，这个是"现在别打"的硬开关。
@@ -202,6 +210,20 @@ export const PLAN_TUNING = {
   horizon: 8,
   /** 行动型计划吐出的动作，没写分时的默认分 */
   actionScore: 900,
+  /*
+   * 屯兵（见 ai-v3 的 `MASS_PLAN`）：僵持多少回合开始屯、屯到多少解除。
+   *
+   * 6 回合是"试探够了"的长度：更短会被一次换血误判成僵持，
+   * 更长则前线的兵已经白死了。
+   */
+  massStallTurns: 6,
+  /** 屯兵期间的推进权重（0.15：推进分几乎不值钱，但兵仍然会走位躲火力） */
+  massAdvance: 0.15,
+  /** 攒到多少解除：至少这么多人，且是对面的多少倍 */
+  massMinArmy: 6,
+  massRatio: 1.5,
+  /** 屯到第几回合放开冲一次（周期 30：6~25 屯，26~29 冲） */
+  massGiveUpTurns: 26,
   /** 计划日志最多留几条（每席每次换计划记一条） */
   traceCap: 200,
   /**
@@ -271,7 +293,7 @@ export function allAiPlans(): AiPlan[] {
 }
 
 export function neutralWeights(): PlanWeights {
-  return { attack: 1, build: 1, econ: 1, save: 1, pullHome: 0, holdFire: false };
+  return { attack: 1, build: 1, econ: 1, save: 1, advance: 1, pullHome: 0, holdFire: false };
 }
 
 /** 合成账本的一行：谁给了什么、生效后是多少 */
@@ -312,6 +334,7 @@ export function composeWeights(list: Array<{ plan: AiPlan; asked: Partial<PlanWe
     if (asked.econ !== undefined) net.econ *= mix(asked.econ);
     if (asked.save !== undefined) net.save *= mix(asked.save);
     // 回撤是"谁要求谁生效"的强度：两条都要收缩时取并集，不是相乘
+    if (asked.advance !== undefined) net.advance *= mix(asked.advance);
     if (asked.holdFire === true) net.holdFire = true;
     if (asked.pullHome !== undefined) {
       net.pullHome = 1 - (1 - net.pullHome) * (1 - s * clamp01(asked.pullHome));

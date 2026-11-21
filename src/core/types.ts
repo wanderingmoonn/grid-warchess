@@ -1507,6 +1507,13 @@ export interface MatchConfig {
    */
   aiQualityScale?: number;
   /**
+   * 屯兵计划（v3 专用）。不写 = 开；`false` = 关（做 A/B 用）。
+   *
+   * 它管的是"僵持时别再添油"：连续 6 回合没压上去，就把推进权重压到 0.15
+   * 并停火，等兵攒到对面 1.5 倍再一起上。
+   */
+  aiMass?: boolean;
+  /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
    *
@@ -1978,7 +1985,7 @@ export interface AiPlanTrace {
   /** 当时各条的估值（取整），按高到低 */
   values: Array<{ id: string; value: number }>;
   /** 当时合成出来的净权重（战略姿态就是从这里读 x / y） */
-  net?: { attack: number; build: number; econ: number; save: number };
+  net?: { attack: number; build: number; econ: number; save: number; advance?: number };
 }
 
 /**

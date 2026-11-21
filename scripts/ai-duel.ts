@@ -145,6 +145,8 @@ const NO_CROSSING = has('no-crossing');
 const POSTURE = has('posture');
 /** `--no-decisive`：关掉决战时机的闸门（做 A/B 用） */
 const NO_DECISIVE = has('no-decisive');
+/** `--no-mass`：关掉屯兵计划（做 A/B 用） */
+const NO_MASS = has('no-mass');
 /** `--quality-scale N`：采购质量信号的放大倍数（默认 2.5，1 = 老行为） */
 const QUALITY_SCALE = argOf('quality-scale', '');
 /** `--recruit-cap auto|N`：放开每回合产兵名额（默认仍是 2） */
@@ -205,6 +207,7 @@ function playOne(
       ...(POSTURE ? { aiPosture: true } : {}),
       ...(RECRUIT_CAP === undefined ? {} : { aiRecruitCap: RECRUIT_CAP }),
       ...(NO_DECISIVE ? { aiDecisive: false } : {}),
+      ...(NO_MASS ? { aiMass: false } : {}),
     },
     seed,
   );

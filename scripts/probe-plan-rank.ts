@@ -95,7 +95,10 @@ ok(allAiPlans().length === 1, 'allAiPlans 只有一份');
 console.log('2 权重合成');
 {
   const w = neutralWeights();
-  ok(w.attack === 1 && w.build === 1 && w.econ === 1 && w.save === 1, '中性权重全是 1');
+  ok(
+    w.attack === 1 && w.build === 1 && w.econ === 1 && w.save === 1 && w.advance === 1,
+    '中性权重全是 1',
+  );
   const two = composeWeights([
     { plan: fakePlan('x', { strength: 1 }), asked: { attack: 0.5 } },
     { plan: fakePlan('y', { strength: 1 }), asked: { attack: 2 } },
@@ -187,7 +190,7 @@ console.log('8 空注册表：什么都不选，权重全中性');
   ok(r.action === null && r.weights.length === 0, '没有计划时当值清单为空');
   ok(r.memo === null, '没有计划时不写记忆');
   ok(
-    r.net.attack === 1 && r.net.build === 1 && r.net.econ === 1 && r.net.save === 1,
+    r.net.attack === 1 && r.net.build === 1 && r.net.econ === 1 && r.net.save === 1 && r.net.advance === 1,
     '空表时净权重全是 1（对局不受影响）',
   );
 }
