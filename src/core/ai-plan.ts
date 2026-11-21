@@ -55,6 +55,10 @@ export interface PlanCtx {
   canReach: boolean;
   /** 威胁值（净攻城战力，见 ai-v3 的 threatLevelOf）：越大越该收着打 */
   threat: number;
+  /** 敌人已经贴到我城 3 格内（"打到门口了"） */
+  enemyAtGate: boolean;
+  /** 我方身价明显不如对面（< 0.75） */
+  weaker: boolean;
   /** 折算收益的时间窗（回合） */
   horizon: number;
   /**
@@ -79,6 +83,15 @@ export interface PlanWeights {
   econ: number;
   /** 为远期目标存钱的意愿 */
   save: number;
+  /**
+   * 回撤强度（0~1）：离家越远越不想往前挪。
+   *
+   * 这是"收缩防守"需要的那个杠杆。它不是乘数——乘数压的是"打不打"，
+   * 而收缩压的是"往不往外走"：贴到脸上的敌人照打，但不主动往前顶。
+   * 地图随机、城市可能交错，所以**不能用"中线"**表达（那是伪命题），
+   * 只能用"离家距离"。
+   */
+  pullHome: number;
 }
 
 /** 行动型计划吐出的一个动作（可带分） */
@@ -222,7 +235,7 @@ export function allAiPlans(): AiPlan[] {
 }
 
 export function neutralWeights(): PlanWeights {
-  return { attack: 1, build: 1, econ: 1, save: 1 };
+  return { attack: 1, build: 1, econ: 1, save: 1, pullHome: 0 };
 }
 
 /** 合成账本的一行：谁给了什么、生效后是多少 */
@@ -262,6 +275,10 @@ export function composeWeights(list: Array<{ plan: AiPlan; asked: Partial<PlanWe
     if (asked.build !== undefined) net.build *= mix(asked.build);
     if (asked.econ !== undefined) net.econ *= mix(asked.econ);
     if (asked.save !== undefined) net.save *= mix(asked.save);
+    // 回撤是"谁要求谁生效"的强度：两条都要收缩时取并集，不是相乘
+    if (asked.pullHome !== undefined) {
+      net.pullHome = 1 - (1 - net.pullHome) * (1 - s * clamp01(asked.pullHome));
+    }
   }
   return { net, ledger };
 }
@@ -532,6 +549,8 @@ export function planCtxOf(
     gold: view.players[me].gold,
     canReach: true,
     threat: 0,
+    enemyAtGate: false,
+    weaker: false,
     horizon: PLAN_TUNING.horizon,
     state: {},
     ...patch,

@@ -1185,13 +1185,13 @@ function scoreBridgeAttack(s: GameState, attacker: Unit, bridge: Unit, all: Fiel
   if (mine === null) return 0;
 
   // 一、死守
-  const holding = all.hold || all.guardCityId !== null;
+  const holding = all.pullHome > 0.3 || all.guardCityId !== null;
   if (mine <= 3 && (foe === null || mine < foe)) {
     return 30 - mine * 4 + (holding ? 14 : 0);
   }
 
   // 二、进攻：桥已经在我推进的方向上（离对面的城更近），而且我没在收着打
-  const pushing = !all.hold && all.mood.abandonedCityId === null && all.mood.driveRaw.boom < 0.5;
+  const pushing = all.pullHome < 0.3 && all.mood.abandonedCityId === null && all.mood.driveRaw.boom < 0.5;
   if (pushing && foe !== null && foe < mine) return 20;
 
   return 0;
@@ -1690,7 +1690,8 @@ interface Fields {
    * 兵力明显不如对面、又没人压到城下时，最好的选择往往是把人留在城里、
    * 把钱攒起来升时代——而不是用更少的兵去换对面的换血。
    */
-  hold: boolean;
+  /** 回撤强度（0~1）：defend 计划给的，不是布尔 */
+  pullHome: number;
   /**
    * 优势期：兵力和身价都压过对面一截，这时候该做的是**破城**，不是清野。
    *
@@ -2184,6 +2185,26 @@ const POSTURE_PLAN: RankedPlan = {
 };
 registerAiPlan(POSTURE_PLAN);
 
+/**
+ * 防守计划：敌人已经打到城下、而我还不如对面能打，就收回来守。
+ *
+ * 它只干一件事——**提高回撤强度**（`pullHome`）。不压"打不打"：
+ * 贴到脸上的敌人照打，只是不再主动往前顶。压攻击权重的教训在 P4：
+ * 双方一起龟缩，平局率翻倍。
+ *
+ * 以前的写法是 `stance === 'turtle'` 直接设 `fields.hold`，现在改成
+ * 走排序层的权重，这样它和其他计划一样有立约、价值、日志。
+ */
+const DEFEND_PLAN: RankedPlan = {
+  id: 'defend',
+  kind: 'weights',
+  strength: PLAN_TUNING.strength.defend ?? 0.85,
+  value: (c) => (c.enemyAtGate && c.weaker && c.army >= 3 ? 1 : 0),
+  done: (c) => !c.enemyAtGate,
+  weights: () => ({ pullHome: 1 }),
+};
+registerAiPlan(DEFEND_PLAN);
+
 const CROSSING_PLAN: RankedPlan = {
   id: 'crossing',
   kind: 'weights',
@@ -2672,7 +2693,7 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     if (prey && distance(unit,prey)<=12) score += (distance(unit,prey)-distance(moved,prey))*4*w.harass;
   }
   const keep = citiesOf(s,unit.owner).filter(c => !c.ruined && c.id!==all.mood.abandonedCityId);
-  if (keep.length && (all.mood.abandonedCityId || all.hold)) {
+  if (keep.length && (all.mood.abandonedCityId || all.pullHome > 0.3)) {
     const a = Math.min(...keep.map(c => distToCity(unit,c))), b = Math.min(...keep.map(c => distToCity(moved,c)));
     score += (a-b)*(all.mood.abandonedCityId ? 7 : 3)*Math.max(0.4,w.boom);
   }
@@ -3035,12 +3056,13 @@ function scoreMoveInner(
   // 这条只影响"要不要往外推"，不影响"要不要打"——贴到脸上的敌人照打不误
   // （攻击分在别的分支里，这里扣的是位置分）。1 格 6 分，走三格就是 18 分，
   // 足以让"再往前顶一格"让位给"回城补位"。
-  if (all.hold) {
+  if (all.pullHome > 0) {
     const mine = citiesOf(s, unit.owner);
     if (mine.length > 0) {
       const before = Math.min(...mine.map((c) => distToCity(unit, c)));
       const after = Math.min(...mine.map((c) => distToCity({ x, y }, c)));
-      if (after > before) score -= (after - before) * 6;
+      // 强度由排序层的 `defend` 计划给（0~1），乘在每格 6 分上
+      if (after > before) score -= (after - before) * 6 * all.pullHome;
     }
   }
 
@@ -5279,7 +5301,7 @@ export interface AiPlan {
    * `trade` = 换家：这一带守不住了，不守着城打，全军去过对面的经济与空城。
    * 见 buildPlan 里"换家"那一段的触发条件。
    */
-  stance: 'push' | 'turtle' | 'elite' | 'trade';
+  stance: 'push' | 'elite' | 'trade';
   /**
    * 正在为什么攒钱。
    *
@@ -6031,15 +6053,13 @@ function buildPlan(
 
 
 
-  // 兵力明显不如对面、对面又已经压到门口：收缩固守，把人留在城里。
-  //
-  // 这里比以前收紧了一档：以前是"只要身价落后就固守"，可 AI 一旦进入攒钱期
-  // 身价必然落后，于是它自己把自己锁进固守、再也不出击（第一版就是这个死循环：
-  // 越攒越不敢打，越不敢打越攒不出胜势）。固守是**防守姿态**，得真有敌人来攻。
-  const weaker = myVal < foeVal * 0.75;
-  const atGate = foe.some((u) =>
-    myCities.some((c) => c.id !== mood.abandonedCityId && distToCity(u, c) <= 5),
-  );
+  /*
+   * 收缩（原来这里的 `turtle`）已经搬进计划层（`DEFEND_PLAN`）。
+   *
+   * 搬走的原因不是"姿态层错了"，而是它必须**有立约、有价值、有日志**：
+   * 原来那个判断每回合重算，进来一个敌人就收缩、敌人一走就放，
+   * 部队在城门口来回走——和决战时机那 128 次抖动是同一个病。
+   */
   /*
    * ── 换家：正面打不过，就别在正面耗 ──
    *
@@ -6078,13 +6098,7 @@ function buildPlan(
    */
   const quality = savingFor !== null || gold >= inc * 1.2 || mood.weight.boom > 0.5;
   const elite = quality || trade;
-  const stance: AiPlan['stance'] = trade
-    ? 'trade'
-    : weaker && army >= 3 && atGate
-      ? 'turtle'
-      : elite
-        ? 'elite'
-        : 'push';
+  const stance: AiPlan['stance'] = trade ? 'trade' : elite ? 'elite' : 'push';
 
   /*
    * 把这一回合的意向写回状态。
@@ -6360,7 +6374,7 @@ function noteEraDecision(s: GameState, view: GameState, me: PlayerId, model: 'co
  * 具体权重在 `core/unit-value.ts`，这里只负责把局面翻译成 `ValueContext`。
  */
 function valueContextOf(s: GameState, me: PlayerId, plan: AiPlan): ValueContext {
-  const tempo = plan.stance === 'push' || plan.stance === 'trade' ? 1 : plan.stance === 'turtle' ? -1 : 0;
+  const tempo = plan.stance === 'push' || plan.stance === 'trade' ? 1 : 0;
   const mine = unitsOf(s, me);
   // 视野冗余度：全军平均视野 / 6（6 格算"够开阔"）
   const coverage =
@@ -7775,13 +7789,13 @@ function aiNextActionCoreInner(
     air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
     crossingSite: null,
+    pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
     flankCityId: flank.flankCityId,
     flank: flank.flank,
     mood,
     needBridge: !canReachEnemyByLand(view, me),
-    hold: false,
     commit: false,
     // 弃城期不派人守那座城（传进去，pickGuardCity 会跳过它）
     guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
@@ -7846,7 +7860,6 @@ function aiNextActionCoreInner(
   // 这一回合的升级名额已经用掉了：攒时代的计划对采购就不再生效。
   // 不然钱被冻着、升级又没得升，这一回合等于白过——而且连着几个回合都白过。
   if (!mayUpgrade && plan.savingFor === 'era') plan.savingFor = null;
-  fields.hold = plan.stance === 'turtle';
 
   /*
    * 收尾计划：对面只剩废墟时，派人去接管。
@@ -7869,7 +7882,18 @@ function aiNextActionCoreInner(
      * `canReach` 填 `!fields.needBridge`：可达性只影响执行、不影响价值，
      * 现在只给收尾用（它不看这个字段），等"决战"接进来才会读到。
      */
-    const planCtx = planCtxOf(view, me, { canReach: !fields.needBridge });
+    const myValNow = unitsOf(view, me)
+      .filter((u) => utype(view, u.type).category === 'combat')
+      .reduce((n, u) => n + (utype(view, u.type).cost ?? 0), 0);
+    const foeValNow = foeUnits
+      .filter((u) => utype(view, u.type).category === 'combat')
+      .reduce((n, u) => n + (utype(view, u.type).cost ?? 0), 0);
+    const planCtx = planCtxOf(view, me, {
+      canReach: !fields.needBridge,
+      threat: fields.threat,
+      weaker: myValNow < foeValNow * 0.75,
+      enemyAtGate: foeUnits.some((u) => citiesOf(view, me).some((c) => distToCity(u, c) <= 3)),
+    });
     const prevPlan = focusOf(s, me).plan ?? null;
     const resolved = resolvePlans(planCtx, prevPlan, { urgent: fields.urgent });
     /*
@@ -7878,6 +7902,7 @@ function aiNextActionCoreInner(
      */
     fields.crossingSite = resolved.focus;
     fields.weights = resolved.net;
+    fields.pullHome = resolved.net.pullHome;
     if (resolved.focus) fields.bridgeSite = resolved.focus;
     for (const item of planActions(resolved.action, planCtx)) {
       candidates.push({ action: item.action, score: item.score ?? PLAN_TUNING.actionScore });
@@ -7932,7 +7957,6 @@ function aiNextActionCoreInner(
    */
   if (plan.stance === 'trade') {
     if (aiTrace.on) aiTrace.tradeCalls += 1;
-    fields.hold = false;
     fields.commit = true;
     fields.guardCityId = null;
     const soft = view.cities

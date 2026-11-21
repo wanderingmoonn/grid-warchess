@@ -49,6 +49,8 @@ function ctxOf(turn: number): PlanCtx {
     gold: 100,
     canReach: true,
     threat: 0,
+    enemyAtGate: false,
+    weaker: false,
     horizon: PLAN_TUNING.horizon,
     state: {},
   };
