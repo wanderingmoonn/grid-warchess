@@ -150,7 +150,7 @@ import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
-import { armyStrength, powerPerTurn, productionCapacity, solvedProjection } from './ai-strength.ts';
+import { armyStrength, powerPerTurn, powerRace, productionCapacity } from './ai-strength.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -2005,21 +2005,68 @@ export interface DecisiveCall {
   foePower: number;
   myPerTurn: number;
   foePerTurn: number;
-  /** 投影比：到 horizon 回合后我方 ÷ 对面 */
+  /**
+   * 投影比：**主力抵达那一刻**我方 ÷ 对面（含各自的产能投资）。
+   *
+   * 这是判决唯一的输入。语义 2026-11-21 从"远景"改成"抵达"——远景比值会把
+   * "趁对面还没补兵"算成优势，于是没兵的时候也说打得动。
+   */
   ratio: number;
+  /** 抵达后 12 回合内能否够打：0 = 抵达即够；12 = 再攒 12 回合；-1 = 都够不上 */
+  readyTurns: number;
+  /** 抵达与"抵达 + 12"里较高的那个比值，以及它出现在第几回合——"等下去会不会更好" */
+  peakRatio: number;
+  peakTurns: number;
   why: string;
 }
+
+/** 投影比到这个数就算"打得动" */
+const DECISIVE_AT = 1.15;
+/** 从"等"转"打"的门槛：比首次判决更高，防止在阈值边上反复横跳 */
+const DECISIVE_SWITCH = 1.3;
+
+/** 往后看多少回合（只用来回答"再等等会不会更好"） */
+const DECISIVE_LATE = 12;
+
+/**
+ * 扫描结果缓存：**按局面对象**记，不按"回合+数字指纹"记。
+ *
+ * `aiNextActionCoreInner` 每出一个动作就会走到这里（一回合十几次），
+ * 而扫描是上百次求解器调用。同一份 `GameState` 对象内的重复调用结论必然一样。
+ *
+ * 为什么不用指纹（2026-11-21 踩过）：`simSteps` 的递归推演会拿**同一回合、
+ * 同一席位、战力金钱也相近**的另一个局面走到这里，指纹会撞上——
+ * 真实局面读到推演局面的判决，行为随即分叉（实测同一牌局从 29 回合变成 34 回合）。
+ * 用 `WeakMap<GameState, ...>` 按对象身份分桶，推演局面天然不共享。
+ */
+const decisiveMemo = new WeakMap<
+  GameState,
+  Map<PlayerId, { ratio: number; readyTurns: number; peakRatio: number; peakTurns: number }>
+>();
 
 /**
  * 决战时机：现在打，还是等产能把自己堆起来。
  *
  * 人的思路是三条比大小：
- *   1. **现在打得动吗**：投影比 ≥ 1.15 且行军回合不太远 → 打；
+ *   1. **现在打得动吗**：抵达时刻的投影比 ≥ 1.15 且行军回合不太远 → 打；
  *   2. **等下去会更有利吗**：我的每回合产能比对面厚 → 等（投资会复利）；
  *   3. 都不成立 → 守（不主动推，但也别自杀）。
  *
- * 为什么用"每回合产能之比"当"等下去"的判据：投影是线性的，
- * 存量是常数项，所以 T 越大、比值越接近产能之比。产能比更高 = 越等越强。
+ * ── 为什么是"扫 T"而不是拍一个 horizon（2026-11-21）──────────────
+ *
+ * 旧版取 `horizon = clamp(marchTurns × 2, 12, 40)`，一个数同时决定了两件事：
+ * 判决用的比值、以及"我在替哪个时刻做打算"。取早了看不见投资复利（判成打不动），
+ * 取晚了把二十回合后的事当成现在（判成打得动）——两种错都实测出现过：
+ * 38 回合的负局是前者，261 回合的平局是后者。
+ *
+ * 现在把起点钉在**主力抵达那一刻**（t0 = 行军回合），并往后看一个点
+ * （`t0 + 12`）回答"再等等会不会更好"：
+ *   · `ratio`（t0 处）：抵达时够不够——这是"现在打不打"的唯一依据；
+ *   · `readyTurns` / `peak`：还差几回合、等下去最好能到多少——给日志和人看，
+ *     也是以后"等到第几回合再打"（而不是二选一）的接口。
+ *
+ * 为什么不细扫（2026-11-21）：实测峰值几乎总落在起点，13 点的细扫只把完整测试
+ * 从几分钟拖到 20 分钟以上，判决一个字都没变。
  */
 function decisiveOf(
   view: GameState,
@@ -2070,12 +2117,59 @@ function decisiveOf(
    * 尺度上差得很多（求解器会自己挑"投到第几回合停止投资"）。
    * 对面的输入用可见信息拼：看不见的钱/格子会低估它，这是刻意的保守。
    */
-  const horizon = Math.max(12, Math.min(40, marchTurns * 2));
-  const myProj = solvedProjection(view, me, horizon).power;
   const foeSeat = [...new Set(view.cities.filter((c) => c.owner !== me).map((c) => c.owner))][0];
-  const foeProj = foeSeat ? solvedProjection(view, foeSeat, horizon).power : foePower;
-  const ratioNow = myProj / Math.max(1, foeProj);
+  /*
+   * 扫描起点＝**主力抵达那一刻**（`marchTurns`），不再是旧版的 `marchTurns × 2`。
+   *
+   * 旧公式取的是"路上再走一倍时间"的远景比值：它把"趁对面还没补兵"算成优势，
+   * 却看不见"我到了城下时还剩多少兵"。改成抵达之后（2026-11-21，对手固定为
+   * `ai-9efb961`）：Q2 4-2 → 6-0，全量 16-5-3 → 17-5-2，配对 2 改善 / 2 变差 / 20 相同。
+   *
+   * 为什么不再加"下限 12"：试过，Q1 从 4-2 掉到 3-3——小图上 2~3 回合就到城下，
+   * 非说"12 回合后"等于又把窗口拉回远景。
+   */
+  const t0 = Math.max(1, Math.min(40, marchTurns));
 
+  let bucket = decisiveMemo.get(view);
+  if (!bucket) {
+    bucket = new Map();
+    decisiveMemo.set(view, bucket);
+  }
+  let scan = bucket.get(me);
+  if (!scan) {
+    /*
+     * **按需扫两点**，不是固定扫一串。
+     *
+     * 判决只看抵达那一刻；再往后的点只回答"等到 `DECISIVE_LATE` 回合会不会更好"。
+     * 所以：已经够打就不必往后看（多算一分钱不值）；不够打才看第二点。
+     *
+     * 为什么不做 13 点的细扫：实测（第四十六节）峰值几乎总在起点，细扫只增加
+     * 求解器调用——完整测试从几分钟涨到 20 分钟以上，收益是零。
+     */
+    const atArrival = powerRace(view, me, foeSeat ?? null, [t0])[0];
+    let peak = atArrival;
+    let readyTurns = atArrival.ratio >= DECISIVE_AT ? 0 : -1;
+    if (readyTurns !== 0) {
+      const late = powerRace(view, me, foeSeat ?? null, [t0 + DECISIVE_LATE])[0];
+      if (late.ratio > peak.ratio) peak = late;
+      if (late.ratio >= DECISIVE_AT) readyTurns = DECISIVE_LATE;
+    }
+    scan = {
+      ratio: atArrival.ratio,
+      readyTurns,
+      peakRatio: peak.ratio,
+      peakTurns: peak.turns,
+    };
+    bucket.set(me, scan);
+  }
+
+  const ratioNow = scan.ratio;
+  const wait =
+    scan.readyTurns === 0
+      ? '抵达即够打'
+      : scan.readyTurns > 0
+        ? `还要攒 ${scan.readyTurns} 回合`
+        : `再等 ${DECISIVE_LATE} 回合也够不上`;
 
   return {
     marchTurns,
@@ -2085,9 +2179,11 @@ function decisiveOf(
     myPerTurn,
     foePerTurn,
     ratio: ratioNow,
-    why: `投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）、行军 ${marchTurns} 回合`,
+    readyTurns: scan.readyTurns,
+    peakRatio: scan.peakRatio,
+    peakTurns: scan.peakTurns,
+    why: `投影比 ${scan.peakRatio.toFixed(2)}@${scan.peakTurns}（抵达 ${t0} 回合后 ${ratioNow.toFixed(2)}）、行军 ${marchTurns} 回合、${wait}`,
   };
-
 }
 
 /**
@@ -2787,9 +2883,10 @@ function decideCallOf(c: PlanCtx): 'attack' | 'develop' {
   const canAttack = c.marchTurns > 0 && c.marchTurns <= 14;
   let call: 'attack' | 'develop';
   if (prev === 'attack') call = ratio >= 0.9 && canAttack ? 'attack' : 'develop';
-  else if (prev === 'develop') call = ratio >= 1.3 && canAttack ? 'attack' : 'develop';
-  else call = ratio >= 1.15 && canAttack ? 'attack' : 'develop';
+  else if (prev === 'develop') call = ratio >= DECISIVE_SWITCH && canAttack ? 'attack' : 'develop';
+  else call = ratio >= DECISIVE_AT && canAttack ? 'attack' : 'develop';
   const ratioAt = Number(c.state.ratioAt ?? ratio);
+  // 驻留：3 回合内、比值没怎么变，就别翻案（防抖）
   const dwell = prev !== null && c.view.turn - since < 3 && Math.abs(ratio - ratioAt) < 0.5;
   return dwell && prev ? prev : call;
 }

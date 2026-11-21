@@ -260,3 +260,45 @@ export function solvedProjection(
   const plan = solvePower(powerInputOf(s, me), turns);
   return { power: base + plan.power, plan };
 }
+
+/* ---------------- 决战扫描：比值随"还能等多久"怎么变 ---------------- */
+
+export interface RacePoint {
+  /** 距离现在几回合 */
+  turns: number;
+  my: number;
+  foe: number;
+  ratio: number;
+}
+
+/**
+ * 逐点扫"再等 T 回合，双方战力各是多少、比值怎么变"。
+ *
+ * 为什么需要它、而不是拍一个 horizon：拍出来的那个数同时决定了判决
+ * （比值越线没有）和两边的比较口径。取早了看不见产能投资，取晚了
+ * 把"二十回合后才会发生的事"当成现在的想法。
+ *
+ * 采几个点由调用方决定：`decisiveOf` 现在只采"抵达"和"抵达 + 12"两点
+ * （实测峰值几乎总落在起点，细扫只增加开销）。
+ *
+ * 两边的输入各拼一次（`powerInputOf` 不随 T 变），之后每个 T 只跑一次求解器。
+ */
+export function powerRace(
+  s: GameState,
+  me: PlayerId,
+  foe: PlayerId | null,
+  horizons: number[],
+): RacePoint[] {
+  const myBase = armyStrength(s, me);
+  const myInput = powerInputOf(s, me);
+  const foeBase = foe === null ? 0 : armyStrength(s, foe);
+  const foeInput = foe === null ? null : powerInputOf(s, foe);
+  const out: RacePoint[] = [];
+  for (const h of horizons) {
+    const t = Math.max(0, Math.floor(h));
+    const my = myBase + solvePower(myInput, t).power;
+    const theirs = foeInput ? foeBase + solvePower(foeInput, t).power : 0;
+    out.push({ turns: t, my, foe: theirs, ratio: my / Math.max(1, theirs) });
+  }
+  return out;
+}

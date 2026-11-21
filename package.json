@@ -79,6 +79,7 @@
     "bench:ai": "node --experimental-strip-types scripts/bench-queue.ts",
     "probe:strength": "node --experimental-strip-types scripts/probe-strength.ts",
     "probe:power-solver": "node --experimental-strip-types scripts/probe-power-solver.ts",
+    "probe:decisive": "node --experimental-strip-types scripts/probe-decisive.ts",
     "diag:strength": "node --experimental-strip-types scripts/diag-strength.ts",
     "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
     "replay": "node --experimental-strip-types scripts/replay-report.ts",
