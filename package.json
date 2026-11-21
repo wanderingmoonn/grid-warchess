@@ -76,6 +76,8 @@
     "audit:era": "node --experimental-strip-types scripts/audit-era-units.ts",
     "probe:plan": "node --experimental-strip-types scripts/probe-plan.ts",
     "probe:plan-rank": "node --experimental-strip-types scripts/probe-plan-rank.ts",
+    "probe:strength": "node --experimental-strip-types scripts/probe-strength.ts",
+    "diag:strength": "node --experimental-strip-types scripts/diag-strength.ts",
     "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
     "replay": "node --experimental-strip-types scripts/replay-report.ts",
     "bench:clone": "node --experimental-strip-types scripts/bench-clone.ts",

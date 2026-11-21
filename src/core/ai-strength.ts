@@ -1,0 +1,115 @@
+/**
+ * 战力估值（S4，只算不用）。
+ *
+ * ── 为什么要有它 ──────────────────────────────────────────────
+ *
+ * 现在 AI 判断"能不能打"只看两样：兵数、身价（造价的简单加总）。
+ * 这两个数都不回答"打不打得动"——
+ *   · 24 个弓箭手和 24 个重骑在造价上可能差不多，战力差一倍；
+ *   · 兵数相同，一边全是残血，另一边满血；
+ *   · 城防厚的时候，"人多"根本换不来输出。
+ *
+ * 所以这里给三个数：**部队战力**（用于比大小）、**攻城输出**（一回合能砸掉
+ * 多少城防）、**破城回合数**（输出 ÷ 城血）。这三个是"该不该打"的地基。
+ *
+ * ── 为什么不自己发明一套战力 ──────────────────────────────────
+ *
+ * `unit-value.ts` 已经有一套 Lanchester 估值（`unitPower`），采购、换血、
+ * 结算全在用。这里**只乘一个血量系数**，不另立一套尺子——
+ * 两套尺子必然对不齐，而且没人说得清"为什么这个兵是 7 分"。
+ *
+ * ── 边界（第一版，都待校准）────────────────────────────────────
+ *
+ *   · 不算地形加成、不算护甲减伤、不算技能与光环；
+ *   · `unitPower` 用中性上下文（不看防守/压上倾向）；
+ *   · 攻城输出只算"这一回合够得着的"，不含下回合能走到的。
+ *
+ * 这些都不是"漏了"，是刻意留的：先把量级跑通，再按实测补。
+ * 见 `docs/PLAN-AI-V3-2026-11-21.md` 的 S4 与第二十节。
+ */
+import {
+  damageToCity,
+  distToCity,
+  effectiveRangeAgainst,
+  isArmed,
+  tileAt,
+  unitsOf,
+  utype,
+} from './rules.ts';
+import { unitPower } from './unit-value.ts';
+import type { City, GameState, PlayerId, Unit } from './types.ts';
+
+/** 一个单位的战力：面板战力 × 剩余血量比例（残血按比例打折） */
+export function unitStrength(s: GameState, u: Unit): number {
+  const def = utype(s, u.type);
+  if (def.category !== 'combat') return 0;
+  const hpRatio = Math.max(0, Math.min(1, u.hp / Math.max(1, def.maxHp)));
+  return unitPower(def) * hpRatio;
+}
+
+/** 一支部队的战力（建筑、工人不算） */
+export function armyStrength(s: GameState, me: PlayerId): number {
+  let total = 0;
+  for (const u of unitsOf(s, me)) total += unitStrength(s, u);
+  return total;
+}
+
+/**
+ * 战力比：我方 ÷ 敌方（多个对手时按总额算）。
+ *
+ * 敌人在迷雾里看不见时 `foe` 会偏小——这不是 bug，是"只知道自己看得见的"。
+ * 用它做判决时要记得这一点（要么保守取 1，要么等侦察）。
+ */
+export function strengthRatio(s: GameState, me: PlayerId): number {
+  const mine = armyStrength(s, me);
+  let foe = 0;
+  // 按**单位**算而不是按城算：无城席位的散兵也要计入（它照样能打人）
+  for (const u of s.units) if (u.owner !== me) foe += unitStrength(s, u);
+  return mine / Math.max(1, foe);
+}
+
+/**
+ * 这一回合能砸到这座城的输出（城防伤害/回合）。
+ *
+ * 只算**已经在射程内**的单位。为什么不把"下回合能走到的"也算上：
+ * 那会把"潜力"混进"当下"，而这道数最常用的场景是"这回合打不打得动"。
+ * 真要评估"再等一回合"，用 `siegeOutputAt` 自己传移动后的位置。
+ */
+export function siegeOutput(s: GameState, me: PlayerId, city: City): number {
+  const tile = tileAt(s, city.x, city.y);
+  let total = 0;
+  for (const u of unitsOf(s, me)) {
+    const def = utype(s, u.type);
+    if (def.category !== 'combat') continue;
+    if (!isArmed(s, u)) continue;
+    const range = effectiveRangeAgainst(s, u, tile);
+    if (distToCity(u, city) > range) continue;
+    total += Math.max(0, damageToCity(u, city, s));
+  }
+  return total;
+}
+
+/**
+ * 按现在的输出，砸开这座城要几回合（Infinity = 砸不动）。
+ *
+ * 这是"该不该打"最直接的那个数：值 ≤ 3 才算"打得动"。
+ * 注意它不含对手的修补/反击，只是"静态算术"——所以只能当**下界**用。
+ */
+export function turnsToRaze(s: GameState, me: PlayerId, city: City): number {
+  const out = siegeOutput(s, me, city);
+  if (out <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(1, Math.ceil(city.hp / out));
+}
+
+/**
+ * 整场"能不能推过去"的粗判：战力比 × 破城回合数。
+ *
+ * 单看哪一个都不够——兵多但砸不动城等于干耗，砸得动但兵力被压着打等于送。
+ * 这个组合数是给"决战时机"用的，**权重待校准**。
+ */
+export function offenseScore(s: GameState, me: PlayerId, city: City): number {
+  const ratio = strengthRatio(s, me);
+  const turns = turnsToRaze(s, me, city);
+  if (!Number.isFinite(turns)) return 0;
+  return ratio / Math.max(1, turns);
+}
