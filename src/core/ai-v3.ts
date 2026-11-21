@@ -1795,6 +1795,17 @@ interface Fields {
   /** 最近的自家城：编队打仗时，没编队的散兵回这里守（见走位的 objective） */
   homeCityId: string | null;
   /**
+   * 造桥点周围 2 格（**只在真的过不去时**才有内容）。
+   *
+   * 用户 2026-11-21 的观察：平局局里大批军队堆在桥头，工程队靠不近那一格，
+   * 在原地徘徊。规则层不许同格，兵站着工程队就永远进不去。
+   *
+   * 上一版试过"战斗单位站桥点扣分"，但忘了加 `needBridge` 条件——
+   * `bridgeSite` 是"最近的水面"，**任何图上都有值**，于是所有兵在所有图都在躲水面，
+   * 全量从 58% 掉到 38%。这次只在真的需要过河时才清场。
+   */
+  bridgeClear: Set<number>;
+  /**
    * 编队成员 → 队形信息（目标城、自己到目标、全队最前/最后、允许的密集度）。
    *
    * 用它替代老的"协同前进"（`aheadOfLine` 比全局战线）：队形该多紧由**编队**定，
@@ -3334,6 +3345,15 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     riskMul;
 
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
+  /*
+   * 给造桥点让路（只在真的过不去时）：非工程单位停在桥点周围 2 格里，
+   * 工程队就永远进不去。已经在里面的不罚——那是"离开"，不是"靠近"。
+   */
+  if (all.bridgeClear.size > 0 && def.category !== 'builder') {
+    const here = all.bridgeClear.has(unit.y * s.w + unit.x);
+    const there = all.bridgeClear.has(y * s.w + x);
+    if (there && !here) score -= 32;
+  }
   for (const city of s.cities) {
     if (!city.ruined || city.id === all.mood.abandonedCityId) continue;
     const affordable = s.players[unit.owner].gold >= rebuildCost(city);
@@ -8489,6 +8509,11 @@ function aiNextActionCoreInner(
     noteEraDecision(s, view, me, s.config.aiEraModel);
   }
 
+  // 先算一次：下面 `bridgeSite` / `bridgeClear` 都要用它，不能在字面量里互相引用
+
+  const needBridgeNow = !canReachEnemyByLand(view, me);
+
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -8504,7 +8529,7 @@ function aiNextActionCoreInner(
     flankCityId: flank.flankCityId,
     flank: flank.flank,
     mood,
-    needBridge: !canReachEnemyByLand(view, me),
+    needBridge: needBridgeNow,
     commit: false,
     // 弃城期不派人守那座城（传进去，pickGuardCity 会跳过它）
     guardCityId: pickGuardCity(view, me, foeUnits, mood.abandonedCityId),
@@ -8532,6 +8557,20 @@ function aiNextActionCoreInner(
       citiesOf(view, me)
         .filter((c) => !c.ruined)
         .sort((a, b) => b.hp - a.hp)[0]?.id ?? null,
+    bridgeClear: (() => {
+      const out = new Set<number>();
+      const site = needBridgeNow ? bestBridgeSite(view, me, wade) : null;
+      if (!site) return out;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const x = site.x + dx;
+          const y = site.y + dy;
+          if (!inBounds(view, x, y)) continue;
+          out.add(y * view.w + x);
+        }
+      }
+      return out;
+    })(),
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
