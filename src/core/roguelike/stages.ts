@@ -123,7 +123,12 @@ const FORESTS: Array<Array<[number, number, number]>> = [
 /** 每幕两场精英：一只新怪 + 常规队，无城 */
 const ELITES: Array<{ id: string; name: string; brief: string; elite: string; relic?: string }> = [
   { id: 'a1e1', name: '林间遭遇', brief: '一个血盾兵领着两个散兵——打完记得把兵带回城。', elite: 'elite_shield' },
-  { id: 'a1e2', name: '巡林队', brief: '钩镰手负责截你的后路。', elite: 'elite_hook', relic: 'packhorse' },
+  /*
+   * 这一场原来掉「驮马」（兵额 +2）。兵额类遗物 2026-11-21 按用户要求整个删掉了
+   * ——兵额就是城格数，不存在"多带两个人"的口子。现在这场不掉遗物；
+   * 首幕的遗物落点是 Boss「守门人」（铁壁）。
+   */
+  { id: 'a1e2', name: '巡林队', brief: '钩镰手负责截你的后路。', elite: 'elite_hook' },
   { id: 'a2e1', name: '河湾伏击', brief: '它跑得比你的民兵快，别让它绕到城门口。', elite: 'elite_hook' },
   { id: 'a2e2', name: '焦土哨所', brief: '咒火术士把这片地烧黑了——别让它站成一线。', elite: 'elite_hexer' },
   { id: 'a3e1', name: '断桥', brief: '血盾兵堵桥，后面跟着长矛。', elite: 'elite_shield' },

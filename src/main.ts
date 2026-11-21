@@ -36,7 +36,6 @@ import { cityUpgradeCost } from './core/roguelike/rewards.ts';
 import { cardLevel, cardsToNext, drawCards, rngFrom } from './core/roguelike/cards.ts';
 import { TACTICS, TACTIC_RATE, applyTacticNow } from './core/roguelike/tactics.ts';
 import {
-  capacityBonus,
   cityArmorBonus,
   healsIntake,
   hornFreebies,
@@ -6608,8 +6607,7 @@ function rogueCtx() {
     evacTurns: st.meta.evacTurns,
     expectedTurns: st.meta.expectedTurns,
     playerSeat: 'A' as const,
-    // 遗物：驮马（兵额）/ 军械（带回满血）
-    capacityBonus: capacityBonus(rogue!.run),
+    // 遗物：军械（带回的兵满血）。兵额不加任何东西——它就是城格数（2026-11-21）
     healIntake: healsIntake(rogue!.run),
   };
 }

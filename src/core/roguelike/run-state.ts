@@ -119,6 +119,13 @@ export function parseRun(raw: string | null): RunState | null {
       // 老存档没有这个字段：当成青铜时代（第一幕的默认值）
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       branch: typeof obj.branch === 'string' ? obj.branch : 'cold',
+      /*
+       * 老存档里可能存着已经删掉的遗物（`packhorse` 驮马，2026-11-21 删除）。
+       * 不过滤的话，遗物面板会拿 id 当名字显示成一个英文单词。
+       */
+      relics: Array.isArray(obj.relics)
+        ? (obj.relics as string[]).filter((id) => id !== 'packhorse')
+        : [],
       tactics: Array.isArray(obj.tactics) ? (obj.tactics as string[]) : [],
       /*
        * 城血只可能是"几十到几百"这个量级：旧版本叠乘过翻倍，

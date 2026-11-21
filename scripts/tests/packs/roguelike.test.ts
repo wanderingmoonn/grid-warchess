@@ -29,10 +29,10 @@ import { validateLevel } from '../../../src/core/level.ts';
 import { applyAction, incomeOf } from '../../../src/core/rules.ts';
 import { TACTICS, TACTIC_BY_ID, applyTacticNow } from '../../../src/core/roguelike/tactics.ts';
 import {
-  capacityBonus,
   cityArmorBonus,
   healsIntake,
   hornFreebies,
+  RELICS,
   skipMoney,
 } from '../../../src/core/roguelike/relics.ts';
 import { canUseType } from '../../../src/core/draft.ts';
@@ -361,23 +361,29 @@ export function run() {
     assert.ok(TACTIC_BY_ID.supply.name.length > 0);
   });
 
-  test('肉鸽：遗物真的生效——铁壁/驮马/号角/军械/吝啬鬼', () => {
+  test('肉鸽：遗物真的生效——铁壁/号角/军械/吝啬鬼', () => {
     const run = newRun(1, { allowRestart: true });
     assert.equal(cityArmorBonus(run), 0, '没遗物就是 0');
-    assert.equal(capacityBonus(run), 0);
     assert.equal(hornFreebies(run), 0);
     assert.equal(healsIntake(run), false);
     assert.equal(skipMoney(run), 80);
 
-    run.relics = ['ironwall', 'packhorse', 'horn', 'arsenal', 'miser'];
+    run.relics = ['ironwall', 'horn', 'arsenal', 'miser'];
     assert.equal(cityArmorBonus(run), 2, '铁壁：城防 +2');
-    assert.equal(capacityBonus(run), 2, '驮马：兵额 +2');
     assert.equal(hornFreebies(run), 2, '号角：2 个免费民兵');
     assert.equal(healsIntake(run), true, '军械：带回满血');
     assert.equal(skipMoney(run), 160, '吝啬鬼：不选拿钱翻倍');
+
+    // 兵额类遗物已整个删除（2026-11-21）：兵额 = 城格数，不能有"凭空多带两个人"的口子
+    assert.equal(RELICS.length, 4, '现在只有四件遗物');
+    assert.ok(
+      !RELICS.some((r) => /兵额|名额/.test(r.blurb)),
+      '遗物里不许再出现改兵额的条目',
+    );
+    assert.ok(!RELICS.some((r) => /驮马/.test(r.name)), '驮马已删除');
   });
 
-  test('肉鸽：驮马与军械在撤离结算里生效', () => {
+  test('肉鸽：兵额只认城格数，任何遗物都不能多带人（军械只回血）', () => {
     const st = SLICE_STAGES[0]!;
     const r = validateLevel(st.level);
     assert.ok(r.ok);
@@ -405,14 +411,15 @@ export function run() {
     };
     const base = { run: newRun(1, { allowRestart: true }), stageIndex: 0, evacTurns: 2, expectedTurns: 6, playerSeat: 'A' as const };
     const plain = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, base);
-    const buffed = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, {
+    // 2×2 的城 = 4 个名额：城里塞了 5 个，只能带走 4 个，另一个进 lost
+    assert.equal(plain.taken.length, 4, '兵额就是城格数，不能多');
+    // 军械只改血，绝不改名额
+    const healed = settleStage(state, { phase: 'done', evacLeft: 0, clearedTurn: 4 }, {
       ...base,
-      capacityBonus: 2,
       healIntake: true,
     });
-    assert.ok(buffed.taken.length > plain.taken.length, '驮马应该多带走几个人');
-    assert.ok(buffed.taken.every((u) => u.hp >= 5), '军械只能加血不能减');
-    assert.ok(buffed.taken.every((u) => typeof u.hp === 'number'));
+    assert.equal(healed.taken.length, plain.taken.length, '遗物不该改变兵额');
+    assert.ok(healed.taken.every((u) => u.hp >= 5), '军械只能加血不能减');
   });
 
   test('肉鸽：撤离期间回合必须照常推进（holdWinner）', () => {
