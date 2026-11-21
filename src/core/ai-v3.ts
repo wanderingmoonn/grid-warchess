@@ -2333,7 +2333,9 @@ function squadTick(
   for (const sq of focus.squads ?? []) {
     // 先 `Set` 去重：同一回合若 `squadTick` 被重复调用（`keep` 丢失时会发生），
     // 成员 id 会被重复 push，报告里就出现"20 人"的编队（实际 12 人）。
-    const alive = [...new Set(sq.memberIds)].filter((id) => byId.has(id));
+    // 去重 + **硬截断到 want**：实测长局里出现 31 人的编队（`squadTick` 在
+    // keep 丢失时会被同一回合重复调用），挤成一团还拖慢行军。
+    const alive = [...new Set(sq.memberIds)].filter((id) => byId.has(id)).slice(0, Math.max(1, sq.want));
     const ratio = alive.length / Math.max(1, sq.want);
     if (alive.length === 0 || ratio < SQUAD_DISBAND_RATIO || foes.length === 0) continue;
     kept.push({ ...sq, memberIds: alive });

@@ -296,12 +296,18 @@ function planFlipsOf(s: GameState, p: PlayerId): number {
  * 组 = 还在收拢（缺口就是报给生产端的那个数），走 = 已出发。
  */
 function squadSummaryOf(s: GameState, p: PlayerId): string {
-  const last = [...(s.aiSquads ?? [])].reverse().find((x) => x.me === p);
-  if (!last || last.squads.length === 0) return '无';
-  const body = last.squads
-    .map((x) => `${x.id.replace(/-\d+$/, '')}${x.state === 'forming' ? '组' : '走'}${x.count}人`)
+  /*
+   * 读**当前编队**（`aiFocus.squads`），不读日志。
+   *
+   * 日志只在"结论变化"时记一条，所以最后一条可能是几十回合前的：
+   * 编队解散之后日志还留着旧的，摘要会一直显示"31 人"（实测踩过）。
+   */
+  const live = s.aiFocus?.[p]?.squads ?? [];
+  if (live.length === 0) return '无';
+  const body = live
+    .map((x) => `${x.id.replace(/-\d+$/, '')}${x.state === 'forming' ? '组' : '走'}${x.memberIds.length}人`)
     .join('/');
-  return `${last.squads.length}支[${body}]`;
+  return `${live.length}支[${body}]`;
 }
 
 function planSummaryOf(s: GameState, p: PlayerId): string {
