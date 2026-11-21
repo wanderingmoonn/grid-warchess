@@ -377,7 +377,14 @@ export function resolvePlans(
   if (opts.urgent) {
     const defend = REGISTRY.get('defend');
     const defendLive = live.some((x) => x.plan.id === 'defend');
-    if (defend && defendLive) {
+    /*
+     * 只有**行动型**的防御计划才配占"行动位"。
+     *
+     * 权重型的防御（现在这条就是）靠 `pullHome` 起作用，它没有动作可出；
+     * 把它塞进行动位等于**把收尾这类真行动挤掉、却什么也不产出**
+     * ——2026-11-21 自查时发现的：urgent 一触发，收尾计划就静默失效。
+     */
+    if (defend && defend.kind === 'action' && defendLive) {
       action = defend;
       reason = 'urgent：强制切防御';
     }
