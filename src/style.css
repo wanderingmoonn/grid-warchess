@@ -11786,3 +11786,180 @@ a.btn {
     height: auto;
   }
 }
+
+.title-ui-toggle {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top, 0px));
+  right: max(16px, env(safe-area-inset-right, 0px));
+  z-index: 3;
+  min-height: 36px;
+}
+
+html[data-ui-layout='classic'] .title-inner {
+  display: block;
+  width: min(560px, 100%);
+  margin: 42px 0 12px;
+  padding: 40px 36px 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px -32px rgba(43, 40, 35, 0.45);
+  text-align: center;
+}
+
+html[data-ui-layout='classic'] .title-visual,
+html[data-ui-layout='classic'] .unit-insignia {
+  display: none;
+}
+
+html[data-ui-layout='classic'] .title-kicker {
+  margin-bottom: 6px;
+}
+
+html[data-ui-layout='classic'] .title-name {
+  font-size: var(--fs-hero);
+  line-height: 1.15;
+}
+
+html[data-ui-layout='classic'] .title-name span {
+  display: inline;
+  color: var(--text);
+}
+
+html[data-ui-layout='classic'] .title-sub {
+  margin: 10px 0 26px;
+  font-size: var(--fs-md);
+}
+
+html[data-ui-layout='classic'] .title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+html[data-ui-layout='classic'] .title-actions .title-btn {
+  min-width: 132px;
+  padding: 12px 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: center;
+}
+
+html[data-ui-layout='classic'] .title-actions .title-btn.primary {
+  border-color: var(--a);
+  background: var(--a-fill);
+  color: #fff;
+}
+
+html[data-ui-layout='classic'] .title-links,
+html[data-ui-layout='classic'] .title-era {
+  justify-content: center;
+}
+
+html[data-ui-layout='classic'] .title-latest {
+  text-align: center;
+}
+
+html[data-ui-layout='classic'] .title-foot {
+  margin-top: 24px;
+}
+
+html[data-ui-layout='classic'] .board .unit .unit-inner:not(.has-art) {
+  border: 0;
+  border-radius: 26%;
+  background: var(--piece-team);
+  color: #fff;
+  font-size: calc(var(--cell) * 0.4);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+html[data-ui-layout='classic'] .board .unit.wide .unit-inner:not(.has-art) {
+  border-radius: 10%;
+  font-size: calc(var(--cell) * 0.62);
+}
+
+html[data-ui-layout='classic'] .board .unit.selected .unit-inner:not(.has-art) {
+  box-shadow: 0 0 0 3px var(--warn-deep), 0 0 0 5px rgba(255, 255, 255, 0.8);
+}
+
+html[data-ui-layout='classic'] .board .unit.site .unit-inner:not(.has-art) {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.75), 0 0 0 2px rgba(224, 163, 60, 0.75);
+}
+
+html[data-ui-layout='classic'] .unit-chip.a,
+html[data-ui-layout='classic'] .unit-chip.b {
+  border: 0;
+  border-radius: 26%;
+  background: var(--piece-team);
+  color: #fff;
+  box-shadow: none;
+}
+
+html[data-ui-layout='classic'] .city-plate {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html[data-ui-layout='classic'] .city-block:not(.selected):not(.siege-target) {
+  border-width: 2px;
+  box-shadow: none;
+}
+
+html[data-ui-layout='classic'] .city-block.era-2:not(.selected):not(.siege-target) {
+  border-width: 2.5px;
+}
+
+html[data-ui-layout='classic'] .city-block.era-3:not(.selected):not(.siege-target) {
+  border-width: 3px;
+  box-shadow: 0 0 0 1px rgba(140, 60, 140, 0.25);
+}
+
+@media (max-width: 560px) {
+  html[data-ui-layout='classic'] .title-inner {
+    padding: 28px 20px 22px;
+  }
+
+  html[data-ui-layout='classic'] .title-actions {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 920px) {
+  html[data-ui-layout='classic'] .main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+    padding: 12px;
+    gap: 12px;
+  }
+
+  html[data-ui-layout='classic'] .board-wrap {
+    min-height: auto;
+    padding-bottom: 4px;
+  }
+
+  html[data-ui-layout='classic'] .side-drawer {
+    display: contents;
+  }
+
+  html[data-ui-layout='classic'] .mobile-drawer-head {
+    display: none;
+  }
+
+  html[data-ui-layout='classic'] .side-drawer > .side {
+    min-height: auto;
+    overflow: visible;
+    padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+
+  html[data-ui-layout='classic'] .side-drawer .side > .card {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+  }
+}

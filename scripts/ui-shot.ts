@@ -171,7 +171,7 @@ async function goto(url: string) {
 }
 
 async function shot(name: string) {
-  if (ARGS.includes('phase1') || ARGS.includes('combat') || ARGS.includes('phase3')) {
+  if (ARGS.includes('phase1') || ARGS.includes('combat') || ARGS.includes('phase3') || ARGS.includes('rollback')) {
     const overflow = await evaluate(`(() => [...document.querySelectorAll('.recruit-wrap, .setup-preset, .battle-resources, .combat-preview, .action-feedback, .title-copy, .title-visual, .side-drawer')]
       .filter((element) => {
         const rect = element.getBoundingClientRect();
@@ -319,6 +319,16 @@ if (ARGS.includes('manual')) {
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
 
+if (ARGS.includes('rollback')) {
+  await click('[data-title="ui-layout"]');
+  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'classic') throw new Error('首页 UI 回滚没有生效');
+  await shot(`20-classic-home-${tag}`);
+  await goto(BASE + '?home=1' + theme);
+  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'classic') throw new Error('刷新丢失 UI 偏好');
+  await click('[data-title="ui-layout"]');
+  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'refined') throw new Error('首页无法恢复新版 UI');
+}
+
 if (ARGS.includes('phase3')) {
   await evaluate(`document.querySelector('.title-tools').open = true`);
   await shot(`01b-title-more-${tag}`);
@@ -428,6 +438,31 @@ await evaluate(`(() => {
 })()`);
 await sleep(700);
 await shot(`04-unit-${tag}`);
+
+if (ARGS.includes('rollback')) {
+  const saved = await evaluate(`localStorage.getItem('warchess:match:v1')`);
+  const selected = await evaluate(`document.querySelector('.unit.selected')?.dataset.id`);
+  await click('[data-act="settings"]');
+  await click('[data-act="set-ui-layout"]');
+  await shot(`21-rollback-settings-${tag}`);
+  await click('[data-act="settings-close"]');
+  const issue = await evaluate(`(() => {
+    if (document.documentElement.dataset.uiLayout !== 'classic') return '设置回滚没有生效';
+    if (getComputedStyle(document.querySelector('.unit-inner')).backgroundColor === 'rgba(0, 0, 0, 0)') return '经典棋子背景丢失';
+    if (getComputedStyle(document.querySelector('.unit-insignia')).display !== 'none') return '经典棋子图标没有回退';
+    if (innerWidth <= 920 && getComputedStyle(document.querySelector('.side-drawer')).display !== 'contents') return '经典手机布局没有回退';
+    return '';
+  })()`);
+  if (issue) throw new Error(issue);
+  if (await evaluate(`localStorage.getItem('warchess:match:v1')`) !== saved) throw new Error('UI 回滚修改了存档');
+  await shot(`22-classic-battle-${tag}`);
+  await click('[data-act="settings"]');
+  await click('[data-act="set-ui-layout"]');
+  await click('[data-act="settings-close"]');
+  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'refined') throw new Error('设置无法恢复新版 UI');
+  if (await evaluate(`document.querySelector('.unit.selected')?.dataset.id`) !== selected) throw new Error('UI 切换丢失单位选中');
+  await shot(`23-restored-battle-${tag}`);
+}
 
 if (ARGS.includes('phase3') && W <= 920) {
   const verifyDrawer = async (expanded: boolean) => {

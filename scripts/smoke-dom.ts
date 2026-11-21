@@ -29,6 +29,7 @@ import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { actionFeedback, forecastCombat } from '../src/ui/combat-feedback.ts';
 import { unitRole } from '../src/ui/unit-insignia.ts';
+import { applyUiLayout, setUiLayout } from '../src/ui/layout.ts';
 import { drainDamageLedger, startDamageLedger } from '../src/core/rules.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import {
@@ -1370,6 +1371,49 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
 });
 
+check('侧栏：没有回合收入的模式写「0 金」，不写「免费」', () => {
+  /*
+   * 肉鸽/挑战模式整局 `config.noIncome === true`，`incomeResOf` 直接返回空表。
+   * 资源条那一格以前套的是 `costLabel`——那是给**价格**写的格式化函数，
+   * 空表返回「免费」（"这东西不花钱"）。套到收入上就成了"每回合白拿钱"，
+   * 和事实正好相反：没有城也没有经济单位，本就该是 0。
+   */
+  const host = doc.createElement('div');
+  const st = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [], noIncome: true },
+    818,
+  );
+  renderPanel(host, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const strip = host.querySelector('.battle-resources');
+  assert.ok(strip, '资源条该在');
+  const cell = strip!.children[1] as HTMLElement;
+  assert.ok((cell.textContent ?? '').includes('每回合收入'), '第二格是每回合收入');
+  assert.match(cell.textContent ?? '', /0 金/, '没有收入时该写 0 金');
+  assert.ok(!(cell.textContent ?? '').includes('免费'), '不能把"没有收入"写成"免费"');
+  assert.equal(cell.getAttribute('title') !== null, true, '这个模式要说明"金币只能从战果拿"');
+
+  // 普通局照常写数字：别为这条把有收入的局也写成 0
+  const host2 = doc.createElement('div');
+  const normal = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 819);
+  renderPanel(host2, {
+    view: playerView(normal, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: null,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const txt = (host2.querySelector('.battle-resources')!.children[1] as HTMLElement).textContent ?? '';
+  assert.ok(!txt.includes('0 金'), `有城的局收入不该是 0（实际 ${txt}）`);
+});
+
 check('装配坞：每件装备写着数据与耗电，插槽与电力收支都看得见', () => {
   /*
    * 用户 2026-11-10 的诉求：装配坞以前每件只写"耗能 N"，装甲板/系统槽装了
@@ -2575,7 +2619,7 @@ check('城内地面位站满时，空军按钮还能点（人口满了不等于�
   const land = btns.find((b) => (b.textContent ?? '').includes('民兵'));
   assert.ok(land?.hasAttribute('disabled'), '陆军确实造不出来了，按钮该是灰的');
   assert.ok(
-    (host.textContent ?? '').includes('空军还能起飞'),
+    (host.textContent ?? '').includes('仍可生产空军'),
     '提示要告诉玩家"占满的只是地面位"',
   );
 });
@@ -3101,7 +3145,7 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
 
   // 说明文案要写明全视野，否则玩家只会以为它是"第四档"
   const section = net()!.closest('section')!;
-  assert.ok((section.textContent ?? '').includes('自带全视野'), '这一栏要有一句"自带全视野"的说明');
+  assert.ok((section.textContent ?? '').includes('全视野'), '这一栏要明确测试 AI 的全视野');
 
   click('[data-ailevel="advanced"]');
   assert.equal(net()!.classList.contains('active'), false, '点档位应该切回手写引擎');
@@ -3639,7 +3683,7 @@ await checkAsync('开始界面选三人：对手区换成说明，开局后顶�
     '点随机要能选中',
   );
   assert.ok(
-    (doc.querySelector('.modal-body')!.textContent ?? '').includes('抽到谁谁先动'),
+    (doc.querySelector('.modal-body')!.textContent ?? '').includes('随机先手'),
     '选了随机要说明"在参赛席位上抽"',
   );
   // 切回按席位，别影响后面这局的断言
@@ -4258,7 +4302,7 @@ await checkAsync('战役页：推荐开局在前，数据记录收进高级设�
     '第一块应当提供可直接应用的推荐开局',
   );
   assert.ok(
-    (blocks[1]?.textContent ?? '').includes('在哪张图上打'),
+    blocks[1]?.querySelector('.start-map-row'),
     '推荐开局之后应当展示当前地图',
   );
   const advanced = doc.querySelector<HTMLDetailsElement>('.start-advanced');
@@ -5692,14 +5736,14 @@ check('设置弹窗：主题、动效、铃声、低频入口都在里面', () =
   }
 
   // 当前值要如实反映：深色主题选中的是「新版」，动效选中的是「减少」
-  assert.ok(/data-theme="modern"[^>]*>新版/.test(html), '当前主题要标在「新版」上');
+  assert.ok(/data-theme="modern"[^>]*>深色/.test(html), '当前主题要标在「深色」上');
   assert.ok(/data-motion="reduced"[^>]*>减少/.test(html), '减少动效要标在「减少」上');
   assert.ok(text.includes('铃声 35%'), `音量文字要写出来：${text.slice(0, 80)}`);
   // 滑块的值跟 chime 走，别写死 60
   assert.ok(/value="35"/.test(html), '滑块初值要等于当前音量');
 
   // 副标题要说清"这是本机设置"——不然玩家会以为它会跟着存档走
-  assert.ok(text.includes('只影响这台设备'), '要说清这些设置不进存档');
+  assert.ok(text.includes('仅此设备'), '要说清外观设置仅对本机生效');
 });
 
 check('手机设置里多出「对局中」：迷雾开关和联机入口', () => {
@@ -11170,6 +11214,75 @@ check('首页更多：编辑器保留首页，导入与复盘入口仍能到达'
     } finally {
       close();
     }
+  }
+});
+
+check('UI 回滚：设置立即生效、能恢复新版，不修改对局和深浅色选择', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const tap = (selector: string) => {
+      const button = fresh.document.querySelector<HTMLElement>(selector);
+      assert.ok(button, selector);
+      button.click();
+    };
+    tap('.unit[data-id="forecast-own"]');
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    const theme = fresh.document.documentElement.dataset.ui;
+    tap('[data-act="settings"]');
+    tap('[data-act="set-ui-layout"]');
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
+    assert.equal(fresh.localStorage.getItem('warchess:ui-layout'), 'classic');
+    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]')?.textContent, '恢复新版 UI');
+    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]'), fresh.document.activeElement);
+    assert.equal(fresh.document.documentElement.dataset.ui, theme);
+    tap('[data-act="set-ui-layout"]');
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    assert.ok(fresh.document.querySelector('.unit.selected[data-id="forecast-own"]'));
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('UI 回滚：应急链接优先、切换同步链接、存储受限也能切换', () => {
+  const fresh = new JSDOM('<!doctype html><html></html>', { url: 'http://localhost/?layout=classic&sharecode=keep#board' }).window;
+  try {
+    const root = fresh.document.documentElement;
+    fresh.localStorage.setItem('warchess:ui-layout', 'refined');
+    assert.equal(applyUiLayout(root), 'classic');
+    setUiLayout('refined', root);
+    assert.equal(new URL(fresh.location.href).searchParams.get('layout'), 'refined');
+    assert.equal(new URL(fresh.location.href).searchParams.get('sharecode'), 'keep');
+    assert.equal(fresh.location.hash, '#board');
+    fresh.history.replaceState(null, '', '/');
+    setUiLayout('classic', root);
+    delete root.dataset.uiLayout;
+    assert.equal(applyUiLayout(root), 'classic');
+    Object.defineProperty(fresh, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
+    assert.equal(applyUiLayout(root), 'refined');
+    setUiLayout('classic', root);
+    assert.equal(root.dataset.uiLayout, 'classic');
+  } finally {
+    fresh.close();
+  }
+});
+
+check('UI 回滚：首页可独立切换，不离开首页且保留主入口', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    fresh.document.querySelector<HTMLElement>('[data-act="settings"]')!.click();
+    fresh.document.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
+    const button = fresh.document.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
+    assert.ok(button);
+    button.click();
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
+    assert.equal(button.getAttribute('aria-pressed'), 'true');
+    assert.equal(button.textContent, '恢复新版 UI');
+    assert.ok(fresh.document.querySelector('.title-screen [data-title="new"]'));
+    button.click();
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+  } finally {
+    fresh.close();
   }
 });
 

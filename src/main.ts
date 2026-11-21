@@ -211,6 +211,7 @@ import {
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { applyUiLayout, currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './ui/layout.ts';
 import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
 import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
 import { settingsHtml } from './ui/settings.ts';
@@ -228,6 +229,11 @@ import { MODULES, deviceTargetOf } from './core/armor.ts';
  *   · 控制台 `__ui('modern')` / `__ui('legacy')`（会记住偏好）。
  */
 applyUiTheme();
+applyUiLayout();
+window.addEventListener(UI_LAYOUT_EVENT, () => {
+  boardDirty = true;
+  render();
+});
 installUiConsole();
 /*
  * 兵种贴图：默认关，只把 `<html data-art>` 定下来。
@@ -2237,7 +2243,7 @@ function fitBoard(): void {
 
   // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
   const viewportH = appEl.clientHeight || window.innerHeight;
-  const availH = window.innerWidth <= 920 && boardWrapEl.clientHeight > 0
+  const availH = currentUiLayout(document.documentElement) !== 'classic' && window.innerWidth <= 920 && boardWrapEl.clientHeight > 0
     ? Math.min(viewportH - chrome - padY, boardWrapEl.clientHeight)
     : viewportH - chrome - padY;
   /*
@@ -6346,7 +6352,6 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
     // 第一次来（没打过一局、也没看过教程）：把教程摆成主按钮
     firstVisit: !hasRealSave && !tutorialSeen(),
     version: BUILD_VERSION,
-    latest: '新：新手教程（约 3 分钟，从首页进）',
     onNew: newGameFlow,
     onRogue: openRoguelike,
     onTutorial: startTutorial,
@@ -10620,6 +10625,7 @@ function openSettings(): void {
 
   const paint = (): void => {
     mask.innerHTML = settingsHtml({
+      uiLayout: currentUiLayout(document.documentElement),
       theme: document.documentElement.dataset.ui === 'modern' ? 'modern' : 'legacy',
       reducedMotion: document.documentElement.dataset.motion === 'reduced',
       chime: chimeVolume,
@@ -10660,6 +10666,12 @@ function openSettings(): void {
     if (act === 'set-theme') {
       setUiMode(el!.dataset.theme === 'modern' ? 'modern' : 'legacy');
       paint();
+      return;
+    }
+    if (act === 'set-ui-layout') {
+      setUiLayout(currentUiLayout(document.documentElement) === 'classic' ? 'refined' : 'classic');
+      paint();
+      mask.querySelector<HTMLButtonElement>('[data-act="set-ui-layout"]')?.focus();
       return;
     }
     if (act === 'set-motion') {

@@ -16,6 +16,7 @@
  */
 
 import { unitInsignia, type UnitRole } from './unit-insignia.ts';
+import { currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './layout.ts';
 
 export interface TitleOptions {
   /** 本机有没有可以接着打的对局 */
@@ -76,7 +77,7 @@ function titleSandtable(): string {
       <span class="hero-city b" style="--x:6;--y:0">${unitInsignia('building')}</span>
       ${pieces.map((piece) => `<span class="hero-piece ${piece.team}" style="--x:${piece.x};--y:${piece.y}"><b>${piece.glyph}</b><i>${unitInsignia(piece.role)}</i></span>`).join('')}
     </div>
-    <div class="title-visual-foot"><span>布阵 · 发展 · 破城</span><span>沙盘示意</span></div>
+    <div class="title-visual-foot"><span>沙盘示意</span></div>
   </div>`;
 }
 
@@ -87,6 +88,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   const layer = doc.createElement('div');
   layer.className = 'title-screen';
   layer.innerHTML = `
+    <button class="title-ui-toggle btn btn-sm" data-title="ui-layout"></button>
     <div class="title-bg" aria-hidden="true">${Array.from({ length: 48 }, (_, i) => {
       const t = i % 12;
       return `<i style="--d:${(t / 12).toFixed(2)};--r:${(i * 37) % 100}"></i>`;
@@ -95,7 +97,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       <div class="title-copy">
       <p class="title-kicker">回合制 · 跨时代战棋</p>
       <h1 class="title-name"><span>时代与</span><span>回旋镖</span></h1>
-      <p class="title-sub">从青铜到信息化。经营城市，调度军队，在方格之间推进你的时代。</p>
+      <p class="title-sub">经营城市，调度军队，推进时代。</p>
 
       <div class="title-actions">
         ${(() => {
@@ -129,7 +131,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       </ol>
       </div>
       ${titleSandtable()}
-      <p class="title-foot">v${opts.version} · 支持三 / 四人局 · 二十余个扩展包 · AI 可调档</p>
+      <p class="title-foot">v${opts.version}</p>
     </div>
   `;
 
@@ -140,17 +142,29 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   const close = (): void => {
     layer.remove();
     win.removeEventListener('keydown', onKey);
+    win.removeEventListener(UI_LAYOUT_EVENT, syncLayout);
   };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && opts.hasSave) close();
   };
   const win = doc.defaultView ?? window;
+  const syncLayout = (): void => {
+    const classic = currentUiLayout(doc.documentElement) === 'classic';
+    const button = layer.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
+    button.textContent = classic ? '恢复新版 UI' : '回滚到经典 UI';
+    button.setAttribute('aria-pressed', String(classic));
+  };
+  syncLayout();
+  win.addEventListener(UI_LAYOUT_EVENT, syncLayout);
   win.addEventListener('keydown', onKey);
 
   layer.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-title]');
     if (!btn || (btn as HTMLButtonElement).disabled) return;
     switch (btn.dataset.title) {
+      case 'ui-layout':
+        setUiLayout(currentUiLayout(doc.documentElement) === 'classic' ? 'refined' : 'classic', doc.documentElement);
+        break;
       case 'new':
         close();
         opts.onNew();

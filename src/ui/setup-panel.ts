@@ -511,16 +511,12 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const twoCities = config.twoCities === true && playerCount > 2;
       const playerHint =
         playerCount === 2
-          ? '红蓝对峙，敌我分明'
+          ? ''
           : `${playerCount} 家各自为战，每家${twoCities ? '两' : '一'}座城`;
       const playerNote =
         playerCount === 2
-          ? '两人局可以带 AI：人机对战、双 AI 观战都行。'
-          : `${playerCount} 人局只支持全真人（本地热座或联机）：这套 AI 的目标选择只认"一个对手"，多方混战会打成一团。${
-              twoCities
-                ? '双城市开局：每家两座城，丢一座不算出局，全丢才出局。'
-                : '每方开局恰好一座城，城丢了就出局。'
-            }${config.size < 16 ? '人多地小会摆不开，建议至少 16 × 16。' : ''}`;
+          ? ''
+          : `失去全部城市即出局。${config.size < 16 ? '建议至少 16 × 16。' : ''}`;
 
       /*
        * 双城市开局的开关：只在三人四人局出现。
@@ -574,11 +570,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       // 提示也跟着变：没勾扩展时说清"多出来的地貌去哪了"，勾了就说现在是几种
       const extraStyles = styles.length - MAP_STYLES.length;
       const styleHint = multi
-        ? `共 ${styles.length} 种，双人多人同一份；随机＝每局抽一种。` +
-          '多人图上这几套扩展地貌只保证"有山有水有意思"，不保证逐家对称——要严格配平选本体那四种'
+        ? `共 ${styles.length} 种；扩展地貌不保证各方对称。`
         : extraStyles > 0
-          ? `共 ${styles.length} 种：扩展额外解锁了 ${extraStyles} 种；随机＝每局抽一种`
-          : '决定天险长什么样；随机＝每局抽一种。勾上带地貌的扩展会在这里多出选项';
+          ? `共 ${styles.length} 种，含扩展 ${extraStyles} 种。`
+          : '随机：每局抽取一种地貌';
 
       /*
        * 地图数据：地图那一页要用。
@@ -604,8 +599,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const lockedPacks = lockedEraPacks(config.expansionIds);
       const eraHint =
         ceiling < ERAS.length && lockedPacks.length > 0
-          ? `从哪一级开始；越高一局越短。这一局科技线到${eraDef(ceiling).name}封顶——勾上「${lockedPacks.join('」「')}」可升到${eraDef(ERAS.length).name}`
-          : '从哪一级开始；越高一局越短';
+          ? `上限：${eraDef(ceiling).name}；「${lockedPacks.join('」「')}」可解锁${eraDef(ERAS.length).name}`
+          : '决定初始兵种与金币';
 
       const symChips = MAP_SYMMETRIES.map(
         (sy) =>
@@ -645,10 +640,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           </div>
           <div class="field-hint">${
             netOn
-              ? '测试 AI 自带全视野——开雾对它没有作用，它能看见你的全部部队。它是在 10×10 / 12×12 的青铜开局上练出来的，<b>别的尺寸与时代会很弱</b>，也没有初级/中级/高级之分'
+              ? '全视野；适合青铜 10×10 / 12×12，<b>其它配置较弱</b>。'
               : netAllowed
-                ? '初级适合熟悉规则；中级会随局面换打法（速攻 / 骚扰 / 弃城）；高级算得最细，走位与采购都稳'
-                : '指挥官模式下的 AI 只执行你排好的生产序列，用的是手写引擎；测试 AI 不认队列，所以这一档不提供'
+                ? '初级熟悉规则 · 中级战术变化 · 高级精细决策'
+                : 'AI 按你的队列生产。'
           }</div>`
         : '';
 
@@ -859,19 +854,16 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
       const battleViewFull = `
             ${!levelOn ? `<section class="setup-presets" aria-label="推荐开局">
-              <div class="setup-section-head"><b>推荐开局</b><span>应用后替换当前规则；仍可继续调整</span></div>
+              <div class="setup-section-head"><b>推荐开局</b><span>替换当前配置</span></div>
               <div class="setup-preset-grid">
                 <button type="button" class="setup-preset" data-preset="learn"><b>入门人机</b><span>青铜 · 12 × 12 · 初级 AI</span></button>
                 <button type="button" class="setup-preset" data-preset="standard"><b>标准人机</b><span>铁器 · 16 × 16 · 中级 AI</span></button>
                 <button type="button" class="setup-preset" data-preset="hotseat"><b>本地双人</b><span>青铜 · 12 × 12 · 轮流操作</span></button>
               </div>
-              <p class="field-hint">使用默认兵种与标准扩展，详细记录沿用你的选择。</p>
             </section>` : ''}
             <section class="field">
               <div class="field-label">
-                在哪张图上打 <span class="field-hint">${
-                  config.fixedMap ? '联机两边、复盘重开都是同一张' : '随机地形每局不同'
-                }</span>
+                地图
               </div>
               <div class="start-map-row">
                 <span class="start-map-thumb">${
@@ -891,29 +883,27 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
             <section class="field">
               <div class="field-label">
-                人数 <span class="field-hint">${levelOn ? '由关卡决定' : playerHint}</span>
+                人数 ${levelOn || playerHint ? `<span class="field-hint">${levelOn ? '由关卡决定' : playerHint}</span>` : ''}
               </div>
               ${
                 levelOn
-                  ? `<div class="field-hint">这一关是 ${playerCount} 家。想自己定几家，去左边「关卡」页选「自由对局」。</div>`
+                  ? `<div class="field-hint">${playerCount} 方 · 关卡指定</div>`
                   : `<div class="chip-row">${playerChips}${twoCityToggle}</div>
-              <div class="field-hint">${playerNote}</div>`
+              ${playerNote ? `<div class="field-hint">${playerNote}</div>` : ''}`
               }
             </section>
 
             <section class="field">
-              <div class="field-label">对手 <span class="field-hint">${
-                netOn ? '测试 AI 自带全视野：开雾也看得见你' : 'AI 会跟你一样受迷雾限制'
-              }</span></div>
+              <div class="field-label">对手 ${aiOn ? `<span class="field-hint">${netOn ? '测试 AI 全视野' : 'AI 受迷雾限制'}</span>` : ''}</div>
               ${
                 levelOn
                   ? `<div class="field-hint">${levelAiText}</div>`
                   : playerCount > 2
                   ? `<div class="chip-row">${multiSeatChips}</div>
-              <div class="field-hint">点一下翻转：真人自己走，电脑替它走。多方局里电脑会挑最强的一家当主攻，见谁打谁。</div>
+              <div class="field-hint">点击席位切换真人 / 电脑。</div>
               ${config.aiSeats && config.aiSeats.length > 0 ? aiLevelChips : ''}`
                   : config.godMode
-                  ? `<div class="field-hint">上帝模式是纯单人沙盒：两边都归你摆，AI 只在点「交给 AI」时同时操控两边。</div>`
+                  ? `<div class="field-hint">纯单人沙盒：自由摆放，点击「交给 AI」演示。</div>`
                   : `<div class="chip-row">
                 <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
                 <button class="chip ${config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="1">人机对战</button>
@@ -942,9 +932,9 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               ${
                 firstLock
-                  ? '<div class="field-hint">这一关规定谁先动，换不了——先手差一回合，整张图的强度就变了。</div>'
+                  ? '<div class="field-hint">先手由关卡指定。</div>'
                   : config.firstSide === 'random'
-                    ? '<div class="field-hint">按这一局的种子抽，抽到什么就存成什么——复盘不会变。</div>'
+                    ? '<div class="field-hint">随机先手，复盘保持一致。</div>'
                     : ''
               }
             </section>`
@@ -956,10 +946,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               ${
                 config.firstSide === 'random'
-                  ? '<div class="field-hint">在参赛的席位上抽（三家就在 A/B/C 里抽），抽到谁谁先动；抽完存成具体席位，复盘不会变。</div>'
+                  ? '<div class="field-hint">随机先手，复盘保持一致。</div>'
                   : ''
               }
-              <div class="field-hint">多人局的城位与出生点按席位固定，不跟着这个走——这里只决定谁先动。</div>
+              <div class="field-hint">先手不改变出生点。</div>
             </section>`
             }
 
@@ -967,7 +957,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="field-label">
                 起始时代 <span class="field-hint">${
                   eraLock !== undefined
-                    ? `这一关固定为${eraDef(eraLock).name}：开局金币 ${startGoldFor(eraLock)}，可造兵种也跟着这一档`
+                    ? `关卡指定：${eraDef(eraLock).name} · ${startGoldFor(eraLock)} 金`
                     : eraHint
                 }</span>
               </div>
@@ -977,7 +967,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             <section class="field">
               <div class="field-label">
                 棋盘大小 <span class="field-hint">${
-                  sizeLock ? '由关卡的地图决定' : `预设之外可以自己填 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE}`
+                  sizeLock ? '关卡指定' : `自定义 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE} 格`
                 }</span>
               </div>
               <div class="chip-row">${sizeChips}</div>
@@ -985,7 +975,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <input class="text-input size-input" data-field="size" type="number"
                   min="${MIN_BOARD_SIZE}" max="${MAX_BOARD_SIZE}" step="1"
                   value="${config.size}" inputmode="numeric" aria-label="自定义棋盘边长" />
-                <span class="field-hint">边长（格）。${MIN_BOARD_SIZE}×${MIN_BOARD_SIZE} 是"街角斗殴"图，64×64 要配合缩放看。</span>
+                <span class="field-hint">边长（格）</span>
               </div>
             </section>
 
@@ -994,7 +984,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               <div class="start-advanced-body">
             <section class="field">
               <div class="field-label">
-                你的角色 <span class="field-hint">指挥官模式：只决定造什么兵，其余交给 AI</span>
+                你的角色
               </div>
               <div class="chip-row">
                 <button class="chip ${!config.commanderMode && !config.godMode ? 'active' : ''}" data-role="full" ${roleLock ? 'disabled' : ''} title="每个单位都由你自己走、自己打">亲自指挥</button>
@@ -1005,13 +995,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                     : `<button class="chip ${config.godMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-role="god" ${roleLock ? 'disabled' : ''} title="纯单人沙盒：不要金币、不看回合，随手摆兵摆城，然后让 AI 同时操控两边打给你看">上帝模式</button>`
                 }
               </div>
-              <div class="field-hint">${
+              ${config.godMode || config.commanderMode ? `<div class="field-hint">${
                 config.godMode
-                  ? '上帝模式下棋盘全图可见：点兵种→点棋盘落子，摆完点「交给 AI · 一回合」看一回合，或者「接管 · 打到全灭」看完整场。'
-                  : config.commanderMode && playerCount > 2
-                    ? '多人局也能用指挥官模式：每一方（包括你自己）只排生产序列，走位、建造、攻击、升级全部由 AI 执行。三家四家局里 AI 会按"所有敌人"打仗，但主攻方向只认最强的那一家。'
-                    : '指挥官模式下棋盘只看不碰：点自己的城 → 在右侧点兵种，就排进顶端的生产队列，点一次执行交给参谋部打完。配合「双 AI 观战」可以量出这套限制下 AI 的表现。'
-              }</div>
+                  ? '点兵种，再点棋盘摆放；「交给 AI」演示战斗。'
+                  : '你排生产队列，AI 执行走位、攻击、建造与升级。'
+              }</div>` : ''}
             </section>
 
             <section class="field">
@@ -1020,21 +1008,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
               </div>
               ${
                 playerCount > 2
-                  ? `<div class="field-hint">多人局暂不支持选卡：禁选是"双方互相看不见"设计的，三家四家一桌要改的是整套 BP 界面，不是加两行。这一局直接按下方勾选的兵种池开局。</div>`
+                  ? `<div class="field-hint">选卡仅支持双人局。</div>`
                   : `<div class="chip-row">
                 <button class="chip ${config.draftMode ? '' : 'active'}${roleLock ? ' is-locked' : ''}" data-draft-mode="off" ${roleLock ? 'disabled' : ''} title="原版开局：这一局有哪些兵由开局面板决定">关闭</button>
                 <button class="chip ${config.draftMode ? 'active' : ''}${roleLock ? ' is-locked' : ''}" data-draft-mode="on" ${roleLock ? 'disabled' : ''} title="系统抽一个兵种池，双方各禁 1 个、各选 6 个；没选到的造不出来，经济/建造/军营不受限">开启选卡模式</button>
               </div>`
               }
-              <div class="field-hint">${
-                config.draftMode
-                  ? '开局先停在「等待开局」：那里可以建房、把邀请链接发给朋友，也可以直接本机开打；点「开始选卡」之后双方同时禁用（互相看不见），再按蛇形顺序轮流选人。选卡期间不能走棋；超出时限时禁用视为放弃、选人由系统随机补；右上角可随时跳过或退出。'
-                  : '打开之后，这一局能造什么由开局的选卡决定——下方逐个勾选兵种在这个模式下不再生效。'
-              }</div>
+              ${config.draftMode ? '<div class="field-hint">双方各禁 1 种、选 6 种；选卡决定可生产兵种。禁用超时视为放弃，选人超时随机补选；经济、建造与军营不受限。</div>' : ''}
               ${
                 config.draftMode
                   ? `<div class="field-label" style="margin-top:10px">
-                       禁用时限 <span class="field-hint">只看一眼名单的事，给短一点</span>
+                       禁用时限
                      </div>
                      <div class="chip-row">
                        ${[15_000, 25_000, 40_000, 60_000]
@@ -1093,7 +1077,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 </span>
                 <span class="pool-open-go">展开</span>
               </button>
-              <div class="field-hint">至少留一个；高时代兵种要城市升级后才能生产。带「扩」的是扩展 / 自定义兵种，默认就开着。</div>
+              <div class="field-hint">至少保留一种；高时代兵种需升级城市。</div>
             </section>
 
             <section class="field">
@@ -1109,7 +1093,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <code>${currentSeed}</code>
                 <button class="btn btn-sm" data-act="reroll">换一张地图</button>
               </div>
-              <div class="field-hint">同一个种子永远生成同一张地图，方便复盘和公平对战。</div>
+              <div class="field-hint">相同种子生成相同地图。</div>
             </section>
             <section class="field">
               <div class="field-label">数据收集 <span class="field-hint">记住本机选择</span></div>
@@ -1117,7 +1101,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <input type="checkbox" data-field="record" ${config.recordDetail ? 'checked' : ''} />
                 <span class="expansion-body">
                   <b>记录这局的详细数据</b>
-                  <span>在本机保存每一步动作与回合统计，供逐帧复盘。不记录玩家名与房间码；上传须在结算卡另行点击。取消后会记住你的选择。</span>
+                  <span>本机记录动作与统计，供复盘。不含玩家名与房间码；上传需另行确认。</span>
                 </span>
               </label>
             </section>
@@ -1637,14 +1621,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 tab === 'battle'
                   ? levelOn
                     ? `<h2>任务简报</h2>
-                       <p>这一关的图、兵力、时代都由关卡定。唯一能改的是扩展包——换一套重打，难度会变。</p>`
-                    : `<h2>战役</h2>
-                     <p>选择推荐开局，或调整地图、对手与时代。更多规则在高级设置中。</p>`
+                       <p>地图、兵力与时代由关卡指定。</p>`
+                    : `<h2>战役</h2>`
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
-                       <p>主线与教学关：一关一关往下走。现在还在设计，选「自由对局」先自己开一局。</p>`
+                       <p>选择关卡，或开始自由对局。</p>`
                     : `<h2>编辑器</h2>
-                       <p>关卡和地图都能从这里做：下面几关是用编辑器搭出来的示例（各演示一两个能力），再往下可以新建自己的关、上传自己画的地图。</p>`
+                       <p>创建关卡与地图。</p>`
               }
             </div>
 

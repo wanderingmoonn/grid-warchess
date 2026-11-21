@@ -393,6 +393,22 @@ function panelFold(key: string, title: string, body: string, forceOpen = false, 
   </details>`;
 }
 
+/**
+ * 「每回合收入」的文案。
+ *
+ * **不能套 `costLabel`**：那个函数是给**价格**写的，空表返回「免费」——
+ * 语义是"这东西不花钱"，是价格的描述。收入为空时套上去变成"每回合白拿钱"，
+ * 而事实正相反：肉鸽模式整局 `config.noIncome`（见 `incomeResOf`），
+ * 金币只能从战果拿；普通对局里"城全丢光 + 没有经济单位"也是 0。
+ * 两种情况的正确读法都是「0 金」，不是「免费」（2026-11-21）。
+ */
+function incomeTextOf(s: GameState, p: PlayerId): string {
+  const income = incomeResOf(s, p);
+  // 判"有没有正数"而不是判表空：noIncome 直接返回 {}，而普通局至少会有 gold: 0
+  const any = Object.values(income).some((n) => (n ?? 0) > 0);
+  return any ? costLabel(income) : '0 金';
+}
+
 function panelHtml(input: PanelInput): string {
   const { view, me } = input;
   const s = view.state;
@@ -542,11 +558,10 @@ function panelHtml(input: PanelInput): string {
     <div class="card card-seats">
       <div class="battle-turn">
         ${turnBadge}
-        <span class="hint">第 ${s.turn} 次行动</span>
       </div>
       ${!spectator ? `<div class="battle-resources" aria-label="本方资源概览">
         <div><span>可用金币</span><strong>${s.players[me].gold}</strong></div>
-        <div><span>每回合收入</span><b>${escapeHtml(costLabel(incomeResOf(s, me)))}</b></div>
+        <div${s.config.noIncome ? ' title="这个模式没有回合收入：金币只能从战果拿"' : ''}><span>每回合收入</span><b>${escapeHtml(incomeTextOf(s, me))}</b></div>
         <div><span>控制城市</span><b>${citiesOf(s, me).length}<small> 座</small></b></div>
       </div>` : ''}
       ${!spectator ? `<div class="battle-extra-resources">${Object.entries(s.players[me].res ?? {})
@@ -567,7 +582,7 @@ function panelHtml(input: PanelInput): string {
                <button class="btn btn-sm" data-act="undo" ${
                  input.canUndo === true && myTurn ? '' : 'disabled'
                } title="退回上一步（只在同一回合内可用）">撤回一步</button>
-               <span class="hint">同一回合内可退，结束回合后就不能了</span>
+               <span class="hint">仅本回合</span>
              </div>`
       }
       ${panelFold('match', '对局与阵营', `<div class="battle-seats">
@@ -583,7 +598,6 @@ function panelHtml(input: PanelInput): string {
     ${input.battleCard
       ? `<div class="card">
            <div class="card-title">战报卡</div>
-           <div class="hint">破城回合、MVP 兵种、关键三步——一张能存下来、也能发出去的卡。</div>
            <button class="btn btn-sm btn-primary" data-act="battle-card">生成战报卡</button>
          </div>`
       : ''}
@@ -674,10 +688,10 @@ function panelHtml(input: PanelInput): string {
       <div class="hint" style="text-align:center">
         ${
           input.replay
-            ? '复盘是全图视角：当时被雾挡住的部队也画出来了。'
+            ? '复盘 · 全图视角'
             : spectator
-              ? '这是全图视角：双方的伏兵和金币都看得见。别在两个人还在打的时候念出来。'
-              : '每一步都会自动存档，随时可以关掉页面'
+              ? '观战 · 全图视角'
+              : '自动保存'
         }
       </div>
     </div>
@@ -1113,7 +1127,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             <div class="unit-sub">坐标 ${coord}</div>
           </div>
         </div>
-        <div class="unit-notes"><div>· 雾里看不透这一格。派个单位走过去，或者等它进入视野。</div></div>
+        <div class="unit-notes"><div>· 未在视野内，地形未知。</div></div>
       `;
       }
 
@@ -1317,7 +1331,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                </div>`,
              )
              .join('')}
-           <div class="hint" style="margin-top:8px">建造要占掉这个单位的整回合，选址范围 ${CONFIG.buildRange} 格。</div>`;
+           <div class="hint" style="margin-top:8px">建造占用整回合 · 选址 ${CONFIG.buildRange} 格</div>`;
 
     // 运输船：装卸是它唯一会做的事，所以单独开一块，写清载了谁、还能装几个
     const cargo = selectedUnit.cargo ?? [];
@@ -1431,11 +1445,10 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         </div>
       </div>
       <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
-      ${mine && myTurn ? `<p class="unit-next-action">${input.combatInspectMode ? '预览模式：点红框目标，查看结果后确认攻击。' : readyToMove && readyToAttack ? '点蓝色范围移动；悬停红框查看交锋，触屏先预览再确认。' : readyToMove ? '仍可移动：点蓝色范围选择落点。' : readyToAttack ? '仍可攻击：选择红框内的目标。' : '本回合没有可用的移动或攻击。'}</p>` : ''}
+      ${mine && myTurn && input.combatInspectMode ? '<p class="unit-next-action">选择红框目标</p>' : ''}
       ${mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
         aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
-        ${input.combatInspectMode ? '退出攻击预览' : '选择目标 · 预览攻击'}</button>
-        ${readyToAttack && input.combatTargetCount === 0 ? '<p class="hint">射程内暂无可攻击的可见目标。</p>' : ''}` : ''}
+        ${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</button>` : ''}
       ${
         underCamp
           ? `<button class="btn btn-sm btn-block" data-act="open-camp" data-id="${underCamp.id}" style="margin-top:10px">
@@ -1576,7 +1589,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${notesBlock}
       ${
         mine && myTurn
-          ? panelFold(`advanced-${selectedUnit.id}`, '进阶操作 · 强制移动 / 攻击', `<div class="force-row">
+          ? panelFold(`advanced-${selectedUnit.id}`, '进阶操作', `<div class="force-row">
                <button class="force-btn${input.forceMode === 'move' ? ' armed' : ''}" data-act="force-move">
                  强制移动 <kbd>Alt</kbd>
                </button>
@@ -1584,7 +1597,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                  强制攻击 <kbd>Shift</kbd>
                </button>
              </div>
-             <div class="hint">同格目标可连点切换。强制模式会持续生效，再点按钮退出；按住快捷键只执行一次。</div>`, !!input.forceMode)
+             <div class="hint">连点切换同格目标；再点按钮退出模式。</div>`, !!input.forceMode)
           : ''
       }
       ${
@@ -1627,21 +1640,15 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
        */
       input.replay
         ? `<div class="hint">
-      拖顶部的进度条 → 停到任意一步；也可以用 <kbd>←</kbd> <kbd>→</kbd> 一步一步走，
-      <kbd>空格</kbd> 播放 / 暂停，<kbd>Home</kbd> <kbd>End</kbd> 跳两端。<br /><br />
-      点棋子、点城市 → 看它<b>在那一刻</b>的属性卡（光环、剩余行动、驻军都在）。<br /><br />
-      这里是回放，不能走子：要接着打那局，点复盘条右边的「退出复盘」。
+      <kbd>←</kbd> <kbd>→</kbd> 逐步回放，<kbd>空格</kbd> 播放 / 暂停。<br />
+      拖动进度条定位；<kbd>Home</kbd> / <kbd>End</kbd> 跳至首尾。<br />
+      点单位或城市查看当时属性；「退出复盘」返回对局。
     </div>`
         : `<div class="hint">
-      点自己的单位 → 蓝色格子是可移动范围，红框是可攻击目标。<br /><br />
-      点自己的城市 → 产兵、以及花钱升级时代。升级后能造更高级的兵种，城市也更硬。<br /><br />
-      点对方的城市 → 查看它的时代、耐久和护甲。攻城伤害 = 攻击 − 城市护甲。<br /><br />
-      点任何一块空地 → 看这块地形能干什么、适合谁站。<br /><br />
-      同一格有好几个东西时，连点会轮换选中；选中自己的兵之后，侧栏有两个模式按钮：<br />
-      <b>强制移动</b>（<kbd>Alt</kbd>）—— 点可达格就走上去，无视压在上面的棋子（比如走上桥面）；<br />
-      <b>强制攻击</b>（<kbd>Shift</kbd>）—— 打身下的目标。<br />
-      点按钮进入的模式会一直扣着，期间棋盘只认这一个动作，<b>再点一次按钮才退出</b>；
-      按住修饰键则只对下一次点击生效。
+      <b>单位</b>：蓝格移动，红框攻击。悬停可预览；触屏先预览再确认。<br />
+      <b>城市</b>：生产、升级；点敌城查看属性。攻城伤害 = 攻击 − 城市护甲。<br />
+      <b>空地</b>：查看地形。同格目标可连点切换。<br />
+      <b>强制移动 / 攻击</b>：<kbd>Alt</kbd> / <kbd>Shift</kbd>，可处理桥面与同格目标；按钮模式再次点击退出。
     </div>`
     }
     </details>
@@ -1684,7 +1691,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
           <div class="unit-sub">${sub}</div>
         </div>
       </div>
-      <div class="unit-notes"><div>· 城市在雾里：耐久、护甲、收入都看不到。派个单位走近，或者等它重新进入视野。</div></div>
+      <div class="unit-notes"><div>· 城市不在视野内，属性未知。</div></div>
     `;
     }
   }
@@ -1898,8 +1905,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
          * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
          */
         mine
-          ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(
-              incomeResOf(s, city.owner),
+          ? `<div class="info-row"><span>本方每回合收入</span><b>${incomeTextOf(
+              s,
+              city.owner,
             )}</b></div>`
           : ''
       }
@@ -1911,27 +1919,27 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
         ? `<div class="card-title" style="margin-top:14px">${
                     ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
                   }</div>
-           ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
+           ${ordering && queueFull ? '<div class="hint">队列已满，请删除或执行。</div>' : ''}
            ${packRow(buildable, pack)}
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
            ${
              input.spawnPick
-               ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
+               ? `<div class="hint" style="margin-top:10px">为「${
                    s.unitTypes[input.spawnPick.type]?.name ?? input.spawnPick.type
-                 }」放下去。点别处就取消。</div>`
+                 }」选择亮起的水面；点别处取消。</div>`
                : ''
            }
            <div class="hint" style="margin-top:10px">
              ${
                ordering
-                 ? '排进队列的是「这座城 · 这个兵」，AI 执行那一回合才扣钱出兵；队列可以在顶部随时删。'
+                 ? '执行队列时扣费出兵。'
                  : freeSlots > 0
-                   ? `城内还有 ${freeSlots} 个空位。新兵当回合不能行动，建筑建成即不可移动。`
+                   ? `空位 ${freeSlots} · 新兵本回合不能行动`
                    : airReady > 0
-                     ? '城内地面位已站满，先让部队挪一挪——空军还能起飞（悬在地面单位上方不占位置）。'
-                     : '城内已站满，先让部队挪一挪。'
+                     ? '地面位已满，仍可生产空军。'
+                     : '城内已满，请先移出部队。'
              }
              ${
                /*
@@ -2366,7 +2374,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
         ? `<div class="card-title" style="margin-top:14px">${
                     ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
                   }</div>
-           ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
+           ${ordering && queueFull ? '<div class="hint">队列已满，请删除或执行。</div>' : ''}
            ${packRow(buildable, pack)}
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
@@ -2384,17 +2392,17 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
            }
            ${
              input.spawnPick
-               ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
+               ? `<div class="hint" style="margin-top:10px">为「${
                    s.unitTypes[input.spawnPick.type]?.name ?? input.spawnPick.type
-                 }」放下去。点别处就取消。</div>`
+                 }」选择亮起的水面；点别处取消。</div>`
                : ''
            }
            <div class="hint" style="margin-top:10px">
-             兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
+             营门四邻：${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
-             }）。
-             <br />这座营按自己的时代出兵。
-             ${ordering ? '<br />排进队列之后，AI 执行那一回合才扣钱出兵。' : ''}
+             }。
+             <br />按军营时代出兵。
+             ${ordering ? '<br />执行队列时扣费出兵。' : ''}
            </div>`
         : `<div class="hint" style="margin-top:12px">
              这是${s.players[camp.owner].name}的产兵建筑。

@@ -66,7 +66,7 @@ function healthHtml(label: string, item: CombatHealth, city = false): string {
   return `<div class="combat-health"><span>${label} · ${escapeHtml(item.name)}</span>
     <div><b>${item.before} → ${item.after}</b><strong class="${delta < 0 ? 'loss' : delta > 0 ? 'gain' : 'neutral'}">${delta > 0 ? '+' : ''}${delta}</strong></div>
     ${(item.extraBefore ?? 0) > 0 || (item.extraAfter ?? 0) > 0 ? `<small>额外生命 ${item.extraBefore ?? 0} → ${item.extraAfter ?? 0}</small>` : ''}
-    ${item.removed ? `<small>${city ? '城墙将被攻破，仍需派兵接管' : '该单位预计离场'}</small>` : ''}</div>`;
+    ${item.removed ? `<small>${city ? '城破后需派兵接管' : '预计离场'}</small>` : ''}</div>`;
 }
 
 export function combatForecastHtml(forecast: CombatForecast, pinned: boolean): string {
@@ -74,7 +74,7 @@ export function combatForecastHtml(forecast: CombatForecast, pinned: boolean): s
     <button class="btn btn-sm" data-combat="cancel" aria-label="关闭攻击预览">关闭</button></div>
     ${healthHtml(forecast.city ? '目标耐久' : '目标生命', forecast.target, forecast.city)}
     ${healthHtml('本方生命', forecast.attacker)}
-    <p class="combat-preview-note">${forecast.collateral > 0 ? `另有 ${forecast.collateral} 个可见单位受到波及。` : ''}已计入反击及可见效果；伏兵和未公开事件可能改变结果。</p>
+    <p class="combat-preview-note">${forecast.collateral > 0 ? `波及 ${forecast.collateral} 个可见单位。` : ''}含反击；伏兵与事件可能影响结果。</p>
     <button class="btn btn-primary btn-block" data-combat="confirm">${pinned ? '确认' : '执行'}${forecast.city ? '攻城' : '攻击'}</button>`;
 }
 
