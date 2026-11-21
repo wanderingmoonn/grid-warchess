@@ -13,6 +13,7 @@ import {
   canRestart,
   newRun,
   parseRun,
+  restartRun,
   serializeRun,
 } from '../../../src/core/roguelike/run-state.ts';
 import { CARDS_PER_LEVEL, cardLevel, cardWeight, cardsToNext, drawCards } from '../../../src/core/roguelike/cards.ts';
@@ -76,6 +77,43 @@ export function run() {
   test('肉鸽：不允许重开时 canRestart 为假', () => {
     assert.equal(canRestart(newRun(1, { allowRestart: false })), false);
     assert.equal(canRestart(newRun(1, { allowRestart: true })), true);
+  });
+
+
+  test('肉鸽：重开本关回到进关前，本关成果全作废', () => {
+    /*
+     * 「重开本关」的契约只有一句：**这一关没发生过**。
+     * 金币、卡、遗物、免费建造、城墙进度全部回到进关那一刻，
+     * 唯一保留的是重开次数（它记的是"又赌了一次"，不是本关成果）。
+     */
+    const start = newRun(9, { allowRestart: true });
+    start.gold = 120;
+    start.freeBuilds = 2;
+    start.cards = { militia: 1 };
+    start.relics = ['ironwall'];
+    start.wallProgress = 0;
+
+    const inStage = structuredClone(start);
+    inStage.gold += 300;
+    inStage.cards['militia'] = 3;
+    inStage.relics.push('miser');
+    inStage.freeBuilds = 0;
+    inStage.wallProgress = 1;
+    inStage.roster = [{ type: 'militia', hp: 5, cardLv: 0 }];
+
+    const back = restartRun(start, inStage);
+    assert.equal(back.gold, 120, '本关挣的金币作废');
+    assert.equal(back.cards['militia'], 1, '本关抽的卡作废');
+    assert.deepEqual(back.relics, ['ironwall'], '本关掉的遗物作废');
+    assert.equal(back.freeBuilds, 2, '本关花掉的免费建造要还回来');
+    assert.equal(back.wallProgress, 0, '整备进度也作废');
+    assert.deepEqual(back.roster, [], '本关招的兵不带回去');
+    assert.equal(back.restartsUsed, 1, '重开次数 +1');
+    // 快照是快照：改返回值不该影响进关前那份
+    back.gold = 999;
+    assert.equal(start.gold, 120, '不能把快照本身改脏');
+
+    assert.equal(canRestart(newRun(9, { allowRestart: false })), false, '硬核局没有重开');
   });
 
   test('肉鸽：三张同名卡合成一级', () => {

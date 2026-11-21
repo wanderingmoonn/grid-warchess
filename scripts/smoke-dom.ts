@@ -11510,6 +11510,57 @@ check('UI 回滚：首页可独立切换，不离开首页且保留主入口', (
   }
 });
 
+check('肉鸽：重开本关只在关卡里出现，点一下回到第 1 手', () => {
+  /*
+   * 2026-11-21 新增。这件事在规则层测不出来——按钮是 main.ts 现挂的 DOM，
+   * 所以只能把整页跑起来点一遍：
+   *   · 进关卡 → 两颗常驻按钮都在（入口 + 重开）；
+   *   · 点重开 → 按钮上多一个计数（说明真的走了一次 restartRogueStage）；
+   *   · 硬核局（不允许重开）→ 根本没有这颗按钮。
+   */
+  const openTitle = (d: Document): void => {
+    if (d.querySelector('.title-screen')) return;
+    d.querySelector<HTMLElement>('[data-act="settings"]')!.click();
+    d.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
+  };
+  const intoStage = (w: ReturnType<typeof bootWith>, hard: boolean): Document => {
+    const d = w.document;
+    openTitle(d);
+    d.querySelector<HTMLElement>('[data-title="rogue"]')!.click();
+    d.querySelector<HTMLElement>(hard ? '[data-act="new-hard"]' : '[data-act="new"]')!.click();
+    d.querySelector<HTMLElement>('[data-act="start"]')!.click();
+    return d;
+  };
+
+  const w = bootWith(undefined);
+  try {
+    const d = intoStage(w, false);
+    const restart = (): HTMLElement | null => d.querySelector('[data-rogue-restart]');
+    assert.ok(d.querySelector('#rogue-hud'), '肉鸽常驻入口应该在');
+    assert.ok(restart(), '进了关卡就该有「重开本关」');
+
+    restart()!.click();
+    assert.match(restart()!.textContent ?? '', /重开本关 · 1/, '点一次就该记一次');
+    // 重开是"重进这一关"：棋盘还在，兵也重新摆好了
+    assert.ok(d.querySelectorAll('.tile').length > 0, '重开之后棋盘要还在');
+
+    restart()!.click();
+    assert.match(restart()!.textContent ?? '', /重开本关 · 2/, '再点一次继续累加');
+  } finally {
+    w.close();
+  }
+
+  // 硬核局：开局选「不允许重开」，这颗按钮根本不该出现
+  const hard = bootWith(undefined);
+  try {
+    const d = intoStage(hard, true);
+    assert.ok(d.querySelector('#rogue-hud'), '硬核局照样能进关卡');
+    assert.equal(d.querySelector('[data-rogue-restart]'), null, '不允许重开就没有这颗按钮');
+  } finally {
+    hard.close();
+  }
+});
+
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*
  * 主动退出。

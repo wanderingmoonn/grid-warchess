@@ -24,7 +24,15 @@ import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, validateLevel } from './core/level.ts';
-import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
+import {
+  RUN_KEY,
+  canRestart,
+  newRun,
+  parseRun,
+  restartRun,
+  serializeRun,
+  type RunState,
+} from './core/roguelike/run-state.ts';
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { buildableTypes, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
@@ -6593,7 +6601,19 @@ function newGameFlow(): void {
  *
  * **三选一、整备、路线选择还没接**——先把 3 关跑通，节奏对不对比面板更重要。
  */
-let rogue: { run: RunState; snap: RunnerSnapshot; settled: boolean } | null = null;
+let rogue: {
+  run: RunState;
+  snap: RunnerSnapshot;
+  settled: boolean;
+  /**
+   * 进这一关**之前**的那份 run（2026-11-21）。
+   *
+   * 「重开本关」要回到这个点：这一关挣的、掉的、抽的、花掉的一律作废。
+   * 只放内存、不进存档——刷新之后就没有了，那时重开就只是把"本关至今的
+   * 消耗"留着（少还原一点，但绝不会多给东西）。
+   */
+  stageStart?: RunState;
+} | null = null;
 
 function rogueSave(): void {
   if (rogue) localStorage.setItem(RUN_KEY, serializeRun(rogue.run));
@@ -6661,6 +6681,14 @@ function showRunPanel(): void {
 
 function startRogueStage(): void {
   if (!rogue) return;
+  /*
+   * 进关前先拍一份 run（2026-11-21）。
+   *
+   * 「重开本关」把它整份盖回去就等于"这一关没发生过"——金币、遗物、卡、
+   * 免费建造次数、城墙进度、城血全都回到进关那一刻。拍在这里而不是
+   * 结算之后，是因为玩家可能在**任何时候**想重开（中途被打崩就该能重来）。
+   */
+  rogue.stageStart = structuredClone(rogue.run);
   const st = stageAt(rogue.run.node);
   const checked = validateLevel(st.level);
   if (!checked.ok) {
@@ -7144,12 +7172,17 @@ function offerRogueCards(after: () => void): void {
  * 为什么需要：结算/三选一都是模态面板，**一旦某个面板没弹出来或被关掉，
  * 玩家就再也找不到回下一关的入口**（用户实机反馈"杀光敌军弹结算，然后呢"）。
  * 只要还在 run 里，顶栏就一直挂一个「肉鸽 1/3 · 下一关」，点它就能回到面板。
+ *
+ * 2026-11-21 起多一颗「重开本关」：只在**这一关真的在打**的时候出现
+ * （判据是当前局面就是这一关的那张图），并且开局选过"不允许重开"就没有。
  */
 function syncRogueHud(): void {
   const total = SLICE_STAGES.length;
   let el = document.getElementById('rogue-hud') as HTMLButtonElement | null;
+  let restart = document.getElementById('rogue-restart') as HTMLButtonElement | null;
   if (!rogue) {
     el?.remove();
+    restart?.remove();
     return;
   }
   if (!el) {
@@ -7160,6 +7193,58 @@ function syncRogueHud(): void {
     document.body.appendChild(el);
   }
   el.textContent = `肉鸽 ${Math.min(rogue.run.node + 1, total)}/${total} · 下一关`;
+
+  /*
+   * 「重开本关」的显隐：
+   *   · 开局选了硬核（`allowRestart === false`）→ 永不出现；
+   *   · 当前局面不是这一关的图（在首页、面板里、刚结算完）→ 不出现，
+   *     免得玩家在"下一关"上点重开，结果把刚打赢的那一关重播一遍。
+   */
+  const inStage = state.config.level?.id === stageAt(rogue.run.node).level.id;
+  if (!inStage || !canRestart(rogue.run)) {
+    restart?.remove();
+    return;
+  }
+  if (!restart) {
+    restart = document.createElement('button');
+    restart.id = 'rogue-restart';
+    restart.className = 'btn btn-sm rogue-restart';
+    restart.setAttribute('data-rogue-restart', '');
+    restart.title = '放弃这一关的进展，用进关时的兵和金币重打（本关成果作废）';
+    document.body.appendChild(restart);
+  }
+  restart.textContent = rogue.run.restartsUsed > 0 ? `重开本关 · ${rogue.run.restartsUsed}` : '重开本关';
+}
+
+/**
+ * 重开本关（2026-11-21）。
+ *
+ * 和"放弃这一局"是两件事：这个只把**这一关**退回去，run 本身继续。
+ * 拿进关前的快照整份覆盖，所以本关挣的金币、掉的遗物、抽的卡、花掉的免费建造
+ * 全部作废——不给"重开一次还能顺走一点"的缝。
+ */
+function restartRogueStage(): void {
+  if (!rogue || !canRestart(rogue.run)) return;
+  const st = stageAt(rogue.run.node);
+  if (state.config.level?.id !== st.level.id) return;
+  const run = rogue.run;
+  /*
+   * 没有快照（刷新过页面）时退回"只加计数"：那时本关已经花掉的东西（免费建造、
+   * 空投）拿不回来，但绝不会多给——宁可少还原，也不能变成刷资源的入口。
+   */
+  rogue.run = rogue.stageStart ? restartRun(rogue.stageStart, run) : { ...run, restartsUsed: run.restartsUsed + 1 };
+  rogue.settled = false;
+  rogue.snap = initRunner();
+  rogueSave();
+  // 重开等于重进这一关：AI 令牌作废，别让上一局的走子循环接着跑
+  aiToken += 1;
+  startRogueStage();
+  syncRogueHud();
+  toast(
+    rogue.run.restartsUsed > 0
+      ? `重开本关（第 ${rogue.run.restartsUsed} 次）：本关的金币、遗物、兵一律作废`
+      : '重开本关',
+  );
 }
 
 /*
@@ -7169,7 +7254,15 @@ function syncRogueHud(): void {
  * 用 document 级委托，面板在不在、挂在谁身上都不影响。
  */
 document.addEventListener('click', (ev) => {
-  const hit = (ev.target as HTMLElement | null)?.closest?.('[data-rogue-open]');
+  const el = ev.target as HTMLElement | null;
+  // 「重开本关」排在前面：它和「下一关」都是常驻按钮，别让后者的分支抢走点击
+  if (el?.closest?.('[data-rogue-restart]')) {
+    ev.preventDefault();
+    console.info('[rogue] 点击重开本关');
+    restartRogueStage();
+    return;
+  }
+  const hit = el?.closest?.('[data-rogue-open]');
   if (!hit) return;
   ev.preventDefault();
   console.info('[rogue] 点击常驻入口');

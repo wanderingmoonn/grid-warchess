@@ -148,3 +148,21 @@ export function parseRun(raw: string | null): RunState | null {
 export function canRestart(run: RunState): boolean {
   return run.allowRestart;
 }
+
+/**
+ * 重开本关：回到**进关前**的那一份 run（2026-11-21）。
+ *
+ * 契约只有一句：**本关的成果一律作废**——这一关挣的金币、掉的遗物、抽的卡、
+ * 花掉的免费建造次数，全部还原成进关那一刻的样子。所以不能"在场上改一改"，
+ * 必须拿进关前的快照覆盖（快照由 UI 层在 `startRogueStage` 里拍）。
+ *
+ * 唯一保留的是 `restartsUsed`：它记的是"往这条命上又赌了一次"，
+ * 不属于本关成果，谁也不能把它还原。
+ */
+export function restartRun(stageStart: RunState, current: RunState): RunState {
+  const next = structuredClone(stageStart);
+  next.restartsUsed = current.restartsUsed + 1;
+  // 开局选项是这一整局的性质，不跟着快照走神
+  next.allowRestart = current.allowRestart;
+  return next;
+}
