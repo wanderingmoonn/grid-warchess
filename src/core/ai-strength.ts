@@ -27,6 +27,8 @@
  * 这些都不是"漏了"，是刻意留的：先把量级跑通，再按实测补。
  * 见 `docs/PLAN-AI-V3-2026-11-21.md` 的 S4 与第二十节。
  */
+import { isProducer } from './produce.ts';
+import { incomeOf, recruitSpawnCells } from './rules.ts';
 import {
   damageToCity,
   distToCity,
@@ -112,4 +114,94 @@ export function offenseScore(s: GameState, me: PlayerId, city: City): number {
   const turns = turnsToRaze(s, me, city);
   if (!Number.isFinite(turns)) return 0;
   return ratio / Math.max(1, turns);
+}
+
+/* ---------------- 产能：战力不只算场上，还要算"每回合能补多少" ---------------- */
+
+/**
+ * 生产点（城 + 产兵建筑）。
+ *
+ * 这是用户 2026-11-21 提的那条：**20 个坦克但每回合只能补 2 个，
+ * 打不过 10 个坦克但每回合能补 5 个**。所以"战力"必须带上一项产能，
+ * 否则"现在有多少"会把"以后能有多少"完全盖住。
+ */
+export interface ProductionSite {
+  kind: 'city' | 'camp';
+  id: string;
+  x: number;
+  y: number;
+}
+
+export function productionSites(s: GameState, me: PlayerId): ProductionSite[] {
+  const out: ProductionSite[] = [];
+  for (const c of s.cities) {
+    if (c.owner !== me || c.ruined) continue;
+    out.push({ kind: 'city', id: c.id, x: c.x, y: c.y });
+  }
+  for (const u of unitsOf(s, me)) {
+    if (!isProducer(utype(s, u.type))) continue;
+    out.push({ kind: 'camp', id: u.id, x: u.x, y: u.y });
+  }
+  return out;
+}
+
+/**
+ * 每回合**最多能出几个兵**：所有生产点周围还能站人的格子数之和。
+ *
+ * 这就是用户说的"格子数"：城只有那么大，格子被占满就出不来兵；
+ * 想多出就得另建军营。
+ *
+ * 用一个"代表兵种"去问，因为出兵格是跟兵种走的（船要水面、飞行兵能停水上）。
+ * 取该席位当前能造的陆军战斗单位里最便宜的那个——格子数对便宜的兵最宽松，
+ * 这是"理论产能上界"，偏乐观，但比拿一个昂贵兵种算出来的下界更像"上限"。
+ */
+export function productionCapacity(s: GameState, me: PlayerId): number {
+  const sites = productionSites(s, me);
+  if (sites.length === 0) return 0;
+  const probe = Object.values(s.unitTypes)
+    .filter((d) => d.category === 'combat' && d.domain !== 'water')
+    .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+  if (!probe) return 0;
+  let cells = 0;
+  for (const site of sites) {
+    cells += site.kind === 'city'
+      ? recruitSpawnCells(s, site.id, undefined, probe.id).length
+      : recruitSpawnCells(s, undefined, site.id, probe.id).length;
+  }
+  return cells;
+}
+
+/**
+ * 每回合能变成战力的部分（战力/回合）。
+ *
+ * 三个上限取最小：格子数、钱、以及"这一局最强的性价比兵"。
+ *   · 钱只算**收入**，不算存款：存款是一次性的，投影要看持续产出；
+ *   · 用性价比最好的兵估，是"人类会这么打"的那个上限。
+ */
+export function powerPerTurn(s: GameState, me: PlayerId): number {
+  const capacity = productionCapacity(s, me);
+  if (capacity <= 0) return 0;
+  const income = incomeOf(s, me);
+  if (income <= 0) return 0;
+  let best: { units: number; power: number } | null = null;
+  for (const d of Object.values(s.unitTypes)) {
+    if (d.category !== 'combat' || d.domain === 'water') continue;
+    const price = d.cost ?? 0;
+    if (price <= 0 || price > income) continue;
+    const units = Math.min(capacity, Math.floor(income / price));
+    if (units <= 0) continue;
+    const power = units * unitPower(d);
+    if (!best || power > best.power) best = { units, power };
+  }
+  return best?.power ?? 0;
+}
+
+/**
+ * 投影：到第 `turns` 回合时我大概有多强 = 现在的战力 + 每回合产能 × 回合数。
+ *
+ * 这是"决战时机"真正需要的那个数。**它不算投资复利、不算升级换代**
+ * ——那两样留给"发展"计划，否则一件事两处算。
+ */
+export function projectedStrength(s: GameState, me: PlayerId, turns: number): number {
+  return armyStrength(s, me) + powerPerTurn(s, me) * Math.max(0, turns);
 }

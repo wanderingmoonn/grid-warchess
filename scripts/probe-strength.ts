@@ -17,6 +17,10 @@ import { distToCity } from '../src/core/rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../src/core/types.ts';
 import {
   armyStrength,
+  powerPerTurn,
+  productionCapacity,
+  productionSites,
+  projectedStrength,
   offenseScore,
   siegeOutput,
   strengthRatio,
@@ -176,7 +180,21 @@ console.log('6 空场：没有单位时战力为 0、比值不炸');
 {
   const s = emptyArena();
   ok(armyStrength(s, 'A') === 0, '没有单位时部队战力为 0');
+  ok(projectedStrength(s, 'A', 0) === armyStrength(s, 'A'), '投影 0 回合 = 当前战力');
   ok(Number.isFinite(strengthRatio(s, 'A')), '分母为 0 时比值仍是有限数');
+}
+
+console.log('7 产能：格子数、每回合产出、投影');
+{
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 3, aiLevel: 'tactic' }, 11);
+  const sites = productionSites(s, 'A');
+  ok(sites.length >= 1, `有 ${sites.length} 个产兵点（城算一个）`);
+  const cap = productionCapacity(s, 'A');
+  ok(cap > 0, `每回合可出兵格子数 > 0（${cap}）`);
+  ok(powerPerTurn(s, 'A') >= 0, `每回合产能 ${powerPerTurn(s, 'A').toFixed(1)} 战力`);
+  const p0 = projectedStrength(s, 'A', 0);
+  const p10 = projectedStrength(s, 'A', 10);
+  ok(p10 > p0, '投影 10 回合比 0 回合强（产能计入）');
 }
 
 console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
