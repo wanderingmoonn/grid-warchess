@@ -1969,6 +1969,42 @@ export interface PlanMemoLike {
   cooldown?: Record<string, number>;
 }
 
+/**
+ * 编队上报：编队层往回说的东西。
+ *
+ * 现在 AI 的通道只有一条——计划往下发指令，下面从不回话。于是计划永远是瞎的：
+ * 它不知道前队被打残了、中队堵在河边、后队压根没动。
+ *
+ * 这一条就是"反向通道"的雏形。以后战略、计划层的上报照抄这个形状：
+ * **谁执行、现在什么状态、判断是什么、依据是哪几个数**。
+ *
+ * 分段按"到主攻城的距离"：front(≤4) / mid(≤10) / rear(>10)。
+ * 不按固定成员分组，因为单位每回合都在动，固定分组会立刻散架；
+ * 意义在于**这一段整体在推进还是在挨打**。
+ */
+export interface AiSquadReport {
+  band: 'front' | 'mid' | 'rear';
+  /** 这一段的战斗单位数 */
+  count: number;
+  /** 到主攻城的平均距离（越小越靠前） */
+  lead: number;
+  /** 连续几回合没前进 */
+  stalled: number;
+  /** 这一回合损失的人数 */
+  lost: number;
+  /** 上报结论：推进 / 受阻 / 在掉人 / 人太少 */
+  note: 'advance' | 'blocked' | 'attrition' | 'thin';
+}
+
+/** 一回合的编队上报（结论有变化才记一条） */
+export interface AiSquadLog {
+  turn: number;
+  me: PlayerId;
+  /** 这一回合的主攻城市 */
+  cityId: string | null;
+  squads: AiSquadReport[];
+}
+
 /** 决战时机的一条判决 */
 export interface AiCallTrace {
   turn: number;
@@ -2456,6 +2492,8 @@ export interface GameState {
    * 回放时对着看"它当时觉得该打还是该等"。
    */
   aiCalls?: AiCallTrace[];
+  /** 编队上报（只记结论变化，上限 200 条）：给"下面有没有回话"留证据 */
+  aiSquads?: AiSquadLog[];
   /**
    * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
    *

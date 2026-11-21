@@ -136,7 +136,7 @@ import {
   resolveCommit,
 } from './ai-goal.ts';
 import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
-import type { AiCommit } from './types.ts';
+import type { AiCommit, AiSquadReport } from './types.ts';
 import {
   PLAN_TUNING,
   neutralWeights,
@@ -2220,6 +2220,71 @@ registerAiPlan(POSTURE_PLAN);
  * 每回合只更新一次（`keep.stallTurn` 去重）——`value` 每步决策都会被调，
  * 不去重会把同一回合算十几次，计数直接失真。
  */
+/* ---------------- 编队：编制 + 上报（2026-11-21） ---------------- */
+
+/**
+ * 编队上报：把战斗单位按"到主攻城的距离"分成前 / 中 / 后三段，
+ * 每段报四件事——几个人、最前面到哪、连续几回合没动、这一回合掉了几个人。
+ *
+ * 为什么要它：现在只有"计划往下发指令"这一条通道，下面从不回话。
+ * 计划因此是瞎的：它不知道前队被打残、中队堵在河边、后队根本没动。
+ * 这是**反向通道的雏形**——
+ *
+ * 分段为什么按距离而不是固定成员：单位每回合都在动，固定分组会立刻散架。
+ * 这一段的意义不是"这几个人是谁"，而是"**这一段整体在推进还是在挨打**"。
+ */
+function squadsOf(
+  s: GameState,
+  me: PlayerId,
+  focusCityId: string | null,
+): { cityId: string | null; squads: AiSquadReport[] } {
+  const combat = unitsOf(s, me).filter(
+    (u) => utype(s, u.type).category === 'combat' && utype(s, u.type).domain !== 'water',
+  );
+  const focused = focusCityId ? s.cities.find((c) => c.id === focusCityId) : null;
+  // 没指定主攻城就取"离我主力最近的那座"（编队总得有个参照）
+  const city =
+    focused ??
+    s.cities
+      .filter((c) => c.owner !== me && !c.ruined)
+      .map((c) => ({ c, d: Math.min(...combat.map((u) => distToCity(u, c)), Infinity) }))
+      .sort((a, b) => a.d - b.d)[0]?.c ??
+    null;
+  if (!city) return { cityId: null, squads: [] };
+  if (combat.length === 0) return { cityId: city.id, squads: [] };
+
+  const bands: Record<AiSquadReport['band'], number[]> = { front: [], mid: [], rear: [] };
+  for (const u of combat) {
+    const d = distToCity(u, city);
+    const band = d <= 4 ? 'front' : d <= 10 ? 'mid' : 'rear';
+    bands[band].push(d);
+  }
+
+  // 上回合的上报存在 keep 里（跨计划退场，因为是"下面"的状态，不属于某条计划）
+  const prev = (s.aiFocus?.[me]?.plan?.keep?.squads ?? {}) as Record<
+    string,
+    { count: number; lead: number; stalled: number }
+  >;
+
+  const out: AiSquadReport[] = [];
+  const next: Record<string, { count: number; lead: number; stalled: number }> = {};
+  for (const band of ['front', 'mid', 'rear'] as const) {
+    const dists = bands[band].sort((a, b) => a - b);
+    const count = dists.length;
+    const lead = count === 0 ? 0 : dists.reduce((n, d) => n + d, 0) / count;
+    const p = prev[band];
+    // 前进 0.5 格以上才算动：平均数抖动不该算"推进"
+    // 上限 99：不加就是个死循环（实测溢出到 554 → 屯兵价值 56 → 永久不推进）
+    const stalled = !p ? 0 : count > 0 && lead >= p.lead - 0.5 ? Math.min(99, p.stalled + 1) : 0;
+    const lost = p ? Math.max(0, p.count - count) : 0;
+    const note: AiSquadReport['note'] =
+      count === 0 ? 'thin' : count < 2 ? 'thin' : stalled >= 4 ? 'blocked' : lost >= 2 ? 'attrition' : 'advance';
+    out.push({ band, count, lead: Math.round(lead * 10) / 10, stalled, lost, note });
+    next[band] = { count, lead, stalled };
+  }
+  return { cityId: city.id, squads: out };
+}
+
 function stallOf(c: PlanCtx): { turns: number; median: number } {
   const turn = c.view.turn;
   const cached = c.keep.stallMedian;
@@ -2369,6 +2434,20 @@ const MASS_PLAN: RankedPlan = {
   strength: PLAN_TUNING.strength.mass ?? 0.9,
   value: (c) => {
     if (c.view.config.aiMass === false) return 0;
+    /*
+     * 上报的第一个消费者（2026-11-21）：**兵根本没到前线就别屯**。
+     *
+     * 实测拿到上报之后才看清：屯兵期把 `advance` 压到 0.15，兵不是"停在战线
+     * 后方等"，而是**一路退回离敌城 20 格的地方**（front/mid 都是 0、rear 五十几个）。
+     * 因为"离城远"在这套评分里等于"安全"。于是屯兵变成了撤退，越屯越打不着。
+     *
+     * 这条上报把那个死循环掐断：前队空 + 后队连续二十回合没前进 → 不是僵持，
+     * 是根本没过河/没出门，这时候该做的是"往前压"，不是"继续屯"。
+     */
+    const sq = c.keep.squads as Record<string, { count: number; stalled: number }> | undefined;
+    if (sq && (sq.front?.count ?? 0) === 0 && (sq.rear?.count ?? 0) >= 8 && (sq.rear?.stalled ?? 0) >= 20) {
+      return 0;
+    }
     const st = stallOf(c);
     if (st.turns < PLAN_TUNING.massStallTurns) return 0;
     // 周期后段放开冲一次：屯久了必须试一把，否则就成了"永久不推进"
@@ -8279,6 +8358,41 @@ function aiNextActionCoreInner(
     if (depth === 0) {
       if (resolved.memo !== prevPlan) setFocus(s, me, { ...focusOf(s, me), plan: resolved.memo });
       notePlanTrace(s, me, resolved);
+      /*
+       * 编队上报：这是"下面往回说话"的第一条通道。
+       *
+       * 写两处：
+       *   · `keep.squads` —— 下回合拿它比"有没有前进、掉了几个"，所以要留着；
+       *   · `aiSquads` —— 给人看的历史，**只在结论变化时记**，否则 260 回合
+       *     × 两席 × 三段会把 state 撑爆。
+       */
+      /*
+       * `depth === 0` 只表示"不是递归推演"，**每次出动作都会进来**（一回合十几次）。
+       * 不去重的话"连续几回合没前进"会被算成"连续十几次"，实测溢出到 554，
+       * 于是屯兵价值 = 1 + 554/10，永久当值、永久不推进。用 `squadTurn` 去重。
+       */
+      const focusNow = focusOf(s, me);
+      const sameTurn = Number(focusNow.plan?.keep?.squadTurn ?? -1) === s.turn;
+      const sq = sameTurn ? null : squadsOf(s, me, fields.focusCityId);
+      if (sq && focusNow.plan) {
+        focusNow.plan.keep = {
+          ...(focusNow.plan.keep ?? {}),
+          squads: Object.fromEntries(
+            sq.squads.map((x) => [x.band, { count: x.count, lead: x.lead, stalled: x.stalled }]),
+          ),
+          squadTurn: s.turn,
+        };
+      }
+      if (sq && sq.squads.length > 0) {
+        const sig = sq.squads.map((x) => `${x.band}:${x.note}:${x.count}`).join('|');
+        const log = (s.aiSquads ??= []);
+        const last = [...log].reverse().find((x) => x.me === me);
+        const lastSig = last ? last.squads.map((x) => `${x.band}:${x.note}:${x.count}`).join('|') : '';
+        if (sig !== lastSig) {
+          log.push({ turn: s.turn, me, cityId: sq.cityId, squads: sq.squads });
+          if (log.length > 200) log.splice(0, log.length - 200);
+        }
+      }
       // 判决由 `DECISIVE_PLAN` 拥有（回滞记在它口袋里），这里只记日志
       if (decisive) {
       const call = (resolved.memo?.pockets['decisive']?.call ?? null) as 'attack' | 'develop' | null;

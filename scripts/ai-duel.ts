@@ -285,6 +285,18 @@ function planFlipsOf(s: GameState, p: PlayerId): number {
   return (s.aiPlanTrace ?? []).filter((t) => t.me === p).length;
 }
 
+/** 编队上报摘要：`前3/中5/后12` + 后队连续几回合没动（最常出问题的就是它） */
+function squadSummaryOf(s: GameState, p: PlayerId): string {
+  const last = [...(s.aiSquads ?? [])].reverse().find((x) => x.me === p);
+  if (!last) return '无';
+  const by = Object.fromEntries(last.squads.map((x) => [x.band, x]));
+  const cell = (b: 'front' | 'mid' | 'rear'): string => {
+    const v = by[b];
+    return v ? `${v.count}${v.note === 'blocked' ? '堵' : v.note === 'attrition' ? '损' : ''}` : '-';
+  };
+  return `前${cell('front')}/中${cell('mid')}/后${cell('rear')}`;
+}
+
 function planSummaryOf(s: GameState, p: PlayerId): string {
   const list = (s.aiPlanTrace ?? []).filter((t) => t.me === p);
   if (list.length === 0) return '无';
@@ -367,6 +379,7 @@ for (let i = 0; i < GAMES; i++) {
         (winner === null ? `  [终端快照 ${snapshotOf(final)}]` : '') +
         `  桥 A=${bridgeCountOf(final, 'A')} B=${bridgeCountOf(final, 'B')}` +
         ` 换手 A=${planFlipsOf(final, 'A')} B=${planFlipsOf(final, 'B')}` +
+        `  编队 A=${squadSummaryOf(final, 'A')} B=${squadSummaryOf(final, 'B')}` +
         `  计划 A=${planSummaryOf(final, 'A')} B=${planSummaryOf(final, 'B')}` +
         '\n',
     );
