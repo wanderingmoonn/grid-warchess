@@ -3174,6 +3174,46 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
   assert.equal(net(), null, '切回热座应该收起来');
 });
 
+check('测试 AI 二代：单独一颗按钮，点了换内核，不和档位/策略网络同时亮', () => {
+  /*
+   * 2026-11-21：修仙分支的「实验 AI」并进主线，改叫「测试 AI 二代」。
+   *
+   * 它是**第二个换内核的按钮**，不是第四档难度：`config.aiBrain` 从
+   * `script` 换成 `goal`，加载的是 `core/ai-v2.ts`。所以这里钉三件事：
+   *   1. 它和档位同一行（玩家是在"给对面挑对手"时看见它的）；
+   *   2. 和档位、和策略网络三选一，不许同时亮两颗；
+   *   3. 说明里写清它是"二代内核"，别让玩家以为它是策略网络的升级版。
+   */
+  click('[data-ai="1"]');
+  const v2 = () => doc.querySelector<HTMLElement>('[data-aibrain="goal"]');
+  assert.ok(v2(), '人机对战时应该能选到测试 AI 二代');
+  assert.ok((v2()!.textContent ?? '').includes('二代'), '按钮上要写着"二代"');
+  assert.equal(
+    v2()!.closest('.ai-level-row'),
+    doc.querySelector('.ai-level-row'),
+    '它和三个档位是同一行',
+  );
+
+  click('[data-aibrain="goal"]');
+  assert.ok(v2()!.classList.contains('active'), '点它应该亮起来');
+  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了二代就不该同时亮着档位');
+  assert.equal(
+    doc.querySelector('[data-aibrain="net"].active'),
+    null,
+    '也不该同时亮着策略网络（两颗是不同内核）',
+  );
+  assert.ok(
+    (v2()!.closest('section')!.textContent ?? '').includes('二代内核'),
+    '这一栏要说明它是二代内核，不是"第四档"',
+  );
+
+  click('[data-ailevel="advanced"]');
+  assert.equal(v2()!.classList.contains('active'), false, '点档位应该切回手写引擎');
+
+  click('[data-ai="0"]');
+  assert.equal(v2(), null, '切回热座应该收起来');
+});
+
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
   // 开局面板这时候已经开着（首屏在没有存档时会自动弹出），不再重复打开
   const activeSize = () =>

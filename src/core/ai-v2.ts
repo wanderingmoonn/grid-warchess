@@ -1,5 +1,8 @@
 /**
- * ⚠️ **实验 AI（v2）—— 老 AI 的完整副本，2026-11-21 fork。**
+ * **测试 AI 二代（v2）—— 老 AI 的完整副本，2026-11-21 fork。**
+ *
+ * 界面上那颗「测试 AI 二代」按钮就是它（`config.aiBrain === 'goal'`）；
+ * 早期代号是「实验 AI」，合并进主线后改用现在的名字。
  *
  * ── 为什么复制而不是在 `ai.ts` 里开口子 ──────────────────────────
  *
@@ -6999,8 +7002,17 @@ function aiNextActionCoreInner(
    */
 
   const me = s.current;
-  // 关键：只看自己看得见的东西，跟玩家同等信息
-  const view = playerView(s, me).state;
+  /*
+   * 关键：只看自己看得见的东西，跟玩家同等信息。
+   *
+   * `clipByVision` 必须给：否则玩家一按"看全图"（`s.fog = false`），
+   * AI 也跟着全知，能打到视野外的单位。默认恒为真，
+   * 只有 `config.aiVision === false` 的调试局才让它全知。
+   *
+   * 这一段原先和 `ai.ts` 是同一份复制品，拆出来时（2026-11-21）漏了这层——
+   * 老引擎修了"关迷雾 = AI 全知"，二代又把它带回来了（合并时发现）。
+   */
+  const view = playerView(s, me, false, s.config.aiVision !== false).state;
 
   /**
    * 指挥官模式：产线和升级都由序列决定，所以调用方给的 maxRecruit / maxUpgrade

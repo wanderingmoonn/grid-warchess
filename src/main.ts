@@ -6039,7 +6039,7 @@ async function runAiLoop(): Promise<void> {
 let aiEnginePromise: Promise<typeof import('./core/ai.ts')> | null = null;
 let aiEngineV2Promise: Promise<typeof import('./core/ai.ts')> | null = null;
 /**
- * 手写引擎：老 AI（`core/ai.ts`）或实验 AI（`core/ai-v2.ts`）。
+ * 手写引擎：老 AI（`core/ai.ts`）或测试 AI 二代（`core/ai-v2.ts`）。
  *
  * 两份文件导出同名同签名的 `aiNextAction`，所以调用方一行不用改——
  * 这就是"复制出去单独一个模型"的意义：切内核不改主循环。

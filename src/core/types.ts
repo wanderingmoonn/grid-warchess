@@ -1439,7 +1439,7 @@ export interface MatchConfig {
    * 用哪份 AI 内核。
    *
    *   · `script`：`core/ai.ts`（老 AI，冻结的参考实现）
-   *   · `goal`  ：`core/ai-v2.ts`（实验 AI，远期规划走目标状态机）
+   *   · `goal`  ：`core/ai-v2.ts`（测试 AI 二代，远期规划走目标状态机）
    *   · `net`   ：策略网络（测试 AI，权重单独加载）
    */
   aiBrain?: 'script' | 'net' | 'goal';

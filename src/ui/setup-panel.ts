@@ -142,7 +142,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       aiLevel: initial.aiLevel === 'basic' ? 'basic' : initial.aiLevel === 'tactic' ? 'tactic' : 'advanced',
       // 内核跟着上一局走：连着跟测试 AI 打几局是常态（换阵营再来一把）。
       // 缺省是手写引擎——老存档里没有这个字段，读出来就该是它。
-      aiBrain: initial.aiBrain === 'net' ? 'net' : 'script',
+      // `goal`（测试 AI 二代）也要带过来：以前只认 `net`，选过二代再开面板
+      // 就会静默退回手写引擎，玩家以为"点了没生效"。
+      aiBrain:
+        initial.aiBrain === 'net'
+          ? 'net'
+          : initial.aiBrain === 'goal'
+            ? 'goal'
+            : 'script',
       // 人数跟着上一局走：连着开三人局是常态
       playerCount: initial.playerCount ?? 2,
       // 双城市开局跟着上一局走（和"人数"一样，是这一局的设定）
@@ -628,12 +635,19 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
       const netAllowed = !config.commanderMode;
       const netOn = netAllowed && config.aiBrain === 'net';
       const goalOn = config.aiBrain === 'goal';
+      /*
+       * 档位按钮的高亮条件必须同时排除两颗"换内核"的按钮。
+       *
+       * 以前只写了 `!netOn`：选了测试 AI 二代之后，`aiLevel` 还停在上一次的档位，
+       * 那一颗就一直亮着——看上去像"两档同时生效"。
+       */
+      const aiLevelOn = !netOn && !goalOn;
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
-            <button class="chip ${!netOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
-            <button class="chip ${!netOn && config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
-            <button class="chip ${!netOn && config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
-            <button class="chip is-brain ${goalOn ? 'active' : ''}" data-aibrain="goal" title="实验内核（core/ai-v2.ts）：远期规划走目标状态机，局部战术仍是老的启发式。和老 AI 是两个独立模型，改动互不影响">实验 AI</button>
+            <button class="chip ${aiLevelOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
+            <button class="chip ${aiLevelOn && config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
+            <button class="chip ${aiLevelOn && config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
+            <button class="chip is-brain ${goalOn ? 'active' : ''}" data-aibrain="goal" title="第二代内核（core/ai-v2.ts）：远期规划走目标状态机（产业链、资源缺口、兵种认领），局部战术仍是老的启发式。和「测试 AI · 全视野」不是同一个东西——那个是策略网络">测试 AI 二代</button>
             ${
               netAllowed
                 ? `<button class="chip is-brain ${netOn ? 'active' : ''}" data-aibrain="net" title="自博弈训练出来的策略网络。自带全视野：开雾也看得见你的全部部队；只会一种打法节奏，没有档位">测试 AI · 全视野</button>`
@@ -643,9 +657,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           <div class="field-hint">${
             netOn
               ? '全视野；适合青铜 10×10 / 12×12，<b>其它配置较弱</b>。'
-              : netAllowed
-                ? '初级熟悉规则 · 中级战术变化 · 高级精细决策'
-                : 'AI 按你的队列生产。'
+              : goalOn
+                ? '二代内核：会认领长期目标（补产业链、补资源缺口），战术层沿用高级的判断。'
+                : netAllowed
+                  ? '初级熟悉规则 · 中级战术变化 · 高级精细决策'
+                  : 'AI 按你的队列生产。'
           }</div>`
         : '';
 

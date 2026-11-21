@@ -145,18 +145,21 @@ test('Same state gives same legal action without mutation',()=>{
   /*
    * AI 允许改写的只有它自己的记账字段：
    *
-   *   · `aiIntent` —— 跨回合意图记忆（"攒钱是为了升时代，攒到 540"），
-   *     必须落在 state 上，否则跟不上下次调用；
+   *   · `aiFocus` —— 跨回合记忆（2026-11-20 把旧的 `aiIntent`「攒钱目标」和
+   *     `aiCommit`「产业链承诺」合并成一份按席位存的袋子），必须落在 state 上，
+   *     否则跟不上下次调用；
+   *   · `aiResMark` —— 资源缺口的观察记录（哪条产出线缺粮/缺材、记到第几回合），
+   *     和 `aiFocus` 一样是跨回合的记忆；
    *   · `aiStale` —— 局面指纹缓存（血量总和 + 计数），纯性能用途。
    *
    * 它们都不是"局面"，是 AI 的私有笔记本。所以这条用例的契约精确成：
-   * **除了这两个，别的字段一个都不许动**。
+   * **除了这些，别的字段一个都不许动**。
    *
-   * 只把这两个抹掉再比，而不是干脆不比：真有人把别的东西写进 state（比如"顺手把
+   * 只把这些抹掉再比，而不是干脆不比：真有人把别的东西写进 state（比如"顺手把
    * 某个单位的 acted 置了"），这条用例照样会红。将来 AI 再加私有字段，记得加进名单——
    * 那样这条用例才会继续提醒你"又有一个字段被偷偷写进对局事实里了"。
    */
-  const AI_BOOKKEEPING = ['aiIntent', 'aiStale'];
+  const AI_BOOKKEEPING = ['aiFocus', 'aiResMark', 'aiStale', 'aiIntent', 'aiCommit'];
   const withoutAiBookkeeping = (json: string): string => {
     const o = JSON.parse(json) as Record<string, unknown>;
     for (const k of AI_BOOKKEEPING) delete o[k];
@@ -447,15 +450,16 @@ test('攒钱意向：跨回合记住，兵力掉下去也不会把钱散回产�
    */
   assert.ok(first.savingFor, `这个局面应该有个攒钱目标，实际 ${String(first.savingFor)}`);
   assert.ok(first.targetCost > s.players.A.gold, '要真的还买不起，不然这条测的是别的东西');
-  assert.ok(s.aiIntent?.A, '意向要写进状态');
-  const since = s.aiIntent!.A!.since;
+  // 2026-11-20 起记忆合并到 `aiFocus[席位].save`（旧的 `aiIntent` 只留给老存档读）
+  assert.ok(s.aiFocus?.A?.save, '意向要写进状态');
+  const since = s.aiFocus!.A!.save!.since;
   // 兵掉到 3 个：攒钱门槛（army >= 4~6）整段被跳过——这正是那个 bug 的现场
   s.units = s.units.filter(u => u.owner!=='A' || u.id==='test-0' || u.id==='test-1' || u.id==='test-2');
   s.turn = 17;
   const again = aiDebugPlan(s,'A');
   assert.equal(again.urgent, false, '3 个兵不算急事，不然这条会被急事那条拦掉');
   assert.equal(again.savingFor, first.savingFor, `两回合后不该忘掉（原来会变成 null），实际 ${again.savingFor}`);
-  assert.equal(s.aiIntent!.A!.since, since, 'since 要保持，不能每回合重置');
+  assert.equal(s.aiFocus!.A!.save!.since, since, 'since 要保持，不能每回合重置');
 });
 test('攒钱意向：目标没了就换，不会抱着死目标',()=>{
   const s = arena();
@@ -464,16 +468,20 @@ test('攒钱意向：目标没了就换，不会抱着死目标',()=>{
   s.players.A.gold=300;
   aiDebugPlan(s,'A');
   // 同上：这个局面现在的目标是"升时代"，不再写死 hero。
-  const firstGoal = s.aiIntent?.A?.goal;
+  const firstGoal = s.aiFocus?.A?.save?.goal;
   assert.ok(firstGoal, '先立一个攒钱意向');
   // 英雄从兵种表里没了（关掉那个包 / 选卡没收录）：这一条必须接得住
   for(const [id,d] of Object.entries(s.unitTypes)) if(d.hero) delete s.unitTypes[id];
   s.turn=17;
   const p = aiDebugPlan(s,'A');
   if (firstGoal === 'hero') {
-    assert.notEqual(s.aiIntent?.A?.goal, 'hero', `英雄没了还在攒英雄，实际 ${s.aiIntent?.A?.goal}`);
+    assert.notEqual(
+      s.aiFocus?.A?.save?.goal,
+      'hero',
+      `英雄没了还在攒英雄，实际 ${String(s.aiFocus?.A?.save?.goal)}`,
+    );
   }
-  assert.equal(p.savingFor, s.aiIntent?.A?.goal ?? null, '计划和记忆要一致');
+  assert.equal(p.savingFor, s.aiFocus?.A?.save?.goal ?? null, '计划和记忆要一致');
 });
 test('攒钱意向：走 aiNextAction 时落在真状态上',()=>{
   const s = arena();
@@ -481,7 +489,7 @@ test('攒钱意向：走 aiNextAction 时落在真状态上',()=>{
   for(let i=0;i<6;i++) unit(s,'A','militia',3+(i%3),5+Math.floor(i/3));
   s.players.A.gold=300;
   aiNextAction(s,{maxRecruit:0,maxUpgrade:0,recruited:0,upgraded:0});
-  assert.ok(s.aiIntent?.A, '雾图副本上的记忆要搬回真状态，否则下一回合又忘了');
+  assert.ok(s.aiFocus?.A?.save, '雾图副本上的记忆要搬回真状态，否则下一回合又忘了');
 });
 
 test('两回合威胁：够得着但还没到的人算进 soon，不算进 exposure',()=>{
