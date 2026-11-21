@@ -139,6 +139,9 @@ const ERA_MODEL_ARG = argOf('era-model', '');
 const ERA_MODEL: 'const' | 'foe' | undefined =
   ERA_MODEL_ARG === 'const' || ERA_MODEL_ARG === 'foe' ? ERA_MODEL_ARG : undefined;
 
+/** `--no-crossing`：关掉 v3 的过河投送计划（做 A/B 用） */
+const NO_CROSSING = has('no-crossing');
+
 const REPLAY_PATH = argOf('replay', '');
 const REPLAY_SEED = argOf('replay-seed', '');
 const REPLAY_FIRST = argOf('replay-first', 'new') === 'old' ? 'old' : 'new';
@@ -187,6 +190,7 @@ function playOne(
       mapSymmetry: SYMMETRY,
       ...(UNIT_CAP === undefined ? {} : { unitCap: UNIT_CAP }),
       ...(ERA_MODEL === undefined ? {} : { aiEraModel: ERA_MODEL }),
+      ...(NO_CROSSING ? { aiCrossing: false } : {}),
     },
     seed,
   );
