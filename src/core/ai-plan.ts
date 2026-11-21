@@ -144,6 +144,15 @@ export interface PlanOrders {
   focusCityId: string | null;
   /** 集火目标（覆盖 pickFocusTarget 算出来的那一个）：可以是防御建筑或工人 */
   focusUnitId: string | null;
+  /**
+   * 这条计划要几个人组成编队（2026-11-21 用户提的）。
+   *
+   * 战略层给的是**总配额**，具体要多大由任务定：
+   *   集中突破 12 人、屯兵 8 人、过河 6 人、守城 5 人；
+   *   以后"侦查/骚扰"报 3 人就够，不用改走位代码。
+   * 不写就用战略层的默认规模。
+   */
+  needSquad: number;
 }
 
 /** 行动型计划吐出的一个动作（可带分） */
@@ -262,6 +271,23 @@ export const PLAN_TUNING = {
   breakStallTurns: 12,
   /** 选定突破目标后粘多少回合再重选（换得太勤，部队会在两座城之间来回跑） */
   breakStickTurns: 24,
+  /**
+   * 各计划申报的编队规模。
+   *
+   * 这些数不是拍脑袋的：突破 12 是"一次能打穿一座有守军的城"的量级，
+   * 守城 5 是"够吃城格加成、又不把产兵格占满"，过河 6 是"够铺桥又够守桥头"。
+   */
+  needSquad: {
+    /*
+     * 突破 12 → **9**（2026-11-21 实测）：12 人意味着"攒满才出发"，
+     * Q4 从 4-1-1 掉到 2-2-2（配对 -3）——等得太久，对面先把城防堆起来了。
+     * 9 是"能打穿一座有守军的城"的下限，也不至于等太久。
+     */
+    breakthrough: 9,
+    mass: 8,
+    crossing: 6,
+    defend: 5,
+  },
   /** 计划日志最多留几条（每席每次换计划记一条） */
   traceCap: 200,
   /**
@@ -537,13 +563,22 @@ export function resolvePlans(
       (live.find((x) => x.plan.id === b.id)?.value ?? 0) -
       (live.find((x) => x.plan.id === a.id)?.value ?? 0),
   );
+  /*
+   * 按价值从高到低**合并**，先到的字段优先。
+   *
+   * 不能"取第一条就停"：屯兵只想申报"我要 8 个人"，不该顺手把
+   * 突破计划的目标城/集火目标一起顶掉。谁先占住某个字段，后面的就不覆盖。
+   */
   for (const plan of orderCandidates) {
     if (!plan.orders) continue;
     try {
       const o = plan.orders(ctxFor(plan));
       if (o && Object.keys(o).length > 0) {
-        orders = o;
-        break;
+        const filled: Partial<PlanOrders> = {};
+        for (const [k, v] of Object.entries(o)) {
+          if ((orders as Record<string, unknown>)[k] === undefined) (filled as Record<string, unknown>)[k] = v;
+        }
+        orders = { ...orders, ...filled };
       }
     } catch {
       // 写坏的计划不该打死整局

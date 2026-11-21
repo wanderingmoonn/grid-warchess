@@ -151,6 +151,8 @@ const NO_MASS = has('no-mass');
 const NO_BREAKTHROUGH = has('no-breakthrough');
 /** `--no-squad`：关掉编队（做 A/B 用） */
 const NO_SQUAD = has('no-squad');
+/** `--need-squad`：打开"计划层申报编队规模"（默认关，实测会变差） */
+const NEED_SQUAD = has('need-squad');
 /** `--quality-scale N`：采购质量信号的放大倍数（默认 2.5，1 = 老行为） */
 const QUALITY_SCALE = argOf('quality-scale', '');
 /** `--recruit-cap auto|N`：放开每回合产兵名额（默认仍是 2） */
@@ -214,6 +216,7 @@ function playOne(
       ...(NO_MASS ? { aiMass: false } : {}),
       ...(NO_BREAKTHROUGH ? { aiBreakthrough: false } : {}),
       ...(NO_SQUAD ? { aiSquad: false } : {}),
+      ...(NEED_SQUAD ? { aiNeedSquad: true } : {}),
     },
     seed,
   );

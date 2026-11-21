@@ -2255,7 +2255,7 @@ const SQUAD_FORM_TIMEOUT = 10;
 function postureBudgetOf(
   s: GameState,
   me: PlayerId,
-): { x: number; y: number; squadSize: number; maxSquads: number; spread: number } {
+): { x: number; y: number; squadCap: number; maxSquads: number; spread: number } {
   const mine = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'combat').length;
   let foe = 0;
   for (const u of s.units) {
@@ -2273,12 +2273,14 @@ function postureBudgetOf(
     x,
     y,
     /*
-     * 6~12 人：x=0 时小股试探，x=1 时大规模集结。
+     * 6~14 人：这是**总配额（上限）**，不是每支编队的规模。
      *
-     * 下限从 4 抬到 6：4 人编队打不动一座有守军的城（实测 Q4 从 5-1-0 掉到 2-3-1）。
-     * "小股"的用处是侦查和骚扰，那是以后的独立任务，不该由主攻编队兼任。
+     * 每支编队要几个人由计划层申报（`orders.needSquad`）：突破 12、屯兵 8、
+     * 过河 6、守城 5。战略层只决定"这一波总共准你投多少人"。
+     *
+     * 下限 6 是实测出来的：4 人的编队打不动一座有守军的城（Q4 从 5-1-0 掉到 2-3-1）。
      */
-    squadSize: Math.round(6 + 6 * x),
+    squadCap: Math.round(6 + 8 * x),
     // 只有真的想打才开第二支；开太多就是散兵线
     maxSquads: x >= 0.55 ? 2 : 1,
     // 越激进越密集（主力互相掩护）；不想打时散开（少挨溅射、便于牵制）
@@ -2301,7 +2303,13 @@ function postureBudgetOf(
  *   · **队形用相对数**（最前和最后差几格），不用"离城的绝对距离"；
  *   · **可以有缺口**：人不够就先攒着，缺口报给生产端。
  */
-function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSquadReport[] {
+function squadTick(
+  s: GameState,
+  me: PlayerId,
+  planCityId: string | null,
+  /** 计划层申报的编队规模（见 `PlanOrders.needSquad`）。不写就用战略默认 */
+  planNeed?: number,
+): AiSquadReport[] {
   const budget = postureBudgetOf(s, me);
   const focus = focusOf(s, me);
   const combat = unitsOf(s, me).filter(
@@ -2349,7 +2357,11 @@ function squadTick(s: GameState, me: PlayerId, planCityId: string | null): AiSqu
       memberIds: free.map((u) => u.id),
       targetCityId: null,
       since: s.turn,
-      want: budget.squadSize,
+      /*
+       * 规模：计划层申报的优先（任务需要几个人），但不能超过战略层的总配额。
+       * 两边都没给就取配额的 3/4——"默认规模"不该等于上限，否则永远在等满编。
+       */
+      want: Math.min(budget.squadCap, planNeed ?? Math.round(budget.squadCap * 0.75)),
       spread: budget.spread,
       requested: [],
     });
@@ -2601,6 +2613,8 @@ const BREAKTHROUGH_PLAN: RankedPlan = {
       commit: c.army >= 8,
       focusCityId: target,
       focusUnitId: pickFocusTarget(c.view, c.me, target),
+      // 集中突破要的是"一次压上去"，所以申报满编
+      needSquad: PLAN_TUNING.needSquad.breakthrough,
     };
   },
 };
@@ -2664,6 +2678,8 @@ const MASS_PLAN: RankedPlan = {
    * 添油的根源是"往前挪一格换 6 分"，压这一项就够了。
    */
   weights: () => ({ advance: PLAN_TUNING.massAdvance }),
+  // 只申报规模，不动目标城（合并规则保证 breakthrough 的字段不会被顶掉）
+  orders: () => ({ needSquad: PLAN_TUNING.needSquad.mass }),
 };
 
 /**
@@ -8591,7 +8607,13 @@ function aiNextActionCoreInner(
       const focusNow = focusOf(s, me);
       const sameTurn = Number(focusNow.plan?.keep?.squadTurn ?? -1) === s.turn;
       if (!sameTurn) {
-        const reps = squadTick(s, me, fields.focusCityId);
+        const reps = squadTick(
+          s,
+          me,
+          fields.focusCityId,
+          // 默认关：申报的规模实测会把编队撑大、出发更慢（见 types 的 aiNeedSquad）
+          s.config.aiNeedSquad === true ? resolved.orders.needSquad : undefined,
+        );
         const f2 = focusOf(s, me);
         if (f2.plan) {
           f2.plan.keep = { ...(f2.plan.keep ?? {}), squads: reps, squadTurn: s.turn };
