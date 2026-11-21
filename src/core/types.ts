@@ -1876,40 +1876,10 @@ export interface AiFocus {
   /** 产业链承诺（形状沿用 `AiCommit`） */
   chain?: AiCommit | null;
   /**
-   * 收尾计划：正在派人去接管哪座废墟（见 ai-v3 的 `reclaimTargetOf`）。
-   *
-   * 为什么单独立一个字段：它不是"攒钱目标"，也不是"产业链承诺"——
-   * 它是一条**动作计划**（把兵走过去、掏钱、接管），要跨回合，而且
-   * 不花钱在别处。以后有多条计划时，这里会扩成 `{ id, valueAt, since }`
-   * 并配双阈值；现在只有一条，所以只记"追哪座城"。
-   */
-  expedition?: AiExpedition | null;
-  /**
-   * 计划排序层当值的那一条（P2 起）。`state` 是计划自己的口袋。
-   *
-   * 和上面的 `expedition` / `crossing` 是过渡期的两套：那两个是 P1 之前
-   * 各写一份的产物，等 P3 把过河也搬进来之后可以删。
+   * 计划排序层当值的那一条（P2/P3 起）。每条计划的状态在自己的 `pockets` 里，
+   * 加新计划不用往这里加字段。
    */
   plan?: PlanMemoLike | null;
-  /**
-   * 过河投送计划：这一局从哪个渡口过河。
-   *
-   * 只在"陆路完全走不到敌城、且主力已经成军"时立。**选定就不换**——
-   * 以前是每回合重新挑"看起来最近的水面"，工程队这回合在河心架一格、
-   * 下回合挪到十格外再架一格，两格宽的水道永远差最后一块。
-   */
-  crossing?: AiCrossing | null;
-}
-
-/** 过河投送计划的跨回合记忆 */
-export interface AiCrossing {
-  /** 渡口（河面上要架桥的第一格） */
-  x: number;
-  y: number;
-  /** 哪一回合立的 */
-  since: number;
-  /** 已经换了几个渡口：换到第三次还不成，说明这条路本身走不通 */
-  tries: number;
 }
 
 /** 收尾计划（接管废墟）的跨回合记忆 */
@@ -1930,7 +1900,8 @@ export interface PlanMemoLike {
   id: string;
   valueAt: number;
   since: number;
-  state: Record<string, unknown>;
+  /** 每条计划自己的口袋：planId → 状态，互不干扰 */
+  pockets: Record<string, Record<string, unknown>>;
   cooldown?: Record<string, number>;
 }
 

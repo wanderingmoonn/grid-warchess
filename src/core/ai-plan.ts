@@ -55,6 +55,11 @@ export interface PlanCtx {
   canReach: boolean;
   /** 折算收益的时间窗（回合） */
   horizon: number;
+  /**
+   * 这条计划自己的口袋（上一回合留给这一回合的）。**每条计划各一份**，
+   * 互不干扰——两条计划同时当值时，共用一份状态必然打架。
+   */
+  state: Record<string, unknown>;
 }
 
 /**
@@ -103,6 +108,14 @@ export interface AiPlan {
   next?(c: PlanCtx): PlanAction[];
   /** 权重型：这一步的乘数，只写要动的那几项。行动型不写 */
   weights?(c: PlanCtx): Partial<PlanWeights>;
+  /**
+   * 想让战术层去哪儿（渡口、集结点）。
+   *
+   * 有些计划不改分数，只改"往哪儿使劲"——过河就是这样：它不产生动作，
+   * 只把渡口钉住，让工程队和建造评分都围着那一格转。
+   * 返回值会存进这条计划的口袋（`state.focus`），下一回合可以读出来做粘性。
+   */
+  focus?(c: PlanCtx): { x: number; y: number } | null;
 }
 
 /**
@@ -116,7 +129,11 @@ export interface PlanMemo {
   /** 立约时算出的价值：双阈值都跟它比，不是跟这一回合的值比 */
   valueAt: number;
   since: number;
-  state: Record<string, unknown>;
+  /**
+   * 每条计划自己的口袋：planId → 任意状态。**按计划分开**，
+   * 否则"收尾记城、过河记渡口"会互相覆盖。
+   */
+  pockets: Record<string, Record<string, unknown>>;
   /** 冷却表：planId → 到期回合。刚放弃的短期内不重立，防抖 */
   cooldown?: Record<string, number>;
 }
@@ -231,6 +248,10 @@ export interface PlanResolution {
   net: PlanWeights;
   /** 合成账本，给日志用 */
   ledger: PlanWeightLine[];
+  /** 当值计划想让战术层去的那个点（目前只有过河用）；没有就是 null */
+  focus: { x: number; y: number } | null;
+  /** 上面那个点是哪条计划给的 */
+  focusPlanId: string | null;
   /** 新的记忆（没有当值计划时为 null） */
   memo: PlanMemo | null;
   /** 这一回合为什么是它（写日志、看回放用） */
@@ -262,13 +283,21 @@ export function resolvePlans(
   opts: { urgent?: boolean } = {},
 ): PlanResolution {
   const turn = ctx.view.turn;
+  const pocketsIn = prev?.pockets ?? {};
+  /**
+   * 每条计划拿到的是**它自己的** ctx：`state` 换成它自己的口袋。
+   * 两条计划同时当值时共用一份状态必然打架（一个记城、一个记渡口）。
+   */
+  const ctxFor = (plan: AiPlan): PlanCtx => ({ ...ctx, state: pocketsIn[plan.id] ?? {} });
+
   const values: PlanResolution['values'] = [];
   const live: Array<{ plan: AiPlan; value: number }> = [];
 
   for (const plan of REGISTRY.values()) {
     let v = 0;
     try {
-      if (!plan.done(ctx)) v = Number(plan.value(ctx)) || 0;
+      const c = ctxFor(plan);
+      if (!plan.done(c)) v = Number(plan.value(c)) || 0;
     } catch {
       // 一条写坏的计划不该打死整局：按"不成立"处理
       v = 0;
@@ -279,7 +308,7 @@ export function resolvePlans(
   }
   values.sort((a, b) => b.value - a.value);
 
-  /** 冷却中？刚放弃的短期内不重立，除非价值翻倍 */
+  /** 冷却中？刚放弃的短期内不重立 */
   const cooling = (id: string): boolean => {
     const until = prev?.cooldown?.[id];
     return until !== undefined && turn < until;
@@ -326,7 +355,7 @@ export function resolvePlans(
   const chosen = action;
   const weightList = weightPlans.map((x) => ({
     plan: x.plan,
-    asked: safeWeights(x.plan, ctx),
+    asked: safeWeights(x.plan, ctxFor(x.plan)),
   }));
 
   const composed = weightList.length > 0 ? composeWeights(weightList) : { net: neutralWeights(), ledger: [] };
@@ -337,21 +366,59 @@ export function resolvePlans(
   const memoryValue = memoryOf ? (live.find((x) => x.plan.id === memoryOf.id)?.value ?? 0) : 0;
 
   /*
+   * 落点：当值的计划里，谁给了"往哪儿使劲"就记下来。
+   * 现在只有一条会给（过河），多条给了就取价值最高的那条——两条指不同方向
+   * 本来就是设计错误，日志里能看见是哪条赢的。
+   */
+  let focus: { x: number; y: number } | null = null;
+  let focusPlanId: string | null = null;
+  const focusCandidates = [chosen, ...weightPlans.map((x) => x.plan)].filter(Boolean) as AiPlan[];
+  focusCandidates.sort((a, b) => (live.find((x) => x.plan.id === b.id)?.value ?? 0) - (live.find((x) => x.plan.id === a.id)?.value ?? 0));
+  for (const plan of focusCandidates) {
+    const f = safeFocus(plan, ctxFor(plan));
+    if (f) {
+      focus = f;
+      focusPlanId = plan.id;
+      break;
+    }
+  }
+
+  /*
    * 冷却表：**不再当值**的计划记一笔到期回合。
    *
    * 注意"不当值"不等于"死了"：一条计划可能还有价值、只是被更高的压下去了。
-   * 按"还活着"判会让冷却形同虚设（实测探针就在这里红过）——
-   * 它明明被换掉了，下一回合又能立刻抢回来，等于每回合换口味。
+   * 按"还活着"判会让冷却形同虚设（实测探针就在这里红过）。
    */
   const cooldown: Record<string, number> = { ...(prev?.cooldown ?? {}) };
   if (prev && prev.id !== '') {
     const prevStillActive =
       prevLive !== null && (prevLive.plan.kind === 'action' ? chosen?.id === prev.id : true);
-    if (!prevStillActive) cooldown[prev.id] = turn + PLAN_TUNING.cooldown;
-    else delete cooldown[prev.id];
+    /*
+     * **完成 ≠ 放弃**：一条计划干完自己的活（`done` 为真）不该进冷却。
+     *
+     * 过河就是这样：过去了 → 计划完成；被赶回来 → 应该立刻能重新立。
+     * 冷却的本意是"别在两条计划之间来回改投"，不是"干完也不许再干"。
+     * 这一条是 P3 对比时抓出来的：不加它，seed 11 会晚 4 回合结束。
+     */
+    const prevPlanDef = REGISTRY.get(prev.id) ?? null;
+    const prevDone = prevPlanDef !== null && safeDone(prevPlanDef, ctxFor(prevPlanDef));
+    if (!prevStillActive && !prevDone) cooldown[prev.id] = turn + PLAN_TUNING.cooldown;
+    else if (prevStillActive) delete cooldown[prev.id];
   }
   // 过期条目清掉，别让它无限长
   for (const [id, until] of Object.entries(cooldown)) if (until <= turn) delete cooldown[id];
+
+  /*
+   * 口袋：只保留这一刻当值的那些计划。不当值的丢掉口袋是**有意的**——
+   * 重新立约应该从零开始，而不是沿用几回合前的半截状态。
+   */
+  const pockets: Record<string, Record<string, unknown>> = {};
+  const activeIds = [chosen?.id, ...weightPlans.map((x) => x.plan.id)].filter((x): x is string => !!x);
+  for (const id of activeIds) {
+    const pocket = { ...(pocketsIn[id] ?? {}) };
+    if (focusPlanId === id && focus) pocket.focus = focus;
+    pockets[id] = pocket;
+  }
 
   const memo: PlanMemo | null =
     memoryOf !== null
@@ -359,14 +426,13 @@ export function resolvePlans(
           id: memoryOf.id,
           valueAt: prev && prev.id === memoryOf.id ? prev.valueAt : memoryValue,
           since: prev && prev.id === memoryOf.id ? prev.since : turn,
-          // 计划自己的口袋：换计划就换口袋，同一条计划继续沿用
-          state: prev && prev.id === memoryOf.id ? prev.state : {},
+          pockets,
           ...(Object.keys(cooldown).length > 0 ? { cooldown } : {}),
         }
       : // 一条计划都不当值时，只要冷却还没过就得留一条空记录——
         // 否则 `prev` 变成 null，冷却表跟着丢掉，冷却等于没写
         Object.keys(cooldown).length > 0
-        ? { id: '', valueAt: 0, since: turn, state: {}, cooldown }
+        ? { id: '', valueAt: 0, since: turn, pockets, cooldown }
         : null;
 
   return {
@@ -374,10 +440,29 @@ export function resolvePlans(
     weights: weightPlans.map((x) => x.plan),
     net: composed.net,
     ledger: composed.ledger,
+    focus,
+    focusPlanId,
     memo,
     reason,
     values,
   };
+}
+
+function safeDone(plan: AiPlan, ctx: PlanCtx): boolean {
+  try {
+    return plan.done(ctx);
+  } catch {
+    return false;
+  }
+}
+
+function safeFocus(plan: AiPlan, ctx: PlanCtx): { x: number; y: number } | null {
+  if (!plan.focus) return null;
+  try {
+    return plan.focus(ctx) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function safeWeights(plan: AiPlan, ctx: PlanCtx): Partial<PlanWeights> {
@@ -420,6 +505,7 @@ export function planCtxOf(
     gold: view.players[me].gold,
     canReach: true,
     horizon: PLAN_TUNING.horizon,
+    state: {},
     ...patch,
   };
 }

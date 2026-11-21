@@ -1636,6 +1636,13 @@ interface Fields {
   air: Map<string, number[]>;
   bridgeSite: { x: number; y: number } | null;
   /**
+   * 过河计划选的渡口（排序层的 `focus`）。null = 这条计划没当值。
+   *
+   * 和 `bridgeSite` 的区别：`bridgeSite` 是"逐回合重挑的最近水面"，
+   * 这个点是**计划钉住的**那一格，建造评分和工程队走位都认它。
+   */
+  crossingSite: { x: number; y: number } | null;
+  /**
    * 本回合的主攻方向：血最少的那座敌方城市。
    *
    * 没有这个"聚焦"，AI 的部队会一半扑这座城、一半扑那座城，
@@ -1859,29 +1866,6 @@ function bestBridgeSite(s: GameState, owner: PlayerId, wade: Map<string, number[
 }
 
 /**
- * 过河投送计划的判据：**陆路完全走不到敌城、而且主力已经成军**。
- *
- * 为什么要有这一条：造桥原来是纯逐回合打分——这座桥值多少、河段铺够没有、
- * 全图还剩几个名额。三个数都不问"我到底要不要过河"。于是实测里工程队
- * 铺到河心就不铺了（撞上"7 格内已有 5 座"那条上限），二十四个兵在岸边
- * 来回走，只有几条船过去。见 docs/PLAN-AI-V3 第十四节。
- *
- * 判据用 `canReachEnemyByLand`（规则层那条"能不能贴到城下"的洪泛），
- * 不用桥数、不用距离：**过没过去这件事本身是可观测的**，不需要代理指标。
- */
-function crossingGoalOf(view: GameState, me: PlayerId): { x: number; y: number } | null {
-  if (view.config.aiCrossing === false) return null;
-  const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
-  if (foes.length === 0) return null;
-  // 能走过去就不需要计划：架桥只是捷径，交给逐回合的分数去决定
-  if (canReachEnemyByLand(view, me)) return null;
-  const army = unitsOf(view, me).filter((u) => utype(view, u.type).category === 'combat').length;
-  // 兵都没凑够就先别修桥：那会变成"为了过河把家底掏空"
-  if (army < 3) return null;
-  return crossingPointOf(view, me);
-}
-
-/**
  * 选渡口：**从两岸的陆地场往回找**，取"我这边 + 对面"总步数最小的那块水面。
  *
  * 为什么不用现成的 `bestBridgeSite`：它是逐格打分（窄、离我近、对岸离敌城近），
@@ -1974,6 +1958,42 @@ function crossingPointOf(view: GameState, me: PlayerId): { x: number; y: number 
   }
   return best;
 }
+
+/**
+ * 过河投送计划（P3 起由排序层管）。
+ *
+ * 它是**权重型**：不产生动作，只做两件事——
+ *   1. 把渡口钉住（`focus`，存进自己的口袋，下一回合优先沿用）；
+ *   2. 让建造评分和工程队走位都围着这一格转（靠 `fields.crossingSite` 传下去）。
+ *
+ * 三个"给桥让路"的老补丁（两道数量上限、工程队 mine<6 闸）现在都读这个点，
+ * 而不是各读各的 `focusOf().crossing`。
+ */
+const CROSSING_PLAN: RankedPlan = {
+  id: 'crossing',
+  kind: 'weights',
+  strength: PLAN_TUNING.strength.crossing ?? 0.9,
+  value: (c) => {
+    if (c.view.config.aiCrossing === false) return 0;
+    if (!c.view.cities.some((x) => x.owner !== c.me && !x.ruined)) return 0;
+    // 能走过去就不需要计划：架桥只是捷径，交给逐回合的分数去决定
+    if (c.canReach) return 0;
+    // 兵都没凑够就先别修桥：那会变成"为了过河把家底掏空"
+    if (c.army < 3) return 0;
+    return 1;
+  },
+  done: (c) => c.canReach || !c.view.cities.some((x) => x.owner !== c.me && !x.ruined),
+  focus: (c) => {
+    // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
+    const prev = c.state.focus as { x: number; y: number } | undefined;
+    if (prev) {
+      const tile = c.view.tiles[prev.y * c.view.w + prev.x];
+      if (tile && (tile.terrain === 'water' || tile.terrain === 'bridge')) return prev;
+    }
+    return crossingPointOf(c.view, c.me);
+  },
+};
+registerAiPlan(CROSSING_PLAN);
 
 /**
  * 这块水面值不值得架桥：从它出发，往哪个方向、跨几格水能上岸。
@@ -2553,7 +2573,8 @@ function scoreMoveInner(
        * 实测 7 座桥（大多在无关的水塘上）之后这条闸就关掉了，工程队不再往
        * 渡口走，剩下的回合全在岸边干别的——"造了一会就不造了"就是这么来的。
        */
-      const underCrossingPlan = focusOf(s, unit.owner).crossing != null;
+      // 计划钉住渡口期间，"桥够多了"这道闸让路（Fields.crossingSite，见 CROSSING_PLAN）
+      const underCrossingPlan = all.crossingSite != null;
       if (site && (mine < 6 || underCrossingPlan)) {
         const step = distance(unit, site) - distance({ x, y }, site);
         // 过河阶段：往桥头走就是当前最重要的任务，给一个压过"顺手盖个磨坊"的底分
@@ -3703,6 +3724,8 @@ function rawBuildScore(
   scarce: ReadonlySet<string> = new Set(),
   /** 这一势力正在追的产业链（Fields.goalCommit） */
   goalCommit: AiCommit | null = null,
+  /** 过河计划钉住的渡口（Fields.crossingSite）：走廊上的桥不吃数量上限 */
+  crossingSite: { x: number; y: number } | null = null,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
@@ -3773,8 +3796,8 @@ function rawBuildScore(
      * 上限是为了"别在河上摆家具"，但它不知道还有一条必须铺通的路：
      * 实测工程队铺到第 5 座就停，河心差最后一格，二十四个兵在岸边来回走。
      */
-    const planCross = focusOf(s, unit.owner).crossing ?? null;
-    const onPlan = planCross !== null && distance(spot, planCross) <= 3;
+    // 渡口由排序层的过河计划给（见 `CROSSING_PLAN.focus`），不在这里自己算
+    const onPlan = crossingSite !== null && distance(spot, crossingSite) <= 3;
     if (near >= 5 && !chain && !onPlan) return -999;
 
     /*
@@ -4079,7 +4102,7 @@ function scoreBuild(
 ): number {
   const raw = rawBuildScore(
     s, unit, buildId, spot, all.land, all.mood, all.sea, all.era,
-    all.urgent, all.threat, all.scarce, all.goalCommit,
+    all.urgent, all.threat, all.scarce, all.goalCommit, all.crossingSite,
   );
   if (raw <= -900) return raw;
 
@@ -7499,6 +7522,7 @@ function aiNextActionCoreInner(
     water: distanceFields(view, me, 'water'),
     air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
+    crossingSite: null,
     focusCityId: mood.focusCityId,
     flankCityId: flank.flankCityId,
     flank: flank.flank,
@@ -7572,53 +7596,6 @@ function aiNextActionCoreInner(
   fields.hold = plan.stance === 'turtle';
 
   /*
-   * 过河投送计划：陆路走不到敌城，就在**一个**渡口上把桥铺通。
-   *
-   * 它只做两件事，但这两件正是原来缺的：
-   *   1. **选定不换**：`fields.bridgeSite` 由计划钉住，走位和建造都跟着它，
-   *      不再每回合重新挑"看起来最近的水面"；
-   *   2. **走廊豁免**：这条走廊上的桥不吃"铺够了 / 总量"两个上限
-   *      （见 `rawBuildScore` 的桥分支）。
-   *
-   * 成功条件是 `canReachEnemyByLand` 变真——**过没过去是可观测的**，
-   * 不需要桥数、距离这些代理指标。兵不够三个时不立约：为了过河把家底掏空不划算。
-   */
-  {
-    const goal = crossingGoalOf(view, me);
-    const prevCross = focusOf(s, me).crossing ?? null;
-    if (goal) {
-      /*
-       * 旧渡口什么时候算"作废"：这一格既不是水面、也不是我们铺出来的桥面。
-       *
-       * **桥面要算有效**——第一段架好之后那一格的 terrain 就从 water 变成
-       * bridge 了，按"必须是水面"判会把计划当场丢掉，于是换个水塘重新开始，
-       * 三段桥永远连不成一条（2026-11-21 实测：渡口在第 40 回合从 16,9
-       * 跳到 8,9，之后整局没有渡口）。
-       */
-      const tileAtCross = prevCross ? view.tiles[prevCross.y * view.w + prevCross.x] : null;
-      const keep =
-        prevCross !== null &&
-        (tileAtCross?.terrain === 'water' || tileAtCross?.terrain === 'bridge');
-      const use = keep ? { x: prevCross!.x, y: prevCross!.y } : goal;
-      // 走位/建造共用同一个点：两处各挑一个，就会出现"人往东走、桥往西修"
-      fields.bridgeSite = use;
-      if (depth === 0 && (!prevCross || prevCross.x !== use.x || prevCross.y !== use.y)) {
-        setFocus(s, me, {
-          ...focusOf(s, me),
-          crossing: {
-            x: use.x,
-            y: use.y,
-            since: s.turn,
-            tries: prevCross ? prevCross.tries + 1 : 0,
-          },
-        });
-      }
-    } else if (depth === 0 && prevCross) {
-      setFocus(s, me, { ...focusOf(s, me), crossing: null });
-    }
-  }
-
-  /*
    * 收尾计划：对面只剩废墟时，派人去接管。
    *
    * 这一条是"计划 → 动作"的第一个出口，和攒钱/选目标那些分开：
@@ -7642,6 +7619,12 @@ function aiNextActionCoreInner(
     const planCtx = planCtxOf(view, me, { canReach: !fields.needBridge });
     const prevPlan = focusOf(s, me).plan ?? null;
     const resolved = resolvePlans(planCtx, prevPlan, { urgent: fields.urgent });
+    /*
+     * 落点：过河计划钉住的渡口。走位、建房评分、工程队那道闸都认它，
+     * **不要各读各的状态**——两处各挑一个点，就会出现"人往东走、桥往西修"。
+     */
+    fields.crossingSite = resolved.focus;
+    if (resolved.focus) fields.bridgeSite = resolved.focus;
     for (const item of planActions(resolved.action, planCtx)) {
       candidates.push({ action: item.action, score: item.score ?? PLAN_TUNING.actionScore });
     }
