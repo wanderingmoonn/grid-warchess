@@ -156,7 +156,7 @@ import type { GodBrush } from './ui/god-panel.ts';
 import { openMapUpload } from './ui/map-upload.ts';
 import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
-import { openTitle } from './ui/title-screen.ts';
+import { openTitle, type TitleOptions } from './ui/title-screen.ts';
 import { buildReplayFromText } from './core/replay-file.ts';
 import type { ReplaySession } from './core/replay-file.ts';
 import { replayBarHtml, syncReplayBar, type ReplayUi } from './ui/replay-bar.ts';
@@ -417,12 +417,8 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
 /**
  * 本机有没有**真的打过**的一局。
  *
- * 不能直接拿 `loadMatch() !== null` 现查：启动流程末尾无条件 `saveMatch()`
- * （新建的那局当场就落盘），于是第一次来的人也会看到亮着的「继续上一局」——
- * 点了接着打的其实是一张谁都没动过的随机棋盘。
- *
- * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
- * 导入一局、进房间接手一局，都把它置 true。
+ * 开机时先看有没有存档，之后开局、导入或接手联机局时置 true。
+ * 启动用的占位局不落盘，避免刷新后首页把它当作上一局。
  */
 /*
  * `?fresh=1`：作者验证新版关卡时的一键清档。
@@ -1063,13 +1059,13 @@ function watching(): boolean {
 }
 
 /** 双 AI 观战：谁都还没"入座"，给全图视角，否则看的是某一方的迷雾 */
-function spectating(): boolean {
+function spectating(s = state): boolean {
   // 上帝模式也是全图：沙盒里藏信息毫无意义——盘上的兵都是自己摆上去的。
   // 迷雾要是没关，摆完 B 方的兵下一帧就看不见了，这个模式会变得没法用。
-  if (state.config.godMode === true) return true;
+  if (s.config.godMode === true) return true;
   // 房间观战位是同一回事：没有"我方"，迷雾就没有意义
   if (watching()) return true;
-  return isAiSide(state, 'A') && isAiSide(state, 'B');
+  return isAiSide(s, 'A') && isAiSide(s, 'B');
 }
 
 // ---------- 联机 ----------
@@ -1163,11 +1159,11 @@ function resumeRoom(): boolean {
 }
 
 /** 视角玩家：联机时永远是自己那一方，而不是"现在轮到谁" */
-function me(): PlayerId {
+function me(s = state): PlayerId {
   // 上帝模式没有"我的一方"：两边都归你摆，所以视角跟着当前行动方走。
   // 这一步很重要——面板和点击判定里的 `mine` 都要有个主人，
   // 固定成 A 会让"轮到蓝方时点蓝方的兵"变成点别人家的东西。
-  if (state.config.godMode === true) return state.current;
+  if (s.config.godMode === true) return s.current;
   // 观战位没有"我的一方"，给谁都一样——渲染走的是全图，
   // 面板里所有"我的"判断都被 spectator 挡住了。
   if (watching()) return 'A';
@@ -1182,9 +1178,9 @@ function me(): PlayerId {
   // 改成"场上只有一个真人时，我就是那个真人"——两人局的三种情形和以前完全等价
   // （人机 → 真人那席；双 AI → 没有真人，跟当前席位走；热座 → 两个真人，跟当前席位走），
   // 三家四家局则正确地认出了"只有一个真人"的那一局。
-  const humans = seatsOf(state).filter((p) => !isAiSide(state, p));
+  const humans = seatsOf(s).filter((p) => !isAiSide(s, p));
   if (humans.length === 1) return humans[0]!;
-  return state.current;
+  return s.current;
 }
 
 /**
@@ -6357,9 +6353,21 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
    */
   if (opts.pauseAi) aiPaused = true;
 
+  // 启动时 state 可能是占位局；首页预览和「继续」读同一个存档槽。
+  const saved = hasRealSave || room ? loadMatch() : null;
+  let preview: TitleOptions['preview'];
+  if (saved) {
+    try {
+      const viewer = me(saved);
+      preview = { viewer, view: playerView(saved, viewer, spectating(saved) || saved.showAll === true) };
+    } catch {
+      // 无法预览的旧存档仍可从原入口尝试继续。
+    }
+  }
   openTitle(host, {
     // 「继续上一局」只认真打过的一局，见 hasRealSave 的注释
-    hasSave: hasRealSave,
+    hasSave: hasRealSave || saved !== null,
+    preview,
     // 第一次来（没打过一局、也没看过教程）：把教程摆成主按钮
     firstVisit: !hasRealSave && !tutorialSeen(),
     version: BUILD_VERSION,
@@ -10527,7 +10535,7 @@ try {
 
   const patched = repairLoadedState();
   refreshMemory(state);
-  saveMatch(state);
+  if (bootSave || resuming) saveMatch(state);
   render();
   dropStaleSelfControl();
   if (patched > 0) {

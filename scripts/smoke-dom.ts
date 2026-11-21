@@ -2821,11 +2821,6 @@ check('关掉迷雾后双方单位全部出现', () => {
 });
 
 check('第一次来：首页的「继续上一局」是灰的（开机自动存档不算"打过"）', () => {
-  /*
-   * 启动流程末尾会无条件 saveMatch() 一次——新建的这局当场落盘。
-   * 如果「继续」直接看 loadMatch()，第一次来的人会看到一个亮着的按钮，
-   * 点下去接着打的是一张谁都没动过的随机棋盘。这条钉住那个判据。
-   */
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '启动就应该出首页');
   const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
@@ -6922,16 +6917,16 @@ check('城郭与物料：HUD 显示粮和材，建造清单写明施工回合与
 console.log('\n强制键');
 
 /** 用一份现成存档起一个新页面：这类用例需要精确摆位，不能靠随机开局 */
-function bootWith(st: unknown) {
+function bootWith(st: unknown, search = '?loadSave=1') {
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/?loadSave=1',
+    url: `http://localhost/${search}`,
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
   if (!w.structuredClone) {
     (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
   }
-  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  if (st !== undefined) w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
   return w;
 }
@@ -11264,6 +11259,57 @@ check('首页更多：编辑器保留首页，导入与复盘入口仍能到达'
     } finally {
       close();
     }
+  }
+});
+
+check('首页沙盘：没有对局时显示示意，启动占位局不落盘', () => {
+  const fresh = bootWith(undefined, '');
+  try {
+    assert.ok(fresh.document.querySelector('.title-sandtable'));
+    assert.equal(fresh.document.querySelector('.title-sandtable-match'), null);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), null);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('首页沙盘：普通启动用已有存档画整张小地图，继续时打开同一局', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 20261121, {});
+  st.tiles[0]!.terrain = 'mountain';
+  const fresh = bootWith(st, '');
+  try {
+    const home = fresh.document.querySelector('.title-screen')!;
+    assert.ok(home.querySelector('[aria-label="上一局战场预览"]'));
+    assert.equal(home.querySelectorAll('.hero-match-tile').length, 144);
+    assert.equal(home.querySelector('.hero-match-tile')?.getAttribute('data-terrain'), 'mountain');
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), JSON.stringify(st));
+    home.querySelector<HTMLButtonElement>('[data-title="continue"]')!.click();
+    assert.equal(fresh.document.querySelector('.title-screen'), null);
+    assert.ok(fresh.document.querySelector('.tile.t-mountain[data-x="0"][data-y="0"]'));
+  } finally {
+    fresh.close();
+  }
+});
+
+check('首页沙盘：大地图只取局部，浓雾里的敌军和地形仍然隐藏', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 64, expansionIds: ['blackout'] }, 20261121, {});
+  st.fog = true;
+  st.cities = [];
+  st.units = [
+    { ...st.units.find((u) => u.owner === 'A')!, type: 'militia', x: 7, y: 7 },
+    { ...st.units.find((u) => u.owner === 'B')!, type: 'militia', x: 14, y: 14 },
+  ];
+  const fresh = bootWith(st, '');
+  try {
+    const home = fresh.document.querySelector('.title-screen')!;
+    assert.ok(home.querySelector('[aria-label="上一局战场局部预览"]'));
+    assert.equal(home.querySelectorAll('.hero-match-tile').length, 256);
+    assert.ok(home.querySelector('.hero-match-tile[data-terrain="unknown"]'));
+    const units = home.querySelectorAll('.hero-match-unit');
+    assert.equal(units.length, 1);
+    assert.match(units[0]!.getAttribute('style')!, /--team-a/);
+  } finally {
+    fresh.close();
   }
 });
 

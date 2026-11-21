@@ -17,10 +17,12 @@
 
 import { unitInsignia, type UnitRole } from './unit-insignia.ts';
 import { currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './layout.ts';
+import { titleMatchPreview, type TitleMatchPreview } from './title-match-preview.ts';
 
 export interface TitleOptions {
   /** 本机有没有可以接着打的对局 */
   hasSave: boolean;
+  preview?: TitleMatchPreview;
   /** 构建版本，底部署名 */
   version: string;
   /** 最近一版的一句话（可省） */
@@ -130,7 +132,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
       </div>
-      ${titleSandtable()}
+      ${(opts.preview && titleMatchPreview(opts.preview)) || titleSandtable()}
       <p class="title-foot">v${opts.version}</p>
     </div>
   `;

@@ -10238,6 +10238,72 @@ a.btn {
   color: var(--piece-team);
 }
 
+.title-sandtable-match {
+  display: block;
+  aspect-ratio: auto;
+}
+
+.title-match-board,
+.title-match-markers {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows), minmax(0, 1fr));
+}
+
+.title-match-board {
+  position: relative;
+  aspect-ratio: var(--cols) / var(--rows);
+  width: min(100%, calc(100% * var(--cols) / var(--rows)));
+  margin-inline: auto;
+  overflow: hidden;
+}
+
+.hero-match-tile {
+  min-width: 0;
+  min-height: 0;
+  background: var(--hero-terrain);
+}
+
+.hero-match-tile[data-terrain='unknown'] {
+  background: var(--void);
+}
+
+.hero-match-tile[data-terrain='shadow'] {
+  background: #2b2140;
+}
+
+.hero-match-tile[data-dim] {
+  filter: brightness(.68);
+}
+
+.title-match-markers {
+  position: absolute;
+  inset: 0;
+}
+
+.hero-match-marker {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  margin: 9%;
+  border: 1px solid var(--piece-team);
+  border-radius: 3px;
+  background: var(--counter-face);
+  color: var(--piece-team);
+}
+
+.hero-match-city {
+  margin: 3%;
+  border-width: 2px;
+  background: color-mix(in srgb, var(--piece-team) 20%, var(--counter-face));
+}
+
+.hero-match-marker svg {
+  width: 76%;
+  height: 76%;
+}
+
 @media (max-width: 920px) {
   .title-inner {
     gap: 28px;
