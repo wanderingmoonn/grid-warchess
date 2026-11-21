@@ -33,7 +33,7 @@ import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import type { LoggedAction } from '../src/core/report.ts';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -285,7 +285,8 @@ for (let i = 0; i < GAMES; i++) {
       mkdirSync(dirname(REPLAY_PATH), { recursive: true });
       writeFileSync(REPLAY_PATH, JSON.stringify(report));
       replayWritten = true;
-      process.stderr.write(`  已导出复盘：${REPLAY_PATH}（${actions.length} 步）\n`);
+      // 打**绝对路径**：相对路径跑完就找不到了，`/tmp` 在访达里还进不去
+      process.stderr.write(`  已导出复盘：${resolve(REPLAY_PATH)}（${actions.length} 步）\n`);
       /*
        * 判决日志跟着回放一起写：回放只能看"做了什么"，这一列补"为什么"。
        * 没有开 `--era-model` 就是空文件，干脆不写。

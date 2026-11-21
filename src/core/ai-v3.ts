@@ -51,6 +51,7 @@ import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
 import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
 import { nextEraLevelOf } from './era-routes.ts';
+import { eraCeilingOf } from './expansions.ts';
 import type { ValueContext } from './unit-value.ts';
 import {
   abilityApi,
@@ -5877,13 +5878,30 @@ function desiredEraOf(
 ): { era: number; foeEra: number; desired: number; why: string } {
   const era = highestEraOf(s, me);
   const foeEra = Math.max(1, ...enemySeats(s, me).map((p) => highestEraOf(s, p)));
-  const maxEra = Math.max(1, ERAS.length);
+  /*
+   * 封顶要问**规则层**，不能用 `ERAS.length`。
+   *
+   * 科技线能开到第几代取决于开了哪些包（`eraCeilingOf`）：没开装甲时代，
+   * 机械化就是终点。用 8 去钳制，模型会一直喊"奔第 6 代"，而那个动作
+   * 在这个局里根本不存在——2026-11-21 第一次跑 S2a 就是这么错的：
+   * 一个 era5 开局的局全程 desiredEra=6，看着像"AI 不肯升"，其实是没得升。
+   */
+  const maxEra = Math.max(1, Math.min(ERAS.length, eraCeilingOf(s)));
+  const capNote = maxEra < ERAS.length ? `（科技线封顶第 ${maxEra} 代）` : '';
+  /*
+   * 目标**不能低于当前时代**：已经升上去的城不会退回来。
+   *
+   * L1 不钳的话会出现"我 5 代、对面 1 代 → 我要奔 2 代"这种自降目标
+   * （2026-11-21 实测日志里真出现过，turn 87）。L0 同样钳一下，
+   * 免得以后科技线上限调高之后常数反而变成倒退。
+   */
+  const floor = era;
   if (model === 'const') {
-    const want = Math.min(ERA_L0_CONST, maxEra);
-    return { era, foeEra, desired: want, why: `L0 常数：奔第 ${want} 代` };
+    const want = Math.max(floor, Math.min(ERA_L0_CONST, maxEra));
+    return { era, foeEra, desired: want, why: `L0 常数：奔第 ${want} 代${capNote}` };
   }
-  const want = Math.min(foeEra + 1, maxEra);
-  return { era, foeEra, desired: want, why: `L1 跟对面：对面 ${foeEra} 代，所以奔 ${want} 代` };
+  const want = Math.max(floor, Math.min(foeEra + 1, maxEra));
+  return { era, foeEra, desired: want, why: `L1 跟对面：对面 ${foeEra} 代，所以奔 ${want} 代${capNote}` };
 }
 
 /**
