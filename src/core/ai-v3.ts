@@ -1916,7 +1916,8 @@ export interface DecisiveCall {
   foePower: number;
   myPerTurn: number;
   foePerTurn: number;
-  call: 'attack' | 'develop' | 'hold';
+  /** 只有两档：打 / 发展。第三档"守"在实现里并进"发展"（不主动推） */
+  call: 'attack' | 'develop';
   why: string;
 }
 
@@ -1935,6 +1936,8 @@ function decisiveOf(
   view: GameState,
   me: PlayerId,
   land: Map<string, number[]>,
+  /** 上一回合的承诺：用来做回滞，不给就按首次判决处理 */
+  prev: { call: 'attack' | 'develop'; since: number; ratioAt: number } | null = null,
 ): DecisiveCall | null {
   const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
   if (foes.length === 0) return null;
@@ -1986,15 +1989,46 @@ function decisiveOf(
   const foeProj = foeSeat ? solvedProjection(view, foeSeat, horizon).power : foePower;
   const ratioNow = myProj / Math.max(1, foeProj);
 
-  if (ratioNow >= 1.15 && marchTurns <= 14) {
+  /*
+   * 回滞（双阈值）：**进入比退出难**。
+   *
+   *   · 还没承诺：投影比 ≥ 1.15 且行军 ≤ 14 → 打，否则发展；
+   *   · 已经承诺"打"：掉到 0.90 以下才放弃（0.90~1.15 这段不动摇）；
+   *   · 已经承诺"发展"：要涨到 1.30 才改打（1.15~1.30 这段不动摇）。
+   *
+   * 这么定是因为"打不打"是个承诺问题，不是每回合重新投票：
+   * 实测不设回滞时 4 局翻了 128 次 attack↔develop，等于没有决定。
+   */
+  const prevCall = prev?.call ?? null;
+  const canAttack = marchTurns <= 14;
+  const enter = 1.15;
+  const keepAttack = 0.9;
+  const switchToAttack = 1.3;
+  const call: 'attack' | 'develop' =
+    prevCall === 'attack'
+      ? ratioNow >= keepAttack && canAttack ? 'attack' : 'develop'
+      : prevCall === 'develop'
+        ? ratioNow >= switchToAttack && canAttack ? 'attack' : 'develop'
+        : ratioNow >= enter && canAttack ? 'attack' : 'develop';
+  /*
+   * 最短驻留：刚立的约 3 回合内不许翻，除非局面变化很大（比值挪了 0.5 以上）。
+   * 光有双阈值还不够——双阈值管的是"同一档内别乱动"，管不住"来回穿线"。
+   */
+  const dwell = prev !== null && view.turn - prev.since < 3 && Math.abs(ratioNow - prev.ratioAt) < 0.5;
+  if (dwell && prevCall) {
     return {
-      marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'attack',
-      why: `现在能打：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）、行军 ${marchTurns} 回合`,
+      marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn,
+      call: prevCall,
+      why: `驻留：${prevCall}（刚立 ${view.turn - prev.since} 回合，局面没大变）`,
     };
   }
+
+  const why =
+    call === 'attack'
+      ? `打：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）、行军 ${marchTurns} 回合`
+      : `发展：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）${canAttack ? '' : '、行军太远'}`;
   return {
-    marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'develop',
-    why: `越等越强：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）还不够打`,
+    marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call, why,
   };
 }
 
@@ -7859,7 +7893,14 @@ function aiNextActionCoreInner(
    * 不用来"催"它去打——催的教训在 P4：任何把进攻权重压到 1 以下的改动，
    * 都会让双方一起龟缩。
    */
-  const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land);
+  const prevDecide = focusOf(s, me).decide ?? null;
+  const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land, prevDecide);
+  if (depth === 0 && decisive && decisive.call !== (prevDecide?.call ?? null)) {
+    setFocus(s, me, {
+      ...focusOf(s, me),
+      decide: { call: decisive.call, since: s.turn, ratioAt: decisive.myPower / Math.max(1, decisive.foePower) },
+    });
+  }
   if (depth === 0 && decisive) {
     const list = (s.aiCalls ??= []);
     const last = [...list].reverse().find((x) => x.me === me);

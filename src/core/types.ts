@@ -1907,6 +1907,13 @@ export interface AiFocus {
    * 加新计划不用往这里加字段。
    */
   plan?: PlanMemoLike | null;
+  /**
+   * 决战时机的**当前承诺**（attack / develop）。
+   *
+   * 判决每回合重算会抖（实测 4 局翻 128 次），而"打不打"这种决定不能
+   * 一小时换一次主意。所以用回滞：进入要 1.30，退出掉到 0.90 才放。
+   */
+  decide?: { call: 'attack' | 'develop'; since: number; ratioAt: number } | null;
 }
 
 /** 收尾计划（接管废墟）的跨回合记忆 */
@@ -1941,7 +1948,7 @@ export interface AiCallTrace {
   foePower: number;
   myPerTurn: number;
   foePerTurn: number;
-  call: 'attack' | 'develop' | 'hold';
+  call: 'attack' | 'develop';
   why: string;
 }
 
