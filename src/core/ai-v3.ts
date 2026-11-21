@@ -150,6 +150,7 @@ import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
+import { productionCapacity } from './ai-strength.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -7551,9 +7552,22 @@ function aiNextActionCoreInner(
   const orderSite = commander ? (orderSitesOf(s, me)[0] || null) : (budget.orderSite ?? null);
   // 指挥官模式的产能是「每回合 1 个」：队首是兵种**并且**这回合还没造过。
   // 只砍到"看队首"是不够的——一回合里 AI 会反复问下一步，队首没变就会连着造好几个。
+  /*
+   * 产兵名额：默认沿用调用方给的预算（2），可以按"空格子数"放开。
+   *
+   * 规则层不限每回合造几个——限制只有钱和格子。那个 2 是历史遗留
+   * （`DEFAULT_BUDGET.maxRecruit`，最初提交里没写理由），
+   * 它让 AI 明明算得出"每回合能有 128 战力"，却只准自己出两个兵。
+   */
+  const recruitCap =
+    s.config.aiRecruitCap === 'auto'
+      ? Math.max(budget.maxRecruit, productionCapacity(view, me))
+      : typeof s.config.aiRecruitCap === 'number'
+        ? Math.max(0, s.config.aiRecruitCap)
+        : budget.maxRecruit;
   const mayRecruit = commander
     ? !idleHead && head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
-    : budget.recruited < budget.maxRecruit;
+    : budget.recruited < recruitCap;
   const mayUpgrade = commander ? head === ORDER_UPGRADE && budget.upgraded < 1 : budget.upgraded < budget.maxUpgrade;
 
   // 蛋还等着落位：先处理掉。不处理的话这一方会一直卡在"等你选蛋"上，

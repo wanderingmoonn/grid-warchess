@@ -143,6 +143,10 @@ const ERA_MODEL: 'const' | 'foe' | undefined =
 const NO_CROSSING = has('no-crossing');
 /** `--posture`：打开 v3 的战略姿态（2 维权重，默认关） */
 const POSTURE = has('posture');
+/** `--recruit-cap auto|N`：放开每回合产兵名额（默认仍是 2） */
+const RECRUIT_CAP_ARG = argOf('recruit-cap', '');
+const RECRUIT_CAP: number | 'auto' | undefined =
+  RECRUIT_CAP_ARG === 'auto' ? 'auto' : RECRUIT_CAP_ARG === '' ? undefined : Number(RECRUIT_CAP_ARG);
 
 const REPLAY_PATH = argOf('replay', '');
 const REPLAY_SEED = argOf('replay-seed', '');
@@ -194,6 +198,7 @@ function playOne(
       ...(ERA_MODEL === undefined ? {} : { aiEraModel: ERA_MODEL }),
       ...(NO_CROSSING ? { aiCrossing: false } : {}),
       ...(POSTURE ? { aiPosture: true } : {}),
+      ...(RECRUIT_CAP === undefined ? {} : { aiRecruitCap: RECRUIT_CAP }),
     },
     seed,
   );

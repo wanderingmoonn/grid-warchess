@@ -1484,6 +1484,17 @@ export interface MatchConfig {
    */
   aiPosture?: boolean;
   /**
+   * 每回合产兵名额（v3 专用）。不写 = 用调用方给的预算（默认 2）。
+   *
+   *   · `'auto'` = 按"产兵点周围的空格数"放开（`productionCapacity`）
+   *   · 数字     = 固定值
+   *
+   * 规则层**不限制**每回合造几个：限制只有钱和空格子。原来那个 2 是
+   * `DEFAULT_BUDGET.maxRecruit`，最初的提交里没有写任何理由，
+   * 和编制上限 24 一样是 AI 自己戴的帽子。
+   */
+  aiRecruitCap?: number | 'auto';
+  /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
    *

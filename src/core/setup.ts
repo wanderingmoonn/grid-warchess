@@ -764,6 +764,11 @@ export function createMatch(
         : {}),
       ...(config.aiCrossing === false ? { aiCrossing: false } : {}),
       ...(config.aiPosture === true ? { aiPosture: true } : {}),
+      ...(config.aiRecruitCap === 'auto'
+        ? { aiRecruitCap: 'auto' as const }
+        : typeof config.aiRecruitCap === 'number' && config.aiRecruitCap >= 0
+          ? { aiRecruitCap: config.aiRecruitCap }
+          : {}),
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。
