@@ -34,6 +34,7 @@ import { drainDamageLedger, startDamageLedger } from '../src/core/rules.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import {
   applyAction,
+  citiesOf,
   cityTiles,
   effectiveStats,
   reachableTiles,
@@ -73,7 +74,8 @@ import { EARTH } from '../src/core/board.ts';
 import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
-import type { Unit } from '../src/core/types.ts';
+import type { GameState, Unit } from '../src/core/types.ts';
+import { LEVELS } from '../src/core/level.ts';
 
 const result = await build({
   entryPoints: ['src/main.ts'],
@@ -1371,46 +1373,54 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
 });
 
-check('侧栏：没有回合收入的模式写「0 金」，不写「免费」', () => {
+check('侧栏：没有回合收入时写「0 金」，不写「免费」（关卡模式「护送」这种无城局）', () => {
   /*
-   * 肉鸽/挑战模式整局 `config.noIncome === true`，`incomeResOf` 直接返回空表。
-   * 资源条那一格以前套的是 `costLabel`——那是给**价格**写的格式化函数，
-   * 空表返回「免费」（"这东西不花钱"）。套到收入上就成了"每回合白拿钱"，
-   * 和事实正好相反：没有城也没有经济单位，本就该是 0。
+   * 用户 2026-11-21 报的是**关卡模式**的截图：守 30 次行动那种关，打到第 28 次
+   * 「控制城市 0 座」，资源条那一格印着「每回合收入 免费」。
+   *
+   * 链路：`incomeResOf` 只留正数项（`cleanCost`），没有城、经济单位又不产金时
+   * 整张表是空的；而那一格套的是 `costLabel`——给**价格**写的格式化函数，
+   * 空表兜底返回「免费」（"这东西不花钱"）。收入空表说的是"一分都收不到"，
+   * 两者正好相反。
+   *
+   * 用真实关卡「护送」（唯一一张 A 方从头就没有城的关）做 fixture，
+   * 别拿手改过的局面糊弄——那样哪天关卡数据变了，这条也不知道。
    */
-  const host = doc.createElement('div');
-  const st = createMatch(
-    { ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [], noIncome: true },
-    818,
-  );
-  renderPanel(host, {
-    view: playerView(st, 'A'),
-    me: 'A',
-    selectedUnit: null,
-    selectedCityId: null,
-    selectedCampId: null,
-    selectedTile: null,
-  });
-  const strip = host.querySelector('.battle-resources');
-  assert.ok(strip, '资源条该在');
-  const cell = strip!.children[1] as HTMLElement;
+  const lv = LEVELS.find((l) => l.id === 'level:escort');
+  assert.ok(lv, '关卡「护送」还在');
+  const render = (st: GameState) => {
+    const el = doc.createElement('div');
+    renderPanel(el, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    return (el.querySelector('.battle-resources')!.children[1] as HTMLElement);
+  };
+
+  const st = createMatch({ ...DEFAULT_CONFIG, level: lv! }, 818);
+  assert.equal(citiesOf(st, 'A').length, 0, '这张关 A 方本来就没有城');
+  const cell = render(st);
   assert.ok((cell.textContent ?? '').includes('每回合收入'), '第二格是每回合收入');
   assert.match(cell.textContent ?? '', /0 金/, '没有收入时该写 0 金');
   assert.ok(!(cell.textContent ?? '').includes('免费'), '不能把"没有收入"写成"免费"');
-  assert.equal(cell.getAttribute('title') !== null, true, '这个模式要说明"金币只能从战果拿"');
+  assert.match(cell.getAttribute('title') ?? '', /没有城就没有回合产出/, '格子上要说明为什么是 0');
+
+  // 肉鸽整局 noIncome：同一张空表，措辞不同（不是"没城"，是"这个模式不产"）
+  const rogue = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [], noIncome: true },
+    818,
+  );
+  const rogueCell = render(rogue);
+  assert.match(rogueCell.textContent ?? '', /0 金/, '肉鸽同样写 0 金');
+  assert.match(rogueCell.getAttribute('title') ?? '', /这个模式没有回合收入/, '肉鸽要说清是模式本身不产金');
 
   // 普通局照常写数字：别为这条把有收入的局也写成 0
-  const host2 = doc.createElement('div');
   const normal = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 819);
-  renderPanel(host2, {
-    view: playerView(normal, 'A'),
-    me: 'A',
-    selectedUnit: null,
-    selectedCityId: null,
-    selectedCampId: null,
-    selectedTile: null,
-  });
-  const txt = (host2.querySelector('.battle-resources')!.children[1] as HTMLElement).textContent ?? '';
+  const txt = render(normal).textContent ?? '';
   assert.ok(!txt.includes('0 金'), `有城的局收入不该是 0（实际 ${txt}）`);
 });
 

@@ -397,14 +397,19 @@ function panelFold(key: string, title: string, body: string, forceOpen = false, 
  * 「每回合收入」的文案。
  *
  * **不能套 `costLabel`**：那个函数是给**价格**写的，空表返回「免费」——
- * 语义是"这东西不花钱"，是价格的描述。收入为空时套上去变成"每回合白拿钱"，
- * 而事实正相反：肉鸽模式整局 `config.noIncome`（见 `incomeResOf`），
- * 金币只能从战果拿；普通对局里"城全丢光 + 没有经济单位"也是 0。
- * 两种情况的正确读法都是「0 金」，不是「免费」（2026-11-21）。
+ * 它描述的是"这东西不花钱"。收入是另一回事，空表说的是"一分都收不到"。
+ *
+ * 空表在两种场合是真的：
+ *   1. **关卡模式**（`config.level`）里守 N 次行动那类关：一方可能从头就没有城
+ *      （"你只有几个兵"），也可能打到中途城被打光了——`incomeResOf` 只有
+ *      `cleanCost` 之后的正数项，`gold: 0` 会被剥掉，于是整张表是空的；
+ *   2. 肉鸽整局 `config.noIncome`，一进门就 `return {}`（金币只从战果来）。
+ *
+ * 两种都该读作「0 金」（2026-11-21，用户报的是关卡模式那张截图）。
  */
 function incomeTextOf(s: GameState, p: PlayerId): string {
   const income = incomeResOf(s, p);
-  // 判"有没有正数"而不是判表空：noIncome 直接返回 {}，而普通局至少会有 gold: 0
+  // 判"有没有正数"而不是判表空：普通局至少会有 gold: 0，noIncome 直接给 {}
   const any = Object.values(income).some((n) => (n ?? 0) > 0);
   return any ? costLabel(income) : '0 金';
 }
@@ -460,6 +465,20 @@ function panelHtml(input: PanelInput): string {
   /** 只看不给动：观战位、已退出、城全丢光、指挥官模式都算，后面所有 `mine` 都挂在它上面 */
   const readOnly = spectator || quit || lostAll || input.commander === true;
   const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
+
+  /*
+   * 收入为 0 时给资源条那一格挂一句解释。
+   *
+   * 关卡模式里"没有城"是常态（守 N 次行动那类：开局只有几个兵，或者城打到一半丢了），
+   * 玩家看到「0 金」第一反应是"界面坏了"——2026-11-16 删掉每回合底薪之后，
+   * 没有城真的一分钱都不来，这件事得写在格子上，不能只写在规则书里。
+   */
+  const myIncome = incomeResOf(s, me);
+  const noIncomeNote = Object.values(myIncome).some((n) => (n ?? 0) > 0)
+    ? ''
+    : s.config.noIncome
+      ? ' title="这个模式没有回合收入：金币只能从战果拿"'
+      : ' title="没有城就没有回合产出（底薪已取消）：金币只能从战果拿"';
 
 
   /*
@@ -561,7 +580,7 @@ function panelHtml(input: PanelInput): string {
       </div>
       ${!spectator ? `<div class="battle-resources" aria-label="本方资源概览">
         <div><span>可用金币</span><strong>${s.players[me].gold}</strong></div>
-        <div${s.config.noIncome ? ' title="这个模式没有回合收入：金币只能从战果拿"' : ''}><span>每回合收入</span><b>${escapeHtml(incomeTextOf(s, me))}</b></div>
+        <div${noIncomeNote}><span>每回合收入</span><b>${escapeHtml(incomeTextOf(s, me))}</b></div>
         <div><span>控制城市</span><b>${citiesOf(s, me).length}<small> 座</small></b></div>
       </div>` : ''}
       ${!spectator ? `<div class="battle-extra-resources">${Object.entries(s.players[me].res ?? {})
