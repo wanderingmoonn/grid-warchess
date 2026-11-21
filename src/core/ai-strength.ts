@@ -27,6 +27,8 @@
  * 这些都不是"漏了"，是刻意留的：先把量级跑通，再按实测补。
  * 见 `docs/PLAN-AI-V3-2026-11-21.md` 的 S4 与第二十节。
  */
+import { solvePower } from './power-solver.ts';
+import type { PowerEcon, PowerInput, PowerPlan, PowerUnit } from './power-solver.ts';
 import { isProducer } from './produce.ts';
 import { incomeOf, recruitSpawnCells } from './rules.ts';
 import {
@@ -204,4 +206,57 @@ export function powerPerTurn(s: GameState, me: PlayerId): number {
  */
 export function projectedStrength(s: GameState, me: PlayerId, turns: number): number {
   return armyStrength(s, me) + powerPerTurn(s, me) * Math.max(0, turns);
+}
+
+/* ---------------- 战力求解器的入口：从局面拼输入 ---------------- */
+
+/**
+ * 把局面翻译成求解器的输入。
+ *
+ * 只需要四样：手上多少钱、每回合收多少、每回合能出几个兵、以及"能买什么"。
+ * 兵的价格用金币造价（资源费忽略——求解器只看金，这是已知偏差），
+ * 战力用同一套 `unitPower`。
+ */
+export function powerInputOf(s: GameState, me: PlayerId): PowerInput {
+  const units: PowerUnit[] = [];
+  const econ: PowerEcon[] = [];
+  for (const d of Object.values(s.unitTypes)) {
+    const price = d.cost ?? 0;
+    if (price <= 0) continue;
+    if (d.category === 'combat' && d.domain !== 'water') {
+      units.push({ id: d.id, price, power: unitPower(d) });
+    } else if (d.category === 'economy') {
+      // 按平均地块估：`incomeByTerrain` 的最大值（乐观），没有就用面板 income
+      const tiles = Object.values(d.incomeByTerrain ?? {});
+      const inc = tiles.length > 0 ? Math.max(...tiles.map((v) => Number(v) || 0)) : d.income ?? 0;
+      if (inc > 0) econ.push({ id: d.id, price, income: inc });
+    }
+  }
+  const cities = s.cities.filter((c) => c.owner === me && !c.ruined).length;
+  const haveEcon = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'economy').length;
+  return {
+    gold: s.players[me].gold,
+    income: incomeOf(s, me),
+    slots: productionCapacity(s, me),
+    // 每城两个经济单位的惯例，减去已经有的
+    econRoom: Math.max(0, cities * 2 - haveEcon),
+    units,
+    econ,
+  };
+}
+
+/**
+ * 到第 `turns` 回合，这一席**最多**能攒出多少战力（含现有部队）。
+ *
+ * 和 `projectedStrength` 的区别：那个是"按现在的产能线性外推"，
+ * 这个是"按最优投法算"——它会自己决定什么时候停止投经济、转暴兵。
+ */
+export function solvedProjection(
+  s: GameState,
+  me: PlayerId,
+  turns: number,
+): { power: number; plan: PowerPlan } {
+  const base = armyStrength(s, me);
+  const plan = solvePower(powerInputOf(s, me), turns);
+  return { power: base + plan.power, plan };
 }

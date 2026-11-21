@@ -1,0 +1,148 @@
+/**
+ * 战力求解器：给定"每回合收入 / 产兵格子 / 能买什么"，
+ * 算**到第 T 回合最多能有多少战力**。
+ *
+ * ── 和 `solve-economy` 的分工 ────────────────────────────────
+ *
+ * `scripts/solve-economy.ts` 回答"最快几回合到第 N 代"（目标是**时代**）。
+ * 这里回答"到第 T 回合战力最大是多少"（目标是**战力**）。
+ * 两者共用同一套假设：收入逐回合到账、名额和格子有限、经济单位提升后续收入。
+ *
+ * 为什么战力需要单独求解：同样一袋钱，买 5 个民兵和 1 个坦克产出的战力不同，
+ * 而"先投经济再暴兵"的收益又取决于还剩多少回合。这三件事必须一起算，
+ * 拍一个"每回合能产多少战力"的常数是不够的（S4b 的 `powerPerTurn` 就是这么被
+ * 校准出来的：现状战力 50% 命中，产能投影 88%，但产能本身还是拍的）。
+ *
+ * ── 模型（刻意简单，能解释）────────────────────────────────────
+ *
+ *   · 每回合先收钱，再花名额买（先经济后兵，由 `econUntil` 决定投到第几回合）；
+ *   · 经济单位即时开始产出（不建模"走过去的一回合"，见文档里的已知偏差）；
+ *   · 兵买了就永久计入战力（不建模战损）；
+ *   · 时代是给定的，不建模升代——升代归"发展"计划，不在这里算两次。
+ *
+ * 搜索空间就是"投经济投到第几回合"（0~T），逐个模拟取最优。O(T²·名额)。
+ */
+
+export interface PowerUnit {
+  id: string;
+  price: number;
+  power: number;
+}
+
+export interface PowerEcon {
+  id: string;
+  price: number;
+  /** 每回合能多产多少金（按平均地块估） */
+  income: number;
+}
+
+export interface PowerInput {
+  gold: number;
+  /** 每回合金币收入 */
+  income: number;
+  /** 每回合能出几个兵（产兵格子数） */
+  slots: number;
+  /** 经济单位最多还能补几个（地形/建筑有限） */
+  econRoom: number;
+  units: PowerUnit[];
+  econ: PowerEcon[];
+}
+
+export interface PowerPlan {
+  /** 到第 T 回合的**增量**战力（不含现有部队） */
+  power: number;
+  /** 投经济投到第几回合（0 = 一上来就暴兵） */
+  econUntil: number;
+  /** 一共买了几个经济单位 */
+  econ: number;
+  /** 买了几件兵 */
+  units: number;
+  note: string;
+}
+
+/** 取"每金战力最高"的兵：线性无战损模型下，这就是最优选择 */
+function bestUnit(units: PowerUnit[]): PowerUnit | null {
+  let best: PowerUnit | null = null;
+  let bestEff = -1;
+  for (const u of units) {
+    if (u.price <= 0 || u.power <= 0) continue;
+    const eff = u.power / u.price;
+    if (eff > bestEff) {
+      bestEff = eff;
+      best = u;
+    }
+  }
+  return best;
+}
+
+/** 取"每金收入最高"的经济单位 */
+function bestEcon(list: PowerEcon[]): PowerEcon | null {
+  let best: PowerEcon | null = null;
+  let bestEff = -1;
+  for (const e of list) {
+    if (e.price <= 0 || e.income <= 0) continue;
+    const eff = e.income / e.price;
+    if (eff > bestEff) {
+      bestEff = eff;
+      best = e;
+    }
+  }
+  return best;
+}
+
+/**
+ * 一条固定策略：前 `econUntil` 回合优先补经济，之后全买兵。
+ *
+ * 每个名额的处理顺序：还有额度且有钱就买经济，否则买兵。
+ * 两个都买不起就空转（不借钱、不预支）。
+ */
+function simulate(input: PowerInput, turns: number, econUntil: number): PowerPlan {
+  const unit = bestUnit(input.units);
+  const econ = bestEcon(input.econ);
+  let gold = input.gold;
+  let income = input.income;
+  let power = 0;
+  let econCount = 0;
+  let unitCount = 0;
+
+  for (let t = 0; t < turns; t += 1) {
+    gold += income;
+    for (let slot = 0; slot < Math.max(0, input.slots); slot += 1) {
+      if (t < econUntil && econ && econCount < input.econRoom && gold >= econ.price) {
+        gold -= econ.price;
+        econCount += 1;
+        income += econ.income;
+        continue;
+      }
+      if (unit && gold >= unit.price) {
+        gold -= unit.price;
+        power += unit.power;
+        unitCount += 1;
+      }
+    }
+  }
+  return {
+    power,
+    econUntil,
+    econ: econCount,
+    units: unitCount,
+    note: econUntil === 0 ? '一上来就暴兵' : `先投经济 ${econUntil} 回合，再暴兵`,
+  };
+}
+
+/**
+ * 到第 `turns` 回合能攒出的最大增量战力。
+ *
+ * 返回里带"投经济投到第几回合"，是因为这个数本身就是决策：
+ * 人也是这么想的——"还能打几个回合？够不够回本？"
+ */
+export function solvePower(input: PowerInput, turns: number): PowerPlan {
+  const span = Math.max(0, Math.floor(turns));
+  if (span === 0) return { power: 0, econUntil: 0, econ: 0, units: 0, note: '不投了' };
+  let best: PowerPlan | null = null;
+  for (let k = 0; k <= span; k += 1) {
+    const p = simulate(input, span, k);
+    if (!best || p.power > best.power) best = p;
+  }
+  return best ?? { power: 0, econUntil: 0, econ: 0, units: 0, note: '无解' };
+}

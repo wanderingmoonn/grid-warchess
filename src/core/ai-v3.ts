@@ -150,7 +150,7 @@ import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
-import { armyStrength, powerPerTurn, productionCapacity } from './ai-strength.ts';
+import { armyStrength, powerPerTurn, productionCapacity, solvedProjection } from './ai-strength.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -1973,24 +1973,28 @@ function decisiveOf(
     ),
   );
 
-  const ratioNow = myPower / Math.max(1, foePower);
-  const ratioRate = myPerTurn / Math.max(1, foePerTurn);
+  /*
+   * 投影用**战力求解器**，不再拿"每回合产能"线性外推。
+   *
+   * 外推假设"一直在造兵"，而人会先投经济再暴兵——两者在 10 回合以上的
+   * 尺度上差得很多（求解器会自己挑"投到第几回合停止投资"）。
+   * 对面的输入用可见信息拼：看不见的钱/格子会低估它，这是刻意的保守。
+   */
+  const horizon = Math.max(12, Math.min(40, marchTurns * 2));
+  const myProj = solvedProjection(view, me, horizon).power;
+  const foeSeat = [...new Set(view.cities.filter((c) => c.owner !== me).map((c) => c.owner))][0];
+  const foeProj = foeSeat ? solvedProjection(view, foeSeat, horizon).power : foePower;
+  const ratioNow = myProj / Math.max(1, foeProj);
 
   if (ratioNow >= 1.15 && marchTurns <= 14) {
     return {
       marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'attack',
-      why: `现在能打：战力比 ${ratioNow.toFixed(2)}、行军 ${marchTurns} 回合`,
-    };
-  }
-  if (ratioRate > ratioNow * 1.05) {
-    return {
-      marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'develop',
-      why: `越等越强：产能比 ${ratioRate.toFixed(2)} > 现状比 ${ratioNow.toFixed(2)}`,
+      why: `现在能打：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）、行军 ${marchTurns} 回合`,
     };
   }
   return {
-    marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'hold',
-    why: `打不动也等不来：现状比 ${ratioNow.toFixed(2)}、产能比 ${ratioRate.toFixed(2)}`,
+    marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'develop',
+    why: `越等越强：投影比 ${ratioNow.toFixed(2)}（${horizon} 回合后）还不够打`,
   };
 }
 
