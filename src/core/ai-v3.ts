@@ -1785,6 +1785,16 @@ interface Fields {
   /** 编队缺口：还在收拢的编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
   squadNeed: number;
   /**
+   * 发展意愿 y（0~1，来自战略层 `postureBudgetOf`）。
+   *
+   * 2026-11-21 之前它**算出来没人用**：战略层说"该发展"，采购照样把 97% 的钱
+   * 砸进军队（实测一局 4312 : 115）。现在接进采购：经济单位的分数和目标数量
+   * 都按它放大（见 `recruitCandidate` 的 `econWeight`）。
+   */
+  developBias: number;
+  /** 最近的自家城：编队打仗时，没编队的散兵回这里守（见走位的 objective） */
+  homeCityId: string | null;
+  /**
    * 编队成员 → 队形信息（目标城、自己到目标、全队最前/最后、允许的密集度）。
    *
    * 用它替代老的"协同前进"（`aheadOfLine` 比全局战线）：队形该多紧由**编队**定，
@@ -2544,8 +2554,14 @@ function stallOf(c: PlanCtx): { turns: number; median: number } {
  * 迷雾下的守军看不见，会估成 0 → 挑它。这是必然的（现在没有侦察），
  * 但方向不算错：看不见的地方通常就是没被重点守的地方。
  */
-function softestCityOf(view: GameState, me: PlayerId): { id: string; guard: number } | null {
-  const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
+function softestCityOf(
+  view: GameState,
+  me: PlayerId,
+  /** 排除这一座（"打了很久还没下"的那座）。只剩一座时排除无效 */
+  excludeId?: string | null,
+): { id: string; guard: number } | null {
+  let foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
+  if (excludeId && foes.length > 1) foes = foes.filter((c) => c.id !== excludeId);
   if (foes.length === 0) return null;
   const guards = enemyUnitsOf(view, me);
   let best: { id: string; guard: number } | null = null;
@@ -2601,9 +2617,16 @@ const BREAKTHROUGH_PLAN: RankedPlan = {
       prev !== undefined &&
       c.view.cities.some((x) => x.id === prev && x.owner !== c.me && !x.ruined) &&
       c.view.turn - prevAt < PLAN_TUNING.breakStickTurns;
-    const soft = softestCityOf(c.view, c.me);
+    /*
+     * 绕路的**触发点**：目标城粘满 `breakStickTurns` 还没打下来，就把它排除掉重选。
+     *
+     * 不加这一条，"守军相当时永远挑第一座"会让换城永不发生——绕路等于没实现
+     * （2026-11-21 用户在回放里确认过：Q2/Q3 两局从头到尾打同一座城）。
+     */
+    const stuck = prevAlive && c.view.turn - prevAt >= PLAN_TUNING.breakStickTurns;
+    const soft = softestCityOf(c.view, c.me, stuck ? prev : null);
     if (!soft) return {};
-    const target = prevAlive ? prev! : soft.id;
+    const target = prevAlive && !stuck ? prev! : soft.id;
     if (!prevAlive) {
       c.keep.breakCity = target;
       c.keep.breakAt = c.view.turn;
@@ -3118,9 +3141,23 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
    */
   // 编队成员朝**编队的目标城**走（整队一个方向，所以不会散）；
   // 散兵（守家、经济护卫、新造出来还没编队的）仍按全局目标
+  /*
+   * 目标三档（2026-11-21 用户定的分工）：
+   *   1. 编队成员 → 编队的目标城（整队一个方向）；
+   *   2. 散兵（没编队的、新造的、掉队的）→ **回自家城守**；
+   *   3. 一支部队都没编成（编队被全歼）→ 退回全局目标，否则全军缩在家里等死。
+   *
+   * 为什么散兵不能跟着冲：实测两股人挤同一个窄口——编队在后面排队，
+   * 散兵在前面挨炮，路被塞满，谁也没过去。
+   */
+  const squadObjective = all.squadTarget.get(unit.id) ?? null;
   const objective =
-    all.squadTarget.get(unit.id) ??
-    (all.flank.has(unit.id) && all.flankCityId ? all.flankCityId : all.focusCityId);
+    squadObjective ??
+    (all.squadTarget.size > 0 && all.homeCityId
+      ? all.homeCityId
+      : all.flank.has(unit.id) && all.flankCityId
+        ? all.flankCityId
+        : all.focusCityId);
   const before = advanceDistance(s,unit.owner,unit.x,unit.y,fields,objective,all.commit);
   const after = advanceDistance(s,unit.owner,x,y,fields,objective,all.commit);
   const progress = Number.isFinite(before) && Number.isFinite(after) ? before-after : 0;
@@ -7209,7 +7246,19 @@ function recruitCandidate(
   const cityCount = Math.max(1, citiesOf(s, me).length);
   // 弃城期把经济线的目标抬高：这一档赢在"三个回合之后我比你富一代"，
   // 所以它要的不是"够用的农民"，而是能把整座城的产线滚起来的人手。
-  const targetEarners = Math.min(10, cityCount * 2 + Math.round(3 * (mood?.driveRaw.boom ?? 0)) + (mood?.abandonedCityId ? 2 : 0));
+  /*
+   * 经济单位的目标数量：**跟着发展意愿走**（2026-11-21）。
+   *
+   * 以前固定"每城 2 个"，而战略层算出来的 `y` 根本没人读——于是"该发展阶段"
+   * 和"每城只两个农民"同时成立。现在 `econWeight`（含 y）也乘在这里，
+   * 想发展时目标翻倍、分数也放大，钱才会真的流向经济。
+   */
+  const targetEarners = Math.min(
+    12,
+    Math.round(cityCount * 2 * Math.max(1, econWeight)) +
+      Math.round(3 * (mood?.driveRaw.boom ?? 0)) +
+      (mood?.abandonedCityId ? 2 : 0),
+  );
 
   // 高级：看现在这支部队的"远程占比"，缺什么补什么。
   //
@@ -8465,6 +8514,11 @@ function aiNextActionCoreInner(
     squadTarget: squadTargetsOf(view, me),
     squadNeed: squadShortfallOf(view, me),
     squadInfo: squadInfoOf(view, me),
+    developBias: postureBudgetOf(view, me).y,
+    homeCityId:
+      citiesOf(view, me)
+        .filter((c) => !c.ruined)
+        .sort((a, b) => b.hp - a.hp)[0]?.id ?? null,
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,
@@ -8812,7 +8866,13 @@ function aiNextActionCoreInner(
         mood,
         seaDemandNow,
         undefined,
-        fields.weights.econ,
+        /*
+         * 经济权重 = 排序层给的 × 战略层的发展意愿。
+         *
+         * 1+3y 是量出来的：农民 payback ≈ 6.4 回合、基础分只有 24，
+         * 而战斗单位带质量项能到 100 上下——不放大到 2~3 倍，经济永远排不上。
+         */
+        fields.weights.econ * (1 + 3 * fields.developBias),
       );
       if (c) candidates.push(c);
     }
