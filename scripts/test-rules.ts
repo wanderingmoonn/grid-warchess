@@ -2025,6 +2025,40 @@ test('只能升级自己的城市', () => {
   assert.equal(applyAction(s, { type: 'UPGRADE', cityId: enemy.id }).ok, false);
 });
 
+test('废墟不能升级，接管之后才能升', () => {
+  /*
+   * 2026-11-21 用户报的：城被打成废墟之后还能点升级。
+   *
+   * `ruined` 这一位本来就管着"不产出""不能产兵"两件事（见 `incomeResOf` /
+   * recruit 的闸门），唯独漏了升级——花几百金把石头堆升到最高时代，
+   * `city.era`、耐久、护甲全都涨，产出还是 0。
+   * 复活它的唯一路径是派陆军走进城里接管（`moveInto` 里 `ruined = false`）。
+   */
+  const s = fresh();
+  const city = citiesOf(s, 'A')[0];
+  assert.ok(city);
+  s.players.A.gold = 99999;
+  const gold0 = s.players.A.gold;
+  const era0 = city.era;
+  const maxHp0 = city.maxHp;
+
+  city.ruined = true;
+  const denied = applyAction(s, { type: 'UPGRADE', cityId: city.id });
+  assert.equal(denied.ok, false, '废墟不能被升级');
+  assert.ok(
+    denied.ok ? false : denied.reason.includes('废墟'),
+    `理由要说清是废墟：${denied.ok ? '' : denied.reason}`,
+  );
+  assert.equal(s.players.A.gold, gold0, '被拒时一个金币都不许扣');
+  assert.equal(city.era, era0, '时代不能变');
+  assert.equal(city.maxHp, maxHp0, '耐久不能变');
+
+  // 接管之后（`ruined` 被清掉）又能正常升级
+  city.ruined = false;
+  const granted = applyAction(s, { type: 'UPGRADE', cityId: city.id });
+  assert.equal(granted.ok, true, `接管后应该能升级：${granted.ok ? '' : granted.reason}`);
+});
+
 test('城市收入随时代提高', () => {
   const base = fresh();
   const buffed = fresh();

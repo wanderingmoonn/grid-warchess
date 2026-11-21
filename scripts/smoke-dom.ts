@@ -1424,6 +1424,34 @@ check('侧栏：没有回合收入时写「0 金」，不写「免费」（关�
   assert.ok(!txt.includes('0 金'), `有城的局收入不该是 0（实际 ${txt}）`);
 });
 
+check('城市详情：废墟不显示升级按钮，写明"先派兵接管"', () => {
+  /*
+   * 2026-11-21 用户报：城被打成废墟之后还能点升级。规则层已加闸门
+   * （`doUpgrade` 拒绝并说明理由），这条钉界面这一半——
+   * 别让人先点一次、被拒一次才知道，也别让面板继续写"本城收入 40 金"。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 823);
+  const city = citiesOf(st, 'A')[0];
+  assert.ok(city, '标准局 A 方应该有城');
+  st.players.A.gold = 9999;
+  city.ruined = true;
+
+  const el = doc.createElement('div');
+  renderPanel(el, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const html = el.innerHTML;
+  assert.equal(el.querySelector('[data-act="upgrade"]'), null, '废墟上不该有升级按钮');
+  assert.ok(html.includes('已成废墟'), '要说清它现在是废墟');
+  assert.ok(html.includes('接管'), '要给出路：派陆军走进去接管');
+  assert.ok(html.includes('0 金'), '本城收入该写 0 金，不能还写着时代基础收入');
+});
+
 check('装配坞：每件装备写着数据与耗电，插槽与电力收支都看得见', () => {
   /*
    * 用户 2026-11-10 的诉求：装配坞以前每件只写"耗能 N"，装甲板/系统槽装了

@@ -6892,6 +6892,17 @@ function doUpgrade(s: GameState, cityId: string): ActionResult {
   const city = cityById(s, cityId);
   if (!city) return { ok: false, reason: '城市不存在' };
   if (city.owner !== s.current) return { ok: false, reason: '只能升级自己的城市' };
+  /*
+   * 废墟不能升级（2026-11-21 用户报）。
+   *
+   * 城被打成废墟之后，`ruined` 这一位同时管着三条：不产出（`incomeResOf` 跳过它）、
+   * 不能产兵（recruit 那边已有闸门）、也不能作为升级的对象。漏掉最后一条时，
+   * 玩家可以花几百金把一堆石头升到最高时代——`city.era` 变了、耐久和护甲也涨了，
+   * 但一分钱产出都没有，等于钱花了什么都没换到。
+   *
+   * 复活它的路只有一条：派陆军走进城里接管（`moveInto` 里 `destCity.ruined = false`）。
+   */
+  if (city.ruined) return { ok: false, reason: '这座城市已成废墟，先派兵入驻接管，再升级' };
 
   const target = upgradeTargetOf(s, city);
   const cost = target ? target.cost : null;

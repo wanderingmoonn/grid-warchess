@@ -6458,6 +6458,9 @@ function swapOutCandidate(
 
 function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
+  // 废墟不能升级（规则层也拦，见 doUpgrade）：这里先剔掉，免得 AI 把一次决策
+  // 花在一个必被拒绝的动作上——跑批时被拒动作要顺延，等于白丢一步。
+  if (city.ruined) return null;
   const cost = upgradeCostOf(s, city);
   if (cost === null) return null;
   const gold = s.players[s.current].gold;

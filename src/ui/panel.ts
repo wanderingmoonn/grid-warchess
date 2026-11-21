@@ -1886,11 +1886,21 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座城')
       : grouped;
 
+  /*
+   * 废墟：能点开、能看，但**不能升级**。
+   *
+   * 2026-11-21 用户报的就是这个：城被打成废墟之后，升级按钮还在，点下去钱照扣、
+   * `city.era` 照涨，可这座城一分钱产出都没有（`incomeResOf` 跳过 `ruined`）——
+   * 等于花钱把石头堆升了个时代。规则层已经拦住了（见 `doUpgrade`），
+   * 这里把按钮换成一句话，别让人先花一次点击才知道。
+   */
   const upgradeBlock =
-    mine && nextEra && upgradeCost !== null
-      ? `<button class="upgrade-btn" data-act="${ordering ? 'order-add' : 'upgrade'}"${
-          ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
-        } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
+    mine && city.ruined
+      ? '<div class="hint">这座城市已成废墟：先派一支陆军走进去接管，接管之后才能升级。</div>'
+      : mine && nextEra && upgradeCost !== null
+        ? `<button class="upgrade-btn" data-act="${ordering ? 'order-add' : 'upgrade'}"${
+            ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
+          } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
            <span class="upgrade-main">
              <b>升级到「${nextEra.name}」</b>
              <span>耐久 ${city.maxHp} → ${nextEra.cityMaxHp} · 护甲 ${city.armor} → ${nextEra.cityArmor} · 收入 ${era.cityIncome} → ${nextEra.cityIncome}</span>
@@ -1898,23 +1908,23 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
            <span class="price">${upgradeCost}</span>
            ${ordering ? '<span class="order-tag">＋队列</span>' : ''}
          </button>`
-      : mine
-        ? '<div class="hint">已经是最高时代。</div>'
-        : '';
+        : mine
+          ? '<div class="hint">已经是最高时代。</div>'
+          : '';
 
   return `
     <div class="unit-head">
       <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
       <div>
         <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}</div>
+        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}${city.ruined ? ' · <b>废墟</b>' : ''}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="stat-grid">
       <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
       <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-      <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
+      <div class="info-row"><span>本城收入</span><b>${city.ruined ? '0 金 <small>（废墟不产出）</small>' : `${era.cityIncome} 金`}</b></div>
       ${
         /*
          * 本方总收入单独一行，且只在**自己的城**上显示。
