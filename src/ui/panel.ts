@@ -159,7 +159,9 @@ export interface PanelInput {
    */
   forceMode?: 'move' | 'attack' | null;
   combatInspectMode?: boolean;
+  combatDirectPreview?: boolean;
   combatTargetCount?: number;
+  battleStatusInHeader?: boolean;
   /**
    * 「操作」说明卡是不是展开着。
    *
@@ -414,6 +416,43 @@ function incomeTextOf(s: GameState, p: PlayerId): string {
   return any ? costLabel(income) : '0 金';
 }
 
+function incomeNoteOf(s: GameState, income: string): string {
+  if (income !== '0 金') return '';
+  return s.config.noIncome
+    ? '这个模式没有回合收入：金币只能从战果拿'
+    : '没有城就没有回合产出（底薪已取消）：金币只能从战果拿';
+}
+
+export function battleStatusShell(): string {
+  return `<div class="battle-status-amounts" role="group" aria-label="本方资源">
+    <div class="battle-status-stat"><span>金币</span><b data-ref="battle-gold"></b></div>
+    <div class="battle-status-stat" data-ref="battle-income-stat"><span>每回合</span><b data-ref="battle-income"></b></div>
+  </div>
+  <button type="button" class="btn btn-sm" data-ref="battle-undo" aria-label="撤回一步" title="撤回一步，仅本回合" disabled>撤回</button>`;
+}
+
+export function updateBattleStatus(root: HTMLElement, s: GameState, me: PlayerId | null, canUndo: boolean): void {
+  root.hidden = me === null;
+  const undo = root.querySelector<HTMLButtonElement>('[data-ref="battle-undo"]')!;
+  if (me === null) {
+    delete undo.dataset.act;
+    undo.disabled = true;
+    return;
+  }
+  const income = incomeTextOf(s, me);
+  const goldEl = root.querySelector<HTMLElement>('[data-ref="battle-gold"]')!;
+  const incomeEl = root.querySelector<HTMLElement>('[data-ref="battle-income"]')!;
+  const incomeStat = root.querySelector<HTMLElement>('[data-ref="battle-income-stat"]')!;
+  const gold = String(s.players[me].gold);
+  const note = incomeNoteOf(s, income);
+  const displayedIncome = note ? income : `+${income}`;
+  if (goldEl.textContent !== gold) goldEl.textContent = gold;
+  if (incomeEl.textContent !== displayedIncome) incomeEl.textContent = displayedIncome;
+  if (incomeStat.title !== note) incomeStat.title = note;
+  if (undo.dataset.act !== 'undo') undo.dataset.act = 'undo';
+  if (undo.disabled === canUndo) undo.disabled = !canUndo;
+}
+
 function panelHtml(input: PanelInput): string {
   const { view, me } = input;
   const s = view.state;
@@ -466,20 +505,8 @@ function panelHtml(input: PanelInput): string {
   const readOnly = spectator || quit || lostAll || input.commander === true;
   const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
 
-  /*
-   * 收入为 0 时给资源条那一格挂一句解释。
-   *
-   * 关卡模式里"没有城"是常态（守 N 次行动那类：开局只有几个兵，或者城打到一半丢了），
-   * 玩家看到「0 金」第一反应是"界面坏了"——2026-11-16 删掉每回合底薪之后，
-   * 没有城真的一分钱都不来，这件事得写在格子上，不能只写在规则书里。
-   */
-  const myIncome = incomeResOf(s, me);
-  const noIncomeNote = Object.values(myIncome).some((n) => (n ?? 0) > 0)
-    ? ''
-    : s.config.noIncome
-      ? ' title="这个模式没有回合收入：金币只能从战果拿"'
-      : ' title="没有城就没有回合产出（底薪已取消）：金币只能从战果拿"';
-
+  const sideIncome = !spectator && !input.battleStatusInHeader ? incomeTextOf(s, me) : null;
+  const noIncomeNote = sideIncome === null ? '' : incomeNoteOf(s, sideIncome);
 
   /*
    * 终局那一格写"谁赢了"，不再只写"对局结束"。
@@ -578,9 +605,9 @@ function panelHtml(input: PanelInput): string {
       <div class="battle-turn">
         ${turnBadge}
       </div>
-      ${!spectator ? `<div class="battle-resources" aria-label="本方资源概览">
+      ${sideIncome !== null ? `<div class="battle-resources" aria-label="本方资源概览">
         <div><span>可用金币</span><strong>${s.players[me].gold}</strong></div>
-        <div${noIncomeNote}><span>每回合收入</span><b>${escapeHtml(incomeTextOf(s, me))}</b></div>
+        <div${noIncomeNote ? ` title="${noIncomeNote}"` : ''}><span>每回合收入</span><b>${escapeHtml(sideIncome)}</b></div>
         <div><span>控制城市</span><b>${citiesOf(s, me).length}<small> 座</small></b></div>
       </div>` : ''}
       ${!spectator ? `<div class="battle-extra-resources">${Object.entries(s.players[me].res ?? {})
@@ -588,14 +615,10 @@ function panelHtml(input: PanelInput): string {
         .map(([resource, amount]) => `<span>${escapeHtml(costLabel({ [resource]: amount }))}</span>`).join('')}</div>` : ''}
       ${
         /*
-         * 撤回放在这里，不放在「结束回合」下面。
-         *
-         * 两颗按钮原来上下紧挨着（结束回合是整行长按钮，撤回就在它正下方），
-         * 而它们一个是"这一回合我走完了"、一个是"把最后一步退回来"——
-         * 手一抖点错，代价是一次回合交接。挪到顶部信息卡，"结束回合"下面
-         * 只剩「认输」和「音效」，中间还隔着一行提示。
+         * 经典布局的撤回仍在信息卡里，和结束行动分开。
+         * 新版由顶栏提供撤回，关闭详情时也能点到。
          */
-        input.replay
+        input.replay || input.battleStatusInHeader
           ? ''
           : `<div class="undo-row">
                <button class="btn btn-sm" data-act="undo" ${
@@ -1465,7 +1488,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       </div>
       <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
       ${mine && myTurn && input.combatInspectMode ? '<p class="unit-next-action">选择红框目标</p>' : ''}
-      ${mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
+      ${!input.combatDirectPreview && mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
         aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
         ${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</button>` : ''}
       ${

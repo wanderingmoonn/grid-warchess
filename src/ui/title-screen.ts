@@ -5,8 +5,7 @@
  * 没有"我是谁、我要干什么"，右上角一排小按钮长得像调试面板。新玩家（包括
  * 隔几天回来的人）第一件要判断的事是"这是什么游戏"，而旧流程从来没回答过。
  *
- * 这一页只干三件事：认出门面（标题 + 一句话）、给出唯一的下一步（开始对局）、
- * 把其余入口（继续 / 联机 / 规则 / 公告）降级成一行小链接。
+ * 首页提供教程和新对局。有存档时，战场预览也用于继续对局，联机和规则手册放在辅助入口。
  *
  * 故意不做的：
  *   · 不放背景图 / 不做视差——这是一个靠规则吃饭的战棋，花哨的首屏只会
@@ -89,6 +88,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   const doc = host.ownerDocument;
   const layer = doc.createElement('div');
   layer.className = 'title-screen';
+  const preview = opts.hasSave && opts.preview ? titleMatchPreview(opts.preview) : '';
   layer.innerHTML = `
     <button class="title-ui-toggle btn btn-sm" data-title="ui-layout"></button>
     <div class="title-bg" aria-hidden="true">${Array.from({ length: 48 }, (_, i) => {
@@ -105,7 +105,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         ${(() => {
           const tut = '<button class="title-btn" data-title="tutorial">新手教程</button>';
           const neu = '<button class="title-btn" data-title="new">开始对局</button>';
-          const cont = `<button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>`;
+          const cont = `<button type="button" class="title-btn title-resume-fallback" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>`;
           // 第一次来：教程当主按钮、排第一；老玩家：开始对局在主位，教程退第二
           return opts.firstVisit
             ? tut.replace('class="title-btn"', 'class="title-btn primary"') + neu + cont
@@ -132,7 +132,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
       </div>
-      ${(opts.preview && titleMatchPreview(opts.preview)) || titleSandtable()}
+      ${preview || titleSandtable()}
       <p class="title-foot">v${opts.version}</p>
     </div>
   `;
@@ -150,11 +150,21 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
     if (e.key === 'Escape' && opts.hasSave) close();
   };
   const win = doc.defaultView ?? window;
+  const resumeCard = layer.querySelector<HTMLButtonElement>('.title-resume');
+  const resumeFallback = layer.querySelector<HTMLButtonElement>('.title-resume-fallback')!;
   const syncLayout = (): void => {
     const classic = currentUiLayout(doc.documentElement) === 'classic';
     const button = layer.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
     button.textContent = classic ? '恢复新版 UI' : '回滚到经典 UI';
     button.setAttribute('aria-pressed', String(classic));
+    if (resumeCard) {
+      resumeCard.hidden = classic;
+      if (classic) delete resumeCard.dataset.title;
+      else resumeCard.dataset.title = 'continue';
+    }
+    resumeFallback.hidden = !classic && (!opts.hasSave || !!resumeCard);
+    if (resumeCard && !classic) delete resumeFallback.dataset.title;
+    else resumeFallback.dataset.title = 'continue';
   };
   syncLayout();
   win.addEventListener(UI_LAYOUT_EVENT, syncLayout);

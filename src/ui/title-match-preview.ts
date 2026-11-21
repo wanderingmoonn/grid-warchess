@@ -73,13 +73,18 @@ export function titleMatchPreview({ viewer, view }: TitleMatchPreview): string {
     if (def) marker(unit.x, unit.y, def.footprint === 2 ? 2 : 1, unit.owner, unitInsignia(unitRole(def)), 'hero-match-unit');
   }
 
-  return `<div class="title-visual" role="img" aria-label="上一局战场${cropped ? '局部' : ''}预览">
-    <div class="title-visual-head"><span>上一局</span>${cropped ? '<span>局部</span>' : ''}</div>
-    <div class="title-sandtable title-sandtable-match" style="--cols:${cols};--rows:${rows}">
-      <div class="title-match-board">
+  const turn = Number.isSafeInteger(s.turn) ? `第 ${s.turn} 回合` : '';
+  const details = [turn, cropped ? '局部' : ''].filter(Boolean).join(' · ');
+  return `<button type="button" class="title-visual title-resume" aria-label="继续上一局${turn ? `，${turn}` : ''}">
+    <span class="title-visual-head">
+      <strong>继续上一局 <span aria-hidden="true">→</span></strong>
+      ${details ? `<span>${details}</span>` : ''}
+    </span>
+    <span class="title-sandtable title-sandtable-match" role="img" aria-label="上一局战场${cropped ? '局部' : ''}预览" style="--cols:${cols};--rows:${rows}">
+      <span class="title-match-board">
         ${tiles.join('')}
-        <div class="title-match-markers">${markers.join('')}</div>
-      </div>
-    </div>
-  </div>`;
+        <span class="title-match-markers">${markers.join('')}</span>
+      </span>
+    </span>
+  </button>`;
 }

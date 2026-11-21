@@ -42,7 +42,7 @@ import {
   unitsOf,
   unitYieldAt,
 } from '../src/core/rules.ts';
-import { renderPanel, topbarShell } from '../src/ui/panel.ts';
+import { battleStatusShell, renderPanel, topbarShell, updateBattleStatus } from '../src/ui/panel.ts';
 import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
 import { settingsHtml } from '../src/ui/settings.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
@@ -825,9 +825,11 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
   put(1, 0, 'deep');
   put(2, 0, 'water');
   put(3, 0, 'water');
+  put(4, 0, 'plain');
   // 第 1 行：深 浅（竖直方向）；(3,1) 固定成水域，别让生成的地形左右断言
   put(1, 1, 'shallow');
   put(3, 1, 'water');
+  put(4, 1, 'bridge');
 
   const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
@@ -869,6 +871,8 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
   assert.equal(tile(1, 0).getAttribute('data-wb'), 's', '深水挨浅流，下边该叠浅流色');
   // (3,0) 下面是水域：同档，不铺
   assert.equal(tile(3, 0).getAttribute('data-wb'), '0', '水域和水域不铺');
+  assert.equal(tile(3, 0).getAttribute('data-wr'), 'l', '陆地相邻的一侧画岸线');
+  assert.equal(tile(3, 1).getAttribute('data-wr'), '0', '桥面旁不画陆地岸线');
   host.remove();
 });
 
@@ -1408,6 +1412,11 @@ check('侧栏：没有回合收入时写「0 金」，不写「免费」（关�
   assert.match(cell.textContent ?? '', /0 金/, '没有收入时该写 0 金');
   assert.ok(!(cell.textContent ?? '').includes('免费'), '不能把"没有收入"写成"免费"');
   assert.match(cell.getAttribute('title') ?? '', /没有城就没有回合产出/, '格子上要说明为什么是 0');
+  const status = doc.createElement('div');
+  status.innerHTML = battleStatusShell();
+  updateBattleStatus(status, st, 'A', false);
+  assert.equal(status.querySelector('[data-ref="battle-income"]')?.textContent, '0 金');
+  assert.match(status.querySelector('[data-ref="battle-income-stat"]')?.getAttribute('title') ?? '', /没有城就没有回合产出/);
 
   // 肉鸽整局 noIncome：同一张空表，措辞不同（不是"没城"，是"这个模式不产"）
   const rogue = createMatch(
@@ -2848,12 +2857,13 @@ check('关掉迷雾后双方单位全部出现', () => {
   assert.equal(doc.querySelectorAll('.tile.out').length, 0, '关掉迷雾后不该再有暗格');
 });
 
-check('第一次来：首页的「继续上一局」是灰的（开机自动存档不算"打过"）', () => {
+check('第一次来：首页隐藏「继续上一局」（启动占位局不算打过）', () => {
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '启动就应该出首页');
   const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
   assert.ok(cont, '首页要有「继续上一局」');
   assert.equal(cont!.disabled, true, '第一次来没有可接着打的一局');
+  assert.equal(cont!.hidden, true);
 });
 
 console.log('\n开局设置');
@@ -4380,6 +4390,11 @@ await checkAsync('战役页：推荐开局在前，数据记录收进高级设�
   );
   const advanced = doc.querySelector<HTMLDetailsElement>('.start-advanced');
   assert.equal(advanced?.open, false, '高级设置默认收起');
+  assert.equal(blocks[2]?.getAttribute('aria-label'), '对手');
+  assert.equal(blocks[3]?.getAttribute('aria-label'), '起始时代');
+  for (const selector of ['[data-players]', '[data-size]', '[data-first]', '[data-act="reroll"]']) {
+    assert.ok(advanced?.querySelector(selector), `${selector} 应当在高级设置里`);
+  }
   assert.ok(advanced?.querySelector('[data-field="record"]'), '记录设置应当在高级设置里');
 
   // 勾上 → 取消 → 重新打开，应当还是勾着的
@@ -6617,7 +6632,7 @@ console.log('\n点敌人就是开火');
  * 属性卡不能被攻击抢走，反过来也不行：打不到的目标仍然只弹卡，
  * 所以这里同时验"能打到就开火"和"打不到就只看"。
  */
-check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）', () => {
+check('手操选中部队后点相邻敌人，打开确认并能正常攻击', () => {
   const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
   st.fog = false;
   st.current = 'A';
@@ -6663,6 +6678,9 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   const foeEl = d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`);
   assert.ok(foeEl, '敌人的兵没渲染出来——迷雾没关干净？');
   foeEl.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const confirm = d.querySelector<HTMLButtonElement>('#combat-preview:not([hidden]) [data-combat="confirm"]');
+  assert.ok(confirm, '点可攻击的敌人应该打开确认');
+  confirm.click();
 
   // 以落盘的存档为准：图被重绘过，捏着旧节点看不出有没有真打
   const after = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
@@ -6672,7 +6690,7 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   assert.ok(afterFoe, '敌人从盘上消失了');
   assert.ok(
     afterFoe.hp < hpBefore,
-    `点了相邻敌人却没掉血：${hpBefore} → ${afterFoe.hp}，说明攻击被属性卡抢了`,
+    `确认攻击后敌人应该掉血：${hpBefore} → ${afterFoe.hp}`,
   );
 });
 
@@ -10991,6 +11009,13 @@ for (const preset of [
       tap('[data-role="commander"]');
       assert.equal(fresh.document.querySelector<HTMLDetailsElement>('.start-advanced')?.open, true);
       tap(`[data-preset="${preset.id}"]`);
+      assert.equal(
+        fresh.document.querySelector('[data-preset][aria-current="true"]')?.getAttribute('data-preset'),
+        preset.id,
+      );
+      tap('[data-first="B"]');
+      assert.equal(fresh.document.querySelector('[data-preset][aria-current="true"]'), null);
+      tap(`[data-preset="${preset.id}"]`);
       tap('[data-act="start"]');
       await wait(30);
       const saved = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
@@ -11156,6 +11181,13 @@ check('触屏攻击：首次点击仅预览，确认后才结算并显示结果'
       element.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
     };
     tap('.unit[data-id="forecast-own"]');
+    const status = fresh.document.querySelector<HTMLElement>('#battle-status')!;
+    const undo = status.querySelector<HTMLButtonElement>('[data-act="undo"]')!;
+    assert.equal(status.hidden, false);
+    assert.equal(undo.disabled, true);
+    assert.equal(status.querySelector('[data-ref="battle-gold"]')?.textContent, String(st.players.A.gold));
+    assert.match(status.querySelector('[data-ref="battle-income"]')?.textContent ?? '', /^\+/);
+    assert.equal(fresh.document.querySelector('.battle-resources'), null);
     const foe = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
     const down = new fresh.MouseEvent('pointerdown', { bubbles: true, button: 0 });
     Object.defineProperty(down, 'pointerType', { value: 'touch' });
@@ -11165,20 +11197,29 @@ check('触屏攻击：首次点击仅预览，确认后才结算并显示结果'
     const preview = fresh.document.querySelector<HTMLElement>('#combat-preview')!;
     assert.equal(preview.hidden, false);
     assert.match(preview.textContent ?? '', /28 → 17/);
+    assert.equal(fresh.document.querySelector('#app')?.getAttribute('data-combat-confirm'), 'true');
+    assert.match(fresh.document.querySelector('.combat-cues[data-phase="preview"]')?.textContent ?? '', /−11.*本方 −6/);
     assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
     tap('[data-combat="confirm"]');
     assert.equal(preview.hidden, true);
     const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
     assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+    assert.equal(fresh.document.querySelector('#app')?.hasAttribute('data-combat-confirm'), false);
+    assert.match(fresh.document.querySelector('.combat-cues[data-phase="result"]')?.textContent ?? '', /−11.*本方 −6/);
     assert.equal(fresh.document.querySelector<HTMLElement>('#action-feedback')?.hidden, false);
     assert.match(fresh.document.querySelector('#action-feedback')?.textContent ?? '', /28 → 17/);
+    assert.equal(undo.disabled, false);
+    undo.click();
+    const restored = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(restored.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 28);
+    assert.equal(undo.disabled, true);
   } finally {
     fresh.close();
   }
 });
 
-check('鼠标交锋：悬停只预览，直接点击目标仍可执行攻击', () => {
-  const fresh = bootWith(combatFixture());
+check('经典 UI 鼠标交锋：悬停预览，直接点击目标执行攻击', () => {
+  const fresh = bootWith(combatFixture(), '?loadSave=1&layout=classic');
   try {
     const source = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!;
     source.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
@@ -11196,17 +11237,19 @@ check('鼠标交锋：悬停只预览，直接点击目标仍可执行攻击', (
   }
 });
 
-check('攻击预览模式：取消不会出手，移动后旧预览失效', () => {
+check('新版 UI 鼠标交锋：点目标进入确认，取消不出手，移动后旧预览失效', () => {
   const fresh = bootWith(combatFixture());
   try {
     const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
       .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
     tap('.unit[data-id="forecast-own"]');
-    tap('[data-act="combat-aim"]');
+    const before = fresh.localStorage.getItem('warchess:match:v1');
     tap('.unit[data-id="forecast-foe"]');
     assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
     tap('[data-combat="cancel"]');
     assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    assert.equal(fresh.document.querySelector('.combat-cues[data-phase="preview"]'), null);
     tap('.unit[data-id="forecast-foe"]');
     tap('.tile[data-x="4"][data-y="6"]');
     assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
@@ -11308,14 +11351,71 @@ check('首页沙盘：普通启动用已有存档画整张小地图，继续时�
   try {
     const home = fresh.document.querySelector('.title-screen')!;
     assert.ok(home.querySelector('[aria-label="上一局战场预览"]'));
+    const card = home.querySelector<HTMLButtonElement>('button.title-resume')!;
+    assert.match(card.getAttribute('aria-label') ?? '', /继续上一局.*回合/);
+    assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
+    const layoutSwitch = home.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
+    layoutSwitch.click();
+    assert.ok(card.hidden);
+    assert.ok(home.querySelector('.title-resume-fallback[data-title="continue"]:not([hidden])'));
+    layoutSwitch.click();
+    assert.equal(card.hidden, false);
+    assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
     assert.equal(home.querySelectorAll('.hero-match-tile').length, 144);
     assert.equal(home.querySelector('.hero-match-tile')?.getAttribute('data-terrain'), 'mountain');
     assert.equal(fresh.localStorage.getItem('warchess:match:v1'), JSON.stringify(st));
-    home.querySelector<HTMLButtonElement>('[data-title="continue"]')!.click();
+    home.querySelector<HTMLElement>('.hero-match-tile')!.click();
     assert.equal(fresh.document.querySelector('.title-screen'), null);
     assert.ok(fresh.document.querySelector('.tile.t-mountain[data-x="0"][data-y="0"]'));
   } finally {
     fresh.close();
+  }
+});
+
+check('续局视角：同一存档还原档位和地图中心，首页隐藏时保留已存视角', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 32 }, 20261123, {});
+  const fresh = bootWith(st, '');
+  try {
+    const savedCamera = { seed: st.seed, w: st.w, h: st.h, board: 'earth', zoom: 2, x: 0.62, y: 0.72 };
+    const key = 'warchess:match:v1:camera';
+    fresh.localStorage.setItem(key, JSON.stringify(savedCamera));
+    const { document } = fresh;
+    const wrap = document.querySelector<HTMLElement>('#board-wrap')!;
+    const scroll = document.querySelector<HTMLElement>('#board-scroll')!;
+    const board = document.querySelector<HTMLElement>('#board')!;
+    Object.defineProperty(wrap, 'offsetWidth', { value: 600 });
+    Object.defineProperties(scroll, { clientWidth: { value: 400 }, clientHeight: { value: 400 } });
+    Object.defineProperties(board, { offsetWidth: { value: 800 }, offsetHeight: { value: 800 } });
+    fresh.dispatchEvent(new fresh.Event('pagehide'));
+    assert.equal(fresh.localStorage.getItem(key), JSON.stringify(savedCamera));
+    document.querySelector<HTMLButtonElement>('.title-resume')!.click();
+    assert.equal(document.querySelector('[data-ref="zoom-fit"]')?.textContent, '2×');
+    assert.ok(Math.abs(scroll.scrollLeft - 296) < 1);
+    assert.ok(Math.abs(scroll.scrollTop - 376) < 1);
+    scroll.scrollLeft = 280;
+    const savedMatch = fresh.localStorage.getItem('warchess:match:v1');
+    fresh.dispatchEvent(new fresh.Event('pagehide'));
+    assert.equal(JSON.parse(fresh.localStorage.getItem(key)!).x, 0.6);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), savedMatch);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('续局视角：旧对局或已移除棋盘的记录不会影响续局', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 20261123, {});
+  for (const camera of [{ seed: st.seed + 1, board: 'earth' }, { seed: st.seed, board: 'removed' }]) {
+    const fresh = bootWith(st, '');
+    try {
+      fresh.localStorage.setItem('warchess:match:v1:camera', JSON.stringify({
+        ...camera, w: st.w, h: st.h, zoom: 3, x: 0.7, y: 0.8,
+      }));
+      fresh.document.querySelector<HTMLButtonElement>('.title-resume')!.click();
+      assert.ok(fresh.document.querySelector('#board:not(.zoomed)'));
+      assert.equal(fresh.document.querySelectorAll('.tile').length, 12 * 12);
+    } finally {
+      fresh.close();
+    }
   }
 });
 

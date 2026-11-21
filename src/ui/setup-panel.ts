@@ -58,6 +58,7 @@ import { toast } from './toast.ts';
 import { openLevelEditor } from './level-editor.ts';
 import { openLevelManager } from './level-manager.ts';
 import { mapThumbSvg } from './map-thumb.ts';
+import { currentUiLayout } from './layout.ts';
 import {
   BOARD_SIZES,
   DEFAULT_CONFIG,
@@ -344,7 +345,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     /** 把一颗按钮翻译回选择器，重绘之后靠它把键盘焦点还给同一个按钮 */
     const selectorFor = (el: HTMLElement): string | null => {
       const d = el.dataset;
+      if (d.preset) return `[data-preset="${d.preset}"]`;
       if (d.tab) return `[data-tab="${d.tab}"]`;
+      if (d.players) return `[data-players="${d.players}"]`;
+      if (d.twoCities) return '[data-two-cities]';
+      if (d.first) return `[data-first="${d.first}"]`;
       if (d.unit) return `[data-unit="${d.unit}"]`;
       if (d.era) return `[data-era="${d.era}"]`;
       if (d.size) return `[data-size="${d.size}"]`;
@@ -365,6 +370,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
      */
     let tab: 'battle' | 'levels' | 'editor' = 'battle';
     let advancedOpen = false;
+    let appliedPreset: { id: string; settings: string } | undefined;
+    const presetSettings = () => JSON.stringify({ ...config, recordDetail: undefined });
     /**
      * 关卡栏里两个可折叠分组（2026-11-18）：`true` = 展开。
      *
@@ -476,6 +483,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     };
 
     const paint = () => {
+      const classic = currentUiLayout(mask.ownerDocument.documentElement) === 'classic';
       autoFetchCloudLevels();
       advancedOpen = mask.querySelector<HTMLDetailsElement>('.start-advanced')?.open ?? advancedOpen;
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
@@ -642,6 +650,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 那一颗就一直亮着——看上去像"两档同时生效"。
        */
       const aiLevelOn = !netOn && !goalOn;
+      const aiHint = netOn
+        ? '全视野；适合青铜 10×10 / 12×12，<b>其它配置较弱</b>。'
+        : goalOn
+          ? '二代内核：会认领长期目标（补产业链、补资源缺口），战术层沿用高级的判断。'
+          : netAllowed
+            ? '初级熟悉规则 · 中级战术变化 · 高级精细决策'
+            : 'AI 按你的队列生产。';
+      const compact = !classic && !config.level;
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
             <button class="chip ${aiLevelOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
@@ -654,15 +670,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 : ''
             }
           </div>
-          <div class="field-hint">${
-            netOn
-              ? '全视野；适合青铜 10×10 / 12×12，<b>其它配置较弱</b>。'
-              : goalOn
-                ? '二代内核：会认领长期目标（补产业链、补资源缺口），战术层沿用高级的判断。'
-                : netAllowed
-                  ? '初级熟悉规则 · 中级战术变化 · 高级精细决策'
-                  : 'AI 按你的队列生产。'
-          }</div>`
+          ${!compact || !aiLevelOn || !netAllowed ? `<div class="field-hint">${aiHint}</div>` : ''}`
         : '';
 
       /*
@@ -870,36 +878,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
         return `这一关由电脑操作：${ai.map((p) => seatLabel[p] ?? p).join('、')}；其余席位是真人。`;
       })();
 
-      const battleViewFull = `
-            ${!levelOn ? `<section class="setup-presets" aria-label="推荐开局">
-              <div class="setup-section-head"><b>推荐开局</b><span>替换当前配置</span></div>
-              <div class="setup-preset-grid">
-                <button type="button" class="setup-preset" data-preset="learn"><b>入门人机</b><span>青铜 · 12 × 12 · 初级 AI</span></button>
-                <button type="button" class="setup-preset" data-preset="standard"><b>标准人机</b><span>铁器 · 16 × 16 · 中级 AI</span></button>
-                <button type="button" class="setup-preset" data-preset="hotseat"><b>本地双人</b><span>青铜 · 12 × 12 · 轮流操作</span></button>
-              </div>
-            </section>` : ''}
-            <section class="field">
-              <div class="field-label">
-                地图
-              </div>
-              <div class="start-map-row">
-                <span class="start-map-thumb">${
-                  config.fixedMap
-                    ? mapThumbSvg(config.fixedMap, 2, undefined)
-                    : '<span class="is-random">随机</span>'
-                }</span>
-                <span class="start-map-body">
-                  <b>${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}</b>
-                  <span>${
-                    config.fixedMap ? `${config.fixedMap.w} × ${config.fixedMap.h}` : '每局现生成'
-                  }</span>
-                </span>
-                <button class="btn btn-sm" data-act="pick-map">换图</button>
-              </div>
-            </section>
-
-            <section class="field">
+      const activePreset =
+        appliedPreset && !config.fixedMap && !levelOn && appliedPreset.settings === presetSettings()
+          ? appliedPreset.id
+          : undefined;
+      const presetCard = (id: string, name: string, details: string): string =>
+        `<button type="button" class="setup-preset" data-preset="${id}"${activePreset === id ? ' aria-current="true"' : ''}><b>${name}</b><span>${details}</span></button>`;
+      const playerField = `<section class="field">
               <div class="field-label">
                 人数 ${levelOn || playerHint ? `<span class="field-hint">${levelOn ? '由关卡决定' : playerHint}</span>` : ''}
               </div>
@@ -909,33 +894,11 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   : `<div class="chip-row">${playerChips}${twoCityToggle}</div>
               ${playerNote ? `<div class="field-hint">${playerNote}</div>` : ''}`
               }
-            </section>
-
-            <section class="field">
-              <div class="field-label">对手 ${aiOn ? `<span class="field-hint">${netOn ? '测试 AI 全视野' : 'AI 受迷雾限制'}</span>` : ''}</div>
-              ${
-                levelOn
-                  ? `<div class="field-hint">${levelAiText}</div>`
-                  : playerCount > 2
-                  ? `<div class="chip-row">${multiSeatChips}</div>
-              <div class="field-hint">点击席位切换真人 / 电脑。</div>
-              ${config.aiSeats && config.aiSeats.length > 0 ? aiLevelChips : ''}`
-                  : config.godMode
-                  ? `<div class="field-hint">纯单人沙盒：自由摆放，点击「交给 AI」演示。</div>`
-                  : `<div class="chip-row">
-                <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
-                <button class="chip ${config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="1">人机对战</button>
-                <button class="chip ${config.aiAlly ? 'active' : ''}" data-ai="2">双 AI 观战</button>
-              </div>
-              ${aiLevelChips}`
-              }
-            </section>
-
-            ${
-              config.godMode
-                ? ''
-                : playerCount === 2
-                  ? `<section class="field">
+            </section>`;
+      const firstField = config.godMode
+        ? ''
+        : playerCount === 2
+          ? `<section class="field">
               <div class="field-label">先手 <span class="field-hint">${
                 config.level?.setup?.firstSide
                   ? '这一关固定了先手'
@@ -956,7 +919,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                     : ''
               }
             </section>`
-                  : `<section class="field">
+          : `<section class="field">
               <div class="field-label">先手 <span class="field-hint">谁先行动、谁先禁/先选卡</span></div>
               <div class="chip-row">
                 <button class="chip ${!config.firstSide || config.firstSide === 'A' ? 'active' : ''}" data-first="A">按席位顺序</button>
@@ -968,21 +931,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   : ''
               }
               <div class="field-hint">先手不改变出生点。</div>
-            </section>`
-            }
-
-            <section class="field">
-              <div class="field-label">
-                起始时代 <span class="field-hint">${
-                  eraLock !== undefined
-                    ? `关卡指定：${eraDef(eraLock).name} · ${startGoldFor(eraLock)} 金`
-                    : eraHint
-                }</span>
-              </div>
-              <div class="chip-row">${eraChips}</div>
-            </section>
-
-            <section class="field">
+            </section>`;
+      const sizeField = `<section class="field">
               <div class="field-label">
                 棋盘大小 <span class="field-hint">${
                   sizeLock ? '关卡指定' : `自定义 ${MIN_BOARD_SIZE}~${MAX_BOARD_SIZE} 格`
@@ -995,11 +945,78 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   value="${config.size}" inputmode="numeric" aria-label="自定义棋盘边长" />
                 <span class="field-hint">边长（格）</span>
               </div>
+            </section>`;
+
+      const battleViewFull = `
+            ${!levelOn ? `<section class="setup-presets" aria-label="推荐开局">
+              <div class="setup-section-head"><b>推荐开局</b></div>
+              <div class="setup-preset-grid">
+                ${presetCard('learn', '入门人机', '青铜 · 12×12<br>初级 AI')}
+                ${presetCard('standard', '标准人机', '铁器 · 16×16<br>中级 AI')}
+                ${presetCard('hotseat', '本地双人', '青铜 · 12×12<br>轮流操作')}
+              </div>
+            </section>` : ''}
+            <section class="field" aria-label="地图">
+              <div class="field-label">
+                地图
+              </div>
+              <div class="start-map-row">
+                <span class="start-map-thumb">${
+                  config.fixedMap
+                    ? mapThumbSvg(config.fixedMap, 2, undefined)
+                    : '<span class="is-random">随机</span>'
+                }</span>
+                <span class="start-map-body">
+                  <b>${config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}</b>
+                  <span>${
+                    config.fixedMap ? `${config.fixedMap.w} × ${config.fixedMap.h}` : `${config.size} × ${config.size} · 每局生成`
+                  }</span>
+                </span>
+                <button class="btn btn-sm" data-act="pick-map">换图</button>
+              </div>
             </section>
 
+            ${compact ? '' : playerField}
+
+            <section class="field" aria-label="对手">
+              <div class="field-label">对手 ${aiOn && (!compact || netOn) ? `<span class="field-hint">${netOn ? '测试 AI 全视野' : 'AI 受迷雾限制'}</span>` : ''}</div>
+              ${
+                levelOn
+                  ? `<div class="field-hint">${levelAiText}</div>`
+                  : playerCount > 2
+                  ? `<div class="chip-row">${multiSeatChips}</div>
+              <div class="field-hint">点击席位切换真人 / 电脑。</div>
+              ${config.aiSeats && config.aiSeats.length > 0 ? aiLevelChips : ''}`
+                  : config.godMode
+                  ? `<div class="field-hint">纯单人沙盒：自由摆放，点击「交给 AI」演示。</div>`
+                  : `<div class="chip-row">
+                <button class="chip ${!config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="0">双人热座</button>
+                <button class="chip ${config.aiOpponent && !config.aiAlly ? 'active' : ''}" data-ai="1">人机对战</button>
+                <button class="chip ${config.aiAlly ? 'active' : ''}" data-ai="2">双 AI 观战</button>
+              </div>
+              ${aiLevelChips}`
+              }
+            </section>
+
+            ${compact ? '' : firstField}
+
+            <section class="field" aria-label="起始时代">
+              <div class="field-label">
+                起始时代 <span class="field-hint">${
+                  eraLock !== undefined
+                    ? `关卡指定：${eraDef(eraLock).name} · ${startGoldFor(eraLock)} 金`
+                    : compact ? `上限 ${eraDef(ceiling).short}` : eraHint
+                }</span>
+              </div>
+              <div class="chip-row">${eraChips}</div>
+            </section>
+
+            ${compact ? '' : sizeField}
+
             <details class="start-advanced"${advancedOpen ? ' open' : ''}>
-              <summary><span><b>高级设置</b><small>${config.expansionIds.length} 个扩展 · ${config.godMode ? '上帝模式' : config.commanderMode ? '指挥官模式' : '亲自指挥'}${config.draftMode ? ' · 已开选卡' : ''}</small></span><span class="setup-expand-label" aria-hidden="true"></span></summary>
+              <summary><span><b>高级设置</b><small>${compact ? '人数 · 棋盘大小 · 先手 · 扩展' : `${config.expansionIds.length} 个扩展 · ${config.godMode ? '上帝模式' : config.commanderMode ? '指挥官模式' : '亲自指挥'}${config.draftMode ? ' · 已开选卡' : ''}`}</small></span><span class="setup-expand-label" aria-hidden="true"></span></summary>
               <div class="start-advanced-body">
+            ${compact ? playerField + sizeField + firstField : ''}
             <section class="field">
               <div class="field-label">
                 你的角色
@@ -1099,7 +1116,8 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
-              <div class="field-label">扩展规则 <span class="field-hint">可多选，效果叠加</span></div>
+              <div class="field-label">扩展规则</div>
+              ${compact && lockedPacks.length > 0 ? `<div class="field-hint">${eraHint}</div>` : ''}
               ${expLockNote}
               <div class="expansion-list">${expItems}</div>
               ${expNote ? `<div class="map-note is-bad">${esc(expNote)}</div>` : ''}
@@ -1605,12 +1623,13 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
 
 
 
-      const summary = `${config.level ? `关卡「${esc(config.level.name)}」 · ` : ''}${config.size} × ${config.size} · ${eraDef(config.startEra).name} · ${
+      const { w: width, h: height } = config.fixedMap ?? { w: config.size, h: config.size };
+      const summary = `${config.level ? `关卡「${esc(config.level.name)}」 · ` : ''}${width} × ${height} · ${eraDef(config.startEra).name} · ${
         (config.playerCount ?? 2) > 2 ? `${config.playerCount} 人 · ` : ''
       }${config.level ? '关卡地图' : config.fixedMap ? esc(config.fixedMap.name) : '随机地形'}`;
 
       mask.innerHTML = `
-        <div class="modal start-panel">
+        <div class="modal start-panel${compact && tab === 'battle' ? ' start-panel-compact' : ''}">
           <aside class="start-rail">
             <div class="start-brand">
               <b>时代与回旋镖</b>
@@ -1630,7 +1649,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <span>关卡 · 地图</span>
               </button>
             </nav>
-            <div class="start-rail-foot">同一个种子永远生成同一张地图</div>
+            ${classic ? '<div class="start-rail-foot">同一个种子永远生成同一张地图</div>' : ''}
           </aside>
 
           <div class="start-col">
@@ -1640,7 +1659,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                   ? levelOn
                     ? `<h2>任务简报</h2>
                        <p>地图、兵力与时代由关卡指定。</p>`
-                    : `<h2>战役</h2>`
+                    : `<h2>${compact ? '设置对局' : '战役'}</h2>`
                   : tab === 'levels'
                     ? `<h2>关卡</h2>
                        <p>选择关卡，或开始自由对局。</p>`
@@ -1785,6 +1804,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           firstSide: 'A',
           recordDetail,
         });
+        appliedPreset = { id: preset, settings: presetSettings() };
         expNote = '';
         poolView = null;
         resetScroll = true;

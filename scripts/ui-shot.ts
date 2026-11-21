@@ -264,16 +264,23 @@ if (ARGS.includes('combat')) {
   await shot(`11-combat-ready-${tag}`);
   if (MOBILE) {
     await evaluate(`document.querySelector('.unit[data-id="forecast-foe"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }))`);
-  } else {
-    await click('[data-act="combat-aim"]');
   }
   await click('.unit[data-id="forecast-foe"]');
   const visible = await evaluate(`document.querySelector('#combat-preview')?.hidden === false`);
   if (!visible) throw new Error('交锋预览没有显示');
+  const confirmationLayout = await evaluate(`(() => ({
+    endTurnHidden: getComputedStyle(document.querySelector('.footer-main')).display === 'none',
+    cues: document.querySelectorAll('.combat-cues[data-phase="preview"] .combat-cue').length,
+  }))()`);
+  if (!confirmationLayout.endTurnHidden || confirmationLayout.cues !== 2) {
+    throw new Error('确认攻击时应隐藏结束行动，并显示双方损血');
+  }
   await shot(`12-combat-preview-${tag}`);
   await click('[data-combat="confirm"]');
   const resultVisible = await evaluate(`document.querySelector('#action-feedback')?.hidden === false`);
   if (!resultVisible) throw new Error('操作结果没有显示');
+  const resultCues = await evaluate(`document.querySelectorAll('.combat-cues[data-phase="result"] .combat-cue').length`);
+  if (resultCues !== 2) throw new Error('实际损血没有显示在棋子旁');
   await shot(`13-combat-result-${tag}`);
   proc.kill();
   staticServer.close();

@@ -218,6 +218,8 @@ const CITY_ERA_SLUG = [
   'fusion',
 ] as const;
 
+const WATER_TONE: Readonly<Record<string, string>> = { shallow: 's', water: 'w', deep: 'd' };
+
 const TERRAIN_CLASS: Record<string, string> = {
   plain: 't-plain',
   forest: 't-forest',
@@ -255,7 +257,7 @@ function ensureStructure(el: HTMLElement): void {
   // 闪烁层单独一层，是为了不污染常驻层的"内容相同就不写"缓存——那层按格累积、
   // 大多帧不变；这层每次动作都要重播动画，混在一起会互相把对方的 diff 打断。
   el.innerHTML =
-    '<div class="tiles"></div><div class="board-view"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div><div class="heat-flash"></div>';
+    '<div class="tiles"></div><div class="board-view"></div><div class="marks"></div><div class="units"></div><div class="cities"></div><div class="heat"></div><div class="heat-flash"></div><div class="combat-cues" aria-hidden="true"></div>';
 }
 
 /**
@@ -548,7 +550,7 @@ export function fitBoardBox(cols: number, rows: number, availW: number, availH: 
 }
 
 /*
- * 只刷新格宽（`--cell`），不重画棋盘。
+ * 只刷新格宽和纹理取景尺寸，不重画棋盘。
  *
  * `fitBoard()` 改的是棋盘外框尺寸，格子是按 `1fr` 排的，会自己跟着走；
  * 但 `--cell` 是 `renderBoard()` 里写的，缩放/窗口变化之后它还是旧值。
@@ -556,10 +558,16 @@ export function fitBoardBox(cols: number, rows: number, availW: number, availH: 
  * 对不齐——表现就是"断开"，点一下棋盘触发重画又好了。
  * 这个函数让 fitBoard 在改完尺寸后把格宽补上。
  */
-export function refreshCellVar(el: HTMLElement, cols: number): void {
-  if (!Number.isFinite(cols) || cols <= 0) return;
-  const cellSize = Math.max(18, (el.clientWidth - 12) / cols);
-  setVar(el, '--cell', `${cellSize}px`);
+export function refreshCellVar(el: HTMLElement, cols: number, rows: number): void {
+  if (!Number.isFinite(cols) || cols <= 0 || !Number.isFinite(rows) || rows <= 0) return;
+  const width = (el.clientWidth - BOARD_PAD) / cols;
+  const height = (el.clientHeight - BOARD_PAD) / rows;
+  setVar(el, '--cell', `${Math.max(18, width)}px`);
+  // 大图的字可以设最小字号，纹理取景仍要按实际格宽，才能跨格接起来。
+  if (width > 0 && height > 0) {
+    setVar(el, '--actual-cell-x', `${width}px`);
+    setVar(el, '--actual-cell-y', `${height}px`);
+  }
 }
 
 /**
@@ -595,8 +603,7 @@ export function renderBoard(
     });
   }
 
-  const cellSize = Math.max(18, (el.clientWidth - 12) / s.w);
-  setVar(el, '--cell', `${cellSize}px`);
+  refreshCellVar(el, s.w, s.h);
   setVar(el, '--cols', String(s.w));
   setVar(el, '--rows', String(s.h));
 
@@ -940,7 +947,8 @@ export function renderBoard(
        * 朝对方铺一道半透明的对方色**，两边各铺一半，边界线上的颜色正好是
        * 两色的中点，于是接上。
        *
-       * 值 = **邻居那一档的代号**：`s` 浅流、`w` 水域、`d` 深水。
+       * 值 = **邻居那一档的代号**：`s` 浅流、`w` 水域、`d` 深水、`l` 已知陆地。
+       * 桥面和未知地形不画岸线。
        * 以前只有 `d`/`l` 两个字母（"往深处/往浅处叠哪种色"），
        * 因为浅流和水域被算成同一档、互相之间不铺——可它们一个是青、一个是蓝，
        * 硬拼起来还是刀切边（2026-11-14 用户提的）。
@@ -951,16 +959,14 @@ export function renderBoard(
        * 按 `dispTerrain` 算而不是真地形：雾里看到的是记忆里的地形，
        * 拿真地形算会让"看着一样的两格"之间平白多一道坡（外缘阴影栽过这个跟头）。
        */
-      const WATER_RANK: Record<string, number> = { shallow: 1, water: 2, deep: 3 };
-      const WATER_LETTER: Record<string, string> = { shallow: 's', water: 'w', deep: 'd' };
-      const rankHere = WATER_RANK[dispTerrain[i] ?? ''] ?? 0;
-      if (rankHere > 0) {
+      const waterTone = WATER_TONE[dispTerrain[i] ?? ''];
+      if (waterTone) {
         const wetSide = (tx: number, ty: number): string => {
           if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h) return '0';
-          const t = dispTerrain[ty * s.w + tx] ?? '';
-          const r = WATER_RANK[t] ?? 0;
-          if (r === 0 || r === rankHere) return '0';
-          return WATER_LETTER[t] ?? '0';
+          const terrain = dispTerrain[ty * s.w + tx];
+          if (!terrain || terrain === 'unknown' || terrain === 'bridge' || terrain === 'void') return '0';
+          const adjacentTone = WATER_TONE[terrain];
+          return adjacentTone === waterTone ? '0' : (adjacentTone ?? 'l');
         };
         const wt = wetSide(x, y - 1);
         const wr = wetSide(x + 1, y);
@@ -1153,19 +1159,14 @@ export function renderBoard(
     if (ui.selectedCityId === city.id) cls.push('selected');
 
     const ratio = city.hp / city.maxHp;
-    const style = [
-      `left:${(city.x / s.w) * 100}%`,
-      `top:${(city.y / s.h) * 100}%`,
-      `width:${(city.size / s.w) * 100}%`,
-      `height:${(city.size / s.h) * 100}%`,
-    ].join(';');
+    const style = tileRect(s, city.x, city.y, city.size);
 
     // 旧情报不画血条：上次看到的耐久早就不是现在这条了，画出来是假消息
     const when = ago === 0 ? '刚刚' : `${ago} 个行动前`;
     const plate = memo
-      ? `<div class="city-stale">旧情报 · ${when}</div>`
+      ? `<div class="city-stale">旧情报<span class="city-state-detail"> · ${when}</span></div>`
       : ruined
-        ? '<div class="city-ruin">废墟 · 待接管</div>'
+        ? '<div class="city-ruin">废墟<span class="city-state-detail"> · 待接管</span></div>'
         : `<div class="city-hp"><i class="${hpClass(ratio)}" style="width:${Math.max(3, ratio * 100)}%"></i></div>
                <div class="city-armor">甲 ${city.armor}</div>`;
     const note = memo
