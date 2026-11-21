@@ -129,6 +129,16 @@ const UNIT_CAP: number | 'none' | undefined =
  *   --replay x.json --replay-seed 906
  *   --replay x.json --replay-seed 906 --replay-first old   → 新后手那一局
  */
+/**
+ * 战略层用哪一档"决战时代"模型（`const` / `foe`）。
+ *
+ * **只对 v3 生效**，而且两档现在都只算不用：算出来写进 `aiDecisions`，
+ * 没有任何消费方。所以开了也只是多一份日志，棋还是同一盘。
+ */
+const ERA_MODEL_ARG = argOf('era-model', '');
+const ERA_MODEL: 'const' | 'foe' | undefined =
+  ERA_MODEL_ARG === 'const' || ERA_MODEL_ARG === 'foe' ? ERA_MODEL_ARG : undefined;
+
 const REPLAY_PATH = argOf('replay', '');
 const REPLAY_SEED = argOf('replay-seed', '');
 const REPLAY_FIRST = argOf('replay-first', 'new') === 'old' ? 'old' : 'new';
@@ -176,6 +186,7 @@ function playOne(
       size: SIZE,
       mapSymmetry: SYMMETRY,
       ...(UNIT_CAP === undefined ? {} : { unitCap: UNIT_CAP }),
+      ...(ERA_MODEL === undefined ? {} : { aiEraModel: ERA_MODEL }),
     },
     seed,
   );
@@ -275,6 +286,16 @@ for (let i = 0; i < GAMES; i++) {
       writeFileSync(REPLAY_PATH, JSON.stringify(report));
       replayWritten = true;
       process.stderr.write(`  已导出复盘：${REPLAY_PATH}（${actions.length} 步）\n`);
+      /*
+       * 判决日志跟着回放一起写：回放只能看"做了什么"，这一列补"为什么"。
+       * 没有开 `--era-model` 就是空文件，干脆不写。
+       */
+      const decisions = final.aiDecisions ?? [];
+      if (decisions.length > 0) {
+        const sidecar = REPLAY_PATH.replace(/\.json$/i, '.decisions.jsonl');
+        writeFileSync(sidecar, decisions.map((d) => JSON.stringify(d)).join('\n') + '\n');
+        process.stderr.write(`  判决日志：${sidecar}（${decisions.length} 条）\n`);
+      }
     }
 
     let tag: string;

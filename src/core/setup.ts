@@ -758,6 +758,10 @@ export function createMatch(
         : typeof config.unitCap === 'number' && config.unitCap > 0
           ? { unitCap: config.unitCap }
           : {}),
+      // 决战时代模型（v3 专用）：白名单同样要抄，否则开了跟没开一样
+      ...(config.aiEraModel === 'const' || config.aiEraModel === 'foe'
+        ? { aiEraModel: config.aiEraModel }
+        : {}),
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。

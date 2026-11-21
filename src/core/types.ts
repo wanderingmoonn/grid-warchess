@@ -1458,6 +1458,16 @@ export interface MatchConfig {
    */
   unitCap?: number | 'none';
   /**
+   * 战略层的"决战时代"模型（v3 专用，默认不写 = 不算、不记、零行为变化）。
+   *
+   *   · `const`：L0，固定奔第 5 代（只用来把管线跑通）
+   *   · `foe`  ：L1，对面时代 + 1
+   *
+   * 现在这两档都**只算不用**——算出来写进 `aiDecisions`，没有任何消费方，
+   * 所以开不开都跑出同一盘棋。分层方法见 docs/PLAN-AI-V3 第十二节。
+   */
+  aiEraModel?: 'const' | 'foe';
+  /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
    *
@@ -1875,6 +1885,27 @@ export interface AiExpedition {
   cityId: string;
   /** 哪一回合立的 */
   since: number;
+}
+
+/**
+ * 战略层的一次判决（写进 `GameState.aiDecisions`，导出成 sidecar）。
+ *
+ * 字段刻意只放"当时看到的数"，不放结论的推导过程：
+ * 推导是会改的，数不会。回看时按数自己重推一遍，比读一段旧的解释靠谱。
+ */
+export interface AiDecision {
+  turn: number;
+  me: PlayerId;
+  /** 用的是哪一档模型（见 ai-v3 的 `desiredEraOf`）：const / foe / march / pace */
+  model: string;
+  /** 我方当前时代（最高的那座好城） */
+  era: number;
+  /** 对面当前时代（迷雾里只看得到已知的城） */
+  foeEra: number;
+  /** 这档模型算出来的决战时代；0 = 不表态 */
+  desiredEra: number;
+  /** 一句话理由，给看回放的人 */
+  why: string;
 }
 
 export interface AiIntent {
@@ -2296,6 +2327,16 @@ export interface GameState {
    * 没有，就回落到它们；写一律写 `aiFocus`。等老存档自然淘汰了可以删。
    */
   aiFocus?: Partial<Record<PlayerId, AiFocus>>;
+  /**
+   * 战略层的**判决日志**（默认不记，开了 `config.aiEraModel` 才写）。
+   *
+   * 为什么放在 state 里而不是直接在 AI 里写文件：AI 必须是纯的（不碰 IO、
+   * 不碰 Math.random），否则回放和联机都会分叉。所以只往局面里记，
+   * 由跑批脚本在导出回放时一并写成 sidecar（`<回放>.decisions.jsonl`）。
+   *
+   * 回放只能看"它做了什么"，看不到"它为什么"——这一列就是补后半句的。
+   */
+  aiDecisions?: AiDecision[];
   /**
    * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
    *

@@ -44,7 +44,7 @@
 
 import { hasAbility } from './abilities.ts';
 import { enterMemoScope, exitMemoScope, memoByState, memoTable } from './memo.ts';
-import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
+import { CONFIG, ERAS, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
 import { hasHold, holdOf, holdRoom } from './carry.ts';
 import { isProducer, produceUsableCount } from './produce.ts';
 import { cityGap } from './geo.ts';
@@ -5839,6 +5839,79 @@ function eraNowOf(s: GameState): number {
   return Math.max(s.config.startEra, ...s.cities.filter((c) => !c.ruined).map((c) => c.era));
 }
 
+/* ---------------- 决战时代（S2a：先只算不用） ---------------- */
+
+/**
+ * L0 的常数：固定奔第 5 代。
+ *
+ * 它不产出策略，只用来把"判决 → 日志 → 闸门"这条管线打通。
+ * 没有它，L2 一上线就分不清"是估算错了"还是"闸门根本没接上"。
+ * 分层方法见 docs/PLAN-AI-V3 第十二节。
+ */
+const ERA_L0_CONST = 5;
+
+/** 这一席最高的那座好城的时代（全被打成废墟就是 1） */
+function highestEraOf(s: GameState, owner: PlayerId): number {
+  let m = 1;
+  for (const c of s.cities) if (c.owner === owner && !c.ruined && c.era > m) m = c.era;
+  return m;
+}
+
+/**
+ * 这一席的"决战时代"。
+ *
+ * S2a 只有两档，且**两档都只算不用**——没有任何消费方，所以开不开都是同一盘棋。
+ * 这是故意的：先让数能被看见、被对照，再让数去影响动作。
+ *
+ *   · `const`（L0）：固定 `ERA_L0_CONST`，用来验管线；
+ *   · `foe`  （L1）：对面时代 + 1。典型错误形态是"高时代局互相拖着升"，
+ *     所以它只能作为对照，不会被当成正解。
+ *
+ * 后面两档（L2 距离场 / L3 对面节奏）加进来时，**接口不变**，
+ * 只是在这个函数里多一个分支。
+ */
+function desiredEraOf(
+  s: GameState,
+  me: PlayerId,
+  model: 'const' | 'foe',
+): { era: number; foeEra: number; desired: number; why: string } {
+  const era = highestEraOf(s, me);
+  const foeEra = Math.max(1, ...enemySeats(s, me).map((p) => highestEraOf(s, p)));
+  const maxEra = Math.max(1, ERAS.length);
+  if (model === 'const') {
+    const want = Math.min(ERA_L0_CONST, maxEra);
+    return { era, foeEra, desired: want, why: `L0 常数：奔第 ${want} 代` };
+  }
+  const want = Math.min(foeEra + 1, maxEra);
+  return { era, foeEra, desired: want, why: `L1 跟对面：对面 ${foeEra} 代，所以奔 ${want} 代` };
+}
+
+/**
+ * 把这次判决记进局面（每席每回合至多一条）。
+ *
+ * 为什么记在 state 里：AI 必须是纯的（不碰 IO、不碰随机），否则回放会分叉。
+ * 跑批脚本导出回放时把它写成 sidecar，看回放时对照着读——
+ * 回放只能看"它做了什么"，这一列补"它为什么"。
+ */
+function noteEraDecision(s: GameState, view: GameState, me: PlayerId, model: 'const' | 'foe'): void {
+  const list = (s.aiDecisions ??= []);
+  const last = list[list.length - 1];
+  // 一回合里 AI 会被问很多次（每个兵一次），判决只该记一次
+  if (last && last.turn === s.turn && last.me === me) return;
+  const d = desiredEraOf(view, me, model);
+  list.push({
+    turn: s.turn,
+    me,
+    model,
+    era: d.era,
+    foeEra: d.foeEra,
+    desiredEra: d.desired,
+    why: d.why,
+  });
+  // 别让日志无限长：一局几千步也不该存几万行，留最近 400 条够复盘
+  if (list.length > 400) list.splice(0, list.length - 400);
+}
+
 /**
  * 这一刻"值多少钱"要看局面：移速在防守时打折、压上时加价；
  * 己方视野已经很开阔时，再买一双眼睛的边际价值下降。
@@ -7220,6 +7293,17 @@ function aiNextActionCoreInner(
         stock: { ...((s.players[me].res ?? {}) as Record<string, number>) },
       },
     };
+  }
+
+  /*
+   * 决战时代：S2a 只在开了 `config.aiEraModel` 时算一遍并记进局面。
+   *
+   * **目前没有任何消费方**——它不影响采购、不影响走位、不影响开火。
+   * 先让数能被看见（回放 sidecar + 自动对照），再决定拿它去压什么。
+   * `depth > 0` 不记：推演分支不该往账本里塞东西。
+   */
+  if (depth === 0 && s.config.aiEraModel) {
+    noteEraDecision(s, view, me, s.config.aiEraModel);
   }
 
   const fields: Fields = {
