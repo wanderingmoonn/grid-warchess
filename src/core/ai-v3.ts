@@ -6756,9 +6756,24 @@ function recruitCandidate(
       // 素体的 atk 只是撞击：真正的输出在要装上去的武器里，按"装完之后"估值
       if (d.armorFrame) score += armorFrameScore(s, me, d);
       if (aiLevelOf(s)!=='basic') {
+        /*
+         * 质量项：**放大，让它压过噪声**（2026-11-21）。
+         *
+         * 量过一遍所有兵种的评分构成：性价比项（封顶 26）和单价惩罚相抵之后，
+         * 坦克只比民兵多 5 分左右，而"偏爱兵种"和随机噪声是 ±4~8 分——
+         * 也就是说质量差异被噪声吃掉了，买谁会接近随机，于是经常出现一堆便宜兵。
+         *
+         * 原来那个 26 的封顶只卡住了 1 个兵种（坦克 30.1），**不是主因**；
+         * 主因是信号太小。所以：放大到 ×2.5（坦克 ≈75、民兵 ≈33），
+         * 封顶抬到 70。这样"贵而强"能稳稳压过"便宜但弱"。
+         *
+         * 注意不能改 `EFF_SCALE` 本身——v1 也在用它，改了就动到冻结的老 AI。
+         */
         score += Math.min(
-          26,
-          combatEfficiency(d, resourceValue(s, me, quote.price) + unlockFee * 0.4, valueContextOf(s, me, plan)) * EFF_SCALE,
+          70,
+          combatEfficiency(d, resourceValue(s, me, quote.price) + unlockFee * 0.4, valueContextOf(s, me, plan)) *
+            EFF_SCALE *
+            (s.config.aiQualityScale ?? 2.5),
         );
         if (plan.urgent) score += 15;
       }

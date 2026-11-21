@@ -765,6 +765,9 @@ export function createMatch(
       ...(config.aiCrossing === false ? { aiCrossing: false } : {}),
       ...(config.aiPosture === true ? { aiPosture: true } : {}),
       ...(config.aiDecisive === false ? { aiDecisive: false } : {}),
+      ...(typeof config.aiQualityScale === 'number' && config.aiQualityScale > 0
+        ? { aiQualityScale: config.aiQualityScale }
+        : {}),
       ...(config.aiRecruitCap === 'auto'
         ? { aiRecruitCap: 'auto' as const }
         : typeof config.aiRecruitCap === 'number' && config.aiRecruitCap >= 0
