@@ -10,7 +10,12 @@ let passed=0;
 function test(name: string, run: () => void) { run(); passed++; console.log(`✓ ${name}`); }
 function arena(): GameState {
   const s = createMatch({...DEFAULT_CONFIG,size:16,startEra:3,aiLevel:'tactic',expansionIds:['fantasy-core','fantasy-heroes']}, 7654);
-  s.fog=false; s.units=[]; s.current='A'; s.turn=15;
+  /*
+   * 这一整套测的是**战术决策**，不是视野：arena 是一张全开的斗兽场。
+   * 2026-11-21 之后 AI 默认按真实视野行动（即使 `fog=false`），
+   * 所以这里显式把 AI 的全知打开，保持这些用例原本的前提。
+   */
+  s.fog=false; s.config.aiVision=false; s.units=[]; s.current='A'; s.turn=15;
   s.players.A.gold=0; s.players.B.gold=0;
   s.cities=[['A',1,1],['A',1,12],['B',12,1],['B',12,12]].map((v,i)=>({id:`city${i}`,owner:v[0] as PlayerId,x:v[1] as number,y:v[2] as number,size:2,era:3,hp:70,maxHp:70,armor:4}));
   for(let y=0;y<s.h;y++)for(let x=0;x<s.w;x++) {

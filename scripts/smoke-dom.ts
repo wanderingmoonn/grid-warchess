@@ -11113,7 +11113,9 @@ check('兵种标识：兼容旧飞行字段，保留经济、建造与海军定�
 });
 
 check('详情抽屉：选中更新摘要，展开与收起保留按钮焦点且不改存档', () => {
-  const fresh = bootWith(combatFixture());
+  const st = combatFixture();
+  st.units[0]!.moved = true;
+  const fresh = bootWith(st);
   try {
     const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
       .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
@@ -11134,7 +11136,9 @@ check('详情抽屉：选中更新摘要，展开与收起保留按钮焦点且�
     assert.equal(button.getAttribute('aria-expanded'), 'true');
     assert.equal(fresh.document.activeElement, button);
     assert.equal(fresh.document.querySelector('[data-act="drawer-toggle"]'), button);
-    const city = fresh.document.querySelector<HTMLElement>('.tile.t-city.own-A');
+    const cell = cityTiles(st.cities.find((entry) => entry.owner === 'A')!).find((point) =>
+      !st.units.some((entry) => entry.x === point.x && entry.y === point.y))!;
+    const city = fresh.document.querySelector<HTMLElement>(`.tile[data-x="${cell.x}"][data-y="${cell.y}"]`);
     assert.ok(city);
     city.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
     assert.notEqual(title(), UNIT_TYPES.militia!.name);

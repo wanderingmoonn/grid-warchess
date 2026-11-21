@@ -446,12 +446,19 @@ if (ARGS.includes('phase3') && W <= 920) {
     if (issue) throw new Error(issue);
   };
   await verifyDrawer(false);
-  await click('[data-act="drawer-toggle"]');
-  await verifyDrawer(true);
-  await shot(`14-drawer-expanded-${tag}`);
-  await click('[data-act="drawer-toggle"]');
-  await verifyDrawer(false);
-  await shot(`15-drawer-compact-${tag}`);
+  if (W >= 640 && H <= 560) {
+    await shot(`14-detail-landscape-${tag}`);
+  } else {
+    const compactHeight = await evaluate(`document.querySelector('#side-drawer').getBoundingClientRect().height`);
+    await click('[data-act="drawer-toggle"]');
+    await verifyDrawer(true);
+    const expandedHeight = await evaluate(`document.querySelector('#side-drawer').getBoundingClientRect().height`);
+    if (expandedHeight <= compactHeight + 40) throw new Error('详情抽屉没有增加可见内容高度');
+    await shot(`14-drawer-expanded-${tag}`);
+    await click('[data-act="drawer-toggle"]');
+    await verifyDrawer(false);
+    await shot(`15-drawer-compact-${tag}`);
+  }
 }
 
 if (ARGS.includes('clickswitch') || ARGS.includes('terrain')) {
@@ -544,7 +551,7 @@ await evaluate(`(() => {
 await sleep(600);
 await shot(`07-city-${tag}`);
 
-if (ARGS.includes('phase3') && W <= 920) {
+if (ARGS.includes('phase3') && W <= 920 && (W < 640 || H > 560)) {
   await click('[data-act="drawer-toggle"]');
   await shot(`16-drawer-city-${tag}`);
 }
