@@ -2275,6 +2275,11 @@ function postureBudgetOf(
     Math.max(1, ...s.cities.filter((c) => c.owner === p && !c.ruined).map((c) => c.era));
   const foeEra = Math.max(1, ...[...new Set(s.cities.filter((c) => c.owner !== me).map((c) => c.owner))].map(eraOf));
   const ratio = mine / Math.max(1, foe);
+  /*
+   * 距离曾在这里参与过（"敌人就在旁边 → 该打"）：实测全量 58% → 50%（配对 −2），
+   * 所以撤掉了。**不是方向错，是时机错**——它让 AI 更早决战，而那时候兵力还不够。
+   * 要让它生效，得先有"兵力够不够打"的判断（战力求解器的投影），否则只是提前送。
+   */
   // 0.7 以下不敢打，1.6 以上敢打
   const x = Math.min(1, Math.max(0, (ratio - 0.7) / 0.9));
   // 落后越多越想发展
@@ -2370,8 +2375,14 @@ function squadTick(
       targetCityId: null,
       since: s.turn,
       /*
-       * 规模：计划层申报的优先（任务需要几个人），但不能超过战略层的总配额。
-       * 两边都没给就取配额的 3/4——"默认规模"不该等于上限，否则永远在等满编。
+       * 规模：**看要打的那座城有多少守军**，而不是固定配额。
+       *
+       * 用户 2026-11-21 观察："敌方其实没兵了，人类就不用集结这么多才推进。"
+       * 以前只看"我方/敌方总兵力比"——敌方一个兵都看不见时 ratio 反而最大，
+       * 于是越是空城越要凑满编，白白等十几回合。
+       *
+       * guard 是 `softestCityOf` 算的守军价值（战斗单位 + 建筑×0.6 + 工人×0.3）：
+       * 空城 0 → 6 人；满防 1200+ → 顶到配额。
        */
       want: Math.min(budget.squadCap, planNeed ?? Math.round(budget.squadCap * 0.75)),
       spread: budget.spread,
