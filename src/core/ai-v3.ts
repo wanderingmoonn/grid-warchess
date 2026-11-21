@@ -150,7 +150,7 @@ import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
-import { productionCapacity } from './ai-strength.ts';
+import { armyStrength, powerPerTurn, productionCapacity } from './ai-strength.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -284,8 +284,15 @@ export function aiTraits(s: GameState): AiTraits {
  */
 function unitCapOf(s: GameState): number {
   const v = s.config.unitCap;
-  if (v === 'none') return Number.POSITIVE_INFINITY;
-  return typeof v === 'number' && v > 0 ? v : CONFIG.maxUnits;
+  /*
+   * 默认**不设上限**（2026-11-21 用户决定）。
+   *
+   * `CONFIG.maxUnits = 24` 从来不是规则，是 AI 自己戴的帽子；人下棋不会
+   * 给自己设编制上限。默认放开之后，它退化成"低难度开关"：
+   * `--unit-cap 24` 还能把帽子戴回去，以后可以挂到难度分档上。
+   */
+  if (v === 'none' || v === undefined) return Number.POSITIVE_INFINITY;
+  return typeof v === 'number' && v > 0 ? v : Number.POSITIVE_INFINITY;
 }
 
 /** 0~1 夹紧 */
@@ -1891,6 +1898,100 @@ function bestBridgeSite(s: GameState, owner: PlayerId, wade: Map<string, number[
   }
 
   return best;
+}
+
+/* ---------------- 决战时机：投影对比（2026-11-21） ---------------- */
+
+/**
+ * 一次"现在该打还是该等"的判断结果。
+ *
+ * 判据用**投影**而不是现状（S4 的校准：现状战力比在中局只有 50% 命中，
+ * 产能投影是 88%）：两边各算"到第 T 回合我会有多强"，再看比值怎么变。
+ */
+export interface DecisiveCall {
+  /** 主力走到最近敌城要几回合（按路程代价 ÷ 移动力） */
+  marchTurns: number;
+  cityId: string | null;
+  myPower: number;
+  foePower: number;
+  myPerTurn: number;
+  foePerTurn: number;
+  call: 'attack' | 'develop' | 'hold';
+  why: string;
+}
+
+/**
+ * 决战时机：现在打，还是等产能把自己堆起来。
+ *
+ * 人的思路是三条比大小：
+ *   1. **现在打得动吗**：投影比 ≥ 1.15 且行军回合不太远 → 打；
+ *   2. **等下去会更有利吗**：我的每回合产能比对面厚 → 等（投资会复利）；
+ *   3. 都不成立 → 守（不主动推，但也别自杀）。
+ *
+ * 为什么用"每回合产能之比"当"等下去"的判据：投影是线性的，
+ * 存量是常数项，所以 T 越大、比值越接近产能之比。产能比更高 = 越等越强。
+ */
+function decisiveOf(
+  view: GameState,
+  me: PlayerId,
+  land: Map<string, number[]>,
+): DecisiveCall | null {
+  const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
+  if (foes.length === 0) return null;
+
+  // 行军回合：从我的战斗单位到每一座敌城的最小路程，取最近的那座
+  let bestCost = Infinity;
+  let cityId: string | null = null;
+  const move = Math.max(
+    1,
+    ...unitsOf(view, me)
+      .filter((u) => utype(view, u.type).category === 'combat')
+      .map((u) => utype(view, u.type).move ?? 1),
+  );
+  const myCombat = unitsOf(view, me).filter((u) => utype(view, u.type).category === 'combat');
+  for (const [cid, field] of land) {
+    if (!foes.some((c) => c.id === cid)) continue;
+    let minCost = Infinity;
+    for (const u of myCombat) minCost = Math.min(minCost, field[u.y * view.w + u.x] ?? Infinity);
+    if (minCost < bestCost) {
+      bestCost = minCost;
+      cityId = cid;
+    }
+  }
+  const marchTurns = Number.isFinite(bestCost) ? Math.ceil(bestCost / move) : 99;
+
+  const myPower = armyStrength(view, me);
+  let foePower = 0;
+  for (const p of new Set(view.cities.filter((c) => c.owner !== me).map((c) => c.owner))) {
+    foePower += armyStrength(view, p);
+  }
+  const myPerTurn = powerPerTurn(view, me);
+  const foePerTurn = Math.max(
+    1,
+    ...[...new Set(view.cities.filter((c) => c.owner !== me).map((c) => c.owner))].map((p) =>
+      powerPerTurn(view, p),
+    ),
+  );
+
+  const ratioNow = myPower / Math.max(1, foePower);
+  const ratioRate = myPerTurn / Math.max(1, foePerTurn);
+
+  if (ratioNow >= 1.15 && marchTurns <= 14) {
+    return {
+      marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'attack',
+      why: `现在能打：战力比 ${ratioNow.toFixed(2)}、行军 ${marchTurns} 回合`,
+    };
+  }
+  if (ratioRate > ratioNow * 1.05) {
+    return {
+      marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'develop',
+      why: `越等越强：产能比 ${ratioRate.toFixed(2)} > 现状比 ${ratioNow.toFixed(2)}`,
+    };
+  }
+  return {
+    marchTurns, cityId, myPower, foePower, myPerTurn, foePerTurn, call: 'hold',
+    why: `打不动也等不来：现状比 ${ratioNow.toFixed(2)}、产能比 ${ratioRate.toFixed(2)}`,
+  };
 }
 
 /**
@@ -7560,11 +7661,11 @@ function aiNextActionCoreInner(
    * 它让 AI 明明算得出"每回合能有 128 战力"，却只准自己出两个兵。
    */
   const recruitCap =
-    s.config.aiRecruitCap === 'auto'
-      ? Math.max(budget.maxRecruit, productionCapacity(view, me))
-      : typeof s.config.aiRecruitCap === 'number'
-        ? Math.max(0, s.config.aiRecruitCap)
-        : budget.maxRecruit;
+    typeof s.config.aiRecruitCap === 'number'
+      ? Math.max(0, s.config.aiRecruitCap)
+      : // 默认（未写 / 'auto'）按空格子数放开：规则层本来就不限每回合造几个，
+        // 限制只有钱和格子。帽子留成"低难度开关"（`--recruit-cap 2`）
+        Math.max(budget.maxRecruit, productionCapacity(view, me));
   const mayRecruit = commander
     ? !idleHead && head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
     : budget.recruited < recruitCap;
@@ -7744,6 +7845,33 @@ function aiNextActionCoreInner(
     if (depth === 0) {
       if (resolved.memo !== prevPlan) setFocus(s, me, { ...focusOf(s, me), plan: resolved.memo });
       notePlanTrace(s, me, resolved);
+    }
+  }
+
+  /*
+   * 决战时机：现在打还是等产能堆起来。
+   *
+   * `aiDecisive === false` 时不算（做 A/B 用）。结论只用来**压住明显送死**的进攻，
+   * 不用来"催"它去打——催的教训在 P4：任何把进攻权重压到 1 以下的改动，
+   * 都会让双方一起龟缩。
+   */
+  const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land);
+  if (depth === 0 && decisive) {
+    const list = (s.aiCalls ??= []);
+    const last = [...list].reverse().find((x) => x.me === me);
+    if (!last || last.call !== decisive.call) {
+      list.push({
+        turn: s.turn,
+        me,
+        marchTurns: decisive.marchTurns,
+        myPower: Math.round(decisive.myPower),
+        foePower: Math.round(decisive.foePower),
+        myPerTurn: Math.round(decisive.myPerTurn),
+        foePerTurn: Math.round(decisive.foePerTurn),
+        call: decisive.call,
+        why: decisive.why,
+      });
+      if (list.length > 300) list.splice(0, list.length - 300);
     }
   }
   /*
@@ -7939,7 +8067,14 @@ function aiNextActionCoreInner(
    * 这里的"进攻"只算 ATTACK / SIEGE 两类显式开火动作；
    * "朝敌城推进"的走位留在战术层，等这一步验证完再决定要不要一起压。
    */
-  const mayAttack = strategist.mayAttack(s, me);
+  /*
+   * 决战时机接到"能不能打"上：**只在明显打不过时收手**。
+   *
+   * 判据是"越等越强、而且现在兵力还不到对面八成半"。不满足就不拦——
+   * 拦得太宽会让双方一起龟缩（P4 的教训），所以这条闸故意开得很窄。
+   */
+  const outmatched = decisive !== null && decisive.call === 'develop' && decisive.myPower < decisive.foePower * 0.85;
+  const mayAttack = strategist.mayAttack(s, me) && !outmatched;
   for (let i=candidates.length-1;i>=0;i--) {
     const action=candidates[i]!.action;
     if (!mayAttack && (action.type === 'ATTACK' || action.type === 'SIEGE')) {

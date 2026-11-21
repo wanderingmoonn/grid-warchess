@@ -1495,6 +1495,13 @@ export interface MatchConfig {
    */
   aiRecruitCap?: number | 'auto';
   /**
+   * 决战时机（v3 专用）。不写 = 开；`false` = 不算、不拦（做 A/B 用）。
+   *
+   * 它只压"明显送死"的进攻（越等越强、且兵力不到对面 85%），
+   * 不用来催进攻——催的代价在 P4 实测过：双方一起龟缩。
+   */
+  aiDecisive?: boolean;
+  /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
    *
@@ -1923,6 +1930,19 @@ export interface PlanMemoLike {
   /** 每条计划自己的口袋：planId → 状态，互不干扰 */
   pockets: Record<string, Record<string, unknown>>;
   cooldown?: Record<string, number>;
+}
+
+/** 决战时机的一条判决 */
+export interface AiCallTrace {
+  turn: number;
+  me: PlayerId;
+  marchTurns: number;
+  myPower: number;
+  foePower: number;
+  myPerTurn: number;
+  foePerTurn: number;
+  call: 'attack' | 'develop' | 'hold';
+  why: string;
 }
 
 /** 计划当值的一条记录（换计划时记一条） */
@@ -2394,6 +2414,11 @@ export interface GameState {
    * 一条计划 value 写坏了，表现就是"AI 一点反应都没有"，和没装一模一样。
    */
   aiPlanTrace?: AiPlanTrace[];
+  /**
+   * 决战时机的判决记录（每席每回合一条，只记"结论变了"的那些）。
+   * 回放时对着看"它当时觉得该打还是该等"。
+   */
+  aiCalls?: AiCallTrace[];
   /**
    * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
    *
