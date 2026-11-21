@@ -1963,7 +1963,7 @@ export interface AiPlanTrace {
   /** 当时各条的估值（取整），按高到低 */
   values: Array<{ id: string; value: number }>;
   /** 当时合成出来的净权重（战略姿态就是从这里读 x / y） */
-  net?: { attack: number; build: number; econ: number; save: number; holdLine: boolean };
+  net?: { attack: number; build: number; econ: number; save: number };
 }
 
 /**

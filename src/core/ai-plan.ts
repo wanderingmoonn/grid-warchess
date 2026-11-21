@@ -79,8 +79,6 @@ export interface PlanWeights {
   econ: number;
   /** 为远期目标存钱的意愿 */
   save: number;
-  /** 一支兵都不许越过中线 */
-  holdLine: boolean;
 }
 
 /** 行动型计划吐出的一个动作（可带分） */
@@ -224,7 +222,7 @@ export function allAiPlans(): AiPlan[] {
 }
 
 export function neutralWeights(): PlanWeights {
-  return { attack: 1, build: 1, econ: 1, save: 1, holdLine: false };
+  return { attack: 1, build: 1, econ: 1, save: 1 };
 }
 
 /** 合成账本的一行：谁给了什么、生效后是多少 */
@@ -264,8 +262,6 @@ export function composeWeights(list: Array<{ plan: AiPlan; asked: Partial<PlanWe
     if (asked.build !== undefined) net.build *= mix(asked.build);
     if (asked.econ !== undefined) net.econ *= mix(asked.econ);
     if (asked.save !== undefined) net.save *= mix(asked.save);
-    // 守线是布尔：任一条当值的计划要求就不许越线（要放松它得改强度，不是改这里）
-    if (asked.holdLine === true) net.holdLine = true;
   }
   return { net, ledger };
 }

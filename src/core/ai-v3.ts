@@ -2179,7 +2179,6 @@ const POSTURE_PLAN: RankedPlan = {
       econ: t.econBase + t.econSlope * y,
       build: 1,
       save: y > 0.6 ? 1.1 : 0.9,
-      holdLine: x < t.holdLineBelow,
     };
   },
 };
@@ -6066,14 +6065,19 @@ function buildPlan(
       foeCities.some((c) => distance(u, c) <= 8),
   );
   const trade = doomedNow && myVal > 0 && foeVal > myVal * TRADE_AT && army >= 4 && reachFoe;
-  // 精兵姿态：兵不是"越多越好"，是"每个出生名额都该值回票价"。
-  // 每回合只有两个产兵名额（AI 的编制上限也压着），所以只要手头比一个兵宽裕
-  // （金 ≥ 1.2 回合收入）或者编制快满，就该往贵的、能打的上面花钱。
-  // 攒钱期同理：钱是要攒着买好的，再拿线性单价惩罚去压大件等于自我否定。
-  const quality = savingFor !== null || gold >= inc * 1.2 || army >= unitCapOf(s) - 6;
-  // 弃城期一律按"精兵"花钱：钱要攒着换时代/英雄，不该拆成一堆便宜兵。
-  // 换家也一样：这时候每一分钱都要换成能打穿城墙的东西，不是铺散兵线。
-  const elite = quality || mood.weight.boom > 0.5 || trade;
+  /*
+   * 精兵姿态：**留着，但砍掉那条"编制快满就精兵"的触发**（2026-11-21）。
+   *
+   * 先试过整条删掉，对 v1 的胜率从 75% 掉到 33%——说明"手头宽裕时买好的"
+   * 这件事和帽子无关：同样一袋钱，买 5 个民兵和 1 个坦克的战斗力不一样，
+   * 便宜兵再多也顶不住质量。帽子只该背它自己的那一份：
+   * `army >= 编制上限 - 6` 这条判据没有编制就永远不成立，删。
+   *
+   * 所以 `quality` 现在只剩三条与帽子无关的来源：在攒钱、手头比一个兵宽裕、
+   * 或者这一局性格偏发展。
+   */
+  const quality = savingFor !== null || gold >= inc * 1.2 || mood.weight.boom > 0.5;
+  const elite = quality || trade;
   const stance: AiPlan['stance'] = trade
     ? 'trade'
     : weaker && army >= 3 && atGate
@@ -6904,15 +6908,13 @@ function recruitCandidate(
       if (plan.urgent) score -= 22;
     }
     // 高级对单价更敏感一点：便宜的兵能多铺几个方向。
-    // 但高时代单位要单独放宽——它们贵是设计如此，不该因此永远排在火枪兵后面。
-    // 精兵姿态下，单价惩罚只剩三分之一：这时候钱是**攒着买贵的**，
-    // 再用线性价格惩罚去压大件，等于自我否定。
-    // 换家姿态按"精兵"算：这时候每一分钱都要换成能打穿城墙的东西。
+    // 高时代单位单独放宽——它们贵是设计如此，不该永远排在火枪兵后面。
+    // 精兵姿态下单价惩罚只剩三分之一：这时候钱是**攒着买贵的**。
+    // 换家姿态按精兵算：每一分钱都要换成能打穿城墙的东西。
     const concentrated = plan.stance === 'elite' || plan.stance === 'trade';
     const perGold =
       concentrated ? 0.012 : aiLevelOf(s) !== 'basic' ? 0.035 : 0.05;
     score -= price * (d.era >= 4 ? perGold * 0.6 : perGold);
-    // 攒钱姿态下额外给大件一点意愿：既然要停手攒钱，那就攒来买好的
     if (concentrated && price >= 100) score += 8;
 
     // 军营是前线补给点：在军营出兵有额外价值（省了从后方跑一趟）
