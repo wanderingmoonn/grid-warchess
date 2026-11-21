@@ -30,6 +30,10 @@ import { armySize } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
+import { buildMatchReport } from '../src/core/report.ts';
+import type { LoggedAction } from '../src/core/report.ts';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -110,6 +114,24 @@ const SYMMETRY = argOf('symmetry', 'fair') as 'fair' | 'mirror';
 const UNIT_CAP_ARG = argOf('unit-cap', '');
 const UNIT_CAP: number | 'none' | undefined =
   UNIT_CAP_ARG === '' ? undefined : UNIT_CAP_ARG === 'none' ? 'none' : Number(UNIT_CAP_ARG);
+
+/**
+ * 导出一局回放：`--replay <文件路径>`。
+ *
+ * 复盘文件就是一份普通的对局报告（种子 + 完整 config + 动作序列），
+ * 界面里拖进去就能逐帧看——同一个 `buildReplayFromText`，不另写一套。
+ *
+ * 为什么要有它：有些问题（"它为什么把兵堆在这儿""为什么整局没往对面走"）
+ * 人看一眼就知道，机器得写一堆探针才摸到边。所以每个结论都该能**看一眼**。
+ *
+ * 挑哪一局：
+ *   --replay x.json                 → 默认第一颗种子的第一局（新先手）
+ *   --replay x.json --replay-seed 906
+ *   --replay x.json --replay-seed 906 --replay-first old   → 新后手那一局
+ */
+const REPLAY_PATH = argOf('replay', '');
+const REPLAY_SEED = argOf('replay-seed', '');
+const REPLAY_FIRST = argOf('replay-first', 'new') === 'old' ? 'old' : 'new';
 /**
  * 台子上测哪一档。
  *
@@ -138,7 +160,7 @@ type Ai = AiFn;
 function playOne(
   seed: number,
   aIsNew: boolean,
-): { winner: PlayerId | null; turns: number; final: GameState } {
+): { winner: PlayerId | null; turns: number; final: GameState; actions: LoggedAction[] } {
   let s: GameState = createMatch(
     {
       ...DEFAULT_CONFIG,
@@ -160,6 +182,9 @@ function playOne(
 
   const aiFor = (p: PlayerId): Ai =>
     (p === 'A') === aIsNew ? (scriptAi ?? newAi) : VS_NEW ? newAi : oldAi;
+
+  /** 只记**被接受**的动作：被拒的那几步重放时也走不通，记进去只会让复盘提前分叉 */
+  const actions: LoggedAction[] = [];
 
   while (!s.winner && s.turn <= CAP) {
     const ai = aiFor(s.current);
@@ -183,17 +208,21 @@ function playOne(
         continue;
       }
       rejected.clear();
+      actions.push({ ...a, by: s.current });
       s = r.state;
       if (a.type === 'RECRUIT') budget.recruited += 1;
       if (a.type === 'UPGRADE') budget.upgraded += 1;
     }
     if (s.winner) break;
-    const r = applyAction(s, { type: 'END_TURN' });
+    const endTurn = { type: 'END_TURN' as const };
+    const r = applyAction(s, endTurn);
     if (!r.ok) break;
+    // END_TURN 也要记：复盘是一步步 applyAction 重放，少了它回合永远不换手
+    actions.push({ ...endTurn, by: s.current });
     s = r.state;
   }
 
-  return { winner: s.winner ?? null, turns: s.turn, final: s };
+  return { winner: s.winner ?? null, turns: s.turn, final: s, actions };
 }
 
 /**
@@ -216,6 +245,10 @@ function snapshotOf(s: GameState): string {
   return `A ${side('A')} · B ${side('B')}`;
 }
 
+/** 复盘只导一局：第一颗匹配到的那局，别把二十局都写出去 */
+const wantReplaySeed = REPLAY_SEED === '' ? BASE_SEED : Number(REPLAY_SEED);
+let replayWritten = false;
+
 let newWins = 0;
 let oldWins = 0;
 let draws = 0;
@@ -228,9 +261,21 @@ for (let i = 0; i < GAMES; i++) {
   const layouts = SWAP ? [true, false] : [i % 2 === 0];
 
   for (const aIsNew of layouts) {
-    const { winner, turns, final } = playOne(seed, aIsNew);
+    const { winner, turns, final, actions } = playOne(seed, aIsNew);
     turnsSum += turns;
     played += 1;
+
+    /*
+     * 导出这一局（见 `--replay`）：默认取第一颗种子的"新先手"那局。
+     * 报告格式和界面里"结束后上传"的完全一样，所以拖进游戏就能看。
+     */
+    if (REPLAY_PATH && !replayWritten && seed === wantReplaySeed && aIsNew === (REPLAY_FIRST === 'new')) {
+      const report = buildMatchReport(final, new Date(), null, actions);
+      mkdirSync(dirname(REPLAY_PATH), { recursive: true });
+      writeFileSync(REPLAY_PATH, JSON.stringify(report));
+      replayWritten = true;
+      process.stderr.write(`  已导出复盘：${REPLAY_PATH}（${actions.length} 步）\n`);
+    }
 
     let tag: string;
     if (winner === null) {
