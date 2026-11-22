@@ -58,6 +58,9 @@ for (let y = 0; y < 5; y++) {
 }
 console.log('铺农民', n, '产兵格', recruitSpawnCells(s, c2.id, undefined, 'farmer').length);
 s.players[me].gold = 0;
+const startPos = new Map<string, { x: number; y: number }>();
+for (const u of s.units.filter((z) => z.owner === me)) startPos.set(u.id, { x: u.x, y: u.y });
+const moveCount = new Map<string, number>();
 
 const budget = { ...DEFAULT_BUDGET };
 // 3 个回合，每回合最多 12 步，看几回合把产兵格恢复满
@@ -70,7 +73,11 @@ for (let round = 1; round <= 3; round++) {
     const r = applyAction(s, a);
     if (!r.ok) { if (a.type !== 'MOVE') { rejected.add('x'); break; } continue; }
     s = r.state;
-    if (a.type === 'MOVE') moves += 1;
+    if (a.type === 'MOVE') {
+      moves += 1;
+      const uid = 'unitId' in a ? String((a as { unitId?: string }).unitId ?? '') : '';
+      moveCount.set(uid, (moveCount.get(uid) ?? 0) + 1);
+    }
     if (a.type === 'RECRUIT') budget.recruited += 1;
   }
   console.log(`回合 ${round}：MOVE ${moves} 次，产兵格 ${recruitSpawnCells(s, c2.id, undefined, 'farmer').length}`);
@@ -86,4 +93,26 @@ for (let y = 0; y < 5; y++) {
     row += u ? '农' : '·';
   }
   console.log(row);
+}
+
+console.log('—— 农民动静 ——');
+for (const [id, p0] of startPos) {
+  const u = s.units.find((z) => z.id === id);
+  const n = moveCount.get(id) ?? 0;
+  const to = u ? `${u.x},${u.y}` : '（阵亡）';
+  console.log(`${id} ${p0.x},${p0.y} → ${to} 移动${n}次${n === 0 ? '  ※没动' : ''}`);
+}
+const moved = [...startPos.keys()].filter((id) => (moveCount.get(id) ?? 0) > 0).length;
+console.log(`共 ${startPos.size} 个农民，动过 ${moved} 个`);
+
+console.log('—— 城格检查 ——');
+const cc = s.cities.find((c) => c.id === c2.id)!;
+console.log('城', cc.id, cc.x, cc.y, 'size', cc.size);
+for (let dy = 0; dy < cc.size; dy++) {
+  for (let dx = 0; dx < cc.size; dx++) {
+    const x = cc.x + dx, y = cc.y + dy;
+    const t = s.tiles[y * s.w + x];
+    const u = s.units.find((z) => z.x === x && z.y === y);
+    console.log(`(${x},${y}) 地形=${t?.terrain} cityId=${(t as { cityId?: string })?.cityId ?? '-'} 单位=${u ? u.type : '空'}`);
+  }
 }
