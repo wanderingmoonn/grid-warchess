@@ -770,6 +770,7 @@ export function createMatch(
       ...(config.aiEconCap === true ? { aiEconCap: true } : {}),
       ...(config.aiEconPlan === true ? { aiEconPlan: true } : {}),
       ...(config.aiCrossSplit === false ? { aiCrossSplit: false } : {}),
+      ...(config.aiThreatScale === true ? { aiThreatScale: true } : {}),
       ...(config.aiMass === false ? { aiMass: false } : {}),
       ...(config.aiBreakthrough === false ? { aiBreakthrough: false } : {}),
       ...(config.aiSquad === false ? { aiSquad: false } : {}),

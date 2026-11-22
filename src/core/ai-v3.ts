@@ -1774,6 +1774,11 @@ interface Fields {
   /** 建造编队缺口：有计划要修桥、却没有（或不够）建造编队。>0 时采购给工人加分 */
   builderNeed: number;
   /**
+   * 威胁强度（0~1）：敌方 2 回合能摸到城 / 近 6 回合城被打过 / 敌城离我城 ≤6 格。
+   * 采购按它压经济、提兵（`aiThreatScale` 开时）。
+   */
+  threatScale: number;
+  /**
    * 发展意愿 y（0~1，来自战略层 `postureBudgetOf`）。
    *
    * 2026-11-21 之前它**算出来没人用**：战略层说"该发展"，采购照样把 97% 的钱
@@ -2498,6 +2503,44 @@ const SQUAD_FORM_TIMEOUT = 10;
  * 仍然只有两个维度（用户的原模型）：x = 打不打，y = 钱花在发展还是军费。
  * y 目前只用来定"经济单位的相对偏好"，还没做成预算硬上限。
  */
+/**
+ * 威胁强度（0~1）。三个信号，越齐越高（用户 2026-11-22 的方案）：
+ *
+ *   a. 视野内敌方战斗单位 **2 回合**能摸到我家城（`2×move + range-1`）；
+ *   b. 最近 6 回合我家城被打过（`keep.cityHitTurn`，见下面的 hp 比较）；
+ *   c. 敌城离我家城 ≤6 格（地图刷新就可能"贴着开"）。
+ *
+ * 只读我方可见信息，不看全图。
+ */
+function threatScaleOf(
+  view: GameState,
+  me: PlayerId,
+  keep: Record<string, unknown>,
+): number {
+  const myCities = citiesOf(view, me).filter((c) => !c.ruined);
+  if (myCities.length === 0) return 1;
+  let reachable = false;
+  for (const u of enemyUnitsOf(view, me)) {
+    const d = utype(view, u.type);
+    if (d.category !== 'combat') continue;
+    const reach = 2 * Math.max(1, d.move ?? 1) + Math.max(0, (d.range ?? 1) - 1);
+    if (myCities.some((c) => distToCity(u, c) <= reach)) {
+      reachable = true;
+      break;
+    }
+  }
+  const hitRecent = view.turn - Number(keep.cityHitTurn ?? -99) <= 6;
+  let close = false;
+  for (const fc of view.cities) {
+    if (fc.owner === me || fc.ruined) continue;
+    if (myCities.some((mc) => distToCity(fc, mc) <= 6)) {
+      close = true;
+      break;
+    }
+  }
+  return Math.min(1, (reachable ? 0.4 : 0) + (hitRecent ? 0.3 : 0) + (close ? 0.3 : 0));
+}
+
 function postureBudgetOf(
   s: GameState,
   me: PlayerId,
@@ -7966,6 +8009,7 @@ function recruitCandidate(
   const keepNow = (focusOf(s, me).plan?.keep ?? {}) as Record<string, unknown>;
   const squadNeed = Number(keepNow.squadNeed ?? 0);
   const builderNeed = Number(keepNow.builderNeed ?? 0);
+  const threatScale = Number(keepNow.threatScale ?? 0);
   /*
    * 产业链目标的读数：整次采购算一遍，别跟着每个兵种重算
    * （`goalStepsInPlay` 会问每个目标的价值，海军那条还要查水域）。
@@ -8333,6 +8377,8 @@ function recruitCandidate(
     let score = 50;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
+      // 威胁越大，兵越优先（0~40 分，和"编队缺口"叠加）
+      if (threatScale > 0) score += 40 * threatScale;
       // 编队缺口：还在收拢的编队缺人 → 采购优先补（每条缺口 4 分，封顶 24）
       score += Math.min(24, squadNeed * 4);
       // 素体的 atk 只是撞击：真正的输出在要装上去的武器里，按"装完之后"估值
@@ -8517,6 +8563,8 @@ function recruitCandidate(
       if (!plan.urgent) score -= 14 * w.boom;
     }
     if (d.category === 'economy') {
+      // 威胁越大，经济越该让位给兵（`aiThreatScale` 开时；scale 已含开关）
+      if (threatScale > 0) score *= 1 - 0.5 * threatScale;
       const inc = maxIncome(d);
       const payback = inc > 0 ? price / inc : 99;
       /*
@@ -9344,6 +9392,14 @@ function aiNextActionCoreInner(
   const needBridgeNow = !canReachEnemyByLand(view, me);
 
 
+  /*
+   * 威胁强度：先读上回合的 `keep.cityHitTurn`，再更新本回合的城血。
+   * 只在 `depth === 0` 写账本，推演分支不该改它。
+   */
+  const keepPrev = (focusOf(s, me).plan?.keep ?? {}) as Record<string, unknown>;
+  const threatScale =
+    s.config.aiThreatScale === true ? threatScaleOf(view, me, keepPrev) : 0;
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -9358,6 +9414,7 @@ function aiNextActionCoreInner(
     crossingAlt: null,
     buildGuide: null,
     builderNeed: 0,
+    threatScale,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -9547,6 +9604,24 @@ function aiNextActionCoreInner(
     if (depth === 0) {
       if (resolved.memo !== prevPlan) setFocus(s, me, { ...focusOf(s, me), plan: resolved.memo });
       notePlanTrace(s, me, resolved);
+      /*
+       * 城血比较放在这里：`plan` 是 `resolvePlans` 之后才有的，
+       * 放在它之前写 `keep` 会一直读到 `plan == null`，`cityHp` 永远为空
+       * （实测 threat 一直是 0.00、城血 {}）。
+       */
+      if (focusOf(s, me).plan) {
+        const k = { ...(focusOf(s, me).plan!.keep ?? {}) };
+        const hp = { ...((k.cityHp as Record<string, number> | undefined) ?? {}) };
+        for (const c of citiesOf(view, me)) {
+          if (typeof hp[c.id] === 'number' && c.hp < (hp[c.id] ?? 0) - 0.5) {
+            k.cityHitTurn = view.turn;
+          }
+          hp[c.id] = c.hp;
+        }
+        k.cityHp = hp;
+        k.threatScale = threatScale;
+        focusOf(s, me).plan!.keep = k;
+      }
       /*
        * 编队上报：这是"下面往回说话"的第一条通道。
        *

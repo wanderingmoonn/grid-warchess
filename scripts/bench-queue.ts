@@ -56,6 +56,8 @@ const QUEUES: Queue[] = [
 const pickArg = argOf('queue', '');
 /** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），做 A/B 用 */
 const ECON_CAP = process.argv.includes('--econ-cap');
+/** `--threat`：打开威胁感知采购（`aiThreatScale`） */
+const THREAT = process.argv.includes('--threat');
 const WANT = pickArg ? new Set(pickArg.split(',').map((x) => x.trim().toUpperCase())) : null;
 /** 路径都相对 `scripts/` 解析（和 ai-duel 的写法一致：`--new ../src/core/ai-v3.ts`） */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -90,6 +92,7 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
       size: q.size,
       mapSymmetry: 'fair',
       ...(ECON_CAP ? { aiEconCap: true } : {}),
+      ...(THREAT ? { aiThreatScale: true } : {}),
     },
     seed,
   );

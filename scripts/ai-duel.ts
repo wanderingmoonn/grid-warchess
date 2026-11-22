@@ -161,6 +161,8 @@ const RECRUIT_CAP_ARG = argOf('recruit-cap', '');
 const ECON_CAP = has('econ-cap');
 /** `--econ-plan`：经济投入交给求解器（`aiEconPlan`） */
 const ECON_PLAN = has('econ-plan');
+/** `--threat`：威胁感知采购（`aiThreatScale`） */
+const THREAT = has('threat');
 const RECRUIT_CAP: number | 'auto' | undefined =
   RECRUIT_CAP_ARG === 'auto' ? 'auto' : RECRUIT_CAP_ARG === '' ? undefined : Number(RECRUIT_CAP_ARG);
 
@@ -217,6 +219,7 @@ function playOne(
       ...(POSTURE ? { aiPosture: true } : {}),
       ...(ECON_CAP ? { aiEconCap: true } : {}),
       ...(ECON_PLAN ? { aiEconPlan: true } : {}),
+      ...(THREAT ? { aiThreatScale: true } : {}),
       ...(RECRUIT_CAP === undefined ? {} : { aiRecruitCap: RECRUIT_CAP }),
       ...(NO_DECISIVE ? { aiDecisive: false } : {}),
       ...(NO_MASS ? { aiMass: false } : {}),
