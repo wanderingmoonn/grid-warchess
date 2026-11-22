@@ -216,6 +216,30 @@ const freeAround = (): number => {
 };
 
 console.log(`地图 ${W}×${W} · 城 (${CITY_X},${CITY_Y}) · 战斗单位 ${traps.length} 个占满城格（${traps.join(' ')}）`);
+{
+  // 按 buildSlotPlan 的规则复算一遍，确认关键格到底有没有生成
+  const cityTiles2: Array<{ x: number; y: number }> = [];
+  for (let dy = 0; dy < city.size; dy++) for (let dx = 0; dx < city.size; dx++) cityTiles2.push({ x: city.x + dx, y: city.y + dy });
+  const insideCat = cityTiles2.map((t) => {
+    const u = s.units.find((z) => z.x === t.x && z.y === t.y);
+    return u ? s.unitTypes[u.type]?.category ?? '?' : '空';
+  });
+  const combatInside = insideCat.includes('combat');
+  const exits: string[] = [];
+  if (combatInside) {
+    for (const t of cityTiles2) {
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as Array<[number, number]>) {
+        const x = t.x + dx;
+        const y = t.y + dy;
+        const tile = s.tiles[y * W + x];
+        if (!tile || tile.terrain === 'city') continue;
+        if (!s.units.some((u) => u.x === x && u.y === y && u.owner === me)) continue;
+        exits.push(`${x},${y}`);
+      }
+    }
+  }
+  console.log(`  [构造] 城格类别 ${insideCat.join('/')} · 出城关键格 ${exits.length} 个：${exits.join(' ') || '无'}`);
+}
 console.log(
   `塞入经济单位 ${farmers} 个（城周围两圈，城格除外）· 产兵格 ${spawnCells()} · 出城邻格空 ${freeAround()}`,
 );
