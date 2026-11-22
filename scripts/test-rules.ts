@@ -2717,11 +2717,11 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
   }
 });
 
-test('英雄包装十一个英雄，外加跟班的召唤物', () => {
+test('英雄包装十二个英雄，外加跟班的召唤物', () => {
   const pack = EXPANSIONS.find((e) => e.id === 'fantasy')!;
   const units = pack.units ?? [];
   const heroes = units.filter((u) => u.hero === true);
-  assert.equal(heroes.length, 11);
+  assert.equal(heroes.length, 12);
   for (const u of heroes) {
     assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
     assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
@@ -4172,6 +4172,42 @@ test('投斧：默认只能近身，开了技能才够得着三格', () => {
   const melee = computeDamage(r.state, k2, foe);
   
   assert.equal(far, Math.round(melee * 0.6), `远程 ${far} 应该等于近身 ${melee} 的六成`);
+});
+
+test('精灵女王：林海把五格内地表变森林、五回合后还原，友军限时获得林地之力', () => {
+  /*
+   * 2026-11-22 新增。它验证的是引擎新加的两件事：
+   *   · `patchTerrain`：改完记原样、到期还原（而不是永久改掉地形）；
+   *   · `grantTempAbility`：限时能力到期会被摘掉（而不是永久多一条）。
+   */
+  const s = fresh({ expansionIds: FANTASY });
+  for (let y = 2; y <= 12; y += 1) {
+    for (let x = 2; x <= 12; x += 1) {
+      const t = s.tiles[idx(s, x, y)];
+      if (t && t.terrain !== 'city') t.terrain = 'plain';
+    }
+  }
+  const queen = place2(s, 'A', 'elf-queen', 7, 7);
+  const ally = place2(s, 'A', 'militia', 7, 8);
+  s.current = 'A';
+
+  const cast = applyAction(s, { type: 'HERO_SKILL', unitId: queen.id, skillId: 'forest-tide' });
+  assert.ok(cast.ok, cast.ok ? '' : cast.reason);
+  assert.equal(cast.state.tiles[idx(cast.state, 7, 7)].terrain, 'forest', '脚下的地变成森林');
+  assert.equal(cast.state.tiles[idx(cast.state, 4, 7)].terrain, 'forest', '五格内直着走三格的地方也变');
+  const buffed = cast.state.units.find((u) => u.id === ally.id)!;
+  assert.ok((buffed.tempAbilities ?? []).length > 0, '友军拿到限时能力');
+
+  // 走满五回合：地形还原、能力摘掉
+  let st = cast.state;
+  for (let i = 0; i < 6; i += 1) {
+    const e = applyAction(st, { type: 'END_TURN' });
+    assert.ok(e.ok, e.ok ? '' : e.reason);
+    st = e.state;
+    st.current = 'A';
+  }
+  assert.equal(st.tiles[idx(st, 7, 7)].terrain, 'plain', '到期该还原成平地');
+  assert.equal((st.units.find((u) => u.id === ally.id)?.tempAbilities ?? []).length, 0, '限时能力到期要摘掉');
 });
 
 test('九头蛇：不再是英雄，强再生是被动', () => {

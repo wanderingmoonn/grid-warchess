@@ -1296,6 +1296,14 @@ export interface Unit {
    * 规则层**不认识任何具体能力 id**，只负责合并查找。
    */
   extraAbilities?: string[];
+  /**
+   * 临时能力（2026-11-22）：带到期回合，由引擎统一发、统一收。
+   *
+   * 和 `extraAbilities` 的分工：那个是**永久**附着（模块、关卡、存档），
+   * 这个是**限时**的（精灵女王的林海给友军 5 回合穿林 + 林地之主）。
+   * 查询走 `abilitiesOf(s,u)`，到期在 `turnStartSkills` 里回收。
+   */
+  tempAbilities?: Array<{ ids: string[]; until: number }>;
 
   /** 
    * 扩展专用的自定义数据沙盒，一些其他扩展不会共用的数据就丢这里。
@@ -2279,6 +2287,12 @@ export interface GameState {
    * 事件（造一个兵、盖一座楼），不是流量。所以只能看**趋势**：
    * 存量在掉 = 供不上，该补产出建筑了；持平或涨 = 够了。
    */
+  /**
+   * 临时地形改造（2026-11-22，精灵女王的「林海」）：只记原始地形与到期回合，
+   * 到期由 `turnStartSkills` 还原。森林会牵动移速/视野/护甲/穿林/林地之主一整套
+   * 判定，逐个加 if 迟早漏；直接改 tiles，所有系统天然一致。
+   */
+  terrainPatches?: Array<{ x: number; y: number; from: Terrain; until: number }>;
   aiResMark?: Partial<Record<PlayerId, { turn: number; stock: Record<string, number> }>>;
   /**
    * 僵持计数（AI 用，2026-11-15）。

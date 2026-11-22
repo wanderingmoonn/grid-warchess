@@ -2488,6 +2488,43 @@ const HERO_IDS = [
 // 玩家自己。所以按 +半成 走，谁的血涨得多谁多掏一点，最终都还落在原档位里。
 const HERO_UNITS: UnitTypeDef[] = [
   /*
+   * 精灵女王（2026-11-22 新增）：五代英雄，六边形远程（射程 6）。
+   *
+   * 技能「林海」整局一次：五格内**非水域**地形改成森林、维持五回合；
+   * 范围内的友军同时获得「穿林」与「林地之主」。它不是伤害技，是**改地形**的技——
+   * 把一片开阔地变成自家的林子：穿林让友军在林子里只花 1 点移动，林地之主给
+   * +3 护甲。打完之后这片地会变回原样，所以选在哪一格放，是这一局要算的事。
+   */
+  {
+    id: 'elf-queen',
+    name: '精灵女王',
+    short: '灵',
+    era: 5,
+    category: 'combat',
+    cost: 560,
+    move: 4,
+    atk: 36,
+    armor: 5,
+    maxHp: 105,
+    range: 6,
+    vision: 6,
+    hero: true,
+    unlockCost: 180,
+    abilities: ['forest-walk', 'woodland', 'elf-shot'],
+    skills: [
+      {
+        id: 'forest-tide',
+        name: '林海',
+        summary: '五格内非水域地形化为森林，持续 5 回合；范围内友军获得穿林与林地之主。整局一次。',
+        effect: 'forest-tide',
+        charges: 1,
+        regen: 999,
+        radius: 5,
+        power: 5,
+      },
+    ],
+  },
+  /*
    * 兽人酋长（2026-11-22 新增）：**第二代的英雄**。
    *
    * 之前英雄全在 3~8 代，二代局一个可买的英雄都没有——早期局只能拼普通兵。
@@ -3071,7 +3108,7 @@ const HEROES: Expansion = {
   scale: 'large',
   name: '奇想·英雄',
   summary:
-    '十一个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、兽人酋长（战吼：整局一次，召出四个兽人步兵）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本轮倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）、圣剑勇者（圣剑觉醒：永久 +8 攻 / +2 甲 / +8 魔攻 / +2 魔抗 / +30 生命上限并回血，剑气直线溅射）、邪龙王（陨卵：9 格内落下魔龙卵，落点周围吃暗属性魔法，两回合后孵出魔龙；本体飞行）。第一次招募要额外付解锁费，解锁后永久开放。后两位需要同时开启「信息化」扩展。',
+    '十二个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、兽人酋长（战吼：整局一次，召出四个兽人步兵）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本轮倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）、圣剑勇者（圣剑觉醒：永久 +8 攻 / +2 甲 / +8 魔攻 / +2 魔抗 / +30 生命上限并回血，剑气直线溅射）、邪龙王（陨卵：9 格内落下魔龙卵，落点周围吃暗属性魔法，两回合后孵出魔龙；本体飞行）。第一次招募要额外付解锁费，解锁后永久开放。后两位需要同时开启「信息化」扩展。',
   requires: ['fantasy-core'],
   hooks: {},
   units: HERO_UNITS,
@@ -3138,6 +3175,52 @@ registerSkillEffect('summon-squad', (c) => {
     c.state,
     c.self.owner,
     `${c.api.utype(c.state, c.self.type).name} 战吼召出 ${spawned} 个兽人步兵`,
+  );
+});
+
+/**
+ * 林海（精灵女王）：五格内非水域地形变成森林，持续 5 回合；范围内友军获得
+ * 「穿林」+「林地之主」。
+ *
+ * 两个都走引擎的新接口：`patchTerrain`（改完会记原样、到期还原）和
+ * `grantTempAbility`（限时能力，到期自动摘）。扩展不自己碰 `tiles` 和
+ * `extraAbilities`——那样要么改不回来，要么永久多一条能力。
+ */
+registerSkillEffect('forest-tide', (c) => {
+  const radius = Math.max(1, Math.round(c.skill.radius ?? 5));
+  const turns = Math.max(1, Math.round(c.skill.power ?? 5));
+  const cells: Array<{ x: number; y: number }> = [];
+  for (let dy = -radius; dy <= radius; dy += 1) {
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      const x = c.self.x + dx;
+      const y = c.self.y + dy;
+      const tile = c.api.tileAt(c.view, x, y);
+      if (!tile) continue;
+      if (c.api.distance(c.self, { x, y }) > radius) continue;
+      // 水域不动：水不会变成森林
+      if (tile.terrain === 'water' || tile.terrain === 'deep') continue;
+      cells.push({ x, y });
+    }
+  }
+  const changed = c.api.patchTerrain(c.view, cells, 'forest', turns);
+
+  let buffed = 0;
+  for (const u of c.state.units) {
+    if (u.owner !== c.self.owner || u.hp <= 0) continue;
+    if (c.api.distance(c.self, u) > radius) continue;
+    c.api.grantTempAbility(c.state, u, ['forest-walk', 'woodland'], turns);
+    buffed += 1;
+  }
+
+  if (changed === 0 && buffed === 0) {
+    c.result.ok = false;
+    c.result.reason = '周围已经是森林了，喊这一嗓子没用';
+    return;
+  }
+  c.api.pushLog(
+    c.state,
+    c.self.owner,
+    `${c.api.utype(c.state, c.self.type).name} 唤来林海：${changed} 格化为森林，${buffed} 名友军获得林地之力（${turns} 回合）`,
   );
 });
 
@@ -3306,7 +3389,7 @@ export const FANTASY: Expansion = {
   recommends: ['pack-contemporary'],
   summary:
     '一整套奇想军备：法则（魔法攻击/魔抗、属性克制、负面状态、空中层）+ 人类的骑士团 + ' +
-    '荒兽 + 秘法 + 十一个全场唯一的英雄。开这一个包就有全部 72 个兵种，不再分五个勾。' +
+    '荒兽 + 秘法 + 十二个全场唯一的英雄。开这一个包就有全部 72 个兵种，不再分五个勾。' +
     '英雄第一次招募要额外付解锁费，解锁后永久开放；圣剑勇者与邪龙王需要同时开「信息化」。',
   // 只有法则包有钩子（开局写一条战报，让玩家确认法则生效）。
   // 合并之后它就是整包的钩子——四组兵种本来就没有钩子。
