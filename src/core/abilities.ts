@@ -105,14 +105,16 @@ export const CORE_ABILITIES: AbilityDef[] = [
   {
     id: 'siege-master',
     name: '破城',
-    summary: '攻城伤害 ×1.5。',
+    summary: '攻城伤害 ×2。',
     group: 'attack',
     hooks: {
       siegeDamage: [
         {
           stage: 1,
           apply: (c) => {
-            c.damage = Math.round(c.damage * 1.5);
+            // 2026-11-22：×1.5 → ×2。同批城血整体 ×1.5，攻城器械要保住
+            // "比普通兵快"的优势，倍率就得压在 1.5 之上（2 / 1.5 ≈ 1.33 倍效率）。
+            c.damage = Math.round(c.damage * 2);
           },
         },
       ],

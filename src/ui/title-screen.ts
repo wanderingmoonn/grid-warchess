@@ -5,8 +5,7 @@
  * 没有"我是谁、我要干什么"，右上角一排小按钮长得像调试面板。新玩家（包括
  * 隔几天回来的人）第一件要判断的事是"这是什么游戏"，而旧流程从来没回答过。
  *
- * 这一页只干三件事：认出门面（标题 + 一句话）、给出唯一的下一步（开始对局）、
- * 把其余入口（继续 / 联机 / 规则 / 公告）降级成一行小链接。
+ * 首页提供教程和新对局。有存档时，战场预览也用于继续对局，联机和规则手册放在辅助入口。
  *
  * 故意不做的：
  *   · 不放背景图 / 不做视差——这是一个靠规则吃饭的战棋，花哨的首屏只会
@@ -15,9 +14,14 @@
  *     首页多一个开关，第一个按钮就晚一秒被看见。
  */
 
+import { unitInsignia, type UnitRole } from './unit-insignia.ts';
+import { currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './layout.ts';
+import { titleMatchPreview, type TitleMatchPreview } from './title-match-preview.ts';
+
 export interface TitleOptions {
   /** 本机有没有可以接着打的对局 */
   hasSave: boolean;
+  preview?: TitleMatchPreview;
   /** 构建版本，底部署名 */
   version: string;
   /** 最近一版的一句话（可省） */
@@ -56,26 +60,52 @@ const ERA_STRIP: Array<[string, string]> = [
   ['信息化', '#4a7fa6'],
 ];
 
+function titleSandtable(): string {
+  const terrain = ['pppppwpp', 'ppppwwhh', 'pffpwphh', 'pffwwppp', 'pppwpppp', 'pppwwppp', 'phppwppp', 'ppppwwpp'].join('');
+  const pieces: Array<{ x: number; y: number; team: string; glyph: string; role: UnitRole }> = [
+    { x: 1, y: 5, team: 'a', glyph: '戈', role: 'melee' },
+    { x: 2, y: 4, team: 'a', glyph: '弓', role: 'ranged' },
+    { x: 2, y: 6, team: 'a', glyph: '炮', role: 'ranged' },
+    { x: 5, y: 2, team: 'b', glyph: '骑', role: 'melee' },
+    { x: 6, y: 3, team: 'b', glyph: '坦', role: 'ranged' },
+    { x: 6, y: 1, team: 'b', glyph: '机', role: 'air' },
+  ];
+  return `<div class="title-visual" role="img" aria-label="跨时代沙盘示意：青铜军队与现代军队隔河对峙，不代表实际对局">
+    <div class="title-visual-head"><span>推演沙盘</span><span>青铜 → 信息化</span></div>
+    <div class="title-sandtable">
+      ${Array.from(terrain, (kind) => `<i class="hero-tile hero-${kind}"></i>`).join('')}
+      <span class="hero-city a" style="--x:0;--y:6">${unitInsignia('building')}</span>
+      <span class="hero-city b" style="--x:6;--y:0">${unitInsignia('building')}</span>
+      ${pieces.map((piece) => `<span class="hero-piece ${piece.team}" style="--x:${piece.x};--y:${piece.y}"><b>${piece.glyph}</b><i>${unitInsignia(piece.role)}</i></span>`).join('')}
+    </div>
+    <div class="title-visual-foot"><span>沙盘示意</span></div>
+  </div>`;
+}
+
 export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   // 用宿主自己的 document，而不是全局的那个：界面用例跑在 jsdom 里，
   // 那里没有全局 document（第一版就是这么红的：document is not defined）。
   const doc = host.ownerDocument;
   const layer = doc.createElement('div');
   layer.className = 'title-screen';
+  const preview = opts.hasSave && opts.preview ? titleMatchPreview(opts.preview) : '';
   layer.innerHTML = `
+    <button class="title-ui-toggle btn btn-sm" data-title="ui-layout"></button>
     <div class="title-bg" aria-hidden="true">${Array.from({ length: 48 }, (_, i) => {
       const t = i % 12;
       return `<i style="--d:${(t / 12).toFixed(2)};--r:${(i * 37) % 100}"></i>`;
     }).join('')}</div>
     <div class="title-inner">
-      <h1 class="title-name">时代与回旋镖</h1>
-      <p class="title-sub">从青铜到信息化：六个时代的产兵、经济与攻城</p>
+      <div class="title-copy">
+      <p class="title-kicker">回合制 · 跨时代战棋</p>
+      <h1 class="title-name"><span>时代与</span><span>回旋镖</span></h1>
+      <p class="title-sub">经营城市，调度军队，推进时代。</p>
 
       <div class="title-actions">
         ${(() => {
           const tut = '<button class="title-btn" data-title="tutorial">新手教程</button>';
           const neu = '<button class="title-btn" data-title="new">开始对局</button>';
-          const cont = `<button class="title-btn" data-title="continue" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>`;
+          const cont = `<button type="button" class="title-btn title-resume-fallback" ${opts.hasSave ? '' : 'disabled'}>继续上一局</button>`;
           // 第一次来：教程当主按钮、排第一；老玩家：开始对局在主位，教程退第二
           return opts.firstVisit
             ? tut.replace('class="title-btn"', 'class="title-btn primary"') + neu + cont
@@ -85,24 +115,25 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
 
       <div class="title-links">
         <button data-title="rogue">肉鸽</button>
-        <span>·</span>
         <button data-title="online">联机对战</button>
-        <span>·</span>
         <button data-title="manual">规则手册</button>
-        <span>·</span>
+        <details class="title-tools">
+        <summary>更多</summary>
+        <div class="title-tools-menu">
         <button data-title="editor">兵种编辑器</button>
-        <span>·</span>
         <button data-title="import">导入对局</button>
-        <span>·</span>
         <button data-title="replay" title="选一份对局数据（.json）逐帧回看">复盘</button>
+        </div>
+        </details>
       </div>
       ${opts.latest ? '<p class="title-latest"></p>' : ''}
 
       <ol class="title-era" aria-label="六个时代">
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
-
-      <p class="title-foot">v${opts.version} · 支持三 / 四人局 · 二十余个扩展包 · AI 可调档</p>
+      </div>
+      ${preview || titleSandtable()}
+      <p class="title-foot">v${opts.version}</p>
     </div>
   `;
 
@@ -113,17 +144,39 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   const close = (): void => {
     layer.remove();
     win.removeEventListener('keydown', onKey);
+    win.removeEventListener(UI_LAYOUT_EVENT, syncLayout);
   };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && opts.hasSave) close();
   };
   const win = doc.defaultView ?? window;
+  const resumeCard = layer.querySelector<HTMLButtonElement>('.title-resume');
+  const resumeFallback = layer.querySelector<HTMLButtonElement>('.title-resume-fallback')!;
+  const syncLayout = (): void => {
+    const classic = currentUiLayout(doc.documentElement) === 'classic';
+    const button = layer.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
+    button.textContent = classic ? '恢复新版 UI' : '回滚到经典 UI';
+    button.setAttribute('aria-pressed', String(classic));
+    if (resumeCard) {
+      resumeCard.hidden = classic;
+      if (classic) delete resumeCard.dataset.title;
+      else resumeCard.dataset.title = 'continue';
+    }
+    resumeFallback.hidden = !classic && (!opts.hasSave || !!resumeCard);
+    if (resumeCard && !classic) delete resumeFallback.dataset.title;
+    else resumeFallback.dataset.title = 'continue';
+  };
+  syncLayout();
+  win.addEventListener(UI_LAYOUT_EVENT, syncLayout);
   win.addEventListener('keydown', onKey);
 
   layer.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-title]');
     if (!btn || (btn as HTMLButtonElement).disabled) return;
     switch (btn.dataset.title) {
+      case 'ui-layout':
+        setUiLayout(currentUiLayout(doc.documentElement) === 'classic' ? 'refined' : 'classic', doc.documentElement);
+        break;
       case 'new':
         close();
         opts.onNew();

@@ -90,6 +90,22 @@ export interface AbilityApi {
    * 没有空地就返回 null（不生成）。
    */
   spawnNear(s: GameState, owner: PlayerId, type: string, near: Unit): Unit | null;
+  /**
+   * 把一个单位淹死（浅水那一档，会走 hurtUnit，所以有战报、能被装甲吸掉）。
+   *
+   * 海妖把人拖进水里要用它——"拖进水域直接秒杀"如果写成 `hp = 0`，
+   * 就绕过了死亡钩子（自爆、亡语、战报全不触发），看着像"人凭空消失"。
+   */
+  drown(s: GameState, u: Unit): boolean;
+  /**
+   * 给单位一组限时能力（到期由引擎统一收回）。
+   *
+   * 精灵女王的「林海」用它给友军 5 回合的穿林 + 林地之主。
+   * **扩展不该自己往 `extraAbilities` 里塞**：那个字段是永久的，塞进去就再也拿不出来了。
+   */
+  grantTempAbility(s: GameState, u: Unit, ids: string[], turns: number): void;
+  /** 把一片格子临时改成某种地形，`turns` 回合后自动还原；返回实际改了几格 */
+  patchTerrain(s: GameState, cells: Array<{ x: number; y: number }>, terrain: Terrain, turns: number): number;
   /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它）；`board` 不传就是地球 */
   spawn(
     s: GameState,

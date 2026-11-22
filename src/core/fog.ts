@@ -84,7 +84,19 @@ function allTilesOn(s: GameState, id: BoardId): Set<number> {
  * @param reveal 全图视角：双 AI 观战、复盘、调试平衡时用。
  *               它只影响"给谁看"，不影响任何规则计算。
  */
-export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerView {
+export function playerView(
+  s: GameState,
+  p: PlayerId,
+  reveal = false,
+  /**
+   * **按视野裁剪，无视 `s.fog`**（2026-11-21）。
+   *
+   * `s.fog` 原本兼职两件事：玩家要不要看全图、以及 AI 能不能看见远处。
+   * 于是"我要看全图"一关，AI 立刻全知——这轮用户报的就是这个。
+   * 现在规则层的视野由这个参数单独控制：AI 传 `true`，玩家显示不传。
+   */
+  clipByVision = false,
+): PlayerView {
   /*
    * 每张图各算一份可见格。
    *
@@ -162,7 +174,7 @@ export function playerView(s: GameState, p: PlayerId, reveal = false): PlayerVie
     return false;
   };
 
-  if (!s.fog || reveal) {
+  if ((!s.fog && !clipByVision) || reveal) {
     cloned.units = cloned.units.filter((u) => u.owner === p || !concealed(u));
     // 无雾时幽灵表用不上，但 `memory` 是随 state 一起下发的：
     // 留着一份"对面哪一格有炮"的记忆，等于把这条规则废掉

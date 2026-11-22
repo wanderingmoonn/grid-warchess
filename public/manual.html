@@ -705,7 +705,7 @@
         <span class="c">城市不会反击。最低 0。</span>
       </div>
       <ul>
-        <li>城市初始耐久 30，随时代提升（见第 11 节）。</li>
+        <li>城市初始耐久 45，随时代提升（见第 11 节）。</li>
         <li>耐久归零 → 城市变成<b>废墟</b>：不再产出、不产兵、不回血，<b>但还不算易主</b>——它仍挂在原主名下，所以不会因为"丢了一座城"立刻判负。</li>
         <li><b>派兵走进去才接管</b>：入驻时支付一笔重建费（= 城市耐久上限 × 2.5），付不起就进不去。接管后耐久恢复到上限的 30%，时代等级一起接收。</li>
         <li>这条把"砸开城墙"和"拿到城市"拆成了两件事：攻方必须留一支部队去占，否则只是把对面打残，没拿到产能。</li>
@@ -822,11 +822,11 @@
           <tr><th>时代</th><th>升级费</th><th>城市耐久</th><th>城市护甲</th><th>城市收入</th></tr>
         </thead>
         <tbody>
-          <tr><td class="name">青铜时代</td><td class="num">—</td><td class="num">30</td><td class="num">4</td><td class="num">50</td></tr><tr><td class="name">铁器时代</td><td class="num">220</td><td class="num">42</td><td class="num">6</td><td class="num">55</td></tr><tr><td class="name">火器时代</td><td class="num">360</td><td class="num">54</td><td class="num">8</td><td class="num">61</td></tr><tr><td class="name">蒸汽时代</td><td class="num">540</td><td class="num">66</td><td class="num">10</td><td class="num">68</td></tr><tr><td class="name">机械化时代</td><td class="num">780</td><td class="num">80</td><td class="num">12</td><td class="num">76</td></tr>
+          <tr><td class="name">青铜时代</td><td class="num">—</td><td class="num">45</td><td class="num">4</td><td class="num">50</td></tr><tr><td class="name">铁器时代</td><td class="num">220</td><td class="num">63</td><td class="num">6</td><td class="num">55</td></tr><tr><td class="name">火器时代</td><td class="num">360</td><td class="num">81</td><td class="num">8</td><td class="num">61</td></tr><tr><td class="name">蒸汽时代</td><td class="num">540</td><td class="num">99</td><td class="num">10</td><td class="num">68</td></tr><tr><td class="name">机械化时代</td><td class="num">780</td><td class="num">120</td><td class="num">12</td><td class="num">76</td></tr>
         </tbody>
       </table>
       <p>升级会同时提升耐久、护甲、收入，并解锁新兵种。升级用<b>增量</b>而非覆盖，所以扩展规则（比如「要塞」）给城市加的属性不会被升级抹掉。</p>
-      <p><b>表里还有第六时代「信息化」（升级费 1080，城市耐久 96，城市护甲 14），但基础规则升不上去</b>：
+      <p><b>表里还有第六时代「信息化」（升级费 1080，城市耐久 144，城市护甲 14），但基础规则升不上去</b>：
         它的开关是扩展「信息化」——和原版每一代一样，那个包既开这一级科技，也带<b>这一代最基本的九个兵</b>
         （步兵班、坦克、榴弹炮、装甲侦察车、物流中心、工程兵、混凝土碉堡、产业园、联合作战中心），
         只勾它就能打完一整局。想再要这一代的专精兵（直升机、无人机、反坦克导弹、火箭炮、防空导弹……），
@@ -899,7 +899,7 @@
         <table>
           <thead><tr><th>能力</th><th>效果</th><th>本体里谁有</th></tr></thead>
           <tbody>
-            <tr id="t-ab-first-strike"><td class="name">先手</td><td>攻击后不会被反击。</td><td class="traits">—</td></tr><tr id="t-ab-armor-pierce"><td class="name">破甲</td><td>无视目标一半护甲。</td><td class="traits">戈兵、弩兵、火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr id="t-ab-siege-master"><td class="name">破城</td><td>攻城伤害 ×1.5。</td><td class="traits">臼炮、坦克、火炮</td></tr><tr id="t-ab-kamikaze"><td class="name">自爆</td><td>阵亡时对四周相邻的地面单位各造成自身攻击一半的伤害——打不到空中的东西。</td><td class="traits">—</td></tr><tr id="t-ab-versatile"><td class="name">长短皆可</td><td>射程 3，但隔着一格以上打时伤害只有六成。近身是本职，远程是技能。</td><td class="traits">—</td></tr><tr id="t-ab-charge"><td class="name">冲锋</td><td>本回合移动过时，攻击 +5。</td><td class="traits">—</td></tr><tr id="t-ab-lifesteal"><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-berserk"><td class="name">狂暴</td><td>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</td><td class="traits">—</td></tr><tr id="t-ab-tracker"><td class="name">追猎</td><td>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</td><td class="traits">—</td></tr><tr id="t-ab-maul"><td class="name">撕咬</td><td>对生命已不足一半的目标攻击 +8。它追的是掉队的残兵，不是排好的方阵。</td><td class="traits">—</td></tr><tr id="t-ab-herd"><td class="name">群势</td><td>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</td><td class="traits">—</td></tr><tr id="t-ab-kite"><td class="name">游骑</td><td>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</td><td class="traits">—</td></tr><tr id="t-ab-elf-shot"><td class="name">穿隙</td><td>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</td><td class="traits">—</td></tr><tr id="t-ab-knockback"><td class="name">击退</td><td>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</td><td class="traits">—</td></tr><tr id="t-ab-poison-hit"><td class="name">淬毒</td><td>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</td><td class="traits">—</td></tr><tr id="t-ab-burn-hit"><td class="name">燃焰</td><td>打中就让其点燃 1 层：每层每回合掉 4 点生命（最多 3 层）——怕火的兵翻倍。</td><td class="traits">—</td></tr><tr id="t-ab-slow-hit"><td class="name">霜缚</td><td>打中就让其减速 2 回合，移动力 −1（最少 1）。</td><td class="traits">—</td></tr><tr id="t-ab-curse-hit"><td class="name">咒缚</td><td>打中就让其被咒缚 3 回合，护甲 −4。和普通诅咒不叠加，取强的那一个。</td><td class="traits">—</td></tr><tr id="t-ab-steal-gold"><td class="name">窃掠</td><td>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</td><td class="traits">—</td></tr><tr id="t-ab-element-mastery"><td class="name">属性精研</td><td>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</td><td class="traits">—</td></tr><tr id="t-ab-anti-air"><td class="name">对空</td><td>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-chill"><td class="name">寒霜</td><td>命中让目标「迟缓」2 回合：移动力减半，至少留 1 格。被溅射波及的敌人同样生效。</td><td class="traits">—</td></tr><tr id="t-ab-formation-seal"><td class="name">封印</td><td>半径 3 内敌军移动力减半（向下取整），再由守阵修士的境界扣掉同样多的格数；被压到 0 的单位这一回合完全无法行动。</td><td class="traits">—</td></tr><tr id="t-ab-qi-true-damage"><td class="name">真元</td><td>每次攻击附带随境界提升的、无视护甲的真实伤害。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-sunder"><td class="name">熔甲</td><td>命中让目标「熔甲」2 回合：护甲减半（按<b>当前</b>护甲算，含光环与地形）。被溅射波及的敌人同样生效。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-sword-qi"><td class="name">剑气环</td><td>半径 2 格内的友军攻击力 +15%（多条同类光环取最强的一条，不叠乘）。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-fire-qi"><td class="name">真火</td><td>半径 2 格内的友军真元 +10%（不足 1 点按 1 点算；真元只有修士有，所以受益的也是修士）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-shore-bombard"><td class="name">岸轰</td><td>攻城伤害 ×1.25。舰炮支援登陆，和「破城」可以叠。</td><td class="traits">—</td></tr><tr id="t-ab-nv-asw"><td class="name">反潜</td><td>潜航单位在两格内就会现形；对潜航单位攻击伤害 ×2。</td><td class="traits">—</td></tr><tr id="t-ab-af-superiority"><td class="name">制空</td><td>对空中层目标造成 +12 伤害。战斗机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-ground-strike"><td class="name">对地攻击</td><td>对地面层目标造成 +14 伤害。强击机与攻击机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-anti-ship"><td class="name">反舰</td><td>对水面单位造成 +12 伤害。</td><td class="traits">—</td></tr><tr id="t-ab-shadow-erosion"><td class="name">暗蚀</td><td>每次攻击附带一段无视护甲的暗蚀伤害。</td><td class="traits">—</td></tr><tr id="t-ab-shadow-possess"><td class="name">暗影侵蚀</td><td>击杀单位时，在被击杀的位置生成一个蚀影。</td><td class="traits">—</td></tr><tr id="t-ab-blood-clot"><td class="name">化血</td><td>造成的伤害累计成「血」：每 80 点就在旁边长出一滩淤血（一回合最多两滩）。</td><td class="traits">—</td></tr><tr id="t-ab-blood-siphon"><td class="name">汲取</td><td>按造成的伤害等量回复自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-blood-infect"><td class="name">侵染</td><td>击杀单位时，在被击杀的位置生成一团血肉。</td><td class="traits">—</td></tr><tr id="t-ab-bone-transmute"><td class="name">点化</td><td>击杀单位时，在被击杀处生成一个骸骨、一滩淤血、一团暗影（放不下就落在相邻格）。</td><td class="traits">—</td></tr><tr id="t-ab-leave-food"><td class="name">留食</td><td>视野内的敌方经济单位不多于 2 个时，不会攻击经济单位——那是留给仙帝的食物。</td><td class="traits">—</td></tr><tr id="t-ab-weaken-cry"><td class="name">衰鸣</td><td>被它打中的敌人陷入「虚弱」：移动与攻击各降 30%，持续到对方下一个回合结束。</td><td class="traits">—</td></tr><tr id="t-ab-knowledge-pollution"><td class="name">知识污染</td><td>视野一半内的敌人都变成 1 不详 + 2 黑蝗；6 级以上的修士免疫。</td><td class="traits">—</td></tr>
+            <tr id="t-ab-first-strike"><td class="name">先手</td><td>攻击后不会被反击。</td><td class="traits">—</td></tr><tr id="t-ab-armor-pierce"><td class="name">破甲</td><td>无视目标一半护甲。</td><td class="traits">戈兵、弩兵、火枪兵、步枪兵、炮艇、铁甲舰</td></tr><tr id="t-ab-siege-master"><td class="name">破城</td><td>攻城伤害 ×2。</td><td class="traits">臼炮、坦克、火炮</td></tr><tr id="t-ab-kamikaze"><td class="name">自爆</td><td>阵亡时对四周相邻的地面单位各造成自身攻击一半的伤害——打不到空中的东西。</td><td class="traits">—</td></tr><tr id="t-ab-versatile"><td class="name">长短皆可</td><td>射程 3，但隔着一格以上打时伤害只有六成。近身是本职，远程是技能。</td><td class="traits">—</td></tr><tr id="t-ab-charge"><td class="name">冲锋</td><td>本回合移动过时，攻击 +5。</td><td class="traits">—</td></tr><tr id="t-ab-lifesteal"><td class="name">吸血</td><td>造成伤害的 40% 转成自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-berserk"><td class="name">狂暴</td><td>生命降到一半以下时攻击 +50%。半血之前它只是个普通兵，半血之后才是麻烦。</td><td class="traits">—</td></tr><tr id="t-ab-tracker"><td class="name">追猎</td><td>和目标每拉开 1 格攻击 +2（最多 +6）。它擅长的是追杀，不是站桩对捅。</td><td class="traits">—</td></tr><tr id="t-ab-maul"><td class="name">撕咬</td><td>对生命已不足一半的目标攻击 +8。它追的是掉队的残兵，不是排好的方阵。</td><td class="traits">—</td></tr><tr id="t-ab-herd"><td class="name">群势</td><td>每个相邻友军 +2 攻击（最多 +6）。落单的牛头人只是个大个子。</td><td class="traits">—</td></tr><tr id="t-ab-kite"><td class="name">游骑</td><td>远程射击时，身边没有敌人 +3 攻击；被贴住 −3。它要的是距离，不是对捅。</td><td class="traits">—</td></tr><tr id="t-ab-elf-shot"><td class="name">穿隙</td><td>攻击无视目标脚下的地形加成（森林、丘陵、城头都不顶用）。它不是破甲，重甲照旧是重甲。</td><td class="traits">—</td></tr><tr id="t-ab-knockback"><td class="name">击退</td><td>攻击后把目标推开 1 格（后方可站且没人时）。推不动就只是普通一击。</td><td class="traits">—</td></tr><tr id="t-ab-drag-to-sea"><td class="name">拖入深海</td><td>攻击后把目标朝自己拉两格；地面单位被拉进水里会淹死。</td><td class="traits">—</td></tr><tr id="t-ab-poison-hit"><td class="name">淬毒</td><td>打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。</td><td class="traits">—</td></tr><tr id="t-ab-burn-hit"><td class="name">燃焰</td><td>打中就让其点燃 1 层：每层每回合掉 4 点生命（最多 3 层）——怕火的兵翻倍。</td><td class="traits">—</td></tr><tr id="t-ab-slow-hit"><td class="name">霜缚</td><td>打中就让其减速 2 回合，移动力 −1（最少 1）。</td><td class="traits">—</td></tr><tr id="t-ab-curse-hit"><td class="name">咒缚</td><td>打中就让其被咒缚 3 回合，护甲 −4。和普通诅咒不叠加，取强的那一个。</td><td class="traits">—</td></tr><tr id="t-ab-steal-gold"><td class="name">窃掠</td><td>攻城时额外偷走&quot;伤害 × 2&quot;的金币（不超过对方金库）。砸墙还能顺手捞一笔。</td><td class="traits">—</td></tr><tr id="t-ab-element-mastery"><td class="name">属性精研</td><td>攻击按<b>当前属性</b>附带效果：火再点一层、水挂霜缚（移动 −1）、自然攻击时回自己 10% 生命、暗让魔法段 ×1.5。</td><td class="traits">—</td></tr><tr id="t-ab-anti-air"><td class="name">对空</td><td>打飞行单位（直升机、无人机、飞行兵种）时攻击 ×1.6（护甲照常扣）；打地面目标没有加成。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-chill"><td class="name">寒霜</td><td>命中让目标「迟缓」2 回合：移动力减半，至少留 1 格。被溅射波及的敌人同样生效。</td><td class="traits">—</td></tr><tr id="t-ab-formation-seal"><td class="name">封印</td><td>半径 3 内敌军移动力减半（向下取整），再由守阵修士的境界扣掉同样多的格数；被压到 0 的单位这一回合完全无法行动。</td><td class="traits">—</td></tr><tr id="t-ab-qi-true-damage"><td class="name">真元</td><td>每次攻击附带随境界提升的、无视护甲的真实伤害。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-sunder"><td class="name">熔甲</td><td>命中让目标「熔甲」2 回合：护甲减半（按<b>当前</b>护甲算，含光环与地形）。被溅射波及的敌人同样生效。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-sword-qi"><td class="name">剑气环</td><td>半径 2 格内的友军攻击力 +15%（多条同类光环取最强的一条，不叠乘）。</td><td class="traits">—</td></tr><tr id="t-ab-artifact-fire-qi"><td class="name">真火</td><td>半径 2 格内的友军真元 +10%（不足 1 点按 1 点算；真元只有修士有，所以受益的也是修士）。</td><td class="traits">—</td></tr><tr id="t-ab-nv-shore-bombard"><td class="name">岸轰</td><td>攻城伤害 ×1.25。舰炮支援登陆，和「破城」可以叠。</td><td class="traits">—</td></tr><tr id="t-ab-nv-asw"><td class="name">反潜</td><td>潜航单位在两格内就会现形；对潜航单位攻击伤害 ×2。</td><td class="traits">—</td></tr><tr id="t-ab-af-superiority"><td class="name">制空</td><td>对空中层目标造成 +12 伤害。战斗机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-ground-strike"><td class="name">对地攻击</td><td>对地面层目标造成 +14 伤害。强击机与攻击机的本职。</td><td class="traits">—</td></tr><tr id="t-ab-af-anti-ship"><td class="name">反舰</td><td>对水面单位造成 +12 伤害。</td><td class="traits">—</td></tr><tr id="t-ab-shadow-erosion"><td class="name">暗蚀</td><td>每次攻击附带一段无视护甲的暗蚀伤害。</td><td class="traits">—</td></tr><tr id="t-ab-shadow-possess"><td class="name">暗影侵蚀</td><td>击杀单位时，在被击杀的位置生成一个蚀影。</td><td class="traits">—</td></tr><tr id="t-ab-blood-clot"><td class="name">化血</td><td>造成的伤害累计成「血」：每 80 点就在旁边长出一滩淤血（一回合最多两滩）。</td><td class="traits">—</td></tr><tr id="t-ab-blood-siphon"><td class="name">汲取</td><td>按造成的伤害等量回复自己的生命，上限不超过生命上限。</td><td class="traits">—</td></tr><tr id="t-ab-blood-infect"><td class="name">侵染</td><td>击杀单位时，在被击杀的位置生成一团血肉。</td><td class="traits">—</td></tr><tr id="t-ab-bone-transmute"><td class="name">点化</td><td>击杀单位时，在被击杀处生成一个骸骨、一滩淤血、一团暗影（放不下就落在相邻格）。</td><td class="traits">—</td></tr><tr id="t-ab-leave-food"><td class="name">留食</td><td>视野内的敌方经济单位不多于 2 个时，不会攻击经济单位——那是留给仙帝的食物。</td><td class="traits">—</td></tr><tr id="t-ab-weaken-cry"><td class="name">衰鸣</td><td>被它打中的敌人陷入「虚弱」：移动与攻击各降 30%，持续到对方下一个回合结束。</td><td class="traits">—</td></tr><tr id="t-ab-knowledge-pollution"><td class="name">知识污染</td><td>视野一半内的敌人都变成 1 不详 + 2 黑蝗；6 级以上的修士免疫。</td><td class="traits">—</td></tr>
           </tbody>
         </table>
         <h4>防御</h4>
@@ -941,7 +941,7 @@
         <p class="era-meta">
           短兵相接 ·
           升级费 — ·
-          城市耐久 30 · 护甲 4 · 收入 50
+          城市耐久 45 · 护甲 4 · 收入 50
         </p>
         
     <h4>战斗单位</h4>
@@ -1126,7 +1126,7 @@
         <p class="era-meta">
           甲胄与长弓 ·
           升级费 220 金 ·
-          城市耐久 42 · 护甲 6 · 收入 55
+          城市耐久 63 · 护甲 6 · 收入 55
         </p>
         
     <h4>战斗单位</h4>
@@ -1275,7 +1275,7 @@
         <p class="era-meta">
           排队枪毙 ·
           升级费 360 金 ·
-          城市耐久 54 · 护甲 8 · 收入 61
+          城市耐久 81 · 护甲 8 · 收入 61
         </p>
         
     <h4>战斗单位</h4>
@@ -1436,7 +1436,7 @@
         <p class="era-meta">
           钢铁与堑壕 ·
           升级费 540 金 ·
-          城市耐久 66 · 护甲 10 · 收入 68
+          城市耐久 99 · 护甲 10 · 收入 68
         </p>
         
     <h4>战斗单位</h4>
@@ -1573,7 +1573,7 @@
         <p class="era-meta">
           内燃机与总动员 ·
           升级费 780 金 ·
-          城市耐久 80 · 护甲 12 · 收入 76
+          城市耐久 120 · 护甲 12 · 收入 76
         </p>
         
     <h4>战斗单位</h4>

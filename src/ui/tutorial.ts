@@ -185,7 +185,7 @@ const STEPS: Step[] = [
   {
     key: 'attack',
     title: '第四步：攻击',
-    body: () => '旁边那个农民不会还手，拿它练手。\n选中兵之后点它，就是攻击——注意看它的血条掉了多少。',
+    body: () => '选中兵，再点旁边的农民。按提示完成攻击，看看它的血条掉了多少。',
     mark: (c) => {
       const b = bait(c.state);
       return b ? [{ x: b.x, y: b.y }] : [];
@@ -220,7 +220,7 @@ const STEPS: Step[] = [
     body: (c) => {
       const f = foeCity(c.state);
       if (f?.ruined) return '城已经塌了，但它还不归你——把兵走进废墟，才算接管。\n（走之前先点一下你的兵）';
-      return '走到城墙边上（亮起来的格子），再点一下你的兵，然后点那座城——这叫攻城。\n城血打完会变成废墟，再派兵走进去接管，这局就赢了。';
+      return '走到城墙边上（亮起来的格子），选中你的兵，再点那座城。\n打破城墙后派兵进去接管，这局就赢了。';
     },
     markCity: true,
     mark: (c) => {

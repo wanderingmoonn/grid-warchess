@@ -227,6 +227,8 @@ export function legalActions(s: GameState, seat: PlayerId = s.current): Action[]
   // ── 升级城市 ────────────────────────────────────────────────────────
   for (const city of s.cities) {
     if (city.owner !== seat) continue;
+    // 废墟不产出也不可升级，列进合法动作只会让训练里的每一脚都踩空
+    if (city.ruined) continue;
     const cost = upgradeCostOf(s, city);
     if (cost === null) continue;
     if (s.players[seat].gold < cost) continue;

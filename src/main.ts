@@ -24,7 +24,15 @@ import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, validateLevel } from './core/level.ts';
-import { RUN_KEY, newRun, parseRun, serializeRun, type RunState } from './core/roguelike/run-state.ts';
+import {
+  RUN_KEY,
+  canRestart,
+  newRun,
+  parseRun,
+  restartRun,
+  serializeRun,
+  type RunState,
+} from './core/roguelike/run-state.ts';
 import { initRunner, keepPlaying, observe, onPlayerEndTurn, settleStage, type RunnerSnapshot } from './core/roguelike/runner.ts';
 import { SLICE_STAGES, stageAt } from './core/roguelike/stages.ts';
 import { buildableTypes, compileUnits, mergeUnits } from './core/roguelike/compile.ts';
@@ -36,7 +44,6 @@ import { cityUpgradeCost } from './core/roguelike/rewards.ts';
 import { cardLevel, cardsToNext, drawCards, rngFrom } from './core/roguelike/cards.ts';
 import { TACTICS, TACTIC_RATE, applyTacticNow } from './core/roguelike/tactics.ts';
 import {
-  capacityBonus,
   cityArmorBonus,
   healsIntake,
   hornFreebies,
@@ -67,9 +74,11 @@ import {
   eggSpots,
   heroBlocked,
   heroSkillsOf,
+  hasQuit,
   idx,
   incomeOf,
   isAirborne,
+  isEliminated,
   orderDirectiveOf,
   ordersOf,
   orderSitesOf,
@@ -111,8 +120,10 @@ import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
-import { cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard } from './ui/board.ts';
+import { BOARD_PAD, cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard } from './ui/board.ts';
 import { toast } from './ui/toast.ts';
+import { actionFeedback, combatCuesHtml, combatForecastHtml, combatResultCues, forecastCombat } from './ui/combat-feedback.ts';
+import type { CombatAction, CombatCue, CombatForecast } from './ui/combat-feedback.ts';
 import { scopeBoardUi } from './ui/board-scope.ts';
 import type { BoardUi } from './ui/board.ts';
 import { boardIdOf, boardIds, boardKindOf, boardName, boardOf, boardStateOf, boardState, EARTH, hasBoard, idxOn, tileOn } from './core/board.ts';
@@ -135,7 +146,7 @@ import {
 } from './core/draft.ts';
 import { draftScreenHtml, paintDraftTimer } from './ui/draft-panel.ts';
 import { bindChatComposer } from './ui/chat-input.ts';
-import { renderPanel, invalidatePanel, topbarShell, updateTopbar, setWatchCount, TERRAIN_NAMES, detailCardHtml } from './ui/panel.ts';
+import { battleStatusShell, detailCardHtml, invalidatePanel, renderPanel, setWatchCount, TERRAIN_NAMES, topbarShell, updateBattleStatus, updateTopbar } from './ui/panel.ts';
 import type { PanelInput, PanelReport } from './ui/panel.ts';
 import { buildMatchReport, reportFileName, reportJson, reportSignature } from './core/report.ts';
 import type { LoggedAction, MatchReport } from './core/report.ts';
@@ -154,7 +165,7 @@ import type { GodBrush } from './ui/god-panel.ts';
 import { openMapUpload } from './ui/map-upload.ts';
 import { chimeLabel, loadChimeVolume, playChime, saveChimeVolume } from './ui/sound.ts';
 import { openSetupPanel } from './ui/setup-panel.ts';
-import { openTitle } from './ui/title-screen.ts';
+import { openTitle, type TitleOptions } from './ui/title-screen.ts';
 import { buildReplayFromText } from './core/replay-file.ts';
 import type { ReplaySession } from './core/replay-file.ts';
 import { replayBarHtml, syncReplayBar, type ReplayUi } from './ui/replay-bar.ts';
@@ -181,12 +192,16 @@ import {
 } from './net/room.ts';
 import {
   clearMatch,
+  clearMatchCamera,
   exportMatch,
   importMatch,
   loadMatch,
+  loadMatchCamera,
   saveMatch,
+  saveMatchCamera,
   setSaveScope,
   suspendSaves,
+  type MatchCamera,
 } from './storage/save.ts';
 import {
   CHAT_MAX_LEN,
@@ -209,6 +224,7 @@ import {
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
+import { applyUiLayout, currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './ui/layout.ts';
 import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
 import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
 import { settingsHtml } from './ui/settings.ts';
@@ -226,6 +242,14 @@ import { MODULES, deviceTargetOf } from './core/armor.ts';
  *   · 控制台 `__ui('modern')` / `__ui('legacy')`（会记住偏好）。
  */
 applyUiTheme();
+applyUiLayout();
+window.addEventListener(UI_LAYOUT_EVENT, () => {
+  clearCombatPreview();
+  clearActionFeedback();
+  combatInspectMode = false;
+  boardDirty = true;
+  render();
+});
 installUiConsole();
 /*
  * 兵种贴图：默认关，只把 `<html data-art>` 定下来。
@@ -292,12 +316,17 @@ const appEl = pick<HTMLElement>(document, '#app');
 
 appEl.innerHTML = `
   <div class="app">
-    <header class="topbar" id="topbar"></header>
+    <header class="battle-header">
+      <div class="topbar" id="topbar"></div>
+      <div class="battle-status" id="battle-status" hidden></div>
+    </header>
     <div class="commander-bar" id="commander" hidden></div>
     <div class="replay-bar" id="replay" hidden></div>
     <div class="main">
       <div class="board-wrap" id="board-wrap">
         <div class="force-flag" id="force-flag" hidden></div>
+        <section class="combat-preview" id="combat-preview" hidden aria-label="攻击结果预览" aria-live="polite"></section>
+        <div class="action-feedback" id="action-feedback" hidden role="status" aria-atomic="true"></div>
         <div class="board-scroll" id="board-scroll">
           <div class="board" id="board"></div>
         </div>
@@ -309,13 +338,23 @@ appEl.innerHTML = `
         <div class="star-map" id="star-map" hidden></div>
         <div class="board-list" id="board-list"></div>
       </div>
-      <aside class="side" id="side"></aside>
+      <aside class="side-drawer" id="side-drawer" data-expanded="false">
+        <div class="mobile-drawer-head">
+          <button type="button" class="drawer-toggle" data-act="drawer-toggle" aria-expanded="false" aria-controls="side">
+            <span class="drawer-copy"><b data-ref="drawer-title">战场概览</b><small data-ref="drawer-caption"></small></span>
+            <span class="drawer-state" data-ref="drawer-state">展开详情</span>
+          </button>
+        </div>
+        <div class="side" id="side"></div>
+      </aside>
     </div>
     <div class="draft-mask" id="draft" hidden></div>
   </div>
 `;
 
 const boardEl = pick<HTMLElement>(appEl, '#board');
+const combatPreviewEl = pick<HTMLElement>(appEl, '#combat-preview');
+const actionFeedbackEl = pick<HTMLElement>(appEl, '#action-feedback');
 const draftEl = pick<HTMLElement>(appEl, '#draft');
 const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
 /**
@@ -340,6 +379,7 @@ const starMapEl = pick<HTMLElement>(appEl, '#star-map');
  */
 const forceFlagEl = pick<HTMLElement>(appEl, '#force-flag');
 const sideEl = pick<HTMLElement>(appEl, '#side');
+const drawerEl = pick<HTMLElement>(appEl, '#side-drawer');
 
 /*
  * 侧栏两张折叠卡（「操作」「战报」）的开合状态记录点。
@@ -370,17 +410,19 @@ sideEl.addEventListener(
     if (!el.classList.contains('card-fold')) return;
     // 用 data-fold 区分是哪一张：以后再加折叠卡只要加一个分支，不用改写这一处
     if (el.dataset.fold === 'log') logOpen = open;
-    else opsOpen = open;
+    else if (!el.dataset.fold || el.dataset.fold === 'ops') opsOpen = open;
   },
   true,
 );
 const topbarEl = pick<HTMLElement>(appEl, '#topbar');
+const battleStatusEl = pick<HTMLElement>(appEl, '#battle-status');
 const commanderEl = pick<HTMLElement>(appEl, '#commander');
 const replayEl = pick<HTMLElement>(appEl, '#replay');
 
 // 顶栏骨架只插一次。之后每一步只改文字/class/hidden，绝不重建按钮节点——
 // 否则 AI 连续行动时 click 会在 mousedown 与 mouseup 之间丢掉目标（按钮点不动）。
 topbarEl.innerHTML = topbarShell();
+battleStatusEl.innerHTML = battleStatusShell();
 
 // 应急入口：地址栏带 ?fresh=1 就丢掉本机存档重开。
 // 留着是因为"存档坏了进不去"这件事，除了让人清缓存之外总得有个说法，
@@ -396,12 +438,8 @@ if (new URLSearchParams(location.search).get('fresh') === '1') {
 /**
  * 本机有没有**真的打过**的一局。
  *
- * 不能直接拿 `loadMatch() !== null` 现查：启动流程末尾无条件 `saveMatch()`
- * （新建的那局当场就落盘），于是第一次来的人也会看到亮着的「继续上一局」——
- * 点了接着打的其实是一张谁都没动过的随机棋盘。
- *
- * 所以开机那一刻先量一次（这时 boot 的自动存档还没发生），之后开一局、
- * 导入一局、进房间接手一局，都把它置 true。
+ * 开机时先看有没有存档，之后开局、导入或接手联机局时置 true。
+ * 启动用的占位局不落盘，避免刷新后首页把它当作上一局。
  */
 /*
  * `?fresh=1`：作者验证新版关卡时的一键清档。
@@ -921,6 +959,11 @@ let handoffOpen = false;
  * 一次性的修饰键，两边互不干扰——老玩家的手感不动。
  */
 let forceMode: 'move' | 'attack' | null = null;
+let combatAim: { forecast: CombatForecast; source: GameState; sourceFog: boolean; sourceBoard: string; pinned: boolean } | null = null;
+let combatInspectMode = false;
+let touchCombatInput = false;
+let confirmingCombat = false;
+let actionFeedbackTimer = 0;
 /**
  * 同一格上压着好几个东西时的轮换位置。
  *
@@ -1037,13 +1080,13 @@ function watching(): boolean {
 }
 
 /** 双 AI 观战：谁都还没"入座"，给全图视角，否则看的是某一方的迷雾 */
-function spectating(): boolean {
+function spectating(s = state): boolean {
   // 上帝模式也是全图：沙盒里藏信息毫无意义——盘上的兵都是自己摆上去的。
   // 迷雾要是没关，摆完 B 方的兵下一帧就看不见了，这个模式会变得没法用。
-  if (state.config.godMode === true) return true;
+  if (s.config.godMode === true) return true;
   // 房间观战位是同一回事：没有"我方"，迷雾就没有意义
   if (watching()) return true;
-  return isAiSide(state, 'A') && isAiSide(state, 'B');
+  return isAiSide(s, 'A') && isAiSide(s, 'B');
 }
 
 // ---------- 联机 ----------
@@ -1137,11 +1180,11 @@ function resumeRoom(): boolean {
 }
 
 /** 视角玩家：联机时永远是自己那一方，而不是"现在轮到谁" */
-function me(): PlayerId {
+function me(s = state): PlayerId {
   // 上帝模式没有"我的一方"：两边都归你摆，所以视角跟着当前行动方走。
   // 这一步很重要——面板和点击判定里的 `mine` 都要有个主人，
   // 固定成 A 会让"轮到蓝方时点蓝方的兵"变成点别人家的东西。
-  if (state.config.godMode === true) return state.current;
+  if (s.config.godMode === true) return s.current;
   // 观战位没有"我的一方"，给谁都一样——渲染走的是全图，
   // 面板里所有"我的"判断都被 spectator 挡住了。
   if (watching()) return 'A';
@@ -1156,9 +1199,9 @@ function me(): PlayerId {
   // 改成"场上只有一个真人时，我就是那个真人"——两人局的三种情形和以前完全等价
   // （人机 → 真人那席；双 AI → 没有真人，跟当前席位走；热座 → 两个真人，跟当前席位走），
   // 三家四家局则正确地认出了"只有一个真人"的那一局。
-  const humans = seatsOf(state).filter((p) => !isAiSide(state, p));
+  const humans = seatsOf(s).filter((p) => !isAiSide(s, p));
   if (humans.length === 1) return humans[0]!;
-  return state.current;
+  return s.current;
 }
 
 /**
@@ -1217,6 +1260,10 @@ function myTurn(): boolean {
   if (room.spectator) return false;
   return state.current === room.seat;
 }
+
+function showBattleStatus(): boolean {
+  return currentUiLayout(document.documentElement) === 'refined' && !watching() && !replay && !godMode();
+}
 /**
  * 面板要的全部输入。
  *
@@ -1235,6 +1282,7 @@ function myTurn(): boolean {
  * toggle 不冒泡，监听挂在 sideEl 上用捕获。
  */
 let opsOpen = false;
+let drawerExpanded = false;
 let logOpen = false;
 /**
  * 长列表里哪几个「还有 N 种」被点开了。
@@ -1371,7 +1419,7 @@ function panelInput(known?: PlayerView): PanelInput {
     for (const id of fired) lastFired.add(id);
   }
 
-  const view = known ?? playerView(state, me(), spectating());
+  const view = known ?? playerView(state, me(), spectating() || state.showAll === true);
   const picked = selectedId ? (view.state.units.find((u) => u.id === selectedId) ?? null) : null;
   return {
     view,
@@ -1395,6 +1443,7 @@ function panelInput(known?: PlayerView): PanelInput {
     openFolds,
     // 联机同样能撤：提交（结束回合）会把栈清空，所以「还能撤」本身就等于「还没提交」
     canUndo: undoStack.length > 0,
+    battleStatusInHeader: showBattleStatus(),
     chimeVolume,
     recruitQuery,
     recruitPack,
@@ -1423,6 +1472,9 @@ function panelInput(known?: PlayerView): PanelInput {
     planHotseat: commanderHotseat(),
     planReady: state.orderReady?.[me()] === true,
     forceMode,
+    combatInspectMode,
+    combatDirectPreview: currentUiLayout(document.documentElement) === 'refined',
+    combatTargetCount: targets.length + siege.length,
     report: reportPanel(),
     /*
      * 战报卡只排一种情况：复盘。
@@ -1553,7 +1605,10 @@ function enterReplay(text: string, name: string): boolean {
     return false;
   }
   // 已经在复盘里又拖进来一份：只换这一份，别把 liveState 覆盖成上一份复盘的状态
-  if (!replay) liveState = state;
+  if (!replay) {
+    rememberMatchCamera();
+    liveState = state;
+  }
   /*
    * 先把还在跑的 AI / 参谋部按停，再换 `state`。
    *
@@ -1604,7 +1659,7 @@ function exitReplay(): void {
   liveState = null;
   resetZoom();
   clearSelection();
-  render();
+  renderWithCamera(loadMatchCamera(state));
   kickAiIfNeeded();
 }
 
@@ -1821,7 +1876,8 @@ function renderPaintedCells(cells: number[]): void {
     render();
     return;
   }
-  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating() || state.showAll === true);
+  updateDrawer(view);
   const ids = new Set<number>();
   for (const i of cells) {
     ids.add(i);
@@ -1908,6 +1964,11 @@ function renderAiHud(): void {
 }
 
 function render(): void {
+  if (combatAim && (combatAim.source !== state || combatAim.sourceFog !== state.fog || combatAim.sourceBoard !== activeBoardId ||
+    combatAim.forecast.action.unitId !== selectedId || state.config.commanderMode || godMode() || forceMode === 'move' ||
+    !myTurn() || watching() || replay || starOpen || buildPlan || pendingSkill || spawnPlan || loadPlan || unloadPlan)) {
+    clearCombatPreview();
+  }
   ensureArtIndex();
   renderDebugHud();
   renderAiHud();
@@ -1929,14 +1990,18 @@ function render(): void {
    * "整局到底发生了什么"，所以这里直接给全局视野。不这么做还会撞上第二个问题：
    * 迷雾是按 `me()` 算的，而复盘里的双方都不是"我"，怎么算都是在替一方偷看。
    */
-  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating());
+  const view = replay ? playerView(state, 'A', true) : playerView(state, me(), spectating() || state.showAll === true);
   // 地图列表的待命数/敌人红点跟着视图走；签名没变就不重建 DOM
+  updateDrawer(view);
   syncBoardList(view);
   // 星图：盖在棋盘上的一层。没开就不画，开了才按当前视图算一遍
   starMapEl.hidden = !starOpen;
   if (starOpen) renderStarMap(starMapEl, view, me(), starSel);
 
   const selected = selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+  boardEl.classList.toggle('combat-readable', currentUiLayout(document.documentElement) === 'refined' && !!selected &&
+    selected.owner === me() && myTurn() && !watching() && !replay && !godMode() &&
+    !state.config.commanderMode && !pendingSkill && !forceMode && !buildPlan && !spawnPlan && !loadPlan && !unloadPlan);
   // 复盘里选中只用来"看这张卡"：可达格与攻击目标一律不画，否则看起来像能操作
   const threat =
     !replay &&
@@ -2095,6 +2160,11 @@ function render(): void {
   }
   lastTurnPlayer = state.current;
 
+  const statusPlayer = showBattleStatus() ? me() : null;
+  const canUndo = statusPlayer !== null && undoStack.length > 0 && state.current === statusPlayer &&
+    !state.winner && !state.config.commanderMode && !aiBusy() && !hasQuit(state, statusPlayer) &&
+    (seatsOf(state).length <= 2 || !isEliminated(state, statusPlayer));
+  updateBattleStatus(battleStatusEl, state, statusPlayer, canUndo);
   const topbarChanged = updateTopbar(topbarEl, {
     fog: state.fog,
     blackout: state.config.expansionIds.includes('blackout'),
@@ -2204,12 +2274,12 @@ let boardListOpen = false;
 /** 地图列表已经画出来的签名，避免每帧重建 DOM */
 let boardListSig = '';
 /**
- * 每张图各自的相机（缩放档 + 滚动位置）。
+ * 每张图各自的相机（缩放档 + 视口中心）。
  *
  * 切图要还原相机：32×32 的地球放大到中间看战场，切到 7×7 的空间站再切回来，
  * 如果回到左上角，玩家得重新拖一遍——多图玩法里这个动作一天要做几十次。
  */
-const boardCameras = new Map<BoardId, { zoom: number; left: number; top: number }>();
+const boardCameras = new Map<BoardId, MatchCamera>();
 /**
  * 上一次 `fitBoard()` 用的是哪一档。
  *
@@ -2280,12 +2350,15 @@ function fitBoard(): void {
 
   // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
   const viewportH = appEl.clientHeight || window.innerHeight;
-  const availH = viewportH - chrome - padY;
+  const availH = currentUiLayout(document.documentElement) !== 'classic' && window.innerWidth <= 920 && boardWrapEl.clientHeight > 0
+    ? Math.min(viewportH - chrome - padY, boardWrapEl.clientHeight)
+    : viewportH - chrome - padY;
   /*
    * 先算一格多大，再反推外框——不能直接把 `min(宽, 可用高)` 当边长。
    * 那个写法只在正方形地图上成立；12×10 的图会被拉成长方格（玩家实机发现过）。
    */
-  const fit = fitBoardBox(state?.w ?? 12, state?.h ?? 12, width, availH);
+  const board = boardOf(state, activeBoardId);
+  const fit = fitBoardBox(board.w, board.h, width, availH);
   baseBoardW = fit.w;
   baseBoardH = fit.h;
 
@@ -2318,7 +2391,7 @@ function fitBoard(): void {
    * 还在用旧格宽算偏移，图案在格边界上就对不齐——表现是缩放后丘陵/水面
    * "断开"，点一下棋盘（触发重画）又好了。这一句把这个窗口关掉。
    */
-  refreshCellVar(boardEl, state?.w ?? 0);
+  refreshCellVar(boardEl, board.w, board.h);
 
   const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
@@ -2437,6 +2510,72 @@ function resetZoom(): void {
   boardScrollEl.scrollTop = 0;
   boardScrollEl.classList.remove('dragging', 'zoomed');
   boardEl.classList.remove('zoomed');
+}
+
+function boardCamera(): MatchCamera {
+  const { clientWidth, clientHeight, scrollLeft, scrollTop } = boardScrollEl;
+  const { offsetWidth, offsetHeight } = boardEl;
+  return {
+    board: activeBoardId,
+    zoom: boardZoom,
+    x: boardZoom > 1 && offsetWidth > 0 ? Math.min(1, Math.max(0, (scrollLeft + clientWidth / 2) / offsetWidth)) : 0.5,
+    y: boardZoom > 1 && offsetHeight > 0 ? Math.min(1, Math.max(0, (scrollTop + clientHeight / 2) / offsetHeight)) : 0.5,
+  };
+}
+
+function centerBoardCamera({ x, y }: Pick<MatchCamera, 'x' | 'y'>): void {
+  if (boardZoom <= 1) return;
+  boardScrollEl.scrollLeft = Math.max(0, boardEl.offsetWidth * x - boardScrollEl.clientWidth / 2);
+  boardScrollEl.scrollTop = Math.max(0, boardEl.offsetHeight * y - boardScrollEl.clientHeight / 2);
+}
+
+function renderWithCamera(camera: MatchCamera | null): void {
+  if (camera && (!hasBoard(state, camera.board) || !ZOOM_STEPS.includes(camera.zoom))) camera = null;
+  if (camera) {
+    activeBoardId = camera.board;
+    boardZoom = camera.zoom;
+    boardDirty = true;
+  }
+  render();
+  if (camera) centerBoardCamera(camera);
+}
+
+function rememberMatchCamera(): void {
+  if ((!hasRealSave && !room) || replay || tutorial.tutorialOn() || watching() ||
+      document.querySelector('.title-screen') || boardEl.offsetWidth === 0) return;
+  saveMatchCamera(state, boardCamera());
+}
+
+/** 新局先尝试显示全图，格子过小时放大到己方起点。 */
+function focusOpeningCamera(): void {
+  if (spectating() || baseBoardW <= BOARD_PAD || baseBoardH <= BOARD_PAD) return;
+  const { w, h } = state;
+  const fitCell = Math.min((baseBoardW - BOARD_PAD) / w, (baseBoardH - BOARD_PAD) / h);
+  const zoom = ZOOM_STEPS.find((step) => step * fitCell >= 26) ?? ZOOM_STEPS.at(-1)!;
+  if (zoom === 1) return;
+
+  const viewer = me();
+  const city = state.cities.find((c) => c.owner === viewer && !c.ruined && boardIdOf(c) === EARTH);
+  const units = state.units.filter((u) => u.owner === viewer && boardIdOf(u) === EARTH);
+  const anchor = city ?? units[0];
+  if (!anchor) return;
+  const halfSize = city ? city.size / 2 : 0.5;
+  const origin = { x: anchor.x + halfSize, y: anchor.y + halfSize };
+
+  let nearest: Unit | undefined;
+  let distance = 5;
+  for (const unit of units) {
+    if (state.unitTypes[unit.type]?.category !== 'combat') continue;
+    const gap = Math.hypot(unit.x + 0.5 - origin.x, unit.y + 0.5 - origin.y);
+    if (gap >= distance) continue;
+    nearest = unit;
+    distance = gap;
+  }
+  const x = nearest ? (origin.x + nearest.x + 0.5) / 2 : origin.x;
+  const y = nearest ? (origin.y + nearest.y + 0.5) / 2 : origin.y;
+  boardZoom = zoom;
+  fitBoard();
+  centerBoardCamera({ x: x / w, y: y / h });
 }
 
 /** 地图列表里的小标记：图的类型（地球单独给个"地"） */
@@ -2628,12 +2767,10 @@ function syncBoardList(view: PlayerView): void {
  */
 function switchBoard(id: BoardId): void {
   if (id === activeBoardId || !hasBoard(state, id)) return;
+  clearCombatPreview();
+  clearActionFeedback();
   // 走之前把相机存下来
-  boardCameras.set(activeBoardId, {
-    zoom: boardZoom,
-    left: boardScrollEl.scrollLeft,
-    top: boardScrollEl.scrollTop,
-  });
+  boardCameras.set(activeBoardId, boardCamera());
 
   activeBoardId = id;
   /*
@@ -2658,18 +2795,7 @@ function switchBoard(id: BoardId): void {
   starOpen = false;
   starSel = null;
 
-  const cam = boardCameras.get(id) ?? { zoom: 1, left: 0, top: 0 };
-  boardZoom = cam.zoom;
-  boardDirty = true;
-  render();
-
-  const restore = (): void => {
-    boardScrollEl.scrollLeft = cam.left;
-    boardScrollEl.scrollTop = cam.top;
-  };
-  // 等这一帧的尺寸写完再还原滚动位置，否则会被 fitBoard 的布局覆盖
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore);
-  else restore();
+  renderWithCamera(boardCameras.get(id) ?? { board: id, zoom: 1, x: 0.5, y: 0.5 });
 }
 
 /**
@@ -2892,6 +3018,8 @@ function refreshSelection(): void {
 }
 
 function clearSelection(): void {
+  clearCombatPreview();
+  combatInspectMode = false;
   recruitQuery = '';
   // 扩展包 / 时代筛选都不清：它们是"我这一局只想看哪几个包、哪几代"，
   // 换一个单位不该把它们重置掉
@@ -3013,10 +3141,13 @@ function computePlaceable(): number[] {
  * 但控制台里能查到），既不安全也不符合"只渲染 playerView"的约定。
  */
 function viewNow(): ReturnType<typeof playerView> {
-  return playerView(state, me(), spectating());
+  return playerView(state, me(), spectating() || state.showAll === true);
 }
 
 function selectUnit(u: Unit): void {
+  if (selectedId !== u.id) sideEl.scrollTop = 0;
+  clearCombatPreview();
+  combatInspectMode = false;
   selectedCityId = null;
   selectedCampId = null;
   selectedTile = null;
@@ -3035,6 +3166,7 @@ function selectUnit(u: Unit): void {
  * 只有自己（或同盟视角）的军营才这么处理，敌方的还是走普通单位面板看属性。
  */
 function selectCamp(u: Unit): void {
+  if (selectedCampId !== u.id) sideEl.scrollTop = 0;
   if (selectedCampId !== u.id) recruitQuery = '';
   selectedCityId = null;
   selectedTile = null;
@@ -3047,6 +3179,7 @@ function selectCamp(u: Unit): void {
 }
 
 function selectCity(cityId: string): void {
+  if (selectedCityId !== cityId) sideEl.scrollTop = 0;
   // 换了城就把搜索词清掉：上一座城搜的「龙」，套到下一座城上只会显示「没有匹配」。
   // 同一座城里连着买不清——连买三个弓手不该每次重新打字。
   if (selectedCityId !== cityId) recruitQuery = '';
@@ -3707,12 +3840,118 @@ function noteStrikeFlash(before: GameState, after: GameState): void {
  * 亮一块红，看起来像是刚有人在那边挨了打。
  */
 function dropHeatFlash(): void {
+  clearCombatPreview();
+  clearActionFeedback();
   heatFlash = null;
   if (heatFlashTimer) window.clearTimeout(heatFlashTimer);
   heatFlashTimer = 0;
 }
 
-function dispatch(action: Action): boolean {
+function clearCombatPreview(): void {
+  combatAim = null;
+  combatPreviewEl.hidden = true;
+  delete appEl.dataset.combatConfirm;
+  if (boardEl.querySelector('.combat-cues[data-phase="preview"]')) paintCombatCues([]);
+  if (actionFeedbackEl.textContent) actionFeedbackEl.hidden = false;
+}
+
+function clearActionFeedback(): void {
+  if (actionFeedbackTimer) window.clearTimeout(actionFeedbackTimer);
+  actionFeedbackTimer = 0;
+  actionFeedbackEl.hidden = true;
+  actionFeedbackEl.textContent = '';
+  delete actionFeedbackEl.dataset.inline;
+  if (boardEl.querySelector('.combat-cues[data-phase="result"]')) paintCombatCues([]);
+}
+
+function paintCombatCues(cues: readonly CombatCue[], phase?: 'preview' | 'result'): void {
+  const layer = boardEl.querySelector<HTMLElement>('.combat-cues');
+  if (!layer) return;
+  layer.innerHTML = combatCuesHtml(cues);
+  if (phase) layer.dataset.phase = phase;
+  else delete layer.dataset.phase;
+}
+
+function updateDrawer(view: PlayerView): void {
+  const unit = view.state.units.find((entry) => entry.id === selectedId || entry.id === selectedCampId);
+  const city = view.state.cities.find((entry) => entry.id === selectedCityId);
+  const title = starOpen ? '星图详情' : unit ? utype(view.state, unit.type).name : city ? cityName(city) : selectedTile ? '地形详情' : godMode() ? '沙盒兵种库' : '战场概览';
+  const compactUnit = !!unit && unit.id === selectedId && unit.id !== selectedCampId &&
+    unit.owner === me() && !state.config.commanderMode && !spectating() && !replay && !starOpen;
+  drawerEl.dataset.compactUnit = String(compactUnit);
+  const readiness = compactUnit && myTurn() ? [reach.length ? '可移动' : '', targets.length || siege.length ? '可攻击' : ''].filter(Boolean) : [];
+  const caption = unit ? [`生命 ${unit.hp}`, ...(readiness.length ? readiness : [view.state.players[unit.owner].name])].join(' · ')
+    : watching() || replay ? '观战视角 · 点棋盘查看详情'
+    : `${showBattleStatus() ? '' : `${view.state.players[me()].gold} 金 · `}${citiesOf(view.state, me()).length} 座城市 · ${myTurn() ? '轮到你行动' : '等待对方'}`;
+  drawerEl.dataset.expanded = String(drawerExpanded);
+  drawerEl.querySelector('[data-act="drawer-toggle"]')?.setAttribute('aria-expanded', String(drawerExpanded));
+  for (const [key, value] of [['title', title], ['caption', caption], ['state', drawerExpanded ? '收起详情' : '展开详情']]) {
+    const label = drawerEl.querySelector<HTMLElement>(`[data-ref="drawer-${key}"]`);
+    if (label && label.textContent !== value) label.textContent = value;
+  }
+}
+
+function showActionFeedback(message: string, cues: readonly CombatCue[] = []): void {
+  clearActionFeedback();
+  if (cues.length && currentUiLayout(document.documentElement) === 'refined') {
+    actionFeedbackEl.dataset.inline = 'true';
+    paintCombatCues(cues, 'result');
+  }
+  actionFeedbackEl.textContent = message;
+  actionFeedbackEl.hidden = false;
+  actionFeedbackTimer = window.setTimeout(clearActionFeedback, 4200);
+}
+
+function showCombatPreview(action: CombatAction, pinned: boolean): boolean {
+  if (!myTurn() || watching() || replay || state.config.commanderMode || godMode()) return false;
+  const key = JSON.stringify(action);
+  if (combatAim?.source === state && combatAim.sourceFog === state.fog && combatAim.sourceBoard === activeBoardId &&
+    JSON.stringify(combatAim.forecast.action) === key) {
+    if (!pinned || combatAim.pinned) return true;
+    combatAim.pinned = true;
+  } else {
+    const forecast = forecastCombat(viewNow(), me(), action);
+    if (!forecast) return false;
+    combatAim = { forecast, source: state, sourceFog: state.fog, sourceBoard: activeBoardId, pinned };
+  }
+  const compact = currentUiLayout(document.documentElement) === 'refined';
+  if (compact) {
+    drawerEl.appendChild(combatPreviewEl);
+    paintCombatCues(combatAim.forecast.cues, 'preview');
+  } else if (combatPreviewEl.parentElement !== boardWrapEl) {
+    boardWrapEl.appendChild(combatPreviewEl);
+  }
+  combatPreviewEl.innerHTML = combatForecastHtml(combatAim.forecast, combatAim.pinned, compact);
+  combatPreviewEl.hidden = compact && !combatAim.pinned;
+  if (compact && combatAim.pinned) appEl.dataset.combatConfirm = 'true';
+  actionFeedbackEl.hidden = true;
+  return true;
+}
+
+combatPreviewEl.addEventListener('click', (event) => {
+  const action = (event.target as HTMLElement).closest<HTMLElement>('[data-combat]')?.dataset.combat;
+  if (!action) return;
+  event.stopPropagation();
+  if (action === 'cancel') {
+    clearCombatPreview();
+    return;
+  }
+  const aim = combatAim;
+  if (!aim || aim.source !== state || aim.sourceFog !== state.fog || aim.sourceBoard !== activeBoardId ||
+    aim.forecast.action.unitId !== selectedId) {
+    clearCombatPreview();
+    return;
+  }
+  clearCombatPreview();
+  confirmingCombat = true;
+  try {
+    dispatch(aim.forecast.action);
+  } finally {
+    confirmingCombat = false;
+  }
+});
+
+function dispatch(action: Action, quickAttack = false): boolean {
   /*
    * 肉鸽撤离阶段：**每个动作入口都要先把胜负按下**（2026-11-19）。
    *
@@ -3768,11 +4007,18 @@ function dispatch(action: Action): boolean {
     return false;
   }
 
+  if ((action.type === 'ATTACK' || action.type === 'SIEGE') && !confirmingCombat &&
+    (touchCombatInput || combatInspectMode || (currentUiLayout(document.documentElement) === 'refined' && !quickAttack)) && !godMode()) {
+    if (!showCombatPreview(action, true)) toast('当前无法预览这次攻击，请重新选择单位和目标');
+    return false;
+  }
+
   const prevTurn = state.turn;
   const actor = state.current;
   const prevWinner = state.winner;
   planMovePath(state, action);
   const before = state;
+  const feedbackBefore = ['MOVE', 'ATTACK', 'SIEGE', 'RECRUIT', 'BUILD', 'UPGRADE'].includes(action.type) ? viewNow() : null;
   const result = applyAction(state, action);
   if (!result.ok) {
     pendingMovePath = null;
@@ -3795,6 +4041,16 @@ function dispatch(action: Action): boolean {
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
   }
   state = result.state;
+  clearCombatPreview();
+  combatInspectMode = false;
+  if (feedbackBefore) {
+    const feedbackAfter = viewNow();
+    const message = actionFeedback(feedbackBefore, feedbackAfter, action);
+    if (message) {
+      const cues = action.type === 'ATTACK' || action.type === 'SIEGE' ? combatResultCues(feedbackBefore, feedbackAfter, action) : [];
+      showActionFeedback(message, cues);
+    }
+  }
   // 这一下打到了哪：记账前后差出来的格子，闪一次就散（移动/招募差值为空，自然不闪）
   noteStrikeFlash(before, state);
   // 这一回合第一次出手：红格收起来。结束回合不算（那时已经轮不到自己看了）
@@ -3820,6 +4076,7 @@ function dispatch(action: Action): boolean {
   saveMatch(state);
 
   if (action.type === 'END_TURN') {
+    clearActionFeedback();
     // 回合结束了，这个回合的走子就不许再撤——账已经结了
     undoStack = [];
     clearSelection();
@@ -4423,7 +4680,7 @@ function onBoardClick(e: Event): void {
         targetId: hit.id,
         x: coords.x,
         y: coords.y,
-      });
+      }, true);
       return;
     }
     toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
@@ -4588,7 +4845,7 @@ function onBoardClick(e: Event): void {
         targetId: stacked.id,
         x: coords.x,
         y: coords.y,
-      });
+      }, wantAttack);
       return;
     }
   }
@@ -4601,7 +4858,7 @@ function onBoardClick(e: Event): void {
       targetId: clickedUnitId,
       x: coords?.x,
       y: coords?.y,
-    });
+    }, wantAttack);
     return;
   }
 
@@ -4696,7 +4953,7 @@ function onBoardClick(e: Event): void {
       cityId: city.id,
       x: coords.x,
       y: coords.y,
-    });
+    }, wantAttack);
     return;
   }
 
@@ -4905,6 +5162,7 @@ function handleAction(act: string, el: HTMLElement): void {
       act === 'feedback' ||
       act === 'new-game' ||
       act === 'new-match' ||
+      act === 'drawer-toggle' ||
       act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -4915,6 +5173,19 @@ function handleAction(act: string, el: HTMLElement): void {
     if (act === 'new-game' || act === 'new-match') exitReplay();
   }
   switch (act) {
+    case 'drawer-toggle': {
+      drawerExpanded = !drawerExpanded;
+      boardDirty = true;
+      render();
+      return;
+    }
+    case 'combat-aim': {
+      combatInspectMode = !combatInspectMode;
+      clearCombatPreview();
+      render();
+      if (combatInspectMode) toast('点一个红框目标查看交锋结果，确认后再攻击');
+      return;
+    }
     case 'force-move':
     case 'force-attack': {
       // 点一下进入、再点同一下退出；点另一个就直接切过去。
@@ -5267,7 +5538,21 @@ function handleAction(act: string, el: HTMLElement): void {
       if (state.fog) refreshMemory(state);
       saveMatch(state);
       render();
-      toast(state.fog ? '战争迷雾已开启' : '战争迷雾已关闭');
+      toast(state.fog ? '战争迷雾已开启' : '战争迷雾已关闭（AI 仍然只看得见它视野内的东西）');
+      return;
+    }
+
+    /*
+     * 看全图：**只改显示**（2026-11-21）。
+     *
+     * 想看清整张地图不该等于"取消迷雾规则"——那样 AI 也跟着全知。
+     * 所以这是一个独立的开关，只影响玩家这边的渲染。
+     */
+    case 'toggle-show-all': {
+      state.showAll = !state.showAll;
+      saveMatch(state);
+      render();
+      toast(state.showAll ? '看全图：开（只影响显示）' : '看全图：关');
       return;
     }
 
@@ -6264,22 +6549,41 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
    * 而存档可能正停在 AI 的回合上——那里暂停等于把一局活棋冻住，
    * 上帝模式那条"对面真由 AI 接手"的用例就是这么红的。
    */
-  if (opts.pauseAi) aiPaused = true;
+  if (opts.pauseAi) {
+    rememberMatchCamera();
+    aiPaused = true;
+  }
 
+  // 启动时 state 可能是占位局；首页预览和「继续」读同一个存档槽。
+  const saved = hasRealSave || room ? loadMatch() : null;
+  let preview: TitleOptions['preview'];
+  if (saved) {
+    try {
+      const viewer = me(saved);
+      preview = { viewer, view: playerView(saved, viewer, spectating(saved) || saved.showAll === true) };
+    } catch {
+      // 无法预览的旧存档仍可从原入口尝试继续。
+    }
+  }
   openTitle(host, {
     // 「继续上一局」只认真打过的一局，见 hasRealSave 的注释
-    hasSave: hasRealSave,
+    hasSave: hasRealSave || saved !== null,
+    preview,
     // 第一次来（没打过一局、也没看过教程）：把教程摆成主按钮
     firstVisit: !hasRealSave && !tutorialSeen(),
     version: BUILD_VERSION,
-    latest: '新：新手教程（约 3 分钟，从首页进）',
     onNew: newGameFlow,
     onRogue: openRoguelike,
     onTutorial: startTutorial,
     onContinue: () => {
       // 存档在开机时被挂起了，这里才真正装进来（见 bootSave 那段注释）
       const saved = loadMatch();
-      if (saved) state = saved;
+      if (saved) {
+        if (state.seed !== saved.seed || state.w !== saved.w || state.h !== saved.h || !hasBoard(saved, activeBoardId)) {
+          resetZoom();
+        }
+        state = saved;
+      }
       suspendSaves(false);
       /*
        * 读进来之后**立刻写回一份**（2026-11-20）。
@@ -6291,7 +6595,7 @@ function showTitle(opts: { pauseAi?: boolean } = {}): void {
       if (saved) saveMatch(state);
       refreshMemory(state);
       clearSelection();
-      render();
+      renderWithCamera(saved ? loadMatchCamera(saved) : null);
       kickAiIfNeeded();
     },
     onOnline: () => {
@@ -6345,6 +6649,7 @@ function newGameFlow(): void {
     state.aiControl = undefined;
     dropHeatFlash();
     detachRoom();
+    clearMatchCamera();
     resetZoom();
     clearSelection();
     resetRecorder();
@@ -6354,6 +6659,7 @@ function newGameFlow(): void {
     saveMatch(state);
     hasRealSave = true;
     render();
+    focusOpeningCamera();
     toast('新对局开始');
     kickAiIfNeeded();
   });
@@ -6368,7 +6674,19 @@ function newGameFlow(): void {
  *
  * **三选一、整备、路线选择还没接**——先把 3 关跑通，节奏对不对比面板更重要。
  */
-let rogue: { run: RunState; snap: RunnerSnapshot; settled: boolean } | null = null;
+let rogue: {
+  run: RunState;
+  snap: RunnerSnapshot;
+  settled: boolean;
+  /**
+   * 进这一关**之前**的那份 run（2026-11-21）。
+   *
+   * 「重开本关」要回到这个点：这一关挣的、掉的、抽的、花掉的一律作废。
+   * 只放内存、不进存档——刷新之后就没有了，那时重开就只是把"本关至今的
+   * 消耗"留着（少还原一点，但绝不会多给东西）。
+   */
+  stageStart?: RunState;
+} | null = null;
 
 function rogueSave(): void {
   if (rogue) localStorage.setItem(RUN_KEY, serializeRun(rogue.run));
@@ -6382,8 +6700,7 @@ function rogueCtx() {
     evacTurns: st.meta.evacTurns,
     expectedTurns: st.meta.expectedTurns,
     playerSeat: 'A' as const,
-    // 遗物：驮马（兵额）/ 军械（带回满血）
-    capacityBonus: capacityBonus(rogue!.run),
+    // 遗物：军械（带回的兵满血）。兵额不加任何东西——它就是城格数（2026-11-21）
     healIntake: healsIntake(rogue!.run),
   };
 }
@@ -6437,6 +6754,14 @@ function showRunPanel(): void {
 
 function startRogueStage(): void {
   if (!rogue) return;
+  /*
+   * 进关前先拍一份 run（2026-11-21）。
+   *
+   * 「重开本关」把它整份盖回去就等于"这一关没发生过"——金币、遗物、卡、
+   * 免费建造次数、城墙进度、城血全都回到进关那一刻。拍在这里而不是
+   * 结算之后，是因为玩家可能在**任何时候**想重开（中途被打崩就该能重来）。
+   */
+  rogue.stageStart = structuredClone(rogue.run);
   const st = stageAt(rogue.run.node);
   const checked = validateLevel(st.level);
   if (!checked.ok) {
@@ -6595,6 +6920,7 @@ function startRogueStage(): void {
   document.querySelector('.title-screen')?.remove();
   dropHeatFlash();
   detachRoom();
+  clearMatchCamera();
   resetZoom();
   clearSelection();
   resetRecorder();
@@ -6603,6 +6929,7 @@ function startRogueStage(): void {
   saveMatch(state);
   hasRealSave = true;
   render();
+  focusOpeningCamera();
   toast(`肉鸽 第 ${rogue.run.node + 1}/${SLICE_STAGES.length} 关：${st.level.name}`);
   syncRogueHud();
   kickAiIfNeeded();
@@ -6918,12 +7245,17 @@ function offerRogueCards(after: () => void): void {
  * 为什么需要：结算/三选一都是模态面板，**一旦某个面板没弹出来或被关掉，
  * 玩家就再也找不到回下一关的入口**（用户实机反馈"杀光敌军弹结算，然后呢"）。
  * 只要还在 run 里，顶栏就一直挂一个「肉鸽 1/3 · 下一关」，点它就能回到面板。
+ *
+ * 2026-11-21 起多一颗「重开本关」：只在**这一关真的在打**的时候出现
+ * （判据是当前局面就是这一关的那张图），并且开局选过"不允许重开"就没有。
  */
 function syncRogueHud(): void {
   const total = SLICE_STAGES.length;
   let el = document.getElementById('rogue-hud') as HTMLButtonElement | null;
+  let restart = document.getElementById('rogue-restart') as HTMLButtonElement | null;
   if (!rogue) {
     el?.remove();
+    restart?.remove();
     return;
   }
   if (!el) {
@@ -6934,6 +7266,58 @@ function syncRogueHud(): void {
     document.body.appendChild(el);
   }
   el.textContent = `肉鸽 ${Math.min(rogue.run.node + 1, total)}/${total} · 下一关`;
+
+  /*
+   * 「重开本关」的显隐：
+   *   · 开局选了硬核（`allowRestart === false`）→ 永不出现；
+   *   · 当前局面不是这一关的图（在首页、面板里、刚结算完）→ 不出现，
+   *     免得玩家在"下一关"上点重开，结果把刚打赢的那一关重播一遍。
+   */
+  const inStage = state.config.level?.id === stageAt(rogue.run.node).level.id;
+  if (!inStage || !canRestart(rogue.run)) {
+    restart?.remove();
+    return;
+  }
+  if (!restart) {
+    restart = document.createElement('button');
+    restart.id = 'rogue-restart';
+    restart.className = 'btn btn-sm rogue-restart';
+    restart.setAttribute('data-rogue-restart', '');
+    restart.title = '放弃这一关的进展，用进关时的兵和金币重打（本关成果作废）';
+    document.body.appendChild(restart);
+  }
+  restart.textContent = rogue.run.restartsUsed > 0 ? `重开本关 · ${rogue.run.restartsUsed}` : '重开本关';
+}
+
+/**
+ * 重开本关（2026-11-21）。
+ *
+ * 和"放弃这一局"是两件事：这个只把**这一关**退回去，run 本身继续。
+ * 拿进关前的快照整份覆盖，所以本关挣的金币、掉的遗物、抽的卡、花掉的免费建造
+ * 全部作废——不给"重开一次还能顺走一点"的缝。
+ */
+function restartRogueStage(): void {
+  if (!rogue || !canRestart(rogue.run)) return;
+  const st = stageAt(rogue.run.node);
+  if (state.config.level?.id !== st.level.id) return;
+  const run = rogue.run;
+  /*
+   * 没有快照（刷新过页面）时退回"只加计数"：那时本关已经花掉的东西（免费建造、
+   * 空投）拿不回来，但绝不会多给——宁可少还原，也不能变成刷资源的入口。
+   */
+  rogue.run = rogue.stageStart ? restartRun(rogue.stageStart, run) : { ...run, restartsUsed: run.restartsUsed + 1 };
+  rogue.settled = false;
+  rogue.snap = initRunner();
+  rogueSave();
+  // 重开等于重进这一关：AI 令牌作废，别让上一局的走子循环接着跑
+  aiToken += 1;
+  startRogueStage();
+  syncRogueHud();
+  toast(
+    rogue.run.restartsUsed > 0
+      ? `重开本关（第 ${rogue.run.restartsUsed} 次）：本关的金币、遗物、兵一律作废`
+      : '重开本关',
+  );
 }
 
 /*
@@ -6943,7 +7327,15 @@ function syncRogueHud(): void {
  * 用 document 级委托，面板在不在、挂在谁身上都不影响。
  */
 document.addEventListener('click', (ev) => {
-  const hit = (ev.target as HTMLElement | null)?.closest?.('[data-rogue-open]');
+  const el = ev.target as HTMLElement | null;
+  // 「重开本关」排在前面：它和「下一关」都是常驻按钮，别让后者的分支抢走点击
+  if (el?.closest?.('[data-rogue-restart]')) {
+    ev.preventDefault();
+    console.info('[rogue] 点击重开本关');
+    restartRogueStage();
+    return;
+  }
+  const hit = el?.closest?.('[data-rogue-open]');
   if (!hit) return;
   ev.preventDefault();
   console.info('[rogue] 点击常驻入口');
@@ -7180,6 +7572,7 @@ function playtestLevel(level: LevelDef): void {
     state.aiControl = undefined; // 同上：试玩不该继承上一局的托管
     dropHeatFlash();
     detachRoom();
+    clearMatchCamera();
     resetZoom();
     clearSelection();
     resetRecorder();
@@ -7191,6 +7584,7 @@ function playtestLevel(level: LevelDef): void {
      */
     document.querySelector('.title-screen')?.remove();
     render();
+    focusOpeningCamera();
     toast(`试玩：${level.name}（不想要了就点「新对局」）`);
     kickAiIfNeeded();
   } catch (err) {
@@ -7315,6 +7709,7 @@ function importMatchFlow(): void {
 
   state = imported;
   detachRoom(); // 换了一局，房间就对不上了
+  clearMatchCamera();
   resetZoom(); // 换局可能换尺寸，缩放档位不能跟着上一局走
   clearSelection();
   // 导入的这局要不要记摘要，看它自己的配置；记录器必须跟着换，
@@ -8862,6 +9257,7 @@ function peersAllSeated(snapshot: RoomSnapshot, me: PlayerId): boolean {
 
 /** 进入房间：把云端那一局装进本机，并把存档切到这个房间的草稿槽 */
 function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
+  rememberMatchCamera();
   roomRequests.invalidate();
   room = seat;
   peerSeated = seat.spectator === true ? true : peersAllSeated(snapshot, seat.seat);
@@ -8903,7 +9299,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
   chatNotice = '';
   chatUnread = 0;
   saveMatch(state);
-  render();
+  renderWithCamera(watching() ? null : loadMatchCamera(state));
   startRoomPolling();
   /*
    * 进房后**主动点一次 AI**（2026-11-16）。
@@ -8918,6 +9314,7 @@ function applyRoom(seat: RoomSeat, snapshot: RoomSnapshot): void {
 
 function leaveRoom(): void {
   const wasWatching = watching();
+  rememberMatchCamera();
   detachRoom();
   dropHeatFlash();
   // 回到本机那局：进房间时没动过它，原样还在
@@ -8925,7 +9322,7 @@ function leaveRoom(): void {
   resetRecorder();
   resetZoom();
   clearSelection();
-  render();
+  renderWithCamera(loadMatchCamera(state));
   toast(wasWatching ? '已退出观战，回到本机对局' : '已退出房间，回到本机对局');
 }
 
@@ -10179,6 +10576,42 @@ replayEl.addEventListener('change', endSeek);
 replayEl.addEventListener('pointerup', endSeek);
 replayEl.addEventListener('pointercancel', endSeek);
 
+boardEl.addEventListener('pointerdown', (event) => {
+  touchCombatInput = event.pointerType === 'touch' || event.pointerType === 'pen';
+});
+
+boardEl.addEventListener('mouseover', (event) => {
+  if (touchCombatInput || combatAim?.pinned || !selectedId || !myTurn() || watching() || replay ||
+    state.config.commanderMode || godMode() || starOpen || pendingSkill || buildPlan ||
+    spawnPlan || loadPlan || unloadPlan || forceMode === 'move') return;
+  const coords = coordsFromEvent(event);
+  if (!coords) return;
+  const known = viewNow();
+  const directId = (event.target as HTMLElement).closest<HTMLElement>('.unit')?.dataset.id;
+  const target = known.state.units.find((unit) => unit.id === directId && targets.includes(unit.id)) ??
+    known.state.units.find((unit) => targets.includes(unit.id) && boardIdOf(unit) === activeBoardId &&
+      coversTile(known.state, unit, coords.x, coords.y));
+  const city = known.state.cities.find((entry) => siege.includes(entry.id) && boardIdOf(entry) === activeBoardId &&
+    cityTiles(entry).some((tile) => tile.x === coords.x && tile.y === coords.y));
+  const action: CombatAction | null = target
+    ? { type: 'ATTACK', unitId: selectedId, targetId: target.id, x: coords.x, y: coords.y }
+    : city ? { type: 'SIEGE', unitId: selectedId, cityId: city.id, x: coords.x, y: coords.y } : null;
+  if (action) showCombatPreview(action, false);
+  else clearCombatPreview();
+});
+
+boardWrapEl.addEventListener('mouseleave', () => {
+  if (!combatAim?.pinned) clearCombatPreview();
+});
+
+window.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || document.querySelector('.modal-mask, .title-screen')) return;
+  if (!combatAim && !combatInspectMode) return;
+  clearCombatPreview();
+  combatInspectMode = false;
+  render();
+});
+
 // 悬停可移动格时加深高亮
 boardEl.addEventListener('mouseover', (e) => {
   const target = e.target as HTMLElement | null;
@@ -10401,7 +10834,7 @@ try {
 
   const patched = repairLoadedState();
   refreshMemory(state);
-  saveMatch(state);
+  if (bootSave || resuming) saveMatch(state);
   render();
   dropStaleSelfControl();
   if (patched > 0) {
@@ -10425,8 +10858,10 @@ if (resuming) {
 // 回到这个页面、或者切回这个标签页时，先问一句对面走完没有——
 // 轮询是兜底，用户切回来那一下才是真正会被感知到的时机。
 window.addEventListener('focus', () => void pollRoom());
+window.addEventListener('pagehide', rememberMatchCamera);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') void pollRoom();
+  else if (document.visibilityState === 'hidden') rememberMatchCamera();
 });
 
 // 邀请链接 ?room=CODE：点开就直接入座，不用再填一遍代码
@@ -10510,6 +10945,7 @@ function openSettings(): void {
 
   const paint = (): void => {
     mask.innerHTML = settingsHtml({
+      uiLayout: currentUiLayout(document.documentElement),
       theme: document.documentElement.dataset.ui === 'modern' ? 'modern' : 'legacy',
       reducedMotion: document.documentElement.dataset.motion === 'reduced',
       chime: chimeVolume,
@@ -10517,6 +10953,7 @@ function openSettings(): void {
       unitArt: uiArtOn(),
       terrainArt: uiTerrainOn(),
       replay: replay !== null,
+      showAll: state.showAll === true,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
       compact:
@@ -10549,6 +10986,12 @@ function openSettings(): void {
     if (act === 'set-theme') {
       setUiMode(el!.dataset.theme === 'modern' ? 'modern' : 'legacy');
       paint();
+      return;
+    }
+    if (act === 'set-ui-layout') {
+      setUiLayout(currentUiLayout(document.documentElement) === 'classic' ? 'refined' : 'classic');
+      paint();
+      mask.querySelector<HTMLButtonElement>('[data-act="set-ui-layout"]')?.focus();
       return;
     }
     if (act === 'set-motion') {

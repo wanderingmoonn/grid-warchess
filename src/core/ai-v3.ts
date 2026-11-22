@@ -8882,6 +8882,10 @@ export function flankSplit(
 
 function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
+  // 废墟不能升级（规则层也拦，见 doUpgrade）：这里先剔掉，免得 AI 把一次决策
+  // 花在一个必被拒绝的动作上——跑批时被拒动作要顺延，等于白丢一步。
+  // （2026-11-22 从 main 的 ai-v2 同步过来）
+  if (city.ruined) return null;
   const cost = upgradeCostOf(s, city);
   if (cost === null) return null;
   const gold = s.players[s.current].gold;
@@ -9397,8 +9401,17 @@ function aiNextActionCoreInner(
    */
 
   const me = s.current;
-  // 关键：只看自己看得见的东西，跟玩家同等信息
-  const playerViewNow = playerView(s, me);
+  /*
+   * 关键：只看自己看得见的东西，跟玩家同等信息。
+   *
+   * `clipByVision` 必须给：否则玩家一按"看全图"（`s.fog = false`），
+   * AI 也跟着全知，能打到视野外的单位。默认恒为真，
+   * 只有 `config.aiVision === false` 的调试局才让它全知。
+   *
+   * （2026-11-22 从 main 的 ai-v2 同步过来：这一段拆成独立文件时漏了这层，
+   *  老引擎修了"关迷雾 = AI 全知"，这份副本又把它带回来了。）
+   */
+  const playerViewNow = playerView(s, me, false, s.config.aiVision !== false);
   const view = playerViewNow.state;
 
   /**

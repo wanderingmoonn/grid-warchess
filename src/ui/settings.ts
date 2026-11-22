@@ -15,6 +15,7 @@
  */
 
 export interface SettingsOptions {
+  uiLayout?: 'refined' | 'classic';
   /** 当前主题（legacy / modern） */
   theme: 'legacy' | 'modern';
   /** 是否减少动效 */
@@ -51,6 +52,8 @@ export interface SettingsOptions {
   compact?: boolean;
   /** 迷雾开着吗（compact 时设置里要显示状态） */
   fog?: boolean;
+  /** 看全图（纯显示，不影响 AI 与规则） */
+  showAll?: boolean;
   /** 浓雾蔽野：迷雾锁定，开关只做说明 */
   blackout?: boolean;
   /** 联机房间码；null = 本机对局 */
@@ -65,24 +68,29 @@ export function settingsHtml(o: SettingsOptions): string {
   <div class="modal modal-narrow" role="dialog" aria-label="设置">
     <div class="modal-head">
       <h2>设置</h2>
-      <p>这些选项只影响这台设备上的这个浏览器，不进存档、不影响对局公平。</p>
     </div>
 
     <div class="modal-body">
       <section class="set-group">
-        <div class="set-title">外观</div>
+        <div class="set-title">外观 <span class="set-hint">仅此设备</span></div>
+        <div class="set-row">
+          <div class="set-label">界面回滚
+            <span class="set-hint">切换布局，保留进度。</span>
+          </div>
+          <div class="set-control">
+            <button class="btn btn-sm" data-act="set-ui-layout" aria-pressed="${o.uiLayout === 'classic'}">${o.uiLayout === 'classic' ? '恢复新版 UI' : '回滚到经典 UI'}</button>
+          </div>
+        </div>
         <div class="set-row">
           <div class="set-label">主题
-            <span class="set-hint">新版是深色界面。棋盘和地形色不变——认得出地形比"整体统一"重要。</span>
           </div>
           <div class="chip-row">
-            ${chip(o.theme === 'legacy', 'set-theme', '旧版', 'data-theme="legacy"')}
-            ${chip(o.theme === 'modern', 'set-theme', '新版', 'data-theme="modern"')}
+            ${chip(o.theme === 'legacy', 'set-theme', '浅色', 'data-theme="legacy"')}
+            ${chip(o.theme === 'modern', 'set-theme', '深色', 'data-theme="modern"')}
           </div>
         </div>
         <div class="set-row">
           <div class="set-label">减少动态效果
-            <span class="set-hint">关掉面板与按钮的过渡动画。前庭敏感的人需要的是"不动"，不是"动得快"。</span>
           </div>
           <div class="chip-row">
             ${chip(!o.reducedMotion, 'set-motion', '正常', 'data-motion="full"')}
@@ -91,10 +99,7 @@ export function settingsHtml(o: SettingsOptions): string {
         </div>
         <div class="set-row">
           <div class="set-label">美术贴图
-            <span class="set-hint">
-              把地面换成生成的材质图（草原有草叶、森林连成一片林冠），棋子有图的也换成贴图。
-              关着就是原来的纯色块 + 汉字，一个图片字节都不下载。没有图的地形与兵种自动保留原样。
-            </span>
+            <span class="set-hint">地形与棋子</span>
           </div>
           <div class="chip-row">
             ${chip(!(o.terrainArt || o.unitArt), 'set-fx', '原版', 'data-fx="off"')}
@@ -107,7 +112,7 @@ export function settingsHtml(o: SettingsOptions): string {
         <div class="set-title">声音</div>
         <div class="set-row">
           <div class="set-label">铃声
-            <span class="set-hint">轮到你了才响一声。放在桌上等对手的人靠它回神。</span>
+            <span class="set-hint">回合开始时提醒</span>
           </div>
           <div class="set-control">
             <input class="set-range" type="range" min="0" max="100" step="5"
@@ -123,7 +128,7 @@ export function settingsHtml(o: SettingsOptions): string {
         <div class="set-actions">
           ${
             o.replay
-              ? '<span class="set-hint">复盘里不给导出：先点复盘条上的「退出」，回到你那局再导。</span>'
+              ? '<span class="set-hint">退出复盘后可导出对局。</span>'
               : '<button class="btn btn-sm" data-act="export">导出对局</button>'
           }
           <button class="btn btn-sm" data-act="new-match">新对局</button>
@@ -131,10 +136,6 @@ export function settingsHtml(o: SettingsOptions): string {
         </div>
         <div class="set-row">
           <div class="set-label">新对局快捷键
-            <span class="set-hint">
-              对局中按一下就能直接开新局的设置面板，不用先回首页再点「开始对局」。
-              只在棋盘上生效：正在输入文字时不抢键，复盘里先退出复盘。
-            </span>
           </div>
           <div class="set-control">
             <kbd class="set-key">Alt</kbd><span class="set-key-plus">+</span><kbd class="set-key">N</kbd>
@@ -156,8 +157,8 @@ export function settingsHtml(o: SettingsOptions): string {
           <div class="set-label">迷雾
             <span class="set-hint">${
               o.blackout
-                ? '这局开了「浓雾蔽野」，迷雾锁定开启，关不掉。'
-                : '关掉等于全图可见。自定义局里想看清楚时用，正常对局别关。'
+                ? '「浓雾蔽野」已锁定开启。'
+                : '关闭会改变双方迷雾规则。'
             }</span>
           </div>
           <div class="chip-row">
@@ -167,9 +168,19 @@ export function settingsHtml(o: SettingsOptions): string {
           </div>
         </div>
         <div class="set-row">
+          <div class="set-label">看全图
+            <span class="set-hint">仅改变显示，不影响 AI 视野。</span>
+          </div>
+          <div class="chip-row">
+            <button class="chip${o.showAll ? ' active' : ''}" data-act="toggle-show-all">${
+              o.showAll ? '开' : '关'
+            }</button>
+          </div>
+        </div>
+        <div class="set-row">
           <div class="set-label">联机
             <span class="set-hint">${
-              o.roomCode ? `当前房间 ${o.roomCode}` : '建房或加入别人的房间（不在房间里的对局是本机的）'
+              o.roomCode ? `当前房间 ${o.roomCode}` : '创建或加入房间'
             }</span>
           </div>
           <button class="btn btn-sm" data-act="online">${o.roomCode ? '房间' : '联机'}</button>

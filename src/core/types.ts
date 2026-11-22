@@ -1296,6 +1296,14 @@ export interface Unit {
    * 规则层**不认识任何具体能力 id**，只负责合并查找。
    */
   extraAbilities?: string[];
+  /**
+   * 临时能力（2026-11-22）：带到期回合，由引擎统一发、统一收。
+   *
+   * 和 `extraAbilities` 的分工：那个是**永久**附着（模块、关卡、存档），
+   * 这个是**限时**的（精灵女王的林海给友军 5 回合穿林 + 林地之主）。
+   * 查询走 `abilitiesOf(s,u)`，到期在 `turnStartSkills` 里回收。
+   */
+  tempAbilities?: Array<{ ids: string[]; until: number }>;
 
   /** 
    * 扩展专用的自定义数据沙盒，一些其他扩展不会共用的数据就丢这里。
@@ -1439,7 +1447,7 @@ export interface MatchConfig {
    * 用哪份 AI 内核。
    *
    *   · `script`：`core/ai.ts`（老 AI，冻结的参考实现）
-   *   · `goal`  ：`core/ai-v3.ts`（实验 AI，远期规划走目标状态机）
+   *   · `goal`  ：`core/ai-v3.ts`（实验 AI v3，远期规划走目标状态机）
    *   · `net`   ：策略网络（测试 AI，权重单独加载）
    */
   aiBrain?: 'script' | 'net' | 'goal';
@@ -1747,6 +1755,13 @@ export interface MatchConfig {
    * 但它该能出兵来打你——所以禁的是"生产/经济"这一档，不是全部兵种。
    */
   noEconomySeats?: string[];
+  /**
+   * AI 是否受战争迷雾限制（默认 **是**，2026-11-21）。
+   *
+   * 原来这条和 `state.fog`（玩家要不要看全图）是同一个字段，一关迷雾
+   * AI 就全知。现在分开：`fog` 只管显示，这条只管 AI 的视力。
+   */
+  aiVision?: boolean;
   /**
    * 接管废墟不收重建费（2026-11-20）。
    *
@@ -2614,6 +2629,12 @@ export interface GameState {
    * 事件（造一个兵、盖一座楼），不是流量。所以只能看**趋势**：
    * 存量在掉 = 供不上，该补产出建筑了；持平或涨 = 够了。
    */
+  /**
+   * 临时地形改造（2026-11-22，精灵女王的「林海」）：只记原始地形与到期回合，
+   * 到期由 `turnStartSkills` 还原。森林会牵动移速/视野/护甲/穿林/林地之主一整套
+   * 判定，逐个加 if 迟早漏；直接改 tiles，所有系统天然一致。
+   */
+  terrainPatches?: Array<{ x: number; y: number; from: Terrain; until: number }>;
   aiResMark?: Partial<Record<PlayerId, { turn: number; stock: Record<string, number> }>>;
   /**
    * 僵持计数（AI 用，2026-11-15）。
@@ -2689,6 +2710,15 @@ export interface GameState {
   planStart?: PlayerId;
   nextUnitSeq: number;
   fog: boolean;
+  /**
+   * **看全图**（纯显示，2026-11-21）。
+   *
+   * 和 `fog` 分开：`fog` 是规则（这一局有没有战争迷雾），`showAll` 是
+   * "我想把整张图看清楚"。后者不改任何规则——AI 的视力、攻击的目标合法性
+   * 都不受影响。之所以要拆，是因为原来只有 `fog` 一个字段，
+   * 想看图就得关迷雾，一关 AI 全知，能打到视野外。
+   */
+  showAll?: boolean;
   winner: PlayerId | null;
   /**
    * 已经退出的席位（认输 / 判弃权）。

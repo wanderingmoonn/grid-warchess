@@ -732,13 +732,18 @@ export function createMatch(
             ? 'tactic'
             : 'advanced',
       /*
-       * 内核：`net` = 自博弈练出来的策略网络（见 rl/brain.ts）。
+       * 内核：`net` = 自博弈练出来的策略网络（见 rl/brain.ts）；
+       * `goal` = 实验 AI v3（core/ai-v3.ts，远期规划走目标状态机）。
        *
        * 和上面那些开关一样必须逐个抄进 state.config：读档、复盘、上报、
        * 以及 AI 走子那一刻选哪个内核，读的都是这里。
        *
-       * 只在**两席局**里认：那个网络是在 2 人、10×10/12×12 上练的，
+       * `net` 只在**两席局**里认：那个网络是在 2 人、10×10/12×12 上练的，
        * 三家四家的目标选择与席位顺序它一次都没见过——真让它上不叫测试。
+       * `goal` 不设这条限制：v3 内核本身就是按"所有敌人"写的（多人局只是弱一点）。
+       *
+       * 这一行以前只放行 `net`，`goal` 一律被写成 `script`——面板上点得亮，
+       * 开局却还是老引擎，属于"看着生效、其实没生效"（2026-11-21 接按钮时发现）。
        */
       aiBrain:
         config.aiBrain === 'net' && twoSeats
@@ -794,6 +799,7 @@ export function createMatch(
       ...(config.holdWinner === true ? { holdWinner: true } : {}),
       ...(Array.isArray(config.noEconomySeats) ? { noEconomySeats: [...config.noEconomySeats] } : {}),
       ...(config.freeRebuild === true ? { freeRebuild: true } : {}),
+      ...(config.aiVision === false ? { aiVision: false } : {}),
       // 关掉的那些也要活进 config：兵种池弹层靠它把"关着"的格子画回去，
       // 少了这一行，下一局打开面板会看到整排船又亮了起来。
       disabledUnits: Array.from(disabled).filter((id) => catalog[id]),

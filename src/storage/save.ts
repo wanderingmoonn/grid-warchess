@@ -17,7 +17,7 @@ import { normalizeExpansionIds } from '../core/expansions.ts';
 import { normalizePlayerNames } from '../core/setup.ts';
 import { pruneLegacyDraftPool } from '../core/draft.ts';
 import { levelById } from '../core/level.ts';
-import type { GameState } from '../core/types.ts';
+import type { BoardId, GameState, PlayerId } from '../core/types.ts';
 
 const KEY_MATCH = 'warchess:match:v1';
 const KEY_META = 'warchess:meta:v1';
@@ -53,13 +53,52 @@ export function setSaveScope(roomCode: string | null): void {
   scopedKey = roomCode ? `${KEY_MATCH}:room:${roomCode}` : KEY_MATCH;
 }
 
-import type { PlayerId } from '../core/types.ts';
-
 export interface MatchMeta {
   createdAt: number;
   updatedAt: number;
   /** 当前应该由谁操作 */
   pendingFor: PlayerId;
+}
+
+export interface MatchCamera {
+  board: BoardId;
+  zoom: number;
+  /** 视口中心在整张地图上的比例，换屏幕尺寸后仍指向同一片地形。 */
+  x: number;
+  y: number;
+}
+
+export function saveMatchCamera(state: GameState, camera: MatchCamera): void {
+  if (suspended) return;
+  const { seed, w, h } = state;
+  try {
+    localStorage.setItem(`${scopedKey}:camera`, JSON.stringify({ seed, w, h, ...camera }));
+  } catch {
+    // 浏览器禁用本地存储时仍可正常下棋。
+  }
+}
+
+export function loadMatchCamera(state: GameState): MatchCamera | null {
+  try {
+    const raw = localStorage.getItem(`${scopedKey}:camera`);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as MatchCamera & Pick<GameState, 'seed' | 'w' | 'h'>;
+    if (!saved || saved.seed !== state.seed || saved.w !== state.w || saved.h !== state.h) return null;
+    const { board, zoom, x, y } = saved;
+    if (typeof board !== 'string' || !Number.isFinite(zoom) ||
+        !Number.isFinite(x) || x < 0 || x > 1 || !Number.isFinite(y) || y < 0 || y > 1) return null;
+    return { board, zoom, x, y };
+  } catch {
+    return null;
+  }
+}
+
+export function clearMatchCamera(): void {
+  try {
+    localStorage.removeItem(`${scopedKey}:camera`);
+  } catch {
+    // 有些浏览器不允许访问本地存储。
+  }
 }
 
 export function saveMatch(s: GameState): void {
@@ -199,6 +238,7 @@ export function loadMeta(): MatchMeta | null {
 }
 
 export function clearMatch(): void {
+  clearMatchCamera();
   try {
     localStorage.removeItem(scopedKey);
     localStorage.removeItem(KEY_META);

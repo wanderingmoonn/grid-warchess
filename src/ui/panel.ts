@@ -70,6 +70,11 @@ import {
   citiesOf,
   cityById,
   cityName,
+  canAttack,
+  canMove,
+  isArmed,
+  movePower,
+  underConstruction,
   cityRegenOf,
   cityTiles,
   disbandRefundOf,
@@ -153,6 +158,10 @@ export interface PanelInput {
    * 触屏和鼠标党点这两个按钮。状态放在 main 里，面板只负责显示"现在是哪一档"。
    */
   forceMode?: 'move' | 'attack' | null;
+  combatInspectMode?: boolean;
+  combatDirectPreview?: boolean;
+  combatTargetCount?: number;
+  battleStatusInHeader?: boolean;
   /**
    * 「操作」说明卡是不是展开着。
    *
@@ -367,8 +376,81 @@ export function renderPanel(el: HTMLElement, input: PanelInput): void {
   const html = panelHtml(input);
   // firstChild 一起看：侧栏被清空过（但没走 invalidatePanel）时不能凭缓存跳过
   if (panelHtmlCache.get(el) === html && el.firstChild) return;
+  const folds = new Map(
+    Array.from(el.querySelectorAll<HTMLDetailsElement>('[data-panel-fold]')).map(
+      (fold) => [fold.dataset.panelFold!, fold.open] as const,
+    ),
+  );
   panelHtmlCache.set(el, html);
   el.innerHTML = html;
+  for (const fold of el.querySelectorAll<HTMLDetailsElement>('[data-panel-fold]')) {
+    const open = folds.get(fold.dataset.panelFold!);
+    if (open !== undefined && !fold.hasAttribute('data-force-open')) fold.open = open;
+  }
+}
+
+function panelFold(key: string, title: string, body: string, forceOpen = false, className = '', label = title): string {
+  return `<details class="card-fold panel-fold${className ? ` ${className}` : ''}" data-fold="${key}" data-panel-fold="${key}"${forceOpen ? ' open data-force-open' : ''}>
+    <summary class="card-title fold-head" aria-label="${escapeHtml(label)}">${title}</summary>${body}
+  </details>`;
+}
+
+/**
+ * 「每回合收入」的文案。
+ *
+ * **不能套 `costLabel`**：那个函数是给**价格**写的，空表返回「免费」——
+ * 它描述的是"这东西不花钱"。收入是另一回事，空表说的是"一分都收不到"。
+ *
+ * 空表在两种场合是真的：
+ *   1. **关卡模式**（`config.level`）里守 N 次行动那类关：一方可能从头就没有城
+ *      （"你只有几个兵"），也可能打到中途城被打光了——`incomeResOf` 只有
+ *      `cleanCost` 之后的正数项，`gold: 0` 会被剥掉，于是整张表是空的；
+ *   2. 肉鸽整局 `config.noIncome`，一进门就 `return {}`（金币只从战果来）。
+ *
+ * 两种都该读作「0 金」（2026-11-21，用户报的是关卡模式那张截图）。
+ */
+function incomeTextOf(s: GameState, p: PlayerId): string {
+  const income = incomeResOf(s, p);
+  // 判"有没有正数"而不是判表空：普通局至少会有 gold: 0，noIncome 直接给 {}
+  const any = Object.values(income).some((n) => (n ?? 0) > 0);
+  return any ? costLabel(income) : '0 金';
+}
+
+function incomeNoteOf(s: GameState, income: string): string {
+  if (income !== '0 金') return '';
+  return s.config.noIncome
+    ? '这个模式没有回合收入：金币只能从战果拿'
+    : '没有城就没有回合产出（底薪已取消）：金币只能从战果拿';
+}
+
+export function battleStatusShell(): string {
+  return `<div class="battle-status-amounts" role="group" aria-label="本方资源">
+    <div class="battle-status-stat"><span>金币</span><b data-ref="battle-gold"></b></div>
+    <div class="battle-status-stat" data-ref="battle-income-stat"><span>每回合</span><b data-ref="battle-income"></b></div>
+  </div>
+  <button type="button" class="btn btn-sm" data-ref="battle-undo" aria-label="撤回一步" title="撤回一步，仅本回合" disabled>撤回</button>`;
+}
+
+export function updateBattleStatus(root: HTMLElement, s: GameState, me: PlayerId | null, canUndo: boolean): void {
+  root.hidden = me === null;
+  const undo = root.querySelector<HTMLButtonElement>('[data-ref="battle-undo"]')!;
+  if (me === null) {
+    delete undo.dataset.act;
+    undo.disabled = true;
+    return;
+  }
+  const income = incomeTextOf(s, me);
+  const goldEl = root.querySelector<HTMLElement>('[data-ref="battle-gold"]')!;
+  const incomeEl = root.querySelector<HTMLElement>('[data-ref="battle-income"]')!;
+  const incomeStat = root.querySelector<HTMLElement>('[data-ref="battle-income-stat"]')!;
+  const gold = String(s.players[me].gold);
+  const note = incomeNoteOf(s, income);
+  const displayedIncome = note ? income : `+${income}`;
+  if (goldEl.textContent !== gold) goldEl.textContent = gold;
+  if (incomeEl.textContent !== displayedIncome) incomeEl.textContent = displayedIncome;
+  if (incomeStat.title !== note) incomeStat.title = note;
+  if (undo.dataset.act !== 'undo') undo.dataset.act = 'undo';
+  if (undo.disabled === canUndo) undo.disabled = !canUndo;
 }
 
 function panelHtml(input: PanelInput): string {
@@ -423,6 +505,8 @@ function panelHtml(input: PanelInput): string {
   const readOnly = spectator || quit || lostAll || input.commander === true;
   const myTurn = !spectator && !quit && !lostAll && s.current === me && !s.winner;
 
+  const sideIncome = !spectator && !input.battleStatusInHeader ? incomeTextOf(s, me) : null;
+  const noIncomeNote = sideIncome === null ? '' : incomeNoteOf(s, sideIncome);
 
   /*
    * 终局那一格写"谁赢了"，不再只写"对局结束"。
@@ -518,33 +602,36 @@ function panelHtml(input: PanelInput): string {
 
   return `
     <div class="card card-seats">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div class="battle-turn">
         ${turnBadge}
-        <span class="hint">第 ${s.turn} 次行动</span>
       </div>
+      ${sideIncome !== null ? `<div class="battle-resources" aria-label="本方资源概览">
+        <div><span>可用金币</span><strong>${s.players[me].gold}</strong></div>
+        <div${noIncomeNote ? ` title="${noIncomeNote}"` : ''}><span>每回合收入</span><b>${escapeHtml(sideIncome)}</b></div>
+        <div><span>控制城市</span><b>${citiesOf(s, me).length}<small> 座</small></b></div>
+      </div>` : ''}
+      ${!spectator ? `<div class="battle-extra-resources">${Object.entries(s.players[me].res ?? {})
+        .filter(([resource, amount]) => resource !== 'gold' && (amount ?? 0) > 0)
+        .map(([resource, amount]) => `<span>${escapeHtml(costLabel({ [resource]: amount }))}</span>`).join('')}</div>` : ''}
       ${
         /*
-         * 撤回放在这里，不放在「结束回合」下面。
-         *
-         * 两颗按钮原来上下紧挨着（结束回合是整行长按钮，撤回就在它正下方），
-         * 而它们一个是"这一回合我走完了"、一个是"把最后一步退回来"——
-         * 手一抖点错，代价是一次回合交接。挪到顶部信息卡，"结束回合"下面
-         * 只剩「认输」和「音效」，中间还隔着一行提示。
+         * 经典布局的撤回仍在信息卡里，和结束行动分开。
+         * 新版由顶栏提供撤回，关闭详情时也能点到。
          */
-        input.replay
+        input.replay || input.battleStatusInHeader
           ? ''
           : `<div class="undo-row">
                <button class="btn btn-sm" data-act="undo" ${
                  input.canUndo === true && myTurn ? '' : 'disabled'
                } title="退回上一步（只在同一回合内可用）">撤回一步</button>
-               <span class="hint">同一回合内可退，结束回合后就不能了</span>
+               <span class="hint">仅本回合</span>
              </div>`
       }
-      <div style="margin-top:12px">
+      ${panelFold('match', '对局与阵营', `<div class="battle-seats">
         ${seatRows}
       </div>
       <div class="meta-line">${s.fog ? '迷雾开启' : '迷雾关闭'} · 棋盘 ${s.w}×${s.h}</div>
-      <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>
+      <div class="meta-line">扩展：${escapeHtml(expansionText)}</div>`, spectator)}
       ${powerLine}
     </div>
 
@@ -553,7 +640,6 @@ function panelHtml(input: PanelInput): string {
     ${input.battleCard
       ? `<div class="card">
            <div class="card-title">战报卡</div>
-           <div class="hint">破城回合、MVP 兵种、关键三步——一张能存下来、也能发出去的卡。</div>
            <button class="btn btn-sm btn-primary" data-act="battle-card">生成战报卡</button>
          </div>`
       : ''}
@@ -636,18 +722,18 @@ function panelHtml(input: PanelInput): string {
              </button>`
       }
       </div>
-      <div class="side-actions"${input.replay ? ' hidden' : ''}>
+      ${input.replay ? '' : panelFold('match-actions', '对局管理', `<div class="side-actions">
         <button class="btn btn-sm btn-quiet-danger" data-act="surrender" ${myTurn ? '' : 'disabled'}>
           ${quit ? '已认输' : '认输'}
         </button>
-      </div>
+      </div>`)}
       <div class="hint" style="text-align:center">
         ${
           input.replay
-            ? '复盘是全图视角：当时被雾挡住的部队也画出来了。'
+            ? '复盘 · 全图视角'
             : spectator
-              ? '这是全图视角：双方的伏兵和金币都看得见。别在两个人还在打的时候念出来。'
-              : '每一步都会自动存档，随时可以关掉页面'
+              ? '观战 · 全图视角'
+              : '自动保存'
         }
       </div>
     </div>
@@ -1083,7 +1169,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             <div class="unit-sub">坐标 ${coord}</div>
           </div>
         </div>
-        <div class="unit-notes"><div>· 雾里看不透这一格。派个单位走过去，或者等它进入视野。</div></div>
+        <div class="unit-notes"><div>· 未在视野内，地形未知。</div></div>
       `;
       }
 
@@ -1153,13 +1239,18 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
     const mine = !readOnly && selectedUnit.owner === me;
     // 残兵不给钱，按钮上就得写清楚——"回收 0 金"看着像程序出错
     const refund = disbandRefundOf(s, selectedUnit);
+    const readyToMove = canMove(selectedUnit) && movePower(s, selectedUnit) > 0 && !underConstruction(selectedUnit);
+    const readyToAttack = canAttack(selectedUnit) && isArmed(s, selectedUnit) && !underConstruction(selectedUnit);
     const status: string[] = [];
     if (spectator) {
       status.push('观战中 · 仅查看');
     } else if (mine) {
-      if (!selectedUnit.moved) status.push('可移动');
-      if (!selectedUnit.acted) status.push('可攻击');
-      if (selectedUnit.moved && selectedUnit.acted) status.push('本回合已行动完毕');
+      if (!myTurn) status.push('等待本方回合');
+      else if (underConstruction(selectedUnit)) status.push('施工中 · 无法行动');
+      else {
+        status.push(readyToMove ? '可移动' : selectedUnit.moved ? '移动已用' : '不可移动');
+        status.push(readyToAttack ? `可攻击 · 剩 ${attacksLeftOf(s, selectedUnit)} 次` : isArmed(s, selectedUnit) ? '攻击已用' : '无攻击能力');
+      }
     } else {
       // 别人的单位只给看：兵种一多，临场查对面射程/护甲是刚需，
       // 但这张卡上不该出现任何能按的东西
@@ -1282,7 +1373,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                </div>`,
              )
              .join('')}
-           <div class="hint" style="margin-top:8px">建造要占掉这个单位的整回合，选址范围 ${CONFIG.buildRange} 格。</div>`;
+           <div class="hint" style="margin-top:8px">建造占用整回合 · 选址 ${CONFIG.buildRange} 格</div>`;
 
     // 运输船：装卸是它唯一会做的事，所以单独开一块，写清载了谁、还能装几个
     const cargo = selectedUnit.cargo ?? [];
@@ -1392,9 +1483,14 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         <div class="unit-chip ${selectedUnit.owner === 'A' ? 'a' : 'b'}">${def.short}</div>
         <div>
           <div class="unit-title">${def.name}</div>
-          <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${status.join(' / ')}</div>
+          <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${CATEGORY_NAME[def.category] ?? '单位'}</div>
         </div>
       </div>
+      <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
+      ${mine && myTurn && input.combatInspectMode ? '<p class="unit-next-action">选择红框目标</p>' : ''}
+      ${!input.combatDirectPreview && mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
+        aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
+        ${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</button>` : ''}
       ${
         underCamp
           ? `<button class="btn btn-sm btn-block" data-act="open-camp" data-id="${underCamp.id}" style="margin-top:10px">
@@ -1535,7 +1631,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       ${notesBlock}
       ${
         mine && myTurn
-          ? `<div class="force-row">
+          ? panelFold(`advanced-${selectedUnit.id}`, '进阶操作', `<div class="force-row">
                <button class="force-btn${input.forceMode === 'move' ? ' armed' : ''}" data-act="force-move">
                  强制移动 <kbd>Alt</kbd>
                </button>
@@ -1543,19 +1639,14 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
                  强制攻击 <kbd>Shift</kbd>
                </button>
              </div>
-             <div class="hint" style="margin-top:6px">
-               同一格压着多个目标时，<b>连点同一格会在它们之间轮换</b>。
-               <br /><br />
-               走不上桥、或者点不到身下那格时，按<b>强制移动</b>：期间点棋盘只有移动指令，再点一次按钮才退出。
-               按住 <kbd>Alt</kbd> 点可达格是同样的效果，只是只生效一次。
-             </div>`
+             <div class="hint">连点切换同格目标；再点按钮退出模式。</div>`, !!input.forceMode)
           : ''
       }
       ${
         canDisband
-          ? `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband" style="margin-top:12px">
+          ? panelFold(`manage-${selectedUnit.id}`, '单位管理', `<button class="btn btn-sm btn-block btn-quiet-danger" data-act="disband">
                ${refund > 0 ? `拆除（回收 ${refund} 金）` : '拆除（残兵不回收金币）'}
-             </button>`
+             </button>`)
           : ''
       }
     `;
@@ -1591,21 +1682,15 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
        */
       input.replay
         ? `<div class="hint">
-      拖顶部的进度条 → 停到任意一步；也可以用 <kbd>←</kbd> <kbd>→</kbd> 一步一步走，
-      <kbd>空格</kbd> 播放 / 暂停，<kbd>Home</kbd> <kbd>End</kbd> 跳两端。<br /><br />
-      点棋子、点城市 → 看它<b>在那一刻</b>的属性卡（光环、剩余行动、驻军都在）。<br /><br />
-      这里是回放，不能走子：要接着打那局，点复盘条右边的「退出复盘」。
+      <kbd>←</kbd> <kbd>→</kbd> 逐步回放，<kbd>空格</kbd> 播放 / 暂停。<br />
+      拖动进度条定位；<kbd>Home</kbd> / <kbd>End</kbd> 跳至首尾。<br />
+      点单位或城市查看当时属性；「退出复盘」返回对局。
     </div>`
         : `<div class="hint">
-      点自己的单位 → 蓝色格子是可移动范围，红框是可攻击目标。<br /><br />
-      点自己的城市 → 产兵、以及花钱升级时代。升级后能造更高级的兵种，城市也更硬。<br /><br />
-      点对方的城市 → 查看它的时代、耐久和护甲。攻城伤害 = 攻击 − 城市护甲。<br /><br />
-      点任何一块空地 → 看这块地形能干什么、适合谁站。<br /><br />
-      同一格有好几个东西时，连点会轮换选中；选中自己的兵之后，侧栏有两个模式按钮：<br />
-      <b>强制移动</b>（<kbd>Alt</kbd>）—— 点可达格就走上去，无视压在上面的棋子（比如走上桥面）；<br />
-      <b>强制攻击</b>（<kbd>Shift</kbd>）—— 打身下的目标。<br />
-      点按钮进入的模式会一直扣着，期间棋盘只认这一个动作，<b>再点一次按钮才退出</b>；
-      按住修饰键则只对下一次点击生效。
+      <b>单位</b>：蓝格移动，红框攻击。悬停可预览；触屏先预览再确认。<br />
+      <b>城市</b>：生产、升级；点敌城查看属性。攻城伤害 = 攻击 − 城市护甲。<br />
+      <b>空地</b>：查看地形。同格目标可连点切换。<br />
+      <b>强制移动 / 攻击</b>：<kbd>Alt</kbd> / <kbd>Shift</kbd>，可处理桥面与同格目标；按钮模式再次点击退出。
     </div>`
     }
     </details>
@@ -1648,7 +1733,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
           <div class="unit-sub">${sub}</div>
         </div>
       </div>
-      <div class="unit-notes"><div>· 城市在雾里：耐久、护甲、收入都看不到。派个单位走近，或者等它重新进入视野。</div></div>
+      <div class="unit-notes"><div>· 城市不在视野内，属性未知。</div></div>
     `;
     }
   }
@@ -1780,7 +1865,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
     return recruitButton(s, me, def, disabled, extra, ordering ? 'order' : 'recruit', city.id, {
       kind: 'city',
       city,
-    });
+    }, ordering ? '生产队列已满' : !myTurn ? '等待本方回合' : !slotsOk ? '没有可用出兵位置' : '');
   };
 
   const q = (input.recruitQuery ?? '').trim();
@@ -1824,11 +1909,21 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
       ? emptyRecruitHint(q, pack, eraFilter, buildable.length, '这座城')
       : grouped;
 
+  /*
+   * 废墟：能点开、能看，但**不能升级**。
+   *
+   * 2026-11-21 用户报的就是这个：城被打成废墟之后，升级按钮还在，点下去钱照扣、
+   * `city.era` 照涨，可这座城一分钱产出都没有（`incomeResOf` 跳过 `ruined`）——
+   * 等于花钱把石头堆升了个时代。规则层已经拦住了（见 `doUpgrade`），
+   * 这里把按钮换成一句话，别让人先花一次点击才知道。
+   */
   const upgradeBlock =
-    mine && nextEra && upgradeCost !== null
-      ? `<button class="upgrade-btn" data-act="${ordering ? 'order-add' : 'upgrade'}"${
-          ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
-        } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
+    mine && city.ruined
+      ? '<div class="hint">这座城市已成废墟：先派一支陆军走进去接管，接管之后才能升级。</div>'
+      : mine && nextEra && upgradeCost !== null
+        ? `<button class="upgrade-btn" data-act="${ordering ? 'order-add' : 'upgrade'}"${
+            ordering ? ` data-type="${ORDER_UPGRADE}" data-site="${city.id}"` : ''
+          } ${ordering ? (queueFull ? 'disabled' : '') : !myTurn || gold < upgradeCost ? 'disabled' : ''}>
            <span class="upgrade-main">
              <b>升级到「${nextEra.name}」</b>
              <span>耐久 ${city.maxHp} → ${nextEra.cityMaxHp} · 护甲 ${city.armor} → ${nextEra.cityArmor} · 收入 ${era.cityIncome} → ${nextEra.cityIncome}</span>
@@ -1836,23 +1931,23 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
            <span class="price">${upgradeCost}</span>
            ${ordering ? '<span class="order-tag">＋队列</span>' : ''}
          </button>`
-      : mine
-        ? '<div class="hint">已经是最高时代。</div>'
-        : '';
+        : mine
+          ? '<div class="hint">已经是最高时代。</div>'
+          : '';
 
   return `
     <div class="unit-head">
       <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
       <div>
         <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}</div>
+        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}${city.ruined ? ' · <b>废墟</b>' : ''}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="stat-grid">
       <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
       <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-      <div class="info-row"><span>本城收入</span><b>${era.cityIncome} 金</b></div>
+      <div class="info-row"><span>本城收入</span><b>${city.ruined ? '0 金 <small>（废墟不产出）</small>' : `${era.cityIncome} 金`}</b></div>
       ${
         /*
          * 本方总收入单独一行，且只在**自己的城**上显示。
@@ -1862,8 +1957,9 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
          * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
          */
         mine
-          ? `<div class="info-row"><span>本方每回合收入</span><b>${costLabel(
-              incomeResOf(s, city.owner),
+          ? `<div class="info-row"><span>本方每回合收入</span><b>${incomeTextOf(
+              s,
+              city.owner,
             )}</b></div>`
           : ''
       }
@@ -1875,27 +1971,27 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
         ? `<div class="card-title" style="margin-top:14px">${
                     ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
                   }</div>
-           ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
+           ${ordering && queueFull ? '<div class="hint">队列已满，请删除或执行。</div>' : ''}
            ${packRow(buildable, pack)}
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
            ${recruitGroups}
            ${
              input.spawnPick
-               ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
+               ? `<div class="hint" style="margin-top:10px">为「${
                    s.unitTypes[input.spawnPick.type]?.name ?? input.spawnPick.type
-                 }」放下去。点别处就取消。</div>`
+                 }」选择亮起的水面；点别处取消。</div>`
                : ''
            }
            <div class="hint" style="margin-top:10px">
              ${
                ordering
-                 ? '排进队列的是「这座城 · 这个兵」，AI 执行那一回合才扣钱出兵；队列可以在顶部随时删。'
+                 ? '执行队列时扣费出兵。'
                  : freeSlots > 0
-                   ? `城内还有 ${freeSlots} 个空位。新兵当回合不能行动，建筑建成即不可移动。`
+                   ? `空位 ${freeSlots} · 新兵本回合不能行动`
                    : airReady > 0
-                     ? '城内地面位已站满，先让部队挪一挪——空军还能起飞（悬在地面单位上方不占位置）。'
-                     : '城内已站满，先让部队挪一挪。'
+                     ? '地面位已满，仍可生产空军。'
+                     : '城内已满，请先移出部队。'
              }
              ${
                /*
@@ -2088,6 +2184,7 @@ function recruitButton(
   site = '',
   /** 从哪儿造：定价要和 doRecruit 同源（宗门里招修士收灵石，城里收金币） */
   source?: ProduceSource,
+  disabledReason = '',
 ): string {
   const price = recruitResCost(s, me, def, source);
   // 英雄的价钱是"造价 + 首次解锁费"，按钮上必须显示合计：
@@ -2100,6 +2197,14 @@ function recruitButton(
   // 用当下的余额把按钮禁掉，等于逼玩家先把钱攒够再来排计划。
   const blocked =
     mode === 'order' ? disabled || aliveHere : disabled || aliveHere || !canPay(s.players[me], payCost);
+  const missing = Object.fromEntries(
+    Object.entries(payCost).map(([resource, amount]) => [resource, Math.max(0, (amount ?? 0) - (
+      resource === 'gold' ? s.players[me].gold : s.players[me].res?.[resource] ?? 0
+    ))]).filter(([, amount]) => Number(amount) > 0),
+  );
+  const reason = !blocked ? '' : aliveHere ? '场上已有该英雄'
+    : disabled ? disabledReason || extra.replace(/^ · /, '') || '当前无法生产'
+    : `还缺 ${costLabel(missing)}`;
   const tag = aliveHere ? ' · 场上已有' : unlockFee > 0 ? ` · 解锁 ${unlockFee}` : '';
   // 血量必须出现在购买清单里：攻甲移射都是"打得怎么样"，血是"挨得怎么样"，
   // 一个新兵站上前线能顶几刀，玩家在按下生产之前就该知道。
@@ -2108,8 +2213,6 @@ function recruitButton(
   const detail = `${unitStatLine(def)}${tag}`;
   const act = mode === 'order' ? 'order-add' : 'recruit';
   const siteAttr = mode === 'order' && site ? ` data-site="${site}"` : '';
-  const tail =
-    mode === 'order' ? `<span class="order-tag">＋队列</span>` : '';
   /*
    * 悬停详情卡：造出这个工兵**之前**就能看到它能盖什么，不必先花钱造出来、
    * 再点开属性卡，或者去翻规则书。数据写在隐藏节点里，由 main.ts 那套通用
@@ -2121,15 +2224,19 @@ function recruitButton(
       <span class="tip-row">${escapeHtml(detail)}</span>
       ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${escapeHtml(builds.names.join('、'))}（共 ${builds.names.length} 种）</span>` : ''}
     </span>`;
-  return `<span class="recruit-wrap" data-hover-tip>${tip}
+  const role = `${def.category === 'combat' ? def.range > 1 ? '远程作战' : '近战作战' : CATEGORY_NAME[def.category] ?? '单位'}${def.domain === 'water' ? ' · 水上' : airLayer(def) ? ' · 空中' : ''}${mode === 'order' ? ' · ＋队列' : ''}`;
+  return `<div class="recruit-wrap" data-hover-tip>${tip}
     <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
     <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
     <span class="meta">
       <b>${def.name}${sourceTag(def)}</b>
-      <span>${detail}${extra}</span>
+      <span>${escapeHtml(role)}${extra}</span>
+      ${reason ? `<span class="recruit-reason">${escapeHtml(reason)}</span>` : ''}
     </span>
-    <span class="price">${costLabel(payCost)}</span>${tail}
-  </button></span>`;
+    <span class="price">${costLabel(payCost)}</span>
+  </button>
+  ${panelFold(`recruit-${site}-${def.id}`, '详情', `<div class="recruit-spec">${escapeHtml(detail)}</div>${builds.names.length > 0 ? `<div class="hint">可建造：${escapeHtml(builds.names.join('、'))}</div>` : ''}`, false, 'recruit-fold', `${def.name}：属性与能力`)}
+  </div>`;
 }
 
 const DIRS_4: ReadonlyArray<readonly [number, number]> = [
@@ -2319,7 +2426,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
         ? `<div class="card-title" style="margin-top:14px">${
                     ordering ? `生产 <span class="order-note">点兵种排进本回合队列（${ordersOf(s, me).length}/${CONFIG.commanderSlots}）</span>` : '生产'
                   }</div>
-           ${ordering && queueFull ? '<div class="hint">队列已排满，先在上面删两格或者执行一次。</div>' : ''}
+           ${ordering && queueFull ? '<div class="hint">队列已满，请删除或执行。</div>' : ''}
            ${packRow(buildable, pack)}
            ${eraChipRow(buildable, eraFilter)}
            ${recruitSearchBox(q, shown.length, buildable.length)}
@@ -2337,17 +2444,17 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
            }
            ${
              input.spawnPick
-               ? `<div class="hint" style="margin-top:10px">点棋盘上亮起来的水面，把「${
+               ? `<div class="hint" style="margin-top:10px">为「${
                    s.unitTypes[input.spawnPick.type]?.name ?? input.spawnPick.type
-                 }」放下去。点别处就取消。</div>`
+                 }」选择亮起的水面；点别处取消。</div>`
                : ''
            }
            <div class="hint" style="margin-top:10px">
-             兵从营门四邻的空地出来（当前 ${landOpen} 个空位${
+             营门四邻：${landOpen} 个空位${
                waterSlots.length > 0 ? `、${waterSlots.length} 格空水面` : ''
-             }）。
-             <br />这座营按自己的时代出兵。
-             ${ordering ? '<br />排进队列之后，AI 执行那一回合才扣钱出兵。' : ''}
+             }。
+             <br />按军营时代出兵。
+             ${ordering ? '<br />执行队列时扣费出兵。' : ''}
            </div>`
         : `<div class="hint" style="margin-top:12px">
              这是${s.players[camp.owner].name}的产兵建筑。
@@ -2577,6 +2684,7 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
       <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
       <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
+      <button class="btn btn-sm" data-act="toggle-show-all" data-ref="show-all">看全图</button>
       <!--
         低频入口不再是顶栏按钮（2026-11-11 第二版）。
 

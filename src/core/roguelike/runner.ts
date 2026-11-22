@@ -32,8 +32,6 @@ export interface RunnerCtx {
   expectedTurns: number;
   /** 玩家席位（撤离只看"我的兵有没有进城"） */
   playerSeat: PlayerId;
-  /** 遗物「驮马」：兵额 +N */
-  capacityBonus?: number;
   /** 遗物「军械」：带回来的兵按上限回满 */
   healIntake?: boolean;
 }
@@ -161,7 +159,12 @@ export function settleStage(state: GameState, snap: RunnerSnapshot, ctx: RunnerC
     else outside.push(toRoster(u));
   }
 
-  const capacity = cityCapacity(state.config.citySize ?? 2) + (ctx.capacityBonus ?? 0);
+  /*
+   * 兵额 = 城格数，**没有任何加成**（2026-11-21）。
+   * 以前这里还有一项 `ctx.capacityBonus`（驮马遗物 +2），等于绕过"空间就是名额"
+   * 凭空多塞两个人——和"城里挤满了就得当场选"这条设计正面冲突，已删除。
+   */
+  const capacity = cityCapacity(state.config.citySize ?? 2);
   const valueOf = (u: RosterUnit): number => valueOfUnit(state, u.type);
   const split = settleRoster(inCity, outside, capacity, valueOf);
   /*

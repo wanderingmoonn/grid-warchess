@@ -27,9 +27,14 @@ import { draftScreenHtml } from '../src/ui/draft-panel.ts';
 import { draftAlwaysAllowed, remainingUnits, upgradeUnlocks } from '../src/core/draft.ts';
 import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
+import { actionFeedback, forecastCombat } from '../src/ui/combat-feedback.ts';
+import { unitRole } from '../src/ui/unit-insignia.ts';
+import { applyUiLayout, setUiLayout } from '../src/ui/layout.ts';
+import { drainDamageLedger, startDamageLedger } from '../src/core/rules.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import {
   applyAction,
+  citiesOf,
   cityTiles,
   effectiveStats,
   reachableTiles,
@@ -37,7 +42,7 @@ import {
   unitsOf,
   unitYieldAt,
 } from '../src/core/rules.ts';
-import { renderPanel, topbarShell } from '../src/ui/panel.ts';
+import { battleStatusShell, renderPanel, topbarShell, updateBattleStatus } from '../src/ui/panel.ts';
 import { applyUiTheme, resolveUiMode, setUiMode } from '../src/ui/theme.ts';
 import { settingsHtml } from '../src/ui/settings.ts';
 import { skillTargetPicked } from '../src/ui/skill-aim.ts';
@@ -69,7 +74,8 @@ import { EARTH } from '../src/core/board.ts';
 import type { BoardUi } from '../src/ui/board.ts';
 import { bindChatComposer } from '../src/ui/chat-input.ts';
 import { manualBooks } from '../src/ui/books.ts';
-import type { Unit } from '../src/core/types.ts';
+import type { GameState, Unit } from '../src/core/types.ts';
+import { LEVELS } from '../src/core/level.ts';
 
 const result = await build({
   entryPoints: ['src/main.ts'],
@@ -819,9 +825,11 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
   put(1, 0, 'deep');
   put(2, 0, 'water');
   put(3, 0, 'water');
+  put(4, 0, 'plain');
   // 第 1 行：深 浅（竖直方向）；(3,1) 固定成水域，别让生成的地形左右断言
   put(1, 1, 'shallow');
   put(3, 1, 'water');
+  put(4, 1, 'bridge');
 
   const allSeen = Array.from({ length: st.w * st.h }, (_, i) => i);
   renderBoard(
@@ -863,6 +871,8 @@ check('深水 ↔ 浅水：朝对方那一侧要标出过渡方向，同档之�
   assert.equal(tile(1, 0).getAttribute('data-wb'), 's', '深水挨浅流，下边该叠浅流色');
   // (3,0) 下面是水域：同档，不铺
   assert.equal(tile(3, 0).getAttribute('data-wb'), '0', '水域和水域不铺');
+  assert.equal(tile(3, 0).getAttribute('data-wr'), 'l', '陆地相邻的一侧画岸线');
+  assert.equal(tile(3, 1).getAttribute('data-wr'), '0', '桥面旁不画陆地岸线');
   host.remove();
 });
 
@@ -1365,6 +1375,90 @@ check('侧栏：内容没变就不重写，变了必须重写', () => {
   paint();
   assert.notEqual(host.querySelector('.card'), card, '金币变了必须重写');
   assert.ok((host.textContent ?? '').includes(`金币 ${before + 7}`), '新金币要显示出来');
+});
+
+check('侧栏：没有回合收入时写「0 金」，不写「免费」（关卡模式「护送」这种无城局）', () => {
+  /*
+   * 用户 2026-11-21 报的是**关卡模式**的截图：守 30 次行动那种关，打到第 28 次
+   * 「控制城市 0 座」，资源条那一格印着「每回合收入 免费」。
+   *
+   * 链路：`incomeResOf` 只留正数项（`cleanCost`），没有城、经济单位又不产金时
+   * 整张表是空的；而那一格套的是 `costLabel`——给**价格**写的格式化函数，
+   * 空表兜底返回「免费」（"这东西不花钱"）。收入空表说的是"一分都收不到"，
+   * 两者正好相反。
+   *
+   * 用真实关卡「护送」（唯一一张 A 方从头就没有城的关）做 fixture，
+   * 别拿手改过的局面糊弄——那样哪天关卡数据变了，这条也不知道。
+   */
+  const lv = LEVELS.find((l) => l.id === 'level:escort');
+  assert.ok(lv, '关卡「护送」还在');
+  const render = (st: GameState) => {
+    const el = doc.createElement('div');
+    renderPanel(el, {
+      view: playerView(st, 'A'),
+      me: 'A',
+      selectedUnit: null,
+      selectedCityId: null,
+      selectedCampId: null,
+      selectedTile: null,
+    });
+    return (el.querySelector('.battle-resources')!.children[1] as HTMLElement);
+  };
+
+  const st = createMatch({ ...DEFAULT_CONFIG, level: lv! }, 818);
+  assert.equal(citiesOf(st, 'A').length, 0, '这张关 A 方本来就没有城');
+  const cell = render(st);
+  assert.ok((cell.textContent ?? '').includes('每回合收入'), '第二格是每回合收入');
+  assert.match(cell.textContent ?? '', /0 金/, '没有收入时该写 0 金');
+  assert.ok(!(cell.textContent ?? '').includes('免费'), '不能把"没有收入"写成"免费"');
+  assert.match(cell.getAttribute('title') ?? '', /没有城就没有回合产出/, '格子上要说明为什么是 0');
+  const status = doc.createElement('div');
+  status.innerHTML = battleStatusShell();
+  updateBattleStatus(status, st, 'A', false);
+  assert.equal(status.querySelector('[data-ref="battle-income"]')?.textContent, '0 金');
+  assert.match(status.querySelector('[data-ref="battle-income-stat"]')?.getAttribute('title') ?? '', /没有城就没有回合产出/);
+
+  // 肉鸽整局 noIncome：同一张空表，措辞不同（不是"没城"，是"这个模式不产"）
+  const rogue = createMatch(
+    { ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [], noIncome: true },
+    818,
+  );
+  const rogueCell = render(rogue);
+  assert.match(rogueCell.textContent ?? '', /0 金/, '肉鸽同样写 0 金');
+  assert.match(rogueCell.getAttribute('title') ?? '', /这个模式没有回合收入/, '肉鸽要说清是模式本身不产金');
+
+  // 普通局照常写数字：别为这条把有收入的局也写成 0
+  const normal = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 819);
+  const txt = render(normal).textContent ?? '';
+  assert.ok(!txt.includes('0 金'), `有城的局收入不该是 0（实际 ${txt}）`);
+});
+
+check('城市详情：废墟不显示升级按钮，写明"先派兵接管"', () => {
+  /*
+   * 2026-11-21 用户报：城被打成废墟之后还能点升级。规则层已加闸门
+   * （`doUpgrade` 拒绝并说明理由），这条钉界面这一半——
+   * 别让人先点一次、被拒一次才知道，也别让面板继续写"本城收入 40 金"。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 1, expansionIds: [] }, 823);
+  const city = citiesOf(st, 'A')[0];
+  assert.ok(city, '标准局 A 方应该有城');
+  st.players.A.gold = 9999;
+  city.ruined = true;
+
+  const el = doc.createElement('div');
+  renderPanel(el, {
+    view: playerView(st, 'A'),
+    me: 'A',
+    selectedUnit: null,
+    selectedCityId: city.id,
+    selectedCampId: null,
+    selectedTile: null,
+  });
+  const html = el.innerHTML;
+  assert.equal(el.querySelector('[data-act="upgrade"]'), null, '废墟上不该有升级按钮');
+  assert.ok(html.includes('已成废墟'), '要说清它现在是废墟');
+  assert.ok(html.includes('接管'), '要给出路：派陆军走进去接管');
+  assert.ok(html.includes('0 金'), '本城收入该写 0 金，不能还写着时代基础收入');
 });
 
 check('装配坞：每件装备写着数据与耗电，插槽与电力收支都看得见', () => {
@@ -2501,12 +2595,11 @@ check('产兵面板按战斗 / 经济 / 建造分组', () => {
   assert.ok(html.includes('平原 +') || html.includes('丘陵 +'), '经济单位应该标注地形产出');
 });
 
-check('产兵按钮上写着血量', () => {
-  // 攻甲移射都在按钮上，唯独血量缺席——新兵能顶几刀，是按下生产前的关键信息
-  const btns = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-btn'));
+check('生产前可以展开每种兵的血量属性', () => {
+  const btns = Array.from(doc.querySelectorAll<HTMLElement>('.recruit-wrap'));
   assert.ok(btns.length > 0, '产兵面板应该开着');
-  const withHp = btns.filter((b) => /血 \d+/.test(b.textContent ?? ''));
-  assert.equal(withHp.length, btns.length, '每个产兵按钮都该带血量');
+  const withHp = btns.filter((entry) => /血 \d+/.test(entry.querySelector('.recruit-spec')?.textContent ?? ''));
+  assert.equal(withHp.length, btns.length, '每种兵都应当在生产前查看血量');
 });
 
 check('造兵之前悬停就能看到这个工兵能盖什么', () => {
@@ -2573,7 +2666,7 @@ check('城内地面位站满时，空军按钮还能点（人口满了不等于�
   const land = btns.find((b) => (b.textContent ?? '').includes('民兵'));
   assert.ok(land?.hasAttribute('disabled'), '陆军确实造不出来了，按钮该是灰的');
   assert.ok(
-    (host.textContent ?? '').includes('空军还能起飞'),
+    (host.textContent ?? '').includes('仍可生产空军'),
     '提示要告诉玩家"占满的只是地面位"',
   );
 });
@@ -2706,7 +2799,7 @@ check('数值行到处都带「视野」：产兵按钮 / 建造清单 / 棋子�
    */
   const recruit = doc.querySelector<HTMLElement>('.recruit-btn');
   assert.ok(recruit, '应该有产兵按钮');
-  const rText = recruit.textContent ?? '';
+  const rText = recruit.closest('.recruit-wrap')?.querySelector('.recruit-spec')?.textContent ?? recruit.textContent ?? '';
   assert.ok(/视野 \d+/.test(rText), `产兵按钮的数值行里要有视野：${rText}`);
   assert.ok(/射 \d+/.test(rText), '射程也要还在（别为了加视野把它挤掉）');
 
@@ -2764,17 +2857,13 @@ check('关掉迷雾后双方单位全部出现', () => {
   assert.equal(doc.querySelectorAll('.tile.out').length, 0, '关掉迷雾后不该再有暗格');
 });
 
-check('第一次来：首页的「继续上一局」是灰的（开机自动存档不算"打过"）', () => {
-  /*
-   * 启动流程末尾会无条件 saveMatch() 一次——新建的这局当场落盘。
-   * 如果「继续」直接看 loadMatch()，第一次来的人会看到一个亮着的按钮，
-   * 点下去接着打的是一张谁都没动过的随机棋盘。这条钉住那个判据。
-   */
+check('第一次来：首页隐藏「继续上一局」（启动占位局不算打过）', () => {
   const home = doc.querySelector('.title-screen');
   assert.ok(home, '启动就应该出首页');
   const cont = home!.querySelector<HTMLButtonElement>('[data-title="continue"]');
   assert.ok(cont, '首页要有「继续上一局」');
   assert.equal(cont!.disabled, true, '第一次来没有可接着打的一局');
+  assert.equal(cont!.hidden, true);
 });
 
 console.log('\n开局设置');
@@ -3099,7 +3188,7 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
 
   // 说明文案要写明全视野，否则玩家只会以为它是"第四档"
   const section = net()!.closest('section')!;
-  assert.ok((section.textContent ?? '').includes('自带全视野'), '这一栏要有一句"自带全视野"的说明');
+  assert.ok((section.textContent ?? '').includes('全视野'), '这一栏要明确测试 AI 的全视野');
 
   click('[data-ailevel="advanced"]');
   assert.equal(net()!.classList.contains('active'), false, '点档位应该切回手写引擎');
@@ -3116,6 +3205,47 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
 
   click('[data-ai="0"]');
   assert.equal(net(), null, '切回热座应该收起来');
+});
+
+check('实验 AI v3：单独一颗按钮，点了换内核，不和档位/策略网络同时亮', () => {
+  /*
+   * 2026-11-21：修仙分支的「实验 AI」并进主线，改叫「测试 AI 二代」；
+   * 2026-11-22：v3 分支把它接着往下写成 v3，按钮改叫「实验 AI v3」。
+   *
+   * 它是**第二个换内核的按钮**，不是第四档难度：`config.aiBrain` 从
+   * `script` 换成 `goal`，加载的是 `core/ai-v3.ts`。所以这里钉三件事：
+   *   1. 它和档位同一行（玩家是在"给对面挑对手"时看见它的）；
+   *   2. 和档位、和策略网络三选一，不许同时亮两颗；
+   *   3. 说明里写清它是"v3 内核"，别让玩家以为它是策略网络的升级版。
+   */
+  click('[data-ai="1"]');
+  const v2 = () => doc.querySelector<HTMLElement>('[data-aibrain="goal"]');
+  assert.ok(v2(), '人机对战时应该能选到实验 AI v3');
+  assert.ok((v2()!.textContent ?? '').includes('v3'), '按钮上要写着"v3"');
+  assert.equal(
+    v2()!.closest('.ai-level-row'),
+    doc.querySelector('.ai-level-row'),
+    '它和三个档位是同一行',
+  );
+
+  click('[data-aibrain="goal"]');
+  assert.ok(v2()!.classList.contains('active'), '点它应该亮起来');
+  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了二代就不该同时亮着档位');
+  assert.equal(
+    doc.querySelector('[data-aibrain="net"].active'),
+    null,
+    '也不该同时亮着策略网络（两颗是不同内核）',
+  );
+  assert.ok(
+    (v2()!.closest('section')!.textContent ?? '').includes('v3 内核'),
+    '这一栏要说明它是 v3 内核，不是"第四档"',
+  );
+
+  click('[data-ailevel="advanced"]');
+  assert.equal(v2()!.classList.contains('active'), false, '点档位应该切回手写引擎');
+
+  click('[data-ai="0"]');
+  assert.equal(v2(), null, '切回热座应该收起来');
 });
 
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
@@ -3637,7 +3767,7 @@ await checkAsync('开始界面选三人：对手区换成说明，开局后顶�
     '点随机要能选中',
   );
   assert.ok(
-    (doc.querySelector('.modal-body')!.textContent ?? '').includes('抽到谁谁先动'),
+    (doc.querySelector('.modal-body')!.textContent ?? '').includes('随机先手'),
     '选了随机要说明"在参赛席位上抽"',
   );
   // 切回按席位，别影响后面这局的断言
@@ -4249,20 +4379,24 @@ check('开局面板有"数据收集"开关，默认开', () => {
   assert.ok(box.closest('.expansion-item')?.classList.contains('on'), '勾上之后卡片要跟着高亮');
 });
 
-await checkAsync('战役页：地图条在最上面，数据收集紧随其后，而且会记住上次的选择', async () => {
-  /*
-   * 地图条（在哪张图上打）2026-11-17 提到第一块：自选图以前只能在「地图」页看，
-   * 选完回到战役页就只剩底部摘要一行小字。数据收集还是紧跟着它，仍然对局选项之前。
-   */
+await checkAsync('战役页：推荐开局在前，数据记录收进高级设置并记住选择', async () => {
   const blocks = [...doc.querySelectorAll('.modal-body > section')];
   assert.ok(
-    (blocks[0]?.textContent ?? '').includes('在哪张图上打'),
-    '第一块应当是"在哪张图上打"，实际：' + (blocks[0]?.textContent ?? '').trim().slice(0, 20),
+    blocks[0]?.querySelector('[data-preset="learn"]'),
+    '第一块应当提供可直接应用的推荐开局',
   );
   assert.ok(
-    blocks[1]?.querySelector('[data-field="record"]'),
-    '数据收集应当紧随其后，实际第二块是：' + (blocks[1]?.textContent ?? '').trim().slice(0, 20),
+    blocks[1]?.querySelector('.start-map-row'),
+    '推荐开局之后应当展示当前地图',
   );
+  const advanced = doc.querySelector<HTMLDetailsElement>('.start-advanced');
+  assert.equal(advanced?.open, false, '高级设置默认收起');
+  assert.equal(blocks[2]?.getAttribute('aria-label'), '对手');
+  assert.equal(blocks[3]?.getAttribute('aria-label'), '起始时代');
+  for (const selector of ['[data-players]', '[data-size]', '[data-first]', '[data-act="reroll"]']) {
+    assert.ok(advanced?.querySelector(selector), `${selector} 应当在高级设置里`);
+  }
+  assert.ok(advanced?.querySelector('[data-field="record"]'), '记录设置应当在高级设置里');
 
   // 勾上 → 取消 → 重新打开，应当还是勾着的
   const box = doc.querySelector<HTMLInputElement>('[data-field="record"]');
@@ -5691,14 +5825,14 @@ check('设置弹窗：主题、动效、铃声、低频入口都在里面', () =
   }
 
   // 当前值要如实反映：深色主题选中的是「新版」，动效选中的是「减少」
-  assert.ok(/data-theme="modern"[^>]*>新版/.test(html), '当前主题要标在「新版」上');
+  assert.ok(/data-theme="modern"[^>]*>深色/.test(html), '当前主题要标在「深色」上');
   assert.ok(/data-motion="reduced"[^>]*>减少/.test(html), '减少动效要标在「减少」上');
   assert.ok(text.includes('铃声 35%'), `音量文字要写出来：${text.slice(0, 80)}`);
   // 滑块的值跟 chime 走，别写死 60
   assert.ok(/value="35"/.test(html), '滑块初值要等于当前音量');
 
   // 副标题要说清"这是本机设置"——不然玩家会以为它会跟着存档走
-  assert.ok(text.includes('只影响这台设备'), '要说清这些设置不进存档');
+  assert.ok(text.includes('仅此设备'), '要说清外观设置仅对本机生效');
 });
 
 check('手机设置里多出「对局中」：迷雾开关和联机入口', () => {
@@ -6499,7 +6633,7 @@ console.log('\n点敌人就是开火');
  * 属性卡不能被攻击抢走，反过来也不行：打不到的目标仍然只弹卡，
  * 所以这里同时验"能打到就开火"和"打不到就只看"。
  */
-check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）', () => {
+check('手操选中部队后点相邻敌人，打开确认并能正常攻击', () => {
   const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
   st.fog = false;
   st.current = 'A';
@@ -6545,6 +6679,9 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   const foeEl = d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`);
   assert.ok(foeEl, '敌人的兵没渲染出来——迷雾没关干净？');
   foeEl.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const confirm = d.querySelector<HTMLButtonElement>('#combat-preview:not([hidden]) [data-combat="confirm"]');
+  assert.ok(confirm, '点可攻击的敌人应该打开确认');
+  confirm.click();
 
   // 以落盘的存档为准：图被重绘过，捏着旧节点看不出有没有真打
   const after = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
@@ -6554,7 +6691,7 @@ check('手操选中部队后点相邻敌人，真开火（不是弹属性卡）'
   assert.ok(afterFoe, '敌人从盘上消失了');
   assert.ok(
     afterFoe.hp < hpBefore,
-    `点了相邻敌人却没掉血：${hpBefore} → ${afterFoe.hp}，说明攻击被属性卡抢了`,
+    `确认攻击后敌人应该掉血：${hpBefore} → ${afterFoe.hp}`,
   );
 });
 
@@ -6827,16 +6964,16 @@ check('城郭与物料：HUD 显示粮和材，建造清单写明施工回合与
 console.log('\n强制键');
 
 /** 用一份现成存档起一个新页面：这类用例需要精确摆位，不能靠随机开局 */
-function bootWith(st: unknown) {
+function bootWith(st: unknown, search = '?loadSave=1') {
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
-    url: 'http://localhost/?loadSave=1',
+    url: `http://localhost/${search}`,
     pretendToBeVisual: true,
     runScripts: 'outside-only',
   }).window;
   if (!w.structuredClone) {
     (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
   }
-  w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  if (st !== undefined) w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
   w.eval(code);
   return w;
 }
@@ -8429,6 +8566,11 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
   assert.equal(d.querySelector<HTMLElement>('#replay')!.hidden, false, '应该进入复盘');
 
   const side = (): HTMLElement => d.querySelector<HTMLElement>('#side')!;
+  const drawerButton = d.querySelector<HTMLButtonElement>('[data-act="drawer-toggle"]')!;
+  drawerButton.click();
+  assert.equal(drawerButton.getAttribute('aria-expanded'), 'true');
+  drawerButton.click();
+  assert.equal(drawerButton.getAttribute('aria-expanded'), 'false');
   /*
    * 打开一座城。
    *
@@ -10796,6 +10938,629 @@ check('画布不再给"没有城"的那一方摆城', () => {
 // 收尾
 topMask()?.querySelector<HTMLElement>('[data-act="cancel"]')?.click();
 topMask()?.querySelector<HTMLElement>('[data-act="close"]')?.click();
+
+check('信息层级：单位与对局管理默认收起，重绘保留展开状态', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261120);
+  const host = doc.createElement('div');
+  const unit = st.units.find((candidate) => candidate.owner === 'A' && st.unitTypes[candidate.type]?.category === 'combat')!;
+  const paint = (forceMode?: 'move') => renderPanel(host, {
+    view: playerView(st, 'A'), me: 'A', selectedUnit: unit,
+    selectedCityId: null, selectedCampId: null, selectedTile: null, forceMode,
+  });
+  st.players.A.res = { materials: 17 };
+  paint();
+  assert.ok(host.querySelector('.battle-resources')?.textContent?.includes(String(st.players.A.gold)));
+  assert.ok(host.querySelector('.battle-extra-resources')?.textContent?.includes('17'));
+  assert.ok(host.querySelector('.unit-readiness')?.textContent?.includes('可移动'));
+  const management = host.querySelector<HTMLDetailsElement>(`[data-panel-fold="manage-${unit.id}"]`)!;
+  const advanced = host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)!;
+  assert.equal(management.open, false);
+  assert.equal(advanced.open, false);
+  assert.ok(management.querySelector('[data-act="disband"]'));
+  assert.equal(host.querySelector<HTMLDetailsElement>('[data-panel-fold="match-actions"]')?.open, false);
+  advanced.open = true;
+  st.players.A.gold += 1;
+  paint();
+  assert.equal(host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)?.open, true);
+  host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)!.open = false;
+  paint('move');
+  assert.equal(host.querySelector<HTMLDetailsElement>(`[data-panel-fold="advanced-${unit.id}"]`)?.open, true);
+});
+
+check('生产列表：金币不足时解释原因，仍可展开完整属性', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261121);
+  st.players.A.gold = 0;
+  const host = doc.createElement('div');
+  renderPanel(host, {
+    view: playerView(st, 'A'), me: 'A', selectedUnit: null,
+    selectedCityId: st.cities.find((city) => city.owner === 'A')!.id,
+    selectedCampId: null, selectedTile: null,
+  });
+  const entry = host.querySelector<HTMLElement>('.recruit-wrap')!;
+  assert.ok(entry.querySelector<HTMLButtonElement>('.recruit-btn')?.disabled);
+  assert.match(entry.querySelector('.recruit-reason')?.textContent ?? '', /还缺/);
+  const details = entry.querySelector<HTMLDetailsElement>('[data-panel-fold]')!;
+  details.open = true;
+  assert.match(details.textContent ?? '', /血 \d+/);
+  assert.match(details.textContent ?? '', /视野 \d+/);
+  assert.equal(entry.querySelector('.recruit-btn')?.contains(details), false);
+});
+
+for (const preset of [
+  { id: 'learn', era: 1, size: 12, ai: true, difficulty: 'basic' },
+  { id: 'standard', era: 2, size: 16, ai: true, difficulty: 'tactic' },
+  { id: 'hotseat', era: 1, size: 12, ai: false, difficulty: 'advanced' },
+]) {
+  await checkAsync(`推荐开局 ${preset.id}：应用配置并清除旧模式，保留记录偏好`, async () => {
+    const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: ['blackout'] }, 20261122);
+    st.config.aiSeats = ['B'];
+    st.config.disabledUnits = ['militia'];
+    const fresh = bootWith(st);
+    try {
+      fresh.localStorage.setItem('warchess.setup.record', '0');
+      const tap = (selector: string) => {
+        const element = fresh.document.querySelector<HTMLElement>(selector);
+        assert.ok(element, selector);
+        element.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+      };
+      tap('[data-act="settings"]');
+      tap('[data-act="new-match"]');
+      const advanced = fresh.document.querySelector<HTMLDetailsElement>('.start-advanced')!;
+      advanced.open = true;
+      tap('[data-role="commander"]');
+      assert.equal(fresh.document.querySelector<HTMLDetailsElement>('.start-advanced')?.open, true);
+      tap(`[data-preset="${preset.id}"]`);
+      assert.equal(
+        fresh.document.querySelector('[data-preset][aria-current="true"]')?.getAttribute('data-preset'),
+        preset.id,
+      );
+      tap('[data-first="B"]');
+      assert.equal(fresh.document.querySelector('[data-preset][aria-current="true"]'), null);
+      tap(`[data-preset="${preset.id}"]`);
+      tap('[data-act="start"]');
+      await wait(30);
+      const saved = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+      assert.equal(saved.config.size, preset.size);
+      assert.equal(saved.config.startEra, preset.era);
+      assert.equal(saved.config.aiOpponent, preset.ai);
+      assert.equal(saved.config.aiLevel, preset.difficulty);
+      assert.deepEqual(saved.config.aiSeats, preset.ai ? ['B'] : []);
+      assert.equal(saved.config.commanderMode, false);
+      assert.equal(saved.config.recordDetail, false);
+      assert.deepEqual(saved.config.expansionIds, DEFAULT_CONFIG.expansionIds);
+      assert.deepEqual(saved.config.disabledUnits ?? [], []);
+    } finally {
+      fresh.close();
+    }
+  });
+}
+
+function combatFixture() {
+  const st = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261123);
+  st.fog = false;
+  st.current = 'A';
+  for (const tile of st.tiles) tile.terrain = 'plain';
+  st.units = [
+    { id: 'forecast-own', type: 'militia', owner: 'A', x: 4, y: 5, hp: st.unitTypes.militia!.maxHp, moved: false, acted: false, kills: 0 },
+    { id: 'forecast-foe', type: 'militia', owner: 'B', x: 5, y: 5, hp: st.unitTypes.militia!.maxHp, moved: false, acted: false, kills: 0 },
+  ];
+  return st;
+}
+
+check('交锋预览：与真实结算一致，不修改局面、随机数和伤害账本', () => {
+  const st = combatFixture();
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  const view = playerView(st, 'A');
+  const snapshot = JSON.stringify(view);
+  startDamageLedger();
+  const forecast = forecastCombat(view, 'A', action);
+  assert.ok(forecast);
+  assert.equal(JSON.stringify(view), snapshot);
+  assert.deepEqual(drainDamageLedger(), []);
+  const actual = applyAction(st, action);
+  assert.ok(actual.ok);
+  assert.equal(forecast.target.after, actual.state.units.find((unit) => unit.id === 'forecast-foe')!.hp);
+  assert.equal(forecast.attacker.after, actual.state.units.find((unit) => unit.id === 'forecast-own')!.hp);
+});
+
+check('交锋预览：致命攻击和施工中目标不会预报虚假的反击', () => {
+  const st = combatFixture();
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  st.units[1]!.hp = 1;
+  const lethal = forecastCombat(playerView(st, 'A'), 'A', action)!;
+  assert.equal(lethal.target.removed, true);
+  assert.equal(lethal.attacker.after, st.units[0]!.hp);
+  st.units[1]!.type = 'tower';
+  st.units[1]!.hp = st.unitTypes.tower!.maxHp;
+  st.units[1]!.buildLeft = 2;
+  const construction = forecastCombat(playerView(st, 'A'), 'A', action)!;
+  assert.equal(construction.attacker.after, st.units[0]!.hp);
+});
+
+check('交锋预览：拒绝不可见目标、友军和已经用尽攻击的单位', () => {
+  const st = combatFixture();
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  const view = playerView(st, 'A');
+  view.state.units = view.state.units.filter((unit) => unit.id !== 'forecast-foe');
+  assert.equal(forecastCombat(view, 'A', action), null);
+  st.units[1]!.owner = 'A';
+  assert.equal(forecastCombat(playerView(st, 'A'), 'A', action), null);
+  st.units[1]!.owner = 'B';
+  st.units[0]!.acted = true;
+  assert.equal(forecastCombat(playerView(st, 'A'), 'A', action), null);
+});
+
+check('结算反馈：目标消失于视图时不假报零血或死亡', () => {
+  const st = combatFixture();
+  const before = playerView(st, 'A');
+  const after = playerView(st, 'A');
+  after.state.units = after.state.units.filter((unit) => unit.id !== 'forecast-foe');
+  const message = actionFeedback(before, after, { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' })!;
+  assert.match(message, /当前不可见/);
+  assert.ok(!message.includes('→ 0'));
+});
+
+check('交锋预览：正确计算额外生命吸收，不消耗真实的多次攻击次数', () => {
+  const st = combatFixture();
+  st.unitTypes['forecast-frame'] = { ...st.unitTypes.militia!, id: 'forecast-frame', armorFrame: true };
+  st.units[1]!.type = 'forecast-frame';
+  st.units[1]!.extraHp = 20;
+  st.units[0]!.attacksLeft = 2;
+  st.unitTypes.militia = { ...st.unitTypes.militia!, burst: 2 };
+  const action = { type: 'ATTACK', unitId: 'forecast-own', targetId: 'forecast-foe' } as const;
+  const forecast = forecastCombat(playerView(st, 'A'), 'A', action)!;
+  assert.ok(forecast);
+  assert.equal(forecast.target.after, st.units[1]!.hp);
+  assert.ok(forecast.target.extraAfter! < forecast.target.extraBefore!);
+  assert.equal(st.units[0]!.attacksLeft, 2);
+  const actual = applyAction(st, action);
+  assert.ok(actual.ok);
+  assert.equal(actual.state.units.find((unit) => unit.id === 'forecast-foe')!.extraHp, forecast.target.extraAfter);
+  assert.equal(actual.state.units.find((unit) => unit.id === 'forecast-own')!.attacksLeft, 1);
+});
+
+check('减少动态：受击和掉血补间停止，行动角标仍明确显示剩余操作', () => {
+  const st = combatFixture();
+  const host = doc.createElement('div');
+  const prototype = window.HTMLElement.prototype;
+  const original = prototype.animate;
+  const previousMotion = doc.documentElement.dataset.motion;
+  let animations = 0;
+  Object.defineProperty(prototype, 'animate', { configurable: true, writable: true, value: () => {
+    animations += 1;
+    return { cancel() {}, finished: Promise.resolve() };
+  } });
+  const ui: BoardUi = {
+    selectedId: null, selectedCityId: null, reach: [], targets: [], siegeTargets: [], placeable: [], threat: [],
+    me: 'A', impacts: new Map([['forecast-own', 1]]),
+  };
+  try {
+    doc.documentElement.dataset.motion = 'reduced';
+    st.units[0]!.moved = true;
+    renderBoard(host, playerView(st, 'A'), ui);
+    assert.equal(animations, 0);
+    assert.equal(host.querySelector('.unit[data-id="forecast-own"] .unit-action-mark')?.textContent, '攻');
+    st.units[0]!.acted = true;
+    renderBoard(host, playerView(st, 'A'), ui);
+    assert.equal(host.querySelector('.unit[data-id="forecast-own"] .unit-action-mark')?.textContent, '✓');
+    doc.documentElement.dataset.motion = 'full';
+    renderBoard(host, playerView(st, 'A'), ui);
+    assert.ok(animations > 0);
+  } finally {
+    if (original) prototype.animate = original;
+    else Reflect.deleteProperty(prototype, 'animate');
+    if (previousMotion) doc.documentElement.dataset.motion = previousMotion;
+    else delete doc.documentElement.dataset.motion;
+  }
+});
+
+check('攻城预览：城墙攻破与生命结果吻合，提示仍需入驻接管', () => {
+  const st = combatFixture();
+  const city = st.cities.find((entry) => entry.owner === 'B')!;
+  st.units[0]!.x = city.x > 0 ? city.x - 1 : city.x + city.size;
+  st.units[0]!.y = city.y;
+  city.hp = 1;
+  const action = { type: 'SIEGE', unitId: 'forecast-own', cityId: city.id } as const;
+  const before = playerView(st, 'A');
+  const forecast = forecastCombat(before, 'A', action)!;
+  assert.ok(forecast);
+  assert.equal(forecast.city, true);
+  assert.equal(forecast.target.after, 0);
+  assert.equal(forecast.target.removed, true);
+  const actual = applyAction(st, action);
+  assert.ok(actual.ok);
+  assert.match(actionFeedback(before, playerView(actual.state, 'A'), action) ?? '', /派兵接管/);
+});
+
+check('触屏攻击：首次点击仅预览，确认后才结算并显示结果', () => {
+  const st = combatFixture();
+  const fresh = bootWith(st);
+  try {
+    const tap = (selector: string) => {
+      const element = fresh.document.querySelector<HTMLElement>(selector)!;
+      assert.ok(element, selector);
+      element.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    };
+    tap('.unit[data-id="forecast-own"]');
+    const status = fresh.document.querySelector<HTMLElement>('#battle-status')!;
+    const undo = status.querySelector<HTMLButtonElement>('[data-act="undo"]')!;
+    assert.equal(status.hidden, false);
+    assert.equal(undo.disabled, true);
+    assert.equal(status.querySelector('[data-ref="battle-gold"]')?.textContent, String(st.players.A.gold));
+    assert.match(status.querySelector('[data-ref="battle-income"]')?.textContent ?? '', /^\+/);
+    assert.equal(fresh.document.querySelector('.battle-resources'), null);
+    const foe = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
+    const down = new fresh.MouseEvent('pointerdown', { bubbles: true, button: 0 });
+    Object.defineProperty(down, 'pointerType', { value: 'touch' });
+    foe.dispatchEvent(down);
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    tap('.unit[data-id="forecast-foe"]');
+    const preview = fresh.document.querySelector<HTMLElement>('#combat-preview')!;
+    assert.equal(preview.hidden, false);
+    assert.match(preview.textContent ?? '', /28 → 17/);
+    assert.equal(fresh.document.querySelector('#app')?.getAttribute('data-combat-confirm'), 'true');
+    assert.match(fresh.document.querySelector('.combat-cues[data-phase="preview"]')?.textContent ?? '', /−11.*本方 −6/);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+    tap('[data-combat="confirm"]');
+    assert.equal(preview.hidden, true);
+    const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+    assert.equal(fresh.document.querySelector('#app')?.hasAttribute('data-combat-confirm'), false);
+    assert.match(fresh.document.querySelector('.combat-cues[data-phase="result"]')?.textContent ?? '', /−11.*本方 −6/);
+    assert.equal(fresh.document.querySelector<HTMLElement>('#action-feedback')?.hidden, false);
+    assert.match(fresh.document.querySelector('#action-feedback')?.textContent ?? '', /28 → 17/);
+    assert.equal(undo.disabled, false);
+    undo.click();
+    const restored = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(restored.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 28);
+    assert.equal(undo.disabled, true);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('经典 UI 鼠标交锋：悬停预览，直接点击目标执行攻击', () => {
+  const fresh = bootWith(combatFixture(), '?loadSave=1&layout=classic');
+  try {
+    const source = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!;
+    source.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    const target = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
+    const before = fresh.localStorage.getItem('warchess:match:v1');
+    target.dispatchEvent(new fresh.MouseEvent('mouseover', { bubbles: true }));
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
+    target.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('新版 UI 鼠标交锋：点目标进入确认，取消不出手，移动后旧预览失效', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
+      .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    tap('.unit[data-id="forecast-own"]');
+    const before = fresh.localStorage.getItem('warchess:match:v1');
+    tap('.unit[data-id="forecast-foe"]');
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
+    tap('[data-combat="cancel"]');
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    assert.equal(fresh.document.querySelector('.combat-cues[data-phase="preview"]'), null);
+    tap('.unit[data-id="forecast-foe"]');
+    tap('.tile[data-x="4"][data-y="6"]');
+    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
+    tap('[data-combat="confirm"]');
+    const saved = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
+    assert.equal(saved.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 28);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('兵种标识：兼容旧飞行字段，保留经济、建造与海军定位', () => {
+  const def = UNIT_TYPES.militia!;
+  assert.equal(unitRole({ ...def, layer: 'air' }), 'air');
+  assert.equal(unitRole({ ...def, flight: true }), 'air');
+  assert.equal(unitRole({ ...def, domain: 'water' }), 'naval');
+  assert.equal(unitRole({ ...def, range: 3 }), 'ranged');
+  assert.equal(unitRole({ ...def, category: 'economy' }), 'economy');
+  assert.equal(unitRole({ ...def, category: 'builder' }), 'builder');
+  assert.equal(unitRole({ ...def, category: 'building' }), 'building');
+});
+
+check('详情抽屉：选中更新摘要，展开与收起保留按钮焦点且不改存档', () => {
+  const st = combatFixture();
+  st.units[0]!.moved = true;
+  const fresh = bootWith(st);
+  try {
+    const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
+      .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    const button = fresh.document.querySelector<HTMLButtonElement>('[data-act="drawer-toggle"]')!;
+    const title = () => fresh.document.querySelector('[data-ref="drawer-title"]')!.textContent;
+    const drawer = fresh.document.querySelector<HTMLElement>('#side-drawer')!;
+    assert.equal(title(), '战场概览');
+    tap('.unit[data-id="forecast-own"]');
+    assert.equal(title(), UNIT_TYPES.militia!.name);
+    assert.match(fresh.document.querySelector('[data-ref="drawer-caption"]')!.textContent!, /生命/);
+    const source = fresh.document.querySelector('.unit[data-id="forecast-own"]')!;
+    assert.ok(source.querySelector('.unit-glyph'));
+    assert.equal(source.querySelector('.unit-insignia svg')?.getAttribute('aria-hidden'), 'true');
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    button.focus();
+    tap('[data-act="drawer-toggle"]');
+    assert.equal(drawer.dataset.expanded, 'true');
+    assert.equal(button.getAttribute('aria-expanded'), 'true');
+    assert.equal(fresh.document.activeElement, button);
+    assert.equal(fresh.document.querySelector('[data-act="drawer-toggle"]'), button);
+    const cell = cityTiles(st.cities.find((entry) => entry.owner === 'A')!).find((point) =>
+      !st.units.some((entry) => entry.x === point.x && entry.y === point.y))!;
+    const city = fresh.document.querySelector<HTMLElement>(`.tile[data-x="${cell.x}"][data-y="${cell.y}"]`);
+    assert.ok(city);
+    city.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    assert.notEqual(title(), UNIT_TYPES.militia!.name);
+    assert.equal(drawer.dataset.expanded, 'true');
+    tap('[data-act="drawer-toggle"]');
+    assert.equal(drawer.dataset.expanded, 'false');
+    assert.equal(button.getAttribute('aria-expanded'), 'false');
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('首页更多：编辑器保留首页，导入与复盘入口仍能到达', () => {
+  for (const action of ['editor', 'import', 'replay'] as const) {
+    const host = doc.createElement('div');
+    let invoked = '';
+    const close = openTitle(host, {
+      hasSave: true, version: 'test', onNew() {}, onContinue() {}, onRogue() {}, onTutorial() {}, onOnline() {}, onManual() {},
+      onEditor() { invoked = 'editor'; }, onImport() { invoked = 'import'; }, onReplay() { invoked = 'replay'; },
+    });
+    try {
+      const more = host.querySelector<HTMLDetailsElement>('.title-tools')!;
+      assert.ok(more.querySelector('summary'));
+      more.open = true;
+      more.querySelector<HTMLButtonElement>(`[data-title="${action}"]`)!.click();
+      assert.equal(invoked, action);
+      assert.equal(!!host.querySelector('.title-screen'), action === 'editor');
+    } finally {
+      close();
+    }
+  }
+});
+
+check('首页沙盘：没有对局时显示示意，启动占位局不落盘', () => {
+  const fresh = bootWith(undefined, '');
+  try {
+    assert.ok(fresh.document.querySelector('.title-sandtable'));
+    assert.equal(fresh.document.querySelector('.title-sandtable-match'), null);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), null);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('首页沙盘：普通启动用已有存档画整张小地图，继续时打开同一局', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 20261121, {});
+  st.tiles[0]!.terrain = 'mountain';
+  const fresh = bootWith(st, '');
+  try {
+    const home = fresh.document.querySelector('.title-screen')!;
+    assert.ok(home.querySelector('[aria-label="上一局战场预览"]'));
+    const card = home.querySelector<HTMLButtonElement>('button.title-resume')!;
+    assert.match(card.getAttribute('aria-label') ?? '', /继续上一局.*回合/);
+    assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
+    const layoutSwitch = home.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
+    layoutSwitch.click();
+    assert.ok(card.hidden);
+    assert.ok(home.querySelector('.title-resume-fallback[data-title="continue"]:not([hidden])'));
+    layoutSwitch.click();
+    assert.equal(card.hidden, false);
+    assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
+    assert.equal(home.querySelectorAll('.hero-match-tile').length, 144);
+    assert.equal(home.querySelector('.hero-match-tile')?.getAttribute('data-terrain'), 'mountain');
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), JSON.stringify(st));
+    home.querySelector<HTMLElement>('.hero-match-tile')!.click();
+    assert.equal(fresh.document.querySelector('.title-screen'), null);
+    assert.ok(fresh.document.querySelector('.tile.t-mountain[data-x="0"][data-y="0"]'));
+  } finally {
+    fresh.close();
+  }
+});
+
+check('续局视角：同一存档还原档位和地图中心，首页隐藏时保留已存视角', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 32 }, 20261123, {});
+  const fresh = bootWith(st, '');
+  try {
+    const savedCamera = { seed: st.seed, w: st.w, h: st.h, board: 'earth', zoom: 2, x: 0.62, y: 0.72 };
+    const key = 'warchess:match:v1:camera';
+    fresh.localStorage.setItem(key, JSON.stringify(savedCamera));
+    const { document } = fresh;
+    const wrap = document.querySelector<HTMLElement>('#board-wrap')!;
+    const scroll = document.querySelector<HTMLElement>('#board-scroll')!;
+    const board = document.querySelector<HTMLElement>('#board')!;
+    Object.defineProperty(wrap, 'offsetWidth', { value: 600 });
+    Object.defineProperties(scroll, { clientWidth: { value: 400 }, clientHeight: { value: 400 } });
+    Object.defineProperties(board, { offsetWidth: { value: 800 }, offsetHeight: { value: 800 } });
+    fresh.dispatchEvent(new fresh.Event('pagehide'));
+    assert.equal(fresh.localStorage.getItem(key), JSON.stringify(savedCamera));
+    document.querySelector<HTMLButtonElement>('.title-resume')!.click();
+    assert.equal(document.querySelector('[data-ref="zoom-fit"]')?.textContent, '2×');
+    assert.ok(Math.abs(scroll.scrollLeft - 296) < 1);
+    assert.ok(Math.abs(scroll.scrollTop - 376) < 1);
+    scroll.scrollLeft = 280;
+    const savedMatch = fresh.localStorage.getItem('warchess:match:v1');
+    fresh.dispatchEvent(new fresh.Event('pagehide'));
+    assert.equal(JSON.parse(fresh.localStorage.getItem(key)!).x, 0.6);
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), savedMatch);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('续局视角：旧对局或已移除棋盘的记录不会影响续局', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 20261123, {});
+  for (const camera of [{ seed: st.seed + 1, board: 'earth' }, { seed: st.seed, board: 'removed' }]) {
+    const fresh = bootWith(st, '');
+    try {
+      fresh.localStorage.setItem('warchess:match:v1:camera', JSON.stringify({
+        ...camera, w: st.w, h: st.h, zoom: 3, x: 0.7, y: 0.8,
+      }));
+      fresh.document.querySelector<HTMLButtonElement>('.title-resume')!.click();
+      assert.ok(fresh.document.querySelector('#board:not(.zoomed)'));
+      assert.equal(fresh.document.querySelectorAll('.tile').length, 12 * 12);
+    } finally {
+      fresh.close();
+    }
+  }
+});
+
+check('首页沙盘：大地图只取局部，浓雾里的敌军和地形仍然隐藏', () => {
+  const st = createMatch({ ...DEFAULT_CONFIG, size: 64, expansionIds: ['blackout'] }, 20261121, {});
+  st.fog = true;
+  st.cities = [];
+  st.units = [
+    { ...st.units.find((u) => u.owner === 'A')!, type: 'militia', x: 7, y: 7 },
+    { ...st.units.find((u) => u.owner === 'B')!, type: 'militia', x: 14, y: 14 },
+  ];
+  const fresh = bootWith(st, '');
+  try {
+    const home = fresh.document.querySelector('.title-screen')!;
+    assert.ok(home.querySelector('[aria-label="上一局战场局部预览"]'));
+    assert.equal(home.querySelectorAll('.hero-match-tile').length, 256);
+    assert.ok(home.querySelector('.hero-match-tile[data-terrain="unknown"]'));
+    const units = home.querySelectorAll('.hero-match-unit');
+    assert.equal(units.length, 1);
+    assert.match(units[0]!.getAttribute('style')!, /--team-a/);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('UI 回滚：设置立即生效、能恢复新版，不修改对局和深浅色选择', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const tap = (selector: string) => {
+      const button = fresh.document.querySelector<HTMLElement>(selector);
+      assert.ok(button, selector);
+      button.click();
+    };
+    tap('.unit[data-id="forecast-own"]');
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    const theme = fresh.document.documentElement.dataset.ui;
+    tap('[data-act="settings"]');
+    tap('[data-act="set-ui-layout"]');
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
+    assert.equal(fresh.localStorage.getItem('warchess:ui-layout'), 'classic');
+    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]')?.textContent, '恢复新版 UI');
+    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]'), fresh.document.activeElement);
+    assert.equal(fresh.document.documentElement.dataset.ui, theme);
+    tap('[data-act="set-ui-layout"]');
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    assert.ok(fresh.document.querySelector('.unit.selected[data-id="forecast-own"]'));
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+  } finally {
+    fresh.close();
+  }
+});
+
+check('UI 回滚：应急链接优先、切换同步链接、存储受限也能切换', () => {
+  const fresh = new JSDOM('<!doctype html><html></html>', { url: 'http://localhost/?layout=classic&sharecode=keep#board' }).window;
+  try {
+    const root = fresh.document.documentElement;
+    fresh.localStorage.setItem('warchess:ui-layout', 'refined');
+    assert.equal(applyUiLayout(root), 'classic');
+    setUiLayout('refined', root);
+    assert.equal(new URL(fresh.location.href).searchParams.get('layout'), 'refined');
+    assert.equal(new URL(fresh.location.href).searchParams.get('sharecode'), 'keep');
+    assert.equal(fresh.location.hash, '#board');
+    fresh.history.replaceState(null, '', '/');
+    setUiLayout('classic', root);
+    delete root.dataset.uiLayout;
+    assert.equal(applyUiLayout(root), 'classic');
+    Object.defineProperty(fresh, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
+    assert.equal(applyUiLayout(root), 'refined');
+    setUiLayout('classic', root);
+    assert.equal(root.dataset.uiLayout, 'classic');
+  } finally {
+    fresh.close();
+  }
+});
+
+check('UI 回滚：首页可独立切换，不离开首页且保留主入口', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    fresh.document.querySelector<HTMLElement>('[data-act="settings"]')!.click();
+    fresh.document.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
+    const button = fresh.document.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
+    assert.ok(button);
+    button.click();
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
+    assert.equal(button.getAttribute('aria-pressed'), 'true');
+    assert.equal(button.textContent, '恢复新版 UI');
+    assert.ok(fresh.document.querySelector('.title-screen [data-title="new"]'));
+    button.click();
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+  } finally {
+    fresh.close();
+  }
+});
+
+check('肉鸽：重开本关只在关卡里出现，点一下回到第 1 手', () => {
+  /*
+   * 2026-11-21 新增。这件事在规则层测不出来——按钮是 main.ts 现挂的 DOM，
+   * 所以只能把整页跑起来点一遍：
+   *   · 进关卡 → 两颗常驻按钮都在（入口 + 重开）；
+   *   · 点重开 → 按钮上多一个计数（说明真的走了一次 restartRogueStage）；
+   *   · 硬核局（不允许重开）→ 根本没有这颗按钮。
+   */
+  const openTitle = (d: Document): void => {
+    if (d.querySelector('.title-screen')) return;
+    d.querySelector<HTMLElement>('[data-act="settings"]')!.click();
+    d.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
+  };
+  const intoStage = (w: ReturnType<typeof bootWith>, hard: boolean): Document => {
+    const d = w.document;
+    openTitle(d);
+    d.querySelector<HTMLElement>('[data-title="rogue"]')!.click();
+    d.querySelector<HTMLElement>(hard ? '[data-act="new-hard"]' : '[data-act="new"]')!.click();
+    d.querySelector<HTMLElement>('[data-act="start"]')!.click();
+    return d;
+  };
+
+  const w = bootWith(undefined);
+  try {
+    const d = intoStage(w, false);
+    const restart = (): HTMLElement | null => d.querySelector('[data-rogue-restart]');
+    assert.ok(d.querySelector('#rogue-hud'), '肉鸽常驻入口应该在');
+    assert.ok(restart(), '进了关卡就该有「重开本关」');
+
+    restart()!.click();
+    assert.match(restart()!.textContent ?? '', /重开本关 · 1/, '点一次就该记一次');
+    // 重开是"重进这一关"：棋盘还在，兵也重新摆好了
+    assert.ok(d.querySelectorAll('.tile').length > 0, '重开之后棋盘要还在');
+
+    restart()!.click();
+    assert.match(restart()!.textContent ?? '', /重开本关 · 2/, '再点一次继续累加');
+  } finally {
+    w.close();
+  }
+
+  // 硬核局：开局选「不允许重开」，这颗按钮根本不该出现
+  const hard = bootWith(undefined);
+  try {
+    const d = intoStage(hard, true);
+    assert.ok(d.querySelector('#rogue-hud'), '硬核局照样能进关卡');
+    assert.equal(d.querySelector('[data-rogue-restart]'), null, '不允许重开就没有这颗按钮');
+  } finally {
+    hard.close();
+  }
+});
 
 console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
 /*

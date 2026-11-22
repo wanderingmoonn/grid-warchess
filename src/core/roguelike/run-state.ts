@@ -119,6 +119,13 @@ export function parseRun(raw: string | null): RunState | null {
       // 老存档没有这个字段：当成青铜时代（第一幕的默认值）
       cityEra: typeof obj.cityEra === 'number' && obj.cityEra >= 1 ? obj.cityEra : 1,
       branch: typeof obj.branch === 'string' ? obj.branch : 'cold',
+      /*
+       * 老存档里可能存着已经删掉的遗物（`packhorse` 驮马，2026-11-21 删除）。
+       * 不过滤的话，遗物面板会拿 id 当名字显示成一个英文单词。
+       */
+      relics: Array.isArray(obj.relics)
+        ? (obj.relics as string[]).filter((id) => id !== 'packhorse')
+        : [],
       tactics: Array.isArray(obj.tactics) ? (obj.tactics as string[]) : [],
       /*
        * 城血只可能是"几十到几百"这个量级：旧版本叠乘过翻倍，
@@ -140,4 +147,22 @@ export function parseRun(raw: string | null): RunState | null {
 /** 这一局还能不能再开本关（重开次数由开局的 allowRestart 决定，次数不限） */
 export function canRestart(run: RunState): boolean {
   return run.allowRestart;
+}
+
+/**
+ * 重开本关：回到**进关前**的那一份 run（2026-11-21）。
+ *
+ * 契约只有一句：**本关的成果一律作废**——这一关挣的金币、掉的遗物、抽的卡、
+ * 花掉的免费建造次数，全部还原成进关那一刻的样子。所以不能"在场上改一改"，
+ * 必须拿进关前的快照覆盖（快照由 UI 层在 `startRogueStage` 里拍）。
+ *
+ * 唯一保留的是 `restartsUsed`：它记的是"往这条命上又赌了一次"，
+ * 不属于本关成果，谁也不能把它还原。
+ */
+export function restartRun(stageStart: RunState, current: RunState): RunState {
+  const next = structuredClone(stageStart);
+  next.restartsUsed = current.restartsUsed + 1;
+  // 开局选项是这一整局的性质，不跟着快照走神
+  next.allowRestart = current.allowRestart;
+  return next;
 }
