@@ -1492,6 +1492,44 @@ html[data-terrain='on'] .tile.t-forest::before,
 html[data-terrain='on'] .tile.t-hill::before {
   display: none;
 }
+/* 错开树冠的比例与落点。树冠图仍由林缘、林心两种密度决定。 */
+html[data-terrain='on'][data-ui-layout='refined'] .tile.t-forest {
+  background-size: var(--grove-size, 108%) var(--grove-size, 108%);
+  background-position:
+    calc(50% + var(--texture-width) * var(--grove-x, 0))
+    calc(50% + var(--texture-height) * var(--grove-y, 0));
+}
+
+.tile.t-forest[data-grove='0'] {
+  --grove-size: 97%;
+  --grove-x: -0.12;
+  --grove-y: 0.08;
+}
+
+.tile.t-forest[data-grove='1'] {
+  --grove-size: 117%;
+  --grove-x: 0.08;
+  --grove-y: -0.1;
+}
+
+.tile.t-forest[data-grove='2'] {
+  --grove-size: 83%;
+  --grove-x: 0.15;
+  --grove-y: 0.1;
+}
+
+.tile.t-forest[data-grove='3'] {
+  --grove-size: 107%;
+  --grove-x: -0.04;
+  --grove-y: -0.14;
+}
+
+.tile.t-forest[data-grove='4'] {
+  --grove-size: 94%;
+  --grove-x: 0.02;
+  --grove-y: 0.02;
+}
+
 /*
  * 丘陵：**一张铺满整格、四边可平铺的"地面"**，不是"中心摆几块石头"。
  *
@@ -1926,6 +1964,19 @@ html[data-terrain='on'][data-ui-layout='refined'] .tile.t-hill[data-el='1'] {
 
 html[data-terrain='on'][data-ui-layout='refined'] .tile.t-hill[data-er='1'] {
   --hill-shade-r: rgba(103, 77, 47, 0.17);
+}
+
+/* 各格从同一张明暗图取对应片段，原贴图负责地表材质。 */
+html[data-terrain='on'][data-ui-layout='refined'] .tiles.has-hill-relief .tile.t-hill::before {
+  display: block;
+  inset: 0;
+  border-radius: 0;
+  pointer-events: none;
+  background: var(--hill-relief) no-repeat;
+  background-size: calc(var(--cols) * var(--texture-width)) calc(var(--rows) * var(--texture-height));
+  background-position:
+    calc(var(--x, 0) * var(--texture-width) * -1)
+    calc(var(--y, 0) * var(--texture-height) * -1);
 }
 
 /*
@@ -2938,8 +2989,8 @@ html[data-terrain='on'] .tile.t-mountain {
  * 必然要放大滚动（`.board-scroll.zoomed` 开 overflow）和每帧整盘重绘，
  * 显存与合成器队列就顶穿了——表现是标签页直接崩掉，而不是变卡。
  *
- * 换成"盖一层半透明灰"：`::after` 本来就是高亮层，纯色填充只走绘制、
- * 不进合成器。混的是灰不是黑，所以除了变暗，颜色也被冲淡，观感接近原样。
+ * `::after` 叠一层半透明色。新版用较淡的冷色阴影，压暗视野外的地形，
+ * 同时保留草地、树林和水面的色差。保留纯色填充，避免逐格创建滤镜层。
  */
 /*
  * 雾里"格子边框发亮"的根因（2026-11-04）。
@@ -2951,16 +3002,26 @@ html[data-terrain='on'] .tile.t-mountain {
  * 一暗一亮挨在一起，整张雾区就变成"一张亮线织的网格"，格子越小越刺眼
  * （64×64 上是 4096 条边，看着像满屏白格）。
  *
- * 修法：把边框也刷成同一个半透明灰。边框是画在地形色**之上**的，
+ * 修法：把边框也刷成同一个半透明色。边框是画在地形色**之上**的，
  * 混出来的值和格心完全一致，网格自然消失——不用动布局、不用加元素，
  * 也没有 filter（上面那条"逐格 filter 把标签页压垮"的教训不能踩回去）。
  */
+.board.fog {
+  --fog-shade: rgba(74, 70, 62, 0.52);
+  --fog-memory-shade: rgba(70, 66, 60, 0.56);
+}
+
+html[data-ui-layout='refined'] .board.fog {
+  --fog-shade: rgba(23, 35, 43, 0.28);
+  --fog-memory-shade: rgba(23, 35, 43, 0.42);
+}
+
 .board.fog .tile.out {
-  border-color: rgba(74, 70, 62, 0.52);
+  border-color: var(--fog-shade);
 }
 
 .board.fog .tile.out::after {
-  background: rgba(74, 70, 62, 0.52);
+  background: var(--fog-shade);
   /*
    * 另外把 `.tile.placeable` 那条**无限动画**按掉：CSS 里动画的优先级高于任何
    * 普通声明，place-pulse 的琥珀色背景会把迷雾灰整个盖掉——表现为"雾里有一格
@@ -2982,11 +3043,11 @@ html[data-terrain='on'] .tile.t-mountain {
    两条规则权重一样，靠顺序压过。 */
 .board.blackout .tile.remembered {
   /* 同 `.out`：边框必须和格心一起压暗，否则记忆区也是一张亮线网格 */
-  border-color: rgba(70, 66, 60, 0.56);
+  border-color: var(--fog-memory-shade);
 }
 
 .board.blackout .tile.remembered::after {
-  background: rgba(70, 66, 60, 0.56);
+  background: var(--fog-memory-shade);
   animation: none;
 }
 .board.blackout .tile.unknown.reach,

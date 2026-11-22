@@ -40,6 +40,7 @@ import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 import { unitArtUrl } from './unit-art.ts';
+import { hillRelief } from './hill-relief.ts';
 import { uiTerrainOn } from './terrain-art.ts';
 import { unitInsignia, unitRole } from './unit-insignia.ts';
 
@@ -276,6 +277,7 @@ interface TileLayer {
   cls: string[];
   /** 上一次写的角标 HTML（'' ＝ 没有角标） */
   badge: string[];
+  hillMask?: string;
 }
 
 const tileLayers = new WeakMap<HTMLElement, TileLayer>();
@@ -729,6 +731,18 @@ export function renderBoard(
     tileLayers.set(tilesEl, layer);
   }
 
+  const { terrain, uiLayout } = el.ownerDocument.documentElement.dataset;
+  if (terrain === 'on' && uiLayout !== 'classic') {
+    const hillMask = dispTerrain.map((kind) => kind === 'hill' ? '1' : '0').join('');
+    if (layer.hillMask !== hillMask) {
+      const relief = hillRelief(el.ownerDocument, s.w, s.h, hillMask);
+      layer.hillMask = hillMask;
+      tilesEl.classList.toggle('has-hill-relief', Boolean(relief));
+      if (relief) setVar(tilesEl, '--hill-relief', relief);
+      else tilesEl.style.removeProperty('--hill-relief');
+    }
+  }
+
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
       const i = y * s.w + x;
@@ -836,6 +850,11 @@ export function renderBoard(
         const dense = isForest(x, y - 1) && isForest(x, y + 1) && isForest(x - 1, y) && isForest(x + 1, y);
         const v = dense ? '1' : '0';
         if (node.dataset.v !== v) node.dataset.v = v;
+        if (node.dataset.grove === undefined) {
+          // 固定坐标产生不同的树冠大小和落点，重绘和缩放时保持原位。
+          const seed = Math.imul(x + 1, 0x9e3779b1) ^ Math.imul(y + 1, 0x85ebca6b);
+          node.dataset.grove = String(((seed ^ (seed >>> 16)) >>> 0) % 5);
+        }
       }
       /*
        * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵、高山、台地都要。
