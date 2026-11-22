@@ -56,7 +56,6 @@ import { eraCeilingOf } from './expansions.ts';
 import type { ValueContext } from './unit-value.ts';
 import {
   abilityApi,
-  armySize,
   applyAction,
   attackableTargets,
   buildSiteError,
@@ -70,7 +69,6 @@ import {
   crossesWater,
   terrainWalkable,
   damageToCity,
-  disbandRefundOf,
   distance,
   distToCity,
   eggSpots,
@@ -270,32 +268,6 @@ export function aiTraits(s: GameState): AiTraits {
 }
 
 /* ---------------- 战术倾向：这一回合该打哪一种 ---------------- */
-
-/**
- * 这一席的编制上限（v3 专用）。
- *
- * `CONFIG.maxUnits` 从来不是游戏规则——规则层的招募不拦玩家，那是 AI 给自己
- * 戴的帽子（见 `core/config.ts` 的 `maxUnits` 注释与 `core/rules.ts` 的招募函数）。
- * v3 要能回答"没有上限时该怎么打"，所以把这条约束做成了局面配置：
- *
- *   · `config.unitCap` 不写 = `CONFIG.maxUnits`（24，等于现状）
- *   · `'none'` = 不设上限（用 Infinity，比较逻辑原样成立）
- *
- * 只有 v3 读它，v1 仍然写死 24——这样"撤编制"是一次可对照的实验，
- * 不会悄悄改掉基线。见 `docs/PLAN-AI-V3-2026-11-21.md` 第二节。
- */
-function unitCapOf(s: GameState): number {
-  const v = s.config.unitCap;
-  /*
-   * 默认**不设上限**（2026-11-21 用户决定）。
-   *
-   * `CONFIG.maxUnits = 24` 从来不是规则，是 AI 自己戴的帽子；人下棋不会
-   * 给自己设编制上限。默认放开之后，它退化成"低难度开关"：
-   * `--unit-cap 24` 还能把帽子戴回去，以后可以挂到难度分档上。
-   */
-  if (v === 'none' || v === undefined) return Number.POSITIVE_INFINITY;
-  return typeof v === 'number' && v > 0 ? v : Number.POSITIVE_INFINITY;
-}
 
 /** 0~1 夹紧 */
 function clamp01(v: number): number {
@@ -6257,7 +6229,7 @@ function unitCandidates(
       for (const buildId of def.builds) {
         const buildDef = s.unitTypes[buildId];
         if (!buildDef) continue;
-        // 钱和编制都要够：以前没查，AI 会一直提"金币不足"的建造，
+        // 钱要够：以前没查，AI 会一直提"金币不足"的建造，
         // 而执行方遇到非法动作就中断整回合。
         if (!canPay(s.players[s.current], recruitResCost(s, s.current, buildDef))) continue;
         const spots = buildSpots(s, unit, buildDef);
@@ -6911,15 +6883,6 @@ const HERO_PREMIUM = 1.6;
  */
 const ERA_TIME_DISCOUNT = 0.5;
 
-/**
- * 换血的门槛：新兵的性价比至少是老兵的多少倍，才值得为它 disband 一个。
- *
- * 编制是"一个萝卜一个坑"，换一次的净收益是**差价**，而代价是当回合少一个人、
- * 外加一笔钱（解散只退满血单位的部分造价）。1.35 倍大致等于"跨一代"：
- * 火器的火枪兵 → 蒸汽的步枪兵、或蒸汽的线列步兵 → 机械化的摩托化步兵。
- * 定低了会在同一代里来回倒手，定高了"编制被旧兵占死"这个病又治不回来。
- */
-const SWAP_GAIN = 1.35;
 
 /**
  * 攒升级时的咬住窗口（默认 `SAVE_TIGHT_TURNS = 4`）。
@@ -7405,7 +7368,7 @@ function buildPlan(
      * 升时代：换回来的不是"多一个兵"，是**每个出生名额更值钱**。
      *
      * 为什么按名额算、不按金币算：金币会被收入追平（每回合都在进），
-     * 名额追不平——每座城每回合只能出一个兵，AI 的编制上限还压着 24 个。
+     * 名额追不平——每座城每回合只能出一个兵，这才是真正的稀缺资源。
      * 真正的稀缺资源是名额，所以升时代的价值是"以后每一个名额多产多少战力"。
      *
      * 两个折扣都要打明白：
@@ -7613,7 +7576,7 @@ function buildPlan(
    * 先试过整条删掉，对 v1 的胜率从 75% 掉到 33%——说明"手头宽裕时买好的"
    * 这件事和帽子无关：同样一袋钱，买 5 个民兵和 1 个坦克的战斗力不一样，
    * 便宜兵再多也顶不住质量。帽子只该背它自己的那一份：
-   * `army >= 编制上限 - 6` 这条判据没有编制就永远不成立，删。
+   * （v3 没有编制上限，那条"编制快满就精兵"的触发早就删了。）
    *
    * 所以 `quality` 现在只剩三条与帽子无关的来源：在攒钱、手头比一个兵宽裕、
    * 或者这一局性格偏发展。
@@ -7932,14 +7895,6 @@ function recruitCandidate(
   /** 海军的需求度（0~1）：采购时按它给水军加减分，见 `seaDemand` */
   seaDemand = 0,
   /**
-   * 只问"如果有一个空位，它会买什么"，不真的占位。
-   *
-   * 换血（见 `swapOutCandidate`）要用一次采购判断来定"买谁来替代"，
-   * 而那时候编制正好是满的、`armySize` 这一关必然把它挡回去。
-   * 与其在换血那段再抄一遍采购评分，不如把上限这一条做成开关。
-   */
-  ignoreCap = false,
-  /**
    * 战略姿态的"经济权重"：只管经济单位，兵一分不动。
    *
    * 为什么只乘经济那一侧：兵价和经济单位价不是一个量级，两边同时乘
@@ -7997,12 +7952,6 @@ function recruitCandidate(
     bag.set(k, (bag.get(k) ?? 0) + 1);
     aiRecruitTrace.detail!.set(type, bag);
   };
-
-  // 和 rules 一样只数作战单位：建筑不占编制，别让几座磨坊把产线堵死
-  if (!ignoreCap && armySize(s, me) >= unitCapOf(s)) {
-    deny('编制已满', '*');
-    return null;
-  }
 
   /**
    * 这个产兵点能往哪些格子出兵（跟 rules 里的 doRecruit 保持一致）。
@@ -8687,115 +8636,7 @@ export function flankSplit(
   return { flankCityId: far.id, flank: new Set(picks.map((p) => p.id)) };
 }
 
-/**
- * 换血：编制满了，解散一个最不值钱的，给更好的兵腾位置
- *
- * 到 2026-11-02 为止，这套 AI 从来不发 `DISBAND`（`grep DISBAND src/core/ai.ts`
- * 是空的），而编制上限 `CONFIG.maxUnits = 24` 是硬的。于是后期出现一个死局：
- * 手里 24 个火器时代的兵，工厂造得出坦克、账上也有钱，**新兵进不来**——
- * 招募在 `armySize >= maxUnits` 那一行直接返回 null，而且回来的是 null 不是
- * "换一个"，所以这一回合的钱只能拿去升城或者躺着。
- * 人类不会这样：他会解散两个长枪兵换一辆坦克，眼睛都不眨。
- *
- * 三条界线，缺一条这条机制就会变成"每回合烧一笔差价"：
- *   1. **只换明显更好的**（`SWAP_GAIN`）：性价比不到 1.35 倍就不折腾。
- *      编制是一个萝卜一个坑，来回换只赚个差价，钱却真的花掉了。
- *   2. **只换后方的**：离敌人 5 格以内的不换——那是正在顶线的人，
- *      把他解散掉，当回合城墙就少一个人守，这个洞比升级的收益大得多。
- *      顺带挡住"刚造出来就解散"的抖动：新兵一般出在城里，城里离前线通常更远，
- *      但真正挡住抖动的是第 1 条（新兵不会比它自己好 1.35 倍）。
- *   3. **只在没有急事时换**（`plan.urgent` / 家门口有敌兵都不换）：
- *      这一手是"有余力时整理编成"，不该和救城抢那个动作位。
- *
- * 为什么用"如果有一个空位它会买什么"来定替代目标：采购那一套评分（编队配比、
- * 时代窗口、粮食建材、水域需求）已经写了六百行，换血不该另起一套理解。
- * 把上限那一关关掉问一次，拿到的就是"这一回合它真正想买的那个兵"。
- */
-function swapOutCandidate(
-  s: GameState,
-  me: PlayerId,
-  traits: AiTraits,
-  plan: AiPlan,
-  mood: AiMood,
-  seaDemandNow: number,
-): Candidate | null {
-  const bail = (why: string): null => {
-    if (aiTrace.on) aiTrace.swapWhy.set(why, (aiTrace.swapWhy.get(why) ?? 0) + 1);
-    return null;
-  };
-  // 初级不会换血：这一档连"谁更贵"都不算，让它拆自己的兵只会拆错。
-  if (aiLevelOf(s) === 'basic') return bail('初级档');
-  if (armySize(s, me) < unitCapOf(s)) return bail('编制没满');
-  // 攒钱期不动编制：那笔钱是留给英雄/时代的，换一个兵等于把目标拆了。
-  // 例外正是"攒的就是兵"——那时候目标被编制卡着，不换血就永远买不到。
-  if (plan.savingFor && plan.savingFor !== 'unit') return bail('正在攒别的目标');
 
-  // 有急事就不换：救城、补兵、门口有敌人都比整理编成重要
-  const foe = enemyUnitsOf(s, me);
-  if (plan.urgent) return bail('局面吃紧');
-  const myCities = citiesOf(s, me).filter((c) => !c.ruined);
-  if (foe.some((u) => myCities.some((c) => distToCity(u, c) <= 6))) return bail('敌人压到城下');
-
-  // ① 问采购：如果有一个空位，这一回合它会买谁
-  let want: Candidate | null = null;
-  for (const city of citiesOf(s, me)) {
-    if (city.ruined || city.capturedTurn === s.turn) continue;
-    const c = recruitCandidate(
-      s,
-      { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
-      traits,
-      plan,
-      null,
-      mood,
-      seaDemandNow,
-      true,
-    );
-    if (c && (!want || c.score > want.score)) want = c;
-  }
-  if (!want || want.action.type !== 'RECRUIT') return bail('没有想买的兵');
-  const targetDef = utype(s, want.action.unitType);
-  // 运输船、召唤物这类不是"战斗力"，换掉一个战斗单位去换它是净亏
-  if (targetDef.category !== 'combat' || hasHold(targetDef)) return bail('想买的不是战斗力');
-
-  // ② 找最该被换掉的那个：身价最低、还站在后面
-  const pool = unitsOf(s, me).filter((u) => {
-    const d = utype(s, u.type);
-    if (d.category !== 'combat') return false;
-    if (d.hero === true) return false;
-    if (u.summoned) return false;
-    if (hasHold(d)) return false;
-    if ((u.cargo?.length ?? 0) > 0) return false;
-    // 交火中的不换（见上面第 2 条界线）
-    return !foe.some((e) => distance(e, u) <= 5);
-  });
-  if (pool.length === 0) return bail('没有可换的后方兵');
-  const worth = (u: Unit): number => {
-    const d = utype(s, u.type);
-    return combatPower(d) * Math.max(0.2, u.hp / Math.max(1, d.maxHp));
-  };
-  pool.sort((a, b) => worth(a) - worth(b));
-  const worst = pool[0]!;
-  const worstDef = utype(s, worst.type);
-
-  /*
-   * ③ 值不值：**比"名额能装多少战力"，不比"每金币的性价比"**。
-   *
-   * 原来比的是性价比（power / price^0.8），于是"25 金的民兵换 300 金的步兵班"
-   * 这个明显该换的动作会被判成"提升不够大"——因为按金币摊，步兵班的性价比
-   * 只比民兵高 1.35 倍，刚好卡在门槛上。可名额才是稀缺资源（见上面第 3600 行
-   * 的说明）：满编时你换的不是钱，是**一个位置**。所以拿两个兵的战力直接比。
-   */
-  const ctx = valueContextOf(s, me, plan);
-  const targetPower = combatPower(targetDef, ctx);
-  const worstPower = combatPower(worstDef, ctx) * Math.max(0.2, worst.hp / Math.max(1, worstDef.maxHp));
-  if (targetPower < worstPower * SWAP_GAIN) return bail('提升不够大');
-
-  // ④ 钱够不够：解散能退回一部分（满血才退，见 rules.disbandRefundOf）
-  const refund = disbandRefundOf(s, worst);
-  if (s.players[me].gold + refund < recruitPriceOf(s, me, targetDef).gold) return bail('钱不够');
-
-  return { action: { type: 'DISBAND', unitId: worst.id }, score: 1 };
-}
 
 function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
@@ -9830,22 +9671,6 @@ function aiNextActionCoreInner(
   // 别让它跟着每个产兵点、每个候选兵种重算。
   const seaDemandNow = seaDemand(view, me);
 
-  /*
-   * 换血排在这里，**不进候选表**。
-   *
-   * 它不是"和别的动作比一比"的一手：编制满的时候"造不出更好的兵"是硬状态，
-   * 换血是解开这个状态的唯一办法。放进候选表反而会被一批四十分的走位压住
-   * （满编后期每回合都有二三十个兵能动），这个机制就永远不触发。
-   *
-   * "一回合最多换一次"是**自限的**：解散之后 armySize 掉到 23，
-   * 下一次进来第一条就不成立了。
-   */
-  const swapOut = swapOutCandidate(view, me, traits, plan, mood, seaDemandNow);
-  if (swapOut) {
-    if (aiTrace.on) aiTrace.swap += 1;
-    return swapOut.action;
-  }
-
   if (mayRecruit) {
     for (const city of citiesOf(view, me)) {
       // 指定了产兵点就只看那一个：别的地方再合适也不许造，
@@ -9867,7 +9692,6 @@ function aiNextActionCoreInner(
         order,
         mood,
         seaDemandNow,
-        undefined,
         /*
          * 经济权重 = 排序层给的 × 战略层的发展意愿。
          *
@@ -9893,7 +9717,6 @@ function aiNextActionCoreInner(
           order,
           mood,
           seaDemandNow,
-          undefined,
           fields.weights.econ,
         );
         if (c) candidates.push(c);
