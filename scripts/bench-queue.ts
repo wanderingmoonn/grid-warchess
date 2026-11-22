@@ -103,11 +103,23 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
   while (!s.winner && s.turn <= q.cap) {
     const budget = { ...DEFAULT_BUDGET };
     const rejected = new Set<string>();
+    const moveTries = new Map<string, number>();
     for (let i = 0; i < AI_MAX_STEPS && !s.winner; i++) {
       const a = aiFor(s.current)(s, budget, rejected);
       if (!a) break;
       const r = applyAction(s, a);
       if (!r.ok) {
+        /*
+         * MOVE 的失败大多不是"这个动作非法"，而是"目标格被友军占着"——
+         * 下一步那个人走开就合法了。把它记进 rejected 会让链式让位永远停在第一个人。
+         * 同一单位试 2 次还不行（地形/桥塌之类）再记，防止死循环。
+         */
+        if (a.type === 'MOVE' && 'unitId' in a) {
+          const uid = String((a as { unitId?: string }).unitId ?? '');
+          const n = (moveTries.get(uid) ?? 0) + 1;
+          moveTries.set(uid, n);
+          if (n < 2) continue;
+        }
         rejected.add(aiActionKey(a));
         continue;
       }

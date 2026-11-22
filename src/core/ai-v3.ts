@@ -2589,7 +2589,6 @@ function yieldPlanOf(view: GameState, me: PlayerId): Map<string, { x: number; y:
      * 只把"当前空着的格"放进池子，密集局面下池子是空的（5×5 全铺实测 0 个），
      * 谁都没地方去。
      */
-    const blockerIds = new Set(blockers.map((b) => b.id));
     const pool: Array<{ x: number; y: number }> = [];
     for (let dy = -6; dy <= 6; dy++) {
       for (let dx = -6; dx <= 6; dx++) {
@@ -2598,8 +2597,9 @@ function yieldPlanOf(view: GameState, me: PlayerId): Map<string, { x: number; y:
         if (!inBounds(view, x, y)) continue;
         const t = view.tiles[y * view.w + x];
         if (!t || t.terrain === 'city') continue;
-        const occ = unitAt(view, x, y);
-        if (occ && !blockerIds.has(occ.id)) continue; // 不动的单位挡着，不能选中
+        // 只放**真空位**：被占的格虽然之后会腾，但当下提交就是非法动作。
+        // 链靠"挑完把原格放回池子"实现，不靠"选中别人占着的格"。
+        if (unitAt(view, x, y)) continue;
         pool.push({ x, y });
       }
     }
@@ -6374,7 +6374,12 @@ function unitCandidates(
    */
   if (def.category === 'economy' || def.category === 'builder') {
     const target = all.yieldPlan.get(unit.id);
-    if (target) {
+    /*
+     * 目标格**当前有人就不给候选**：等那个人走开，下一步 `yieldPlan` 会重新算，
+     * 它自然能走。不这样判的话会提交非法动作，`aiNextAction` 每次返回同一条，
+     * 浪费整回合（实测 56 次失败只成功 4 次）。
+     */
+    if (target && !unitAt(s, target.x, target.y)) {
       out.push({
         action: { type: 'MOVE', unitId: unit.id, x: target.x, y: target.y },
         score: 75,
