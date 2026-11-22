@@ -1492,44 +1492,6 @@ html[data-terrain='on'] .tile.t-forest::before,
 html[data-terrain='on'] .tile.t-hill::before {
   display: none;
 }
-/* 错开树冠的比例与落点。树冠图仍由林缘、林心两种密度决定。 */
-html[data-terrain='on'][data-ui-layout='refined'] .tile.t-forest {
-  background-size: var(--grove-size, 108%) var(--grove-size, 108%);
-  background-position:
-    calc(50% + var(--texture-width) * var(--grove-x, 0))
-    calc(50% + var(--texture-height) * var(--grove-y, 0));
-}
-
-.tile.t-forest[data-grove='0'] {
-  --grove-size: 97%;
-  --grove-x: -0.12;
-  --grove-y: 0.08;
-}
-
-.tile.t-forest[data-grove='1'] {
-  --grove-size: 117%;
-  --grove-x: 0.08;
-  --grove-y: -0.1;
-}
-
-.tile.t-forest[data-grove='2'] {
-  --grove-size: 83%;
-  --grove-x: 0.15;
-  --grove-y: 0.1;
-}
-
-.tile.t-forest[data-grove='3'] {
-  --grove-size: 107%;
-  --grove-x: -0.04;
-  --grove-y: -0.14;
-}
-
-.tile.t-forest[data-grove='4'] {
-  --grove-size: 94%;
-  --grove-x: 0.02;
-  --grove-y: 0.02;
-}
-
 /*
  * 丘陵：**一张铺满整格、四边可平铺的"地面"**，不是"中心摆几块石头"。
  *
@@ -1966,17 +1928,20 @@ html[data-terrain='on'][data-ui-layout='refined'] .tile.t-hill[data-er='1'] {
   --hill-shade-r: rgba(103, 77, 47, 0.17);
 }
 
-/* 各格从同一张明暗图取对应片段，原贴图负责地表材质。 */
-html[data-terrain='on'][data-ui-layout='refined'] .tiles.has-hill-relief .tile.t-hill::before {
-  display: block;
-  inset: 0;
-  border-radius: 0;
-  pointer-events: none;
-  background: var(--hill-relief) no-repeat;
+/* 相邻丘陵共用一张地形图。画在格子背景里，邻山的投影仍能落到坡顶。 */
+html[data-terrain='on'][data-ui-layout='refined'] .tiles.has-hill-relief .tile.t-hill {
+  background-color: #cfbb8c;
+  /* 这张地形图含坡脚色块，基础迷雾的前景盖层会统一压暗它。 */
+  background-image: var(--hill-relief) !important;
+  background-repeat: no-repeat;
   background-size: calc(var(--cols) * var(--texture-width)) calc(var(--rows) * var(--texture-height));
   background-position:
     calc(var(--x, 0) * var(--texture-width) * -1)
     calc(var(--y, 0) * var(--texture-height) * -1);
+}
+
+html[data-terrain='on'][data-ui-layout='refined'] .tiles.has-hill-relief .tile.t-hill::before {
+  display: none;
 }
 
 /*

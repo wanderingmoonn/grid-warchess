@@ -733,7 +733,10 @@ export function renderBoard(
 
   const { terrain, uiLayout } = el.ownerDocument.documentElement.dataset;
   if (terrain === 'on' && uiLayout !== 'classic') {
-    const hillMask = dispTerrain.map((kind) => kind === 'hill' ? '1' : '0').join('');
+    const hillMask = dispTerrain.map((kind) => {
+      if (kind === 'hill') return '1';
+      return kind === 'mountain' || kind === 'plateau' ? '2' : '0';
+    }).join('');
     if (layer.hillMask !== hillMask) {
       const relief = hillRelief(el.ownerDocument, s.w, s.h, hillMask);
       layer.hillMask = hillMask;
@@ -850,11 +853,6 @@ export function renderBoard(
         const dense = isForest(x, y - 1) && isForest(x, y + 1) && isForest(x - 1, y) && isForest(x + 1, y);
         const v = dense ? '1' : '0';
         if (node.dataset.v !== v) node.dataset.v = v;
-        if (node.dataset.grove === undefined) {
-          // 固定坐标产生不同的树冠大小和落点，重绘和缩放时保持原位。
-          const seed = Math.imul(x + 1, 0x9e3779b1) ^ Math.imul(y + 1, 0x85ebca6b);
-          node.dataset.grove = String(((seed ^ (seed >>> 16)) >>> 0) % 5);
-        }
       }
       /*
        * 四条边各自"是不是这块地形的边缘"（`data-e*`）：丘陵、高山、台地都要。
