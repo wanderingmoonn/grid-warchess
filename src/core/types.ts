@@ -2058,6 +2058,10 @@ export interface AiCallTrace {
   turn: number;
   me: PlayerId;
   marchTurns: number;
+  /** 记忆里（此刻看不见）的敌方战力：按 0.85^age 折算，8 回合清零 */
+  knownPower?: number;
+  /** 记忆中仍计入的敌方单位数 */
+  knownUnits?: number;
   myPower: number;
   foePower: number;
   myPerTurn: number;

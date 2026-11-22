@@ -49,6 +49,7 @@ import { hasHold, holdOf, holdRoom } from './carry.ts';
 import { isProducer, produceUsableCount } from './produce.ts';
 import { cityGap } from './geo.ts';
 import { playerView } from './fog.ts';
+import type { PlayerView } from './fog.ts';
 import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
 import { nextEraLevelOf } from './era-routes.ts';
 import { eraCeilingOf } from './expansions.ts';
@@ -114,7 +115,7 @@ import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
 import { terrainArmorOf } from './ability-registry.ts';
 import type { TacticalMap } from './ai-tactics.ts';
 import { seatsOf } from './types.ts';
-import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+import type { Action, AiFocus, AiIntent, City, GameState, KnownUnit, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
 import type { AiBudget } from './ai-meta.ts';
@@ -2017,7 +2018,52 @@ export interface DecisiveCall {
   /** 抵达与"抵达 + 12"里较高的那个比值，以及它出现在第几回合——"等下去会不会更好" */
   peakRatio: number;
   peakTurns: number;
+  /**
+   * 记忆里"看不见但记得"的敌方战力（`0.85^age`，8 回合清零）。
+   *
+   * 阶段 1a：先只算出来写进日志，**不进任何判决**——这样能先验证"接入是否正确、
+   * 一个 AI 回合里记忆有多厚"，而行为一个字不变（跑批逐局一致）。
+   */
+  rememberedPower: number;
+  rememberedCount: number;
   why: string;
+}
+
+/** 记忆里的敌人每回合折这么多；超过 `MEMORY_MAX_AGE` 就当忘了 */
+const MEMORY_DECAY = 0.85;
+const MEMORY_MAX_AGE = 8;
+
+/**
+ * 把记忆里"此刻看不见"的敌方单位折算成战力。
+ *
+ * 为什么要有它：`armyStrength(view, p)` 只算**当前可见**的单位，看不见的一律当 0。
+ * 阶段 0 实测（第四十六节之后）迷雾视角的投影比中位高估 0.67，就是这么来的。
+ * 而 `playerView` 其实一直给了 `ghosts`（认得的敌方单位，带 `seenAt`），AI 从没读过。
+ *
+ * 三条口径：
+ *   · 按 `0.85^age` 衰减——"十分钟前看到六个兵"不能和"刚才看到六个"等价；
+ *   · `age > 8` 归零——再久就是猜，不如承认不知道；
+ *   · 只算战斗单位、不含水军——和 `armyStrength` 的口径**保持一致**，
+ *     否则"记得的"和"看见的"不是同一把尺子。
+ *
+ * 血量未知（`KnownUnit` 没有 hp），按满血算——这是乐观的一侧，衰减负责抵消一部分。
+ */
+export function rememberedPowerOf(
+  ghosts: readonly KnownUnit[],
+  turn: number,
+  unitTypes: Record<string, UnitTypeDef>,
+): { power: number; count: number } {
+  let power = 0;
+  let count = 0;
+  for (const g of ghosts) {
+    const age = Math.max(0, turn - g.seenAt);
+    if (age > MEMORY_MAX_AGE) continue;
+    const def = unitTypes[g.type];
+    if (!def || def.category !== 'combat' || def.domain === 'water') continue;
+    power += unitPower(def) * Math.pow(MEMORY_DECAY, age);
+    count += 1;
+  }
+  return { power, count };
 }
 
 /** 投影比到这个数就算"打得动" */
@@ -2072,6 +2118,7 @@ function decisiveOf(
   view: GameState,
   me: PlayerId,
   land: Map<string, number[]>,
+  ghosts: readonly KnownUnit[] = [],
 ): DecisiveCall | null {
   const foes = view.cities.filter((c) => c.owner !== me && !c.ruined);
   if (foes.length === 0) return null;
@@ -2102,6 +2149,7 @@ function decisiveOf(
   for (const p of new Set(view.cities.filter((c) => c.owner !== me).map((c) => c.owner))) {
     foePower += armyStrength(view, p);
   }
+  const remembered = rememberedPowerOf(ghosts, view.turn, view.unitTypes);
   const myPerTurn = powerPerTurn(view, me);
   const foePerTurn = Math.max(
     1,
@@ -2182,7 +2230,9 @@ function decisiveOf(
     readyTurns: scan.readyTurns,
     peakRatio: scan.peakRatio,
     peakTurns: scan.peakTurns,
-    why: `投影比 ${scan.peakRatio.toFixed(2)}@${scan.peakTurns}（抵达 ${t0} 回合后 ${ratioNow.toFixed(2)}）、行军 ${marchTurns} 回合、${wait}`,
+    rememberedPower: remembered.power,
+    rememberedCount: remembered.count,
+    why: `投影比 ${scan.peakRatio.toFixed(2)}@${scan.peakTurns}（抵达 ${t0} 回合后 ${ratioNow.toFixed(2)}）、行军 ${marchTurns} 回合、${wait}、记得 ${remembered.count} 个(${Math.round(remembered.power)})`,
   };
 }
 
@@ -2203,16 +2253,17 @@ export function decisiveViewGap(
   s: GameState,
   me: PlayerId,
 ): { fogged: DecisiveCall; full: DecisiveCall } | null {
-  const build = (view: GameState): DecisiveCall | null => {
+  const build = (pv: PlayerView): DecisiveCall | null => {
+    const view = pv.state;
     const wade = distanceFields(view, me, 'advance');
     const land = new Map<string, number[]>();
     for (const [id, field] of distanceFields(view, me, 'land')) {
       land.set(id, mergeAdvanceField(field, wade.get(id) ?? []));
     }
-    return decisiveOf(view, me, land);
+    return decisiveOf(view, me, land, pv.ghosts);
   };
-  const fogged = build(playerView(s, me).state);
-  const full = build(playerView(s, me, true).state);
+  const fogged = build(playerView(s, me));
+  const full = build(playerView(s, me, true));
   return fogged && full ? { fogged, full } : null;
 }
 
@@ -8528,7 +8579,8 @@ function aiNextActionCoreInner(
 
   const me = s.current;
   // 关键：只看自己看得见的东西，跟玩家同等信息
-  const view = playerView(s, me).state;
+  const playerViewNow = playerView(s, me);
+  const view = playerViewNow.state;
 
   /**
    * 指挥官模式：产线和升级都由序列决定，所以调用方给的 maxRecruit / maxUpgrade
@@ -8779,7 +8831,10 @@ function aiNextActionCoreInner(
      * 拥有（回滞 + 驻留记在它自己的口袋里）。估计和判决分开，是为了以后
      * 有情报时只换估计器，不动判决——见 `PlanCtx.intelKnown` 那个口子。
      */
-    const decisive = s.config.aiDecisive === false ? null : decisiveOf(view, me, fields.land);
+    const decisive =
+      s.config.aiDecisive === false
+        ? null
+        : decisiveOf(view, me, fields.land, playerViewNow.ghosts);
     /*
      * 计划层的主攻城市：上一回合 `breakthrough` 定的那一座（存在 keep 里）优先，
      * 否则用 mood 算的。**必须是上一回合的**——`resolvePlans` 还没跑，
@@ -8878,6 +8933,8 @@ function aiNextActionCoreInner(
           turn: s.turn,
           me,
           marchTurns: decisive.marchTurns,
+          knownPower: Math.round(decisive.rememberedPower),
+          knownUnits: decisive.rememberedCount,
           myPower: Math.round(decisive.myPower),
           foePower: Math.round(decisive.foePower),
           myPerTurn: Math.round(decisive.myPerTurn),

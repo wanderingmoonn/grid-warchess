@@ -150,3 +150,7 @@ rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`u
 
 - 判断类结论要有实测支撑（真跑 `applyAction`，别只看配置表）。
 - 报告要写清"没做什么/样本多小"，别把方向性结论写成定论。
+- **跑批对照必须用 `--old ./baselines/ai-9efb961.ts`**（与 `results/bench/bridge-clear.json` 同对手）。
+  用"自己前一版"当 old 等于新 vs 自己，胜率必然 ~50%，会得出反向结论——
+  2026-11-21 因此连续四轮误判"扫描有害"。跑批前先验证基线版能逐局复现。
+

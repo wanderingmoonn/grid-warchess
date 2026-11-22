@@ -23,10 +23,11 @@
  *   中位差 ≥ 0.15 → 情报确实是瓶颈，继续阶段 1；
  *   中位差 < 0.05 → 停，去查采购/编队（侦查做了也没用）。
  */
+import assert from 'node:assert/strict';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { applyAction } from '../src/core/rules.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
-import { aiNextAction, decisiveViewGap } from '../src/core/ai-v3.ts';
+import { aiNextAction, decisiveViewGap, rememberedPowerOf } from '../src/core/ai-v3.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 
 const argOf = (name: string, fallback = ''): string => {
@@ -66,6 +67,9 @@ interface Sample {
   foeFull: number;
   /** 全图视角下、迷雾完全看不到的敌方战力 */
   foeMissed: number;
+  /** 记忆里（看不见但记得）的敌方战力与单位数 */
+  knownPower: number;
+  knownCount: number;
 }
 
 /** 跑一局，按 `EVERY` 采样当前席位的两种视角 */
@@ -92,6 +96,8 @@ function playOne(c: Case, seed: number): { samples: Sample[]; winner: PlayerId |
           foeFog: gap.fogged.foePower,
           foeFull: gap.full.foePower,
           foeMissed: Math.max(0, gap.full.foePower - gap.fogged.foePower),
+          knownPower: gap.fogged.rememberedPower,
+          knownCount: gap.fogged.rememberedCount,
         });
       }
       lastTurn = s.turn;
@@ -118,6 +124,60 @@ function playOne(c: Case, seed: number): { samples: Sample[]; winner: PlayerId |
   }
   return { samples, winner: s.winner ?? null, turn: s.turn };
 }
+
+/**
+ * 阶段 1a 的验收：衰减公式的六条断言。
+ *
+ * 为什么不靠跑批验这个：跑批只能看出"行为变没变"，看不出"记得的东西算没算对"。
+ * 这里直接拿 `rememberedPowerOf` 做算术，错了立刻红。
+ */
+function assertMemoryMath(): void {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 12, startEra: 2 }, 7);
+  const types = s.unitTypes;
+  const militia = Object.values(types).find((d) => d.id === 'militia')!;
+  const farmer = Object.values(types).find((d) => d.category === 'economy')!;
+  const ship = Object.values(types).find((d) => d.domain === 'water' && d.category === 'combat')!;
+  const base = (d: typeof militia): number =>
+    // 与实现同一把尺子：只比"相对关系"，不抄一个具体数值
+    rememberedPowerOf([{ id: 'x', type: d.id, x: 0, y: 0, seenAt: 10 }], 10, types).power;
+  const P = base(militia);
+
+  assert.ok(P > 0, '满血民兵该有战力');
+  assert.equal(rememberedPowerOf([], 10, types).power, 0, '没有记忆就是 0');
+  // age = 0 / 1 / 8：0.85 的幂
+  const at = (age: number): number =>
+    rememberedPowerOf([{ id: 'x', type: militia.id, x: 0, y: 0, seenAt: 10 }], 10 + age, types).power;
+  assert.ok(Math.abs(at(1) - P * 0.85) < 1e-9, 'age=1 按 0.85 折');
+  assert.ok(Math.abs(at(8) - P * Math.pow(0.85, 8)) < 1e-9, 'age=8 仍计入');
+  assert.equal(at(9), 0, 'age=9 归零');
+  // 兵种口径与 armyStrength 一致：非战斗 / 水军不计
+  assert.equal(
+    rememberedPowerOf([{ id: 'x', type: farmer.id, x: 0, y: 0, seenAt: 10 }], 10, types).count,
+    0,
+    '经济单位不计入战力',
+  );
+  if (ship) {
+    assert.equal(
+      rememberedPowerOf([{ id: 'x', type: ship.id, x: 0, y: 0, seenAt: 10 }], 10, types).count,
+      0,
+      '水军不计入陆战战力',
+    );
+  }
+  // 两个不同 age 的单位：合计 = 各自折算之和
+  const two = rememberedPowerOf(
+    [
+      { id: 'a', type: militia.id, x: 0, y: 0, seenAt: 10 },
+      { id: 'b', type: militia.id, x: 0, y: 0, seenAt: 12 },
+    ],
+    12,
+    types,
+  );
+  assert.equal(two.count, 2, '两个都还在有效期内');
+  assert.ok(Math.abs(two.power - (P * 0.85 * 0.85 + P)) < 1e-9, '各自按自己的 age 折');
+  console.log('记忆衰减断言：8 条通过');
+}
+
+assertMemoryMath();
 
 const quantile = (xs: number[], q: number): number => {
   if (xs.length === 0) return 0;
@@ -161,8 +221,8 @@ if (all.length === 0) {
   process.exit(0);
 }
 
-console.log('\n| 队列 | 样本 | 差的中位 | p25 | p75 | 最大 | 迷雾高估占比 | 敌方战力漏算中位 |');
-console.log('|---|---|---|---|---|---|---|---|');
+console.log('\n| 队列 | 样本 | 差的中位 | p25 | p75 | 最大 | 迷雾高估占比 | 敌方战力漏算中位 | 记得战力中位 | 有记忆占比 |');
+console.log('|---|---|---|---|---|---|---|---|---|---|');
 for (const c of cases) {
   const rows = all.filter((x) => x.caseId === c.id);
   if (rows.length === 0) continue;
@@ -171,7 +231,9 @@ for (const c of cases) {
   console.log(
     `| ${c.id} | ${rows.length} | ${fmt(median(ds))} | ${fmt(quantile(ds, 0.25))} | ` +
       `${fmt(quantile(ds, 0.75))} | ${fmt(Math.max(...ds))} | ` +
-      `${((up / rows.length) * 100).toFixed(0)}% | ${Math.round(median(rows.map((x) => x.foeMissed)))} |`,
+      `${((up / rows.length) * 100).toFixed(0)}% | ${Math.round(median(rows.map((x) => x.foeMissed)))} | ` +
+      `${Math.round(median(rows.map((x) => x.knownPower)))} | ` +
+      `${((rows.filter((x) => x.knownCount > 0).length / rows.length) * 100).toFixed(0)}% |`,
   );
 }
 
