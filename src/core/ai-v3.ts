@@ -1769,6 +1769,8 @@ interface Fields {
   chokedCities: string[];
   /** 产兵格**少**（< 城格数）的城：让位要一直推到恢复，不是 1 格就停 */
   spawnStarved: string[];
+  /** 疏散预订：unitId → 目标空位（每回合算一次，避免各抢各的） */
+  yieldPlan: Map<string, { x: number; y: number }>;
   /** 编队成员 → 目标城：编队认编队目标，散兵认全局目标（见 `SQUAD` 那一段） */
   squadTarget: Map<string, string>;
   /** 编队缺口：还在收拢的战斗编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
@@ -2541,6 +2543,91 @@ function threatScaleOf(
     }
   }
   return Math.min(1, (reachable ? 0.4 : 0) + (hitRecent ? 0.3 : 0) + (close ? 0.3 : 0));
+}
+
+/**
+ * 疏散预订（2026-11-22）：每回合算一次"谁去哪"，而不是让每个单位各自抢最近空位。
+ *
+ * 抽象：多源疏散 + 空格传播。这里用"链式预订"近似最小费用流：
+ *   · 按**离城距离降序**处理（最外圈先挑），每人挑最近可用空位（距离 ≤ 移动力）；
+ *   · 挑完把它**原来的格**放回可用池——后面的人能直接补它的位置；
+ *   · 城格格子不回池（那是产兵格，不能再被经济单位占）。
+ * 一回合内串行执行，argmax 天然按"外圈先走、里层后走"排。
+ *
+ * 只对"产兵格变少的城 + 城边经济/工程单位"生效，不做全图疏散。
+ */
+function yieldPlanOf(view: GameState, me: PlayerId): Map<string, { x: number; y: number }> {
+  const plan = new Map<string, { x: number; y: number }>();
+  for (const c of citiesOf(view, me)) {
+    if (c.ruined) continue;
+    if (spawnCellCountOf(view, c) >= c.size * c.size) continue;
+    /*
+     * 参与疏散的不只是城格上的单位：整条"链"上的人都得有目标，
+     * 否则城格的人挑中别人的格，那个人不动，`applyAction` 永远拒。
+     * 范围取"城 3 格内的经济/工程单位"（5×5 全铺足够覆盖）。
+     */
+    const blockers = unitsOf(view, me)
+      .filter((u) => {
+        const d = utype(view, u.type);
+        if (d.category !== 'economy' && d.category !== 'builder') return false;
+        return distToCity(u, c) <= 3;
+      })
+      .sort((a, b) => distToCity(b, c) - distToCity(a, c) || a.id.localeCompare(b.id));
+    if (blockers.length === 0) continue;
+    const cityBlocked = cityTiles(c).some((t) => {
+      const u = unitAt(view, t.x, t.y);
+      if (!u || u.owner !== me) return false;
+      const d = utype(view, u.type);
+      return d.category === 'economy' || d.category === 'builder';
+    });
+    if (!cityBlocked) continue;
+
+    /*
+     * 候选格池：城 6 格内、可走、非城格——**包括被占的**。
+     *
+     * 疏散是链式的：远处的人先走，他的格才空出来给近处的人。
+     * 只把"当前空着的格"放进池子，密集局面下池子是空的（5×5 全铺实测 0 个），
+     * 谁都没地方去。
+     */
+    const blockerIds = new Set(blockers.map((b) => b.id));
+    const pool: Array<{ x: number; y: number }> = [];
+    for (let dy = -6; dy <= 6; dy++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        const x = c.x + dx;
+        const y = c.y + dy;
+        if (!inBounds(view, x, y)) continue;
+        const t = view.tiles[y * view.w + x];
+        if (!t || t.terrain === 'city') continue;
+        const occ = unitAt(view, x, y);
+        if (occ && !blockerIds.has(occ.id)) continue; // 不动的单位挡着，不能选中
+        pool.push({ x, y });
+      }
+    }
+    const used = new Set<number>();
+    for (const u of blockers) {
+      const move = Math.max(1, utype(view, u.type).move ?? 1);
+      let best: { x: number; y: number } | null = null;
+      let bestD = Infinity;
+      for (let i = 0; i < pool.length; i++) {
+        if (used.has(i)) continue;
+        const e = pool[i]!;
+        const d = Math.abs(e.x - u.x) + Math.abs(e.y - u.y);
+        if (d > move || d === 0) continue;
+        // 只往外走：不占"离城更近"的格（那是留给里层的）
+        if (distToCity(e, c) < distToCity(u, c)) continue;
+        if (d < bestD) {
+          bestD = d;
+          best = e;
+        }
+      }
+      if (!best) continue;
+      plan.set(u.id, best);
+      used.add(pool.indexOf(best));
+      // 原来的格回池（非城格才能给后面的人补）
+      if (!cityAt(view, u.x, u.y)) pool.push({ x: u.x, y: u.y });
+    }
+  }
+  return plan;
 }
 
 function postureBudgetOf(
@@ -6278,75 +6365,20 @@ function unitCandidates(
    *
    * 只对经济/工程单位生效：战斗单位不进产兵格让位（那是走位的事）。
    */
-  if ((def.category === 'economy' || def.category === 'builder') && all.spawnStarved.length > 0) {
-    /*
-     * 让位（2026-11-22 第二层修正）。
-     *
-     * 判据必须从"**城格上有没有经济单位**"出发，而不是"自己站在城格上"：
-     * 链尾通常在外圈（不在城格），如果只让城格上的单位触发，链尾拿不到候选，
-     * 整条链就卡死（实测：5×5 全铺，只挪 2 个，产兵格一直是 0）。
-     */
-    const myCity = citiesOf(s, unit.owner)
-      .filter((c) => all.spawnStarved.includes(c.id))
-      .sort((a, b) => distToCity(unit, a) - distToCity(unit, b))[0];
-    const blocked =
-      myCity !== undefined &&
-      cityTiles(myCity).some((t) => {
-        const u = unitAt(s, t.x, t.y);
-        if (!u || u.owner !== unit.owner || u.id === unit.id) return false;
-        const d = utype(s, u.type);
-        return d.category === 'economy' || d.category === 'builder';
+  /*
+   * 让位（2026-11-22 定稿）：读**疏散预订表**，不自己找空位。
+   *
+   * 预订在 `yieldPlanOf` 里做（每回合一次、按离城距离降序、链式腾位）。
+   * 这里只负责把"我的目标格"变成候选；目标格被占时 `applyAction` 会拒，
+   * 下一步别人走完它就能走——argmax 的串行执行就是递补。
+   */
+  if (def.category === 'economy' || def.category === 'builder') {
+    const target = all.yieldPlan.get(unit.id);
+    if (target) {
+      out.push({
+        action: { type: 'MOVE', unitId: unit.id, x: target.x, y: target.y },
+        score: 75,
       });
-    if (myCity && blocked) {
-      const startCells = cityTiles(myCity).map((t) => t.y * s.w + t.x);
-      const prev = new Map<number, number>();
-      const seen = new Set<number>(startCells);
-      const q: number[] = [...startCells];
-      let end = -1;
-      for (let i = 0; i < q.length && end < 0; i++) {
-        const k = q[i]!;
-        const x = k % s.w;
-        const y = Math.floor(k / s.w);
-        for (const [dx, dy] of DIRS) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (!inBounds(s, nx, ny)) continue;
-          const nk = ny * s.w + nx;
-          if (seen.has(nk)) continue;
-          const t = s.tiles[nk];
-          if (!t || t.terrain === 'city' || !terrainWalkable(def, t.terrain)) continue;
-          const other = unitAt(s, nx, ny);
-          if (other && other.owner !== unit.owner) continue;
-          seen.add(nk);
-          prev.set(nk, k);
-          if (!other) {
-            end = nk;
-            break;
-          }
-          q.push(nk);
-        }
-      }
-      if (end >= 0) {
-        const path: number[] = [end];
-        let k = end;
-        while (prev.has(k)) {
-          k = prev.get(k)!;
-          path.push(k);
-        }
-        // path: [空地, …, 城格]；最靠近空地的己方单位先走
-        for (let i = 1; i < path.length; i++) {
-          const kk = path[i]!;
-          const u = unitAt(s, kk % s.w, Math.floor(kk / s.w));
-          if (!u || u.owner !== unit.owner) continue;
-          if (u.id !== unit.id) break; // 最靠近空地的不是它
-          const tk = path[i - 1]!;
-          out.push({
-            action: { type: 'MOVE', unitId: u.id, x: tk % s.w, y: Math.floor(tk / s.w) },
-            score: 75,
-          });
-          break;
-        }
-      }
     }
   }
   /*
@@ -9533,6 +9565,7 @@ function aiNextActionCoreInner(
     spawnStarved: citiesOf(view, me)
       .filter((c) => !c.ruined && spawnCellCountOf(view, c) < c.size * c.size)
       .map((c) => c.id),
+    yieldPlan: yieldPlanOf(view, me),
     squadTarget: squadTargetsOf(view, me),
     squadNeed: squadShortfallOf(view, me),
     squadInfo: squadInfoOf(view, me),
