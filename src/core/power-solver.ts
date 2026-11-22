@@ -32,8 +32,15 @@ export interface PowerUnit {
 export interface PowerEcon {
   id: string;
   price: number;
-  /** 每回合能多产多少金（按平均地块估） */
+  /** 每回合能多产多少金（**期望**地块产出，不是最好地形） */
   income: number;
+  /**
+   * 买完之后要走几回合才到位。不到位的那几回合收入是 0。
+   *
+   * 不建模这个的话，求解器会以为"买了立刻多 7 金/回合"，
+   * 从而高估经济回本速度、系统性偏向投资经济。
+   */
+  walkTurns?: number;
 }
 
 export interface PowerInput {
@@ -60,27 +67,50 @@ export interface PowerPlan {
   note: string;
 }
 
-/** 取"每金战力最高"的兵：线性无战损模型下，这就是最优选择 */
-function bestUnit(units: PowerUnit[]): PowerUnit | null {
+/**
+ * 这一回合买哪个兵：**看瓶颈是钱还是名额**。
+ *
+ * 以前永远取"每金战力最高"（于是永远是民兵）。这在"钱是瓶颈"时是对的，
+ * 但收入一旦超过"名额 × 最便宜兵价"，瓶颈就变成产兵格——这时候该买的是
+ * **每名额战力最高**的强兵，而不是继续堆民兵。
+ *
+ * 为什么这件事影响经济判断：如果钱多了只能换民兵，"投经济"的收益就被严重低估
+ * （多 100 金/回合 = 4 个民兵/回合，但名额只有 3 个，等于白赚）。
+ * 实测（2026-11-22）：修之前 `econUntil` 在任何局面都是 0。
+ */
+function pickUnit(input: PowerInput, gold: number): PowerUnit | null {
+  const priced = input.units.filter((u) => u.price > 0 && u.power > 0);
+  if (priced.length === 0) return null;
+  const cheapest = Math.min(...priced.map((u) => u.price));
+  // 每回合收入够买满所有名额 → 名额是瓶颈 → 选"每名额战力最高"
+  const slotBound = input.slots > 0 && input.income >= input.slots * cheapest;
+  const affordable = priced.filter((u) => u.price <= gold);
+  if (affordable.length === 0) return null;
   let best: PowerUnit | null = null;
-  let bestEff = -1;
-  for (const u of units) {
-    if (u.price <= 0 || u.power <= 0) continue;
-    const eff = u.power / u.price;
-    if (eff > bestEff) {
-      bestEff = eff;
+  let bestScore = -1;
+  for (const u of affordable) {
+    const score = slotBound ? u.power : u.power / u.price;
+    if (score > bestScore) {
+      bestScore = score;
       best = u;
     }
   }
   return best;
 }
 
-/** 取"每金收入最高"的经济单位 */
-function bestEcon(list: PowerEcon[]): PowerEcon | null {
+/**
+ * 这一回合买哪个经济单位：**买得起**的里面选"每金收入最高"。
+ *
+ * 以前是全局选一次（不看钱）。开局只有 485 金、没按时代过滤时，全局最优是
+ * 260 金的种植公司——买两个就没钱了，之后所有 k>1 的策略都变成"空名额"，
+ * 于是 `econUntil` 恒为 0。买不起就该退回便宜的农民，而不是放弃投资。
+ */
+function pickEcon(input: PowerInput, gold: number): PowerEcon | null {
   let best: PowerEcon | null = null;
   let bestEff = -1;
-  for (const e of list) {
+  for (const e of input.econ) {
     if (e.price <= 0 || e.income <= 0) continue;
+    if (e.price > gold) continue;
     const eff = e.income / e.price;
     if (eff > bestEff) {
       bestEff = eff;
@@ -97,24 +127,34 @@ function bestEcon(list: PowerEcon[]): PowerEcon | null {
  * 两个都买不起就空转（不借钱、不预支）。
  */
 function simulate(input: PowerInput, turns: number, econUntil: number): PowerPlan {
-  const unit = bestUnit(input.units);
-  const econ = bestEcon(input.econ);
+
   let gold = input.gold;
   let income = input.income;
   let power = 0;
   let econCount = 0;
   let unitCount = 0;
+  /** 还没到位的经济单位：到 `at` 那一回合才开始产出 */
+  const arrivals: Array<{ at: number; inc: number }> = [];
 
   for (let t = 0; t < turns; t += 1) {
+    for (let i = arrivals.length - 1; i >= 0; i -= 1) {
+      if (arrivals[i]!.at <= t) {
+        income += arrivals[i]!.inc;
+        arrivals.splice(i, 1);
+      }
+    }
     gold += income;
     for (let slot = 0; slot < Math.max(0, input.slots); slot += 1) {
-      if (t < econUntil && econ && econCount < input.econRoom && gold >= econ.price) {
+      const econ = t < econUntil ? pickEcon(input, gold) : null;
+      if (econ && econCount < input.econRoom) {
         gold -= econ.price;
         econCount += 1;
-        income += econ.income;
+        // 收入不是当场到账：记一笔"第几回合开始产出"，到点了再加
+        arrivals.push({ at: t + Math.max(1, Math.floor(econ.walkTurns ?? 1)), inc: econ.income });
         continue;
       }
-      if (unit && gold >= unit.price) {
+      const unit = pickUnit(input, gold);
+      if (unit) {
         gold -= unit.price;
         power += unit.power;
         unitCount += 1;

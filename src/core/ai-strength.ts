@@ -211,9 +211,26 @@ const ECON_RANGE = 6;
  *
  * 目前只算地球（多图的月球基地等以后要按图分组）。
  */
-export function econCapacity(s: GameState, me: PlayerId): number {
+export interface EconSurvey {
+  /** 可经济化地块数（地皮约束） */
+  capacity: number;
+  /** 从最近自家城走到这些地块的平均步数 */
+  avgDist: number;
+  /** 地形分布：地形 -> 地块数（用来算"某个经济单位的期望产出"） */
+  terrainCounts: Record<string, number>;
+}
+
+/**
+ * 扫一遍可经济化地块：容量、平均距离、地形分布。
+ *
+ * 为什么要地形分布：`powerInputOf` 以前给每个经济单位填 `max(incomeByTerrain)`
+ * ——假设每个新工人都能占到最好的地形。实际好地先被占，而且不同单位擅长不同地形。
+ * 有了分布就能算"这个单位在这张图上的**期望**产出"，而不是它的上限。
+ */
+export function econSurvey(s: GameState, me: PlayerId): EconSurvey {
   const own = s.cities.filter((c) => c.owner === me && !c.ruined);
-  if (own.length === 0) return 0;
+  const empty: EconSurvey = { capacity: 0, avgDist: 0, terrainCounts: {} };
+  if (own.length === 0) return empty;
   const foe = s.cities.filter((c) => c.owner !== me && !c.ruined);
   const probe = Object.values(s.unitTypes)
     .filter((d) => d.category === 'combat' && d.domain !== 'water')
@@ -227,6 +244,8 @@ export function econCapacity(s: GameState, me: PlayerId): number {
     }
   }
   let n = 0;
+  let distSum = 0;
+  const terrainCounts: Record<string, number> = {};
   for (let y = 0; y < s.h; y += 1) {
     for (let x = 0; x < s.w; x += 1) {
       const t = tileAt(s, x, y);
@@ -241,9 +260,15 @@ export function econCapacity(s: GameState, me: PlayerId): number {
       if (dOwn > dFoe) continue;
       if (bestEconOn(s, t.terrain) < ECON_MIN_YIELD) continue;
       n += 1;
+      distSum += dOwn;
+      terrainCounts[t.terrain] = (terrainCounts[t.terrain] ?? 0) + 1;
     }
   }
-  return n;
+  return { capacity: n, avgDist: n > 0 ? distSum / n : 0, terrainCounts };
+}
+
+export function econCapacity(s: GameState, me: PlayerId): number {
+  return econSurvey(s, me).capacity;
 }
 
 /**
@@ -293,20 +318,56 @@ export function projectedStrength(s: GameState, me: PlayerId, turns: number): nu
 export function powerInputOf(s: GameState, me: PlayerId): PowerInput {
   const units: PowerUnit[] = [];
   const econ: PowerEcon[] = [];
+  /*
+   * 经济单位的期望产出 = 按**这张图的可经济化地块分布**加权，而不是它的最好地形。
+   *
+   * 以前用 `max(incomeByTerrain)`：种植园主在平原 20，于是求解器以为每个工人都能
+   * 产出 20；实际好地只有几块，后面补的都是次等地。两件事叠起来（再叠加"买了
+   * 当回合就产出"），求解器会系统性地高估经济回本速度——它建议"多投经济"就是假的。
+   */
+  const haveEcon = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'economy').length;
+  const myCities = s.cities.filter((c) => c.owner === me && !c.ruined);
+  const cities = myCities.length;
+  /*
+   * 只算**现在这个时代造得出来**的单位。
+   *
+   * 以前遍历全部 `unitTypes`：era2 的开局会去"买" era4 的种植公司（260 金/36 金），
+   * 因为它的每金收入最高。结果一次只能买 2 个、钱还不够，于是模型认为
+   * "投经济永远不划算"——`econUntil` 在任何局面都是 0。
+   * 这是"玩家没有的约束"的反面：**求解器给自己开了后门，又因此否掉了经济**。
+   */
+  const eraNow = myCities.length > 0 ? Math.max(...myCities.map((c) => c.era)) : 1;
+
+  const survey = econSurvey(s, me);
+  const expectedIncome = (d: (typeof s.unitTypes)[string]): number => {
+    let sum = 0;
+    let n = 0;
+    for (const [terrain, count] of Object.entries(survey.terrainCounts)) {
+      const v = Number(d.incomeByTerrain?.[terrain as keyof typeof d.incomeByTerrain] ?? 0);
+      sum += v * count;
+      n += count;
+    }
+    if (n > 0) return sum / n;
+    const tiles = Object.values(d.incomeByTerrain ?? {});
+    return tiles.length > 0 ? Math.max(...tiles.map((v) => Number(v) || 0)) : d.income ?? 0;
+  };
+  /*
+   * 走过去的回合数：平均距离 ÷ 2 步/回合（经济单位 move 普遍 2~3），
+   * 至少 1（买在城里那一回合不产金），最多 4（再远就不该算进回本）。
+   */
+  const walkTurns = Math.max(1, Math.min(4, 1 + Math.round(survey.avgDist / 2)));
   for (const d of Object.values(s.unitTypes)) {
     const price = d.cost ?? 0;
     if (price <= 0) continue;
+    if ((d.era ?? 1) > eraNow) continue;
     if (d.category === 'combat' && d.domain !== 'water') {
       units.push({ id: d.id, price, power: unitPower(d) });
     } else if (d.category === 'economy') {
-      // 按平均地块估：`incomeByTerrain` 的最大值（乐观），没有就用面板 income
-      const tiles = Object.values(d.incomeByTerrain ?? {});
-      const inc = tiles.length > 0 ? Math.max(...tiles.map((v) => Number(v) || 0)) : d.income ?? 0;
-      if (inc > 0) econ.push({ id: d.id, price, income: inc });
+      const inc = expectedIncome(d);
+      if (inc > 0) econ.push({ id: d.id, price, income: inc, walkTurns });
     }
   }
-  const haveEcon = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'economy').length;
-  const cities = s.cities.filter((c) => c.owner === me && !c.ruined).length;
+
   return {
     gold: s.players[me].gold,
     income: incomeOf(s, me),
