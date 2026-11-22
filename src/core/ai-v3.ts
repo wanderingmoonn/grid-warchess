@@ -1769,8 +1769,10 @@ interface Fields {
   chokedCities: string[];
   /** 编队成员 → 目标城：编队认编队目标，散兵认全局目标（见 `SQUAD` 那一段） */
   squadTarget: Map<string, string>;
-  /** 编队缺口：还在收拢的编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
+  /** 编队缺口：还在收拢的战斗编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
   squadNeed: number;
+  /** 建造编队缺口：有计划要修桥、却没有（或不够）建造编队。>0 时采购给工人加分 */
+  builderNeed: number;
   /**
    * 发展意愿 y（0~1，来自战略层 `postureBudgetOf`）。
    *
@@ -2561,7 +2563,7 @@ function squadTick(
   planNeed?: number,
   /** 建造编队的目标点（见 `PlanOrders.buildPoint`）。null = 这回合不修桥 */
   buildPoint?: { x: number; y: number } | null,
-): AiSquadReport[] {
+): { reports: AiSquadReport[]; squadNeed: number; builderNeed: number } {
   const budget = postureBudgetOf(s, me);
   const focus = focusOf(s, me);
   /*
@@ -2784,8 +2786,31 @@ function squadTick(
     });
   }
   kept.push(...buildKept);
+  /*
+   * 缺口 → 生产端（2026-11-22 补上这条断掉的通道）。
+   *
+   * `Fields.squadNeed` 从 2026-11-21 就声明了"编队缺口 >0 时采购给战斗单位加分"，
+   * 但**从来没有赋值**——采购不知道编队缺人，只按自己的节奏造。
+   * 建造编队的缺口同理：有计划要修桥、却没有建造编队（或人不够）时，
+   * 报一个 `builderNeed`，让采购把工人排上来。
+   *
+   * 防抖靠"有没有正在进行的建造编队"：有编队就不再报缺口（用户 2026-11-22）。
+   */
+  let squadNeed = 0;
+  for (const sq of kept) {
+    if (sq.role !== 'attack') continue;
+    squadNeed += Math.max(0, sq.want - sq.memberIds.length);
+  }
+  const builderNeed = buildPoint
+    ? Math.max(0, 2 - (buildKept[0]?.memberIds.length ?? 0))
+    : 0;
   if (focus.plan) {
-    focus.plan.keep = { ...(focus.plan.keep ?? {}), buildIdle: idleNext };
+    focus.plan.keep = {
+      ...(focus.plan.keep ?? {}),
+      buildIdle: idleNext,
+      squadNeed,
+      builderNeed,
+    };
   }
 
   if ((focus.squads ?? null) !== null || kept.length > 0) {
@@ -2795,7 +2820,7 @@ function squadTick(
   if (f2.plan) {
     f2.plan.keep = { ...(f2.plan.keep ?? {}), squadPrev: nextPrev };
   }
-  return reports;
+  return { reports, squadNeed, builderNeed };
 }
 
 /** 编队成员 → 目标城（走位用：编队成员认编队目标，散兵认全局目标） */
@@ -7934,6 +7959,14 @@ function recruitCandidate(
   const me = s.current;
   const gold = s.players[me].gold;
   /*
+   * 编队缺口（2026-11-22）：由 `squadTick` 写进计划口袋。
+   * 采购不知道"编队缺人"这件事的话，只会按自己的节奏造兵/造工人，
+   * 编队就一直是残的（见 `squadTick` 里那段注释）。
+   */
+  const keepNow = (focusOf(s, me).plan?.keep ?? {}) as Record<string, unknown>;
+  const squadNeed = Number(keepNow.squadNeed ?? 0);
+  const builderNeed = Number(keepNow.builderNeed ?? 0);
+  /*
    * 产业链目标的读数：整次采购算一遍，别跟着每个兵种重算
    * （`goalStepsInPlay` 会问每个目标的价值，海军那条还要查水域）。
    */
@@ -8300,6 +8333,8 @@ function recruitCandidate(
     let score = 50;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
+      // 编队缺口：还在收拢的编队缺人 → 采购优先补（每条缺口 4 分，封顶 24）
+      score += Math.min(24, squadNeed * 4);
       // 素体的 atk 只是撞击：真正的输出在要装上去的武器里，按"装完之后"估值
       if (d.armorFrame) score += armorFrameScore(s, me, d);
       if (aiLevelOf(s)!=='basic') {
@@ -8521,6 +8556,22 @@ function recruitCandidate(
        * 第三个开始仍然扣分（−12），不要让工人挤掉主攻编队的人。
        */
       score += builders < 1 ? 24 : builders < 2 ? 18 : -12;
+      /*
+       * 建造编队缺口（2026-11-22）：**第一个工人优先，第二个不硬挤**。
+       *
+       * 实测（24×24/era2）：每人 +60 能把编队补到 2 人，但 Q2 有一局胜→负——
+       * 工人把兵的名额挤掉了。加成的语义应该是"没有工人就造不出来桥"，
+       * 不是"永远优先于兵"：所以只有 `builders === 0` 时给足（压过兵），
+       * 第二个工人只给"略高"的 20 分，抢不过就等下次。
+       */
+      if (s.config.aiEconCap === true) {
+        /*
+         * 只在"经济铺满"（`aiEconCap`）时启用：那是唯一会让工人被经济挤到 0 的场景
+         * （经济缺口 +80，工人 24 永远排不上）。默认配置下工人本来就造得出来，
+         * 全局加成反而会在 12×12 上挤掉一个兵（实测 Q1 一局胜→负）。
+         */
+        score += builders === 0 ? 80 : Math.min(40, builderNeed * 20);
+      }
       /*
        * 装甲基建只有「工程机组」盖得了（它的 `builds` 里才有电站/坞）。
        * 不单独给这一条，AI 会一直用前六代那个工兵：它的 builds 里没有这些东西，
@@ -9306,6 +9357,7 @@ function aiNextActionCoreInner(
     peek: null,
     crossingAlt: null,
     buildGuide: null,
+    builderNeed: 0,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -9511,7 +9563,7 @@ function aiNextActionCoreInner(
       const focusNow = focusOf(s, me);
       const sameTurn = Number(focusNow.plan?.keep?.squadTurn ?? -1) === s.turn;
       if (!sameTurn) {
-        const reps = squadTick(
+        const tick = squadTick(
           s,
           me,
           fields.focusCityId,
@@ -9519,6 +9571,9 @@ function aiNextActionCoreInner(
           s.config.aiNeedSquad === true ? resolved.orders.needSquad : undefined,
           resolved.orders.buildPoint ?? null,
         );
+        const reps = tick.reports;
+        fields.squadNeed = tick.squadNeed;
+        fields.builderNeed = tick.builderNeed;
         const f2 = focusOf(s, me);
         if (f2.plan) {
           f2.plan.keep = { ...(f2.plan.keep ?? {}), squads: reps, squadTurn: s.turn };
