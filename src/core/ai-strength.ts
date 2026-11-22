@@ -352,10 +352,16 @@ export function powerInputOf(s: GameState, me: PlayerId): PowerInput {
     return tiles.length > 0 ? Math.max(...tiles.map((v) => Number(v) || 0)) : d.income ?? 0;
   };
   /*
-   * 走过去的回合数：平均距离 ÷ 2 步/回合（经济单位 move 普遍 2~3），
-   * 至少 1（买在城里那一回合不产金），最多 4（再远就不该算进回本）。
+   * 走过去的回合数：**按每个单位自己的移动力**算，不是全局一个常数。
+   *
+   *   walkTurns = ceil(平均距离 / move)
+   *
+   * 平均距离来自 `econSurvey`（这张图上可经济化地块到最近自家城的平均步数），
+   * 所以它随地图变：12×12 上约 2~3 格、24×24 上约 4 格，不是拍出来的常数。
+   * 单位自己那一步也要算：4 格 / move 2 = 2 回合，4 格 / move 4 = 1 回合。
    */
-  const walkTurns = Math.max(1, Math.min(4, 1 + Math.round(survey.avgDist / 2)));
+  const walkFor = (d: (typeof s.unitTypes)[string]): number =>
+    Math.max(1, Math.min(4, Math.ceil(survey.avgDist / Math.max(1, d.move ?? 2))));
   for (const d of Object.values(s.unitTypes)) {
     const price = d.cost ?? 0;
     if (price <= 0) continue;
@@ -364,7 +370,7 @@ export function powerInputOf(s: GameState, me: PlayerId): PowerInput {
       units.push({ id: d.id, price, power: unitPower(d) });
     } else if (d.category === 'economy') {
       const inc = expectedIncome(d);
-      if (inc > 0) econ.push({ id: d.id, price, income: inc, walkTurns });
+      if (inc > 0) econ.push({ id: d.id, price, income: inc, walkTurns: walkFor(d) });
     }
   }
 
@@ -377,7 +383,7 @@ export function powerInputOf(s: GameState, me: PlayerId): PowerInput {
      * 打开后改用"可经济化地块数 − 现有"——那是玩家真正的约束。
      */
     econRoom:
-      s.config.aiEconCap === true
+      s.config.aiEconCap === true || s.config.aiEconPlan === true
         ? Math.max(0, econCapacity(s, me) - haveEcon)
         : Math.max(0, cities * 2 - haveEcon),
     units,

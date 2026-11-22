@@ -151,7 +151,8 @@ import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
-import { armyStrength, econCapacity, powerPerTurn, powerRace, productionCapacity } from './ai-strength.ts';
+import { armyStrength, econCapacity, powerInputOf, powerPerTurn, powerRace, productionCapacity } from './ai-strength.ts';
+import { solvePower } from './power-solver.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -7940,8 +7941,39 @@ function recruitCandidate(
    * 默认仍是旧的目标公式（`aiEconCap` 关）；打开后按地块容量铺。
    * 旧的留着不是"舍不得"：这是默认行为的基线，A/B 时两边都得能跑。
    */
-  const targetEarners =
-    s.config.aiEconCap === true
+  /*
+   * 经济投入交给求解器（第五节第 3 步，`aiEconPlan` 默认开）。
+   *
+   * 窗口 = `focusDist ÷ 3`：主力到敌城要几回合（3 = 平均移动力），
+   * 也就是"离决战还剩多久"。求解器在这个窗口里扫"投经济到第几回合"最划算：
+   *   · `econUntil > 0` → 按它报的个数投（`现有 + plan.econ`）；
+   *   · `econUntil = 0` → 来不及回本，保底每城一个、其余全买兵。
+   *
+   * 为什么不是"每城 2 个"：那个数在同一张图上对所有局面都给同一个答案，
+   * 而"该不该投"取决于还剩几回合——小图上决战 2 回合后就到，经济不可能回本。
+   */
+  const econPlan = (() => {
+    if (s.config.aiEconPlan !== true) return null;
+    /*
+     * 窗口 = 主力到最近敌城的格数 ÷ 3（平均移动力）。这里自己量，不用外部传：
+     * 采购被好几处调用，多一个必填参数只会让人在某一处传错。
+     */
+    const foeCities = s.cities.filter((c) => c.owner !== me && !c.ruined);
+    let focusDist = Infinity;
+    if (foeCities.length > 0) {
+      for (const u of myUnits) {
+        if (utype(s, u.type).category !== 'combat') continue;
+        for (const c of foeCities) focusDist = Math.min(focusDist, distToCity(u, c));
+      }
+    }
+    const horizon = Math.max(2, Math.min(20, Math.round((Number.isFinite(focusDist) ? focusDist : 8) / 3)));
+    return solvePower(powerInputOf(s, me), horizon);
+  })();
+  const targetEarners = econPlan
+    ? econPlan.econUntil > 0
+      ? Math.max(1, earners + econPlan.econ)
+      : Math.max(1, citiesOf(s, me).length)
+    : s.config.aiEconCap === true
       ? inWindow
         ? Math.max(2, Math.round(econCap * Math.min(1, econShare)))
         : Math.max(2, Math.min(econCap, earners))
@@ -8292,7 +8324,7 @@ function recruitCandidate(
        */
       const gap = targetEarners - earners;
       score +=
-        s.config.aiEconCap === true
+        s.config.aiEconCap === true || s.config.aiEconPlan === true
           ? gap > 0
             ? 40 + Math.min(40, gap * 3) - Math.min(18, payback * 1.5)
             : -14

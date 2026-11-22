@@ -40,6 +40,7 @@ interface Case {
 }
 const CASES: Case[] = [
   { id: 'Q1', size: 12, era: 2, cap: 200, seed: 30 },
+  { id: 'Q2', size: 16, era: 3, cap: 220, seed: 30 },
   { id: 'Q3', size: 24, era: 2, cap: 260, seed: 30 },
 ];
 
