@@ -121,6 +121,17 @@ function pickEcon(input: PowerInput, gold: number): PowerEcon | null {
 }
 
 /**
+ * 窗口结束后的"残值"：经济单位还会继续产金 R 回合。
+ *
+ * 没有这一项时，`simulate` 在窗口结束时把经济单位的未来产出当 0，
+ * 于是"回本 9 回合 > 窗口 6~7"永远成立——求解器在任何中小图上都说"别投"。
+ * 人类造农民不是"决战前回本"，是"以后一直产金"，所以给窗口后的 R 回合算钱。
+ *
+ * R 是拍的：8 回合 ≈ 一代兵的寿命。R 越大越敢投，越小越保守。
+ */
+const ECON_TAIL_TURNS = 4;
+
+/**
  * 一条固定策略：前 `econUntil` 回合优先补经济，之后全买兵。
  *
  * 每个名额的处理顺序：还有额度且有钱就买经济，否则买兵。
@@ -161,8 +172,24 @@ function simulate(input: PowerInput, turns: number, econUntil: number): PowerPla
       }
     }
   }
+  /*
+   * 残值：窗口结束后，已到位的经济单位还有 `ECON_TAIL_TURNS` 回合的产出。
+   * 折成战力用"每金战力"（和买兵同一把尺子），这样"投经济"和"买兵"可比。
+   */
+  let residualPower = 0;
+  const econIncome = income - input.income;
+  if (econCount > 0 && econIncome > 0) {
+    let bestPerGold = 0;
+    for (const u of input.units) {
+      if (u.price <= 0 || u.power <= 0) continue;
+      const per = u.power / u.price;
+      if (per > bestPerGold) bestPerGold = per;
+    }
+    if (bestPerGold > 0) residualPower = econIncome * ECON_TAIL_TURNS * bestPerGold;
+  }
+
   return {
-    power,
+    power: power + residualPower,
     econUntil,
     econ: econCount,
     units: unitCount,
