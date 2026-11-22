@@ -41,6 +41,7 @@ import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 import { unitArtUrl } from './unit-art.ts';
 import { hillRelief } from './hill-relief.ts';
+import { createAngledBoard } from './angled-board.ts';
 import { uiTerrainOn } from './terrain-art.ts';
 import { unitInsignia, unitRole } from './unit-insignia.ts';
 
@@ -1455,6 +1456,31 @@ function ghostItem(
   };
 }
 
+const angledBoards = new WeakMap<HTMLElement, ReturnType<typeof createAngledBoard>>();
+
+export function syncAngledBoard(board: HTMLElement, view: PlayerView, ui: BoardUi, enabled: boolean): void {
+  let canvas = board.querySelector<HTMLCanvasElement>('.angled-board');
+  let renderer = angledBoards.get(board);
+  if (enabled && !canvas) {
+    canvas = board.ownerDocument.createElement('canvas');
+    canvas.className = 'angled-board';
+    canvas.setAttribute('aria-label', '斜俯视棋盘');
+    renderer = createAngledBoard(canvas, board.ownerDocument.baseURI);
+    if (renderer) {
+      angledBoards.set(board, renderer);
+      board.appendChild(canvas);
+    }
+  }
+  const active = enabled && Boolean(renderer);
+  board.classList.toggle('has-angled-view', active);
+  if (canvas) canvas.hidden = !active;
+  if (active) renderer?.draw(view, ui);
+}
+
+export function angledBoardMarker(board: HTMLElement, x: number, y: number, span = 1, lift = 0) {
+  if (board.classList.contains('has-angled-view')) return angledBoards.get(board)?.marker(x, y, span, lift);
+}
+
 /** 从事件目标反推棋盘坐标 */
 export function coordsFromEvent(e: Event): { x: number; y: number } | null {
   const target = e.target as HTMLElement | null;
@@ -1507,6 +1533,7 @@ export function cellAtPoint(
   clientX: number,
   clientY: number,
 ): { x: number; y: number } | null {
+  if (board.classList.contains('has-angled-view')) return angledBoards.get(board)?.pick(clientX, clientY) ?? null;
   const tiles = board.querySelector<HTMLElement>('.tiles');
   if (!tiles) return null;
 

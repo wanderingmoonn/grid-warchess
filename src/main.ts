@@ -120,7 +120,8 @@ import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
-import { BOARD_PAD, cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard } from './ui/board.ts';
+import { BOARD_PAD, angledBoardMarker, cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard, syncAngledBoard } from './ui/board.ts';
+import { angledBoardSize } from './ui/angled-board.ts';
 import { toast } from './ui/toast.ts';
 import { actionFeedback, combatCuesHtml, combatForecastHtml, combatResultCues, forecastCombat } from './ui/combat-feedback.ts';
 import type { CombatAction, CombatCue, CombatForecast } from './ui/combat-feedback.ts';
@@ -331,6 +332,7 @@ appEl.innerHTML = `
           <div class="board" id="board"></div>
         </div>
         <div class="zoom-bar" id="zoom-bar">
+          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换棋盘视角" hidden>斜俯视</button>
           <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">适应</button>
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
           <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
@@ -2013,7 +2015,18 @@ function render(): void {
    * 没有别的图的东西时它原样返回，一个对象都不建。
    * 选中/可达/染色这类"图内坐标"在 boardUiFor 里按图过滤。
    */
-  renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(boardUi, activeBoardId));
+  const scopedView = viewOnBoard(view, activeBoardId);
+  const scopedUi = boardUiFor(boardUi, activeBoardId);
+  renderBoard(boardEl, scopedView, scopedUi);
+  const wasAngled = boardEl.classList.contains('has-angled-view');
+  const canAngle = canUseAngledBoard();
+  syncAngledBoard(boardEl, scopedView, scopedUi, canAngle && preferAngledBoard);
+  const angled = boardEl.classList.contains('has-angled-view');
+  const angleToggle = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle"]')!;
+  angleToggle.hidden = !canAngle;
+  angleToggle.textContent = angled ? '正俯视' : '斜俯视';
+  angleToggle.setAttribute('aria-pressed', String(angled));
+  if (wasAngled !== angled) boardDirty = true;
   // 快路径要复用这一份：拖动刷地形时只有几格变了，没必要把上面那套重算一遍
   lastBoardUi = boardUi;
   lastBoardCells = state.w * state.h;
@@ -2181,6 +2194,37 @@ function render(): void {
  */
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
+const ANGLED_BOARD_KEY = 'warchess:board-angle';
+let preferAngledBoard = (() => {
+  const view = new URLSearchParams(location.search).get('view');
+  if (view === 'angled' || view === 'flat') return view === 'angled';
+  try { return localStorage.getItem(ANGLED_BOARD_KEY) === '1'; } catch { return false; }
+})();
+
+function canUseAngledBoard(): boolean {
+  return typeof window.CanvasRenderingContext2D === 'function' && activeBoardId === EARTH &&
+    !godMode() && !tutorial.tutorialOn() && !replay && currentUiLayout(document.documentElement) !== 'classic';
+}
+
+function toggleBoardAngle(): void {
+  if (!canUseAngledBoard()) return;
+  const viewport = boardScrollEl.getBoundingClientRect();
+  const anchor = cellAtPoint(boardEl, viewport.left + boardScrollEl.clientWidth / 2, viewport.top + boardScrollEl.clientHeight / 2);
+  const previous = boardCamera();
+  preferAngledBoard = !preferAngledBoard;
+  try { localStorage.setItem(ANGLED_BOARD_KEY, preferAngledBoard ? '1' : '0'); } catch {}
+  const url = new URL(location.href);
+  if (url.searchParams.has('view')) {
+    url.searchParams.set('view', preferAngledBoard ? 'angled' : 'flat');
+    history.replaceState(history.state, '', url);
+  }
+  clearCombatPreview();
+  clearActionFeedback();
+  render();
+  const point = anchor && (angledBoardMarker(boardEl, anchor.x, anchor.y) ??
+    [(anchor.x + 0.5) / state.w, (anchor.y + 0.5) / state.h]);
+  centerBoardCamera(point ? { x: point[0], y: point[1] } : previous);
+}
 /**
  * 当前在看哪张图。
  *
@@ -2285,7 +2329,12 @@ function fitBoard(): void {
    * 那个写法只在正方形地图上成立；12×10 的图会被拉成长方格（玩家实机发现过）。
    */
   const board = boardOf(state, activeBoardId);
-  const fit = fitBoardBox(board.w, board.h, width, availH);
+  let fit = fitBoardBox(board.w, board.h, width, availH);
+  if (boardEl.classList.contains('has-angled-view')) {
+    const scene = angledBoardSize(board.w, board.h);
+    const scale = Math.min(width / scene.w, Math.max(1, availH) / scene.h);
+    fit = { w: Math.round(scene.w * scale), h: Math.round(scene.h * scale), cell: scale };
+  }
   baseBoardW = fit.w;
   baseBoardH = fit.h;
 
@@ -2375,6 +2424,7 @@ function setZoom(next: number): void {
   const steps = ZOOM_STEPS;
   const clamped = Math.min(steps[steps.length - 1]!, Math.max(1, next));
   const same = clamped === boardZoom;
+  const camera = boardEl.classList.contains('has-angled-view') ? boardCamera() : null;
   boardZoom = clamped;
   // 缩放直接改的是"棋盘该多大"，尺寸缓存必须作废
   boardDirty = true;
@@ -2382,8 +2432,11 @@ function setZoom(next: number): void {
   render();
   if (same) return;
   if (boardZoom > 1) {
-    boardScrollEl.scrollLeft = Math.max(0, (boardScrollEl.scrollWidth - boardScrollEl.clientWidth) / 2);
-    boardScrollEl.scrollTop = Math.max(0, (boardScrollEl.scrollHeight - boardScrollEl.clientHeight) / 2);
+    if (camera) centerBoardCamera(camera);
+    else {
+      boardScrollEl.scrollLeft = Math.max(0, (boardScrollEl.scrollWidth - boardScrollEl.clientWidth) / 2);
+      boardScrollEl.scrollTop = Math.max(0, (boardScrollEl.scrollHeight - boardScrollEl.clientHeight) / 2);
+    }
   } else {
     boardScrollEl.scrollLeft = 0;
     boardScrollEl.scrollTop = 0;
@@ -2477,7 +2530,9 @@ function rememberMatchCamera(): void {
 function focusOpeningCamera(): void {
   if (spectating() || baseBoardW <= BOARD_PAD || baseBoardH <= BOARD_PAD) return;
   const { w, h } = state;
-  const fitCell = Math.min((baseBoardW - BOARD_PAD) / w, (baseBoardH - BOARD_PAD) / h);
+  const fitCell = boardEl.classList.contains('has-angled-view')
+    ? 2 * baseBoardH / (w + h)
+    : Math.min((baseBoardW - BOARD_PAD) / w, (baseBoardH - BOARD_PAD) / h);
   const zoom = ZOOM_STEPS.find((step) => step * fitCell >= 26) ?? ZOOM_STEPS.at(-1)!;
   if (zoom === 1) return;
 
@@ -2502,7 +2557,8 @@ function focusOpeningCamera(): void {
   const y = nearest ? (origin.y + nearest.y + 0.5) / 2 : origin.y;
   boardZoom = zoom;
   fitBoard();
-  centerBoardCamera({ x: x / w, y: y / h });
+  const marker = angledBoardMarker(boardEl, x - 0.5, y - 0.5);
+  centerBoardCamera(marker ? { x: marker[0], y: marker[1] } : { x: x / w, y: y / h });
 }
 
 /** 地图列表里的小标记：图的类型（地球单独给个"地"） */
@@ -3795,6 +3851,15 @@ function paintCombatCues(cues: readonly CombatCue[], phase?: 'preview' | 'result
   const layer = boardEl.querySelector<HTMLElement>('.combat-cues');
   if (!layer) return;
   layer.innerHTML = combatCuesHtml(cues);
+  if (boardEl.classList.contains('has-angled-view')) {
+    for (const [index, node] of layer.querySelectorAll<HTMLElement>('.combat-cue').entries()) {
+      const cue = cues[index]!;
+      const marker = angledBoardMarker(boardEl, cue.x, cue.y, cue.size, cue.below ? -2 : 31);
+      if (!marker) continue;
+      node.style.left = `${marker[0] * 100}%`;
+      node.style.top = `${marker[1] * 100}%`;
+    }
+  }
   if (phase) layer.dataset.phase = phase;
   else delete layer.dataset.phase;
 }
@@ -5168,6 +5233,10 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'zoom-fit':
       setZoom(1);
+      return;
+
+    case 'board-angle':
+      toggleBoardAngle();
       return;
 
     case 'undo':
@@ -10507,7 +10576,7 @@ boardEl.addEventListener('pointerdown', (event) => {
   touchCombatInput = event.pointerType === 'touch' || event.pointerType === 'pen';
 });
 
-boardEl.addEventListener('mouseover', (event) => {
+function previewHoveredCombat(event: MouseEvent): void {
   if (touchCombatInput || combatAim?.pinned || !selectedId || !myTurn() || watching() || replay ||
     state.config.commanderMode || godMode() || starOpen || pendingSkill || buildPlan ||
     spawnPlan || loadPlan || unloadPlan || forceMode === 'move') return;
@@ -10525,6 +10594,10 @@ boardEl.addEventListener('mouseover', (event) => {
     : city ? { type: 'SIEGE', unitId: selectedId, cityId: city.id, x: coords.x, y: coords.y } : null;
   if (action) showCombatPreview(action, false);
   else clearCombatPreview();
+}
+boardEl.addEventListener('mouseover', previewHoveredCombat);
+boardEl.addEventListener('mousemove', (event) => {
+  if (boardEl.classList.contains('has-angled-view')) previewHoveredCombat(event);
 });
 
 boardWrapEl.addEventListener('mouseleave', () => {
