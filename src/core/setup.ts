@@ -733,24 +733,61 @@ export function createMatch(
             : 'advanced',
       /*
        * 内核：`net` = 自博弈练出来的策略网络（见 rl/brain.ts）；
-       * `goal` = 测试 AI 二代（core/ai-v2.ts，远期规划走目标状态机）。
+       * `goal` = 实验 AI v3（core/ai-v3.ts，远期规划走目标状态机）。
        *
        * 和上面那些开关一样必须逐个抄进 state.config：读档、复盘、上报、
        * 以及 AI 走子那一刻选哪个内核，读的都是这里。
        *
        * `net` 只在**两席局**里认：那个网络是在 2 人、10×10/12×12 上练的，
        * 三家四家的目标选择与席位顺序它一次都没见过——真让它上不叫测试。
-       * `goal` 不设这条限制：二代内核本身就是按"所有敌人"写的（多人局只是弱一点）。
+       * `goal` 不设这条限制：v3 内核本身就是按"所有敌人"写的（多人局只是弱一点）。
        *
        * 这一行以前只放行 `net`，`goal` 一律被写成 `script`——面板上点得亮，
        * 开局却还是老引擎，属于"看着生效、其实没生效"（2026-11-21 接按钮时发现）。
        */
       aiBrain:
-        config.aiBrain === 'goal'
-          ? 'goal'
-          : twoSeats && config.aiBrain === 'net'
-            ? 'net'
+        config.aiBrain === 'net' && twoSeats
+          ? 'net'
+          : config.aiBrain === 'goal'
+            ? 'goal'
             : 'script',
+      /*
+       * 编制上限：**只有 v3 读它**（v1 冻结，写死 24）。
+       *
+       * 必须抄进 state.config：这个对象是逐个白名单抄的，漏一个就等于
+       * 那个开关在开局瞬间被吃掉——`unitCap` 第一次加进来时就是漏在这里，
+       * 结果"撤编制"的实验跑出来和没撤一模一样（两边都还是 24 个兵）。
+       */
+      ...(config.unitCap === 'none'
+        ? { unitCap: 'none' as const }
+        : typeof config.unitCap === 'number' && config.unitCap > 0
+          ? { unitCap: config.unitCap }
+          : {}),
+      // 决战时代模型（v3 专用）：白名单同样要抄，否则开了跟没开一样
+      ...(config.aiEraModel === 'const' || config.aiEraModel === 'foe'
+        ? { aiEraModel: config.aiEraModel }
+        : {}),
+      ...(config.aiCrossing === false ? { aiCrossing: false } : {}),
+      ...(config.aiPosture === true ? { aiPosture: true } : {}),
+      ...(config.aiDecisive === false ? { aiDecisive: false } : {}),
+      ...(config.aiScout === true ? { aiScout: true } : {}),
+      ...(config.aiPeek === true ? { aiPeek: true } : {}),
+      ...(config.aiEconCap === true ? { aiEconCap: true } : {}),
+      ...(config.aiEconPlan === true ? { aiEconPlan: true } : {}),
+      ...(config.aiCrossSplit === false ? { aiCrossSplit: false } : {}),
+      ...(config.aiThreatScale === true ? { aiThreatScale: true } : {}),
+      ...(config.aiMass === false ? { aiMass: false } : {}),
+      ...(config.aiBreakthrough === false ? { aiBreakthrough: false } : {}),
+      ...(config.aiSquad === false ? { aiSquad: false } : {}),
+      ...(config.aiNeedSquad === true ? { aiNeedSquad: true } : {}),
+      ...(typeof config.aiQualityScale === 'number' && config.aiQualityScale > 0
+        ? { aiQualityScale: config.aiQualityScale }
+        : {}),
+      ...(config.aiRecruitCap === 'auto'
+        ? { aiRecruitCap: 'auto' as const }
+        : typeof config.aiRecruitCap === 'number' && config.aiRecruitCap >= 0
+          ? { aiRecruitCap: config.aiRecruitCap }
+          : {}),
       // 统一按注册顺序排好：钩子叠加是有顺序的，顺序漂移会破坏可复现性。
       // 前置没满足的整条剔掉——配置里留着它也没用，反而会让"这局开了什么"
       // 在存档里显示成一句谎话。

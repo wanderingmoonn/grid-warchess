@@ -1,8 +1,5 @@
 /**
- * **测试 AI 二代（v2）—— 老 AI 的完整副本，2026-11-21 fork。**
- *
- * 界面上那颗「测试 AI 二代」按钮就是它（`config.aiBrain === 'goal'`）；
- * 早期代号是「实验 AI」，合并进主线后改用现在的名字。
+ * ⚠️ **实验 AI（v3，目标状态机）—— 老 AI 的完整副本，2026-11-21 fork。**
  *
  * ── 为什么复制而不是在 `ai.ts` 里开口子 ──────────────────────────
  *
@@ -17,8 +14,8 @@
  *
  * 同一处战术 bug 可能在两边各存在一次。约定：
  *   · **`ai.ts` 只修"影响对局正确性"的 bug**（会崩、会产生非法动作、会改存档语义），
- *     修完不往 v2 同步；
- *   · 玩法/策略上的改动**只进 v2**；
+ *     修完不往 v3 同步；
+ *   · 玩法/策略上的改动**只进 v3**；
  *   · `ai-duel --old ./baselines/...` 用冻结的老版做对照，别用 `ai.ts`，
  *     否则"基线"会跟着漂。
  *
@@ -45,16 +42,17 @@
  *   4. 不做伤害玩家的特殊照顾。它就是一个贪心的、会算账的对手。
  */
 
-import { hasAbility } from './abilities.ts';
-import { enterMemoScope, exitMemoScope, memoByState, memoTable } from './memo.ts';
-import { CONFIG, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from './config.ts';
-import { hasHold, holdOf, holdRoom } from './carry.ts';
-import { isProducer, produceUsableCount } from './produce.ts';
-import { cityGap } from './geo.ts';
-import { playerView } from './fog.ts';
-import { EFF_SCALE, unitEfficiency, unitPower } from './unit-value.ts';
-import { nextEraLevelOf } from './era-routes.ts';
-import type { ValueContext } from './unit-value.ts';
+import { hasAbility } from '../../src/core/abilities.ts';
+import { enterMemoScope, exitMemoScope, memoByState, memoTable } from '../../src/core/memo.ts';
+import { CONFIG, ERAS, ORDER_IDLE, ORDER_UPGRADE, navigable, passable } from '../../src/core/config.ts';
+import { hasHold, holdOf, holdRoom } from '../../src/core/carry.ts';
+import { isProducer, produceUsableCount } from '../../src/core/produce.ts';
+import { cityGap } from '../../src/core/geo.ts';
+import { playerView } from '../../src/core/fog.ts';
+import { EFF_SCALE, unitEfficiency, unitPower } from '../../src/core/unit-value.ts';
+import { nextEraLevelOf } from '../../src/core/era-routes.ts';
+import { eraCeilingOf } from '../../src/core/expansions.ts';
+import type { ValueContext } from '../../src/core/unit-value.ts';
 import {
   abilityApi,
   armySize,
@@ -106,27 +104,27 @@ import {
   isAirborne,
   strikeDistance,
   sameTeam,
-} from './rules.ts';
-import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from './armor.ts';
-import { canUseType, eraWindowOk } from './draft.ts';
-import { isArmed, orderDirectiveOf } from './rules.ts';
-import { GOLD, canPay, payRes, resOf } from './resources.ts';
-import type { ResourceCost } from './resources.ts';
-import { economicYield, tacticalMap, unitValue } from './ai-tactics.ts';
-import { terrainArmorOf } from './ability-registry.ts';
-import type { TacticalMap } from './ai-tactics.ts';
-import { seatsOf } from './types.ts';
-import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from './types.ts';
+} from '../../src/core/rules.ts';
+import { MODULES, canMount, energyReport, offlineModules, weaponsOf } from '../../src/core/armor.ts';
+import { canUseType, eraWindowOk } from '../../src/core/draft.ts';
+import { isArmed, orderDirectiveOf } from '../../src/core/rules.ts';
+import { GOLD, canPay, payRes, resOf } from '../../src/core/resources.ts';
+import type { ResourceCost } from '../../src/core/resources.ts';
+import { economicYield, tacticalMap, unitValue } from '../../src/core/ai-tactics.ts';
+import { terrainArmorOf } from '../../src/core/ability-registry.ts';
+import type { TacticalMap } from '../../src/core/ai-tactics.ts';
+import { seatsOf } from '../../src/core/types.ts';
+import type { Action, AiFocus, AiIntent, City, GameState, PlayerId, ProduceSource, Terrain, Unit, UnitTypeDef } from '../../src/core/types.ts';
 // 档位 / 托管判定 / 预算这几个"元信息"住在 ai-meta.ts：它们要给界面用，
 // 不该为了两行判断把整个引擎拉进首屏。这里只是转手引用（并继续对外导出）。
-import type { AiBudget } from './ai-meta.ts';
-import { NULL_STRATEGIST } from './ai-strategist.ts';
-import type { Strategist } from './ai-strategist.ts';
-import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from './ai-meta.ts';
-import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from './unit-ai.ts';
-import type { UnitAiBinding } from './unit-ai.ts';
-import type { UnitAiResult } from './expansions.ts';
-import { SKILL_AI_HINTS } from './skill-hooks.ts';
+import type { AiBudget } from '../../src/core/ai-meta.ts';
+import { NULL_STRATEGIST } from '../../src/core/ai-strategist.ts';
+import type { Strategist } from '../../src/core/ai-strategist.ts';
+import { DEFAULT_BUDGET, aiLevelOf, isAiSide } from '../../src/core/ai-meta.ts';
+import { UNIT_AI_MUST_SCORE, unitAiActionProblem, unitAiOf, unitAiWarn } from '../../src/core/unit-ai.ts';
+import type { UnitAiBinding } from '../../src/core/unit-ai.ts';
+import type { UnitAiResult } from '../../src/core/expansions.ts';
+import { SKILL_AI_HINTS } from '../../src/core/skill-hooks.ts';
 import {
   COMMIT_BUILD_BONUS,
   allAiGoals,
@@ -136,11 +134,22 @@ import {
   goalStepsInPlay,
   registerCoreGoal,
   resolveCommit,
-} from './ai-goal.ts';
-import type { AiGoalCtx, AiGoal } from './ai-goal.ts';
-import type { AiCommit } from './types.ts';
+} from '../../src/core/ai-goal.ts';
+import type { AiGoalCtx, AiGoal } from '../../src/core/ai-goal.ts';
+import type { AiCommit } from '../../src/core/types.ts';
+import {
+  PLAN_TUNING,
+  notePlanTrace,
+  planActions,
+  planCtxOf,
+  registerAiPlan,
+  resolvePlans,
+} from '../../src/core/ai-plan.ts';
+// 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
+// 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
+import type { AiPlan as RankedPlan } from '../../src/core/ai-plan.ts';
 
-export type { AiBudget } from './ai-meta.ts';
+export type { AiBudget } from '../../src/core/ai-meta.ts';
 
 const DIRS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],
@@ -256,6 +265,25 @@ export function aiTraits(s: GameState): AiTraits {
 }
 
 /* ---------------- 战术倾向：这一回合该打哪一种 ---------------- */
+
+/**
+ * 这一席的编制上限（v3 专用）。
+ *
+ * `CONFIG.maxUnits` 从来不是游戏规则——规则层的招募不拦玩家，那是 AI 给自己
+ * 戴的帽子（见 `core/config.ts` 的 `maxUnits` 注释与 `core/rules.ts` 的招募函数）。
+ * v3 要能回答"没有上限时该怎么打"，所以把这条约束做成了局面配置：
+ *
+ *   · `config.unitCap` 不写 = `CONFIG.maxUnits`（24，等于现状）
+ *   · `'none'` = 不设上限（用 Infinity，比较逻辑原样成立）
+ *
+ * 只有 v3 读它，v1 仍然写死 24——这样"撤编制"是一次可对照的实验，
+ * 不会悄悄改掉基线。见 `docs/PLAN-AI-V3-2026-11-21.md` 第二节。
+ */
+function unitCapOf(s: GameState): number {
+  const v = s.config.unitCap;
+  if (v === 'none') return Number.POSITIVE_INFINITY;
+  return typeof v === 'number' && v > 0 ? v : CONFIG.maxUnits;
+}
 
 /** 0~1 夹紧 */
 function clamp01(v: number): number {
@@ -1608,6 +1636,13 @@ interface Fields {
   air: Map<string, number[]>;
   bridgeSite: { x: number; y: number } | null;
   /**
+   * 过河计划选的渡口（排序层的 `focus`）。null = 这条计划没当值。
+   *
+   * 和 `bridgeSite` 的区别：`bridgeSite` 是"逐回合重挑的最近水面"，
+   * 这个点是**计划钉住的**那一格，建造评分和工程队走位都认它。
+   */
+  crossingSite: { x: number; y: number } | null;
+  /**
    * 本回合的主攻方向：血最少的那座敌方城市。
    *
    * 没有这个"聚焦"，AI 的部队会一半扑这座城、一半扑那座城，
@@ -1829,6 +1864,136 @@ function bestBridgeSite(s: GameState, owner: PlayerId, wade: Map<string, number[
 
   return best;
 }
+
+/**
+ * 选渡口：**从两岸的陆地场往回找**，取"我这边 + 对面"总步数最小的那块水面。
+ *
+ * 为什么不用现成的 `bestBridgeSite`：它是逐格打分（窄、离我近、对岸离敌城近），
+ * 分数里没有"这块水到底连不连得通"。实测它会挑湖心的一格，铺几段之后
+ * 连不上了就返回 null，计划当场丢掉（2026-11-21，seed 11 / 24×24）。
+ *
+ * 这里的判据是可验的：两个洪泛（我方陆地 / 敌方陆地）都够得到的水面，
+ * 才是"一条能走通的渡口"。找不到就是这张图真的过不去，返回 null。
+ */
+function crossingPointOf(view: GameState, me: PlayerId): { x: number; y: number } | null {
+  const flood = (
+    seeds: Array<{ x: number; y: number }>,
+    throughWater: boolean,
+  ): Map<number, number> => {
+    const dist = new Map<number, number>();
+    const queue: number[] = [];
+    for (const p of seeds) {
+      if (!inBounds(view, p.x, p.y)) continue;
+      const k = p.y * view.w + p.x;
+      if (dist.has(k)) continue;
+      dist.set(k, 0);
+      queue.push(k);
+    }
+    for (let i = 0; i < queue.length; i++) {
+      const k = queue[i]!;
+      const d = dist.get(k)!;
+      const x = k % view.w;
+      const y = Math.floor(k / view.w);
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (!inBounds(view, nx, ny)) continue;
+        const nk = ny * view.w + nx;
+        if (dist.has(nk)) continue;
+        const tile = view.tiles[nk];
+        if (!tile || tile.terrain === 'bridge') continue;
+        const wet = tile.terrain === 'water' || tile.terrain === 'deep';
+        // 陆地洪泛只走旱地（浅滩按"能涉水"算可走）；对岸洪泛要能穿过水面，
+        // 否则六格宽的湖永远没有一格"两侧都是陆地"，渡口被判成不存在。
+        if (wet && !throughWater) continue;
+        if (!wet && !passable(tile.terrain)) continue;
+        dist.set(nk, d + 1);
+        queue.push(nk);
+      }
+    }
+    return dist;
+  };
+
+  const myLand = flood(
+    unitsOf(view, me).filter((u) => utype(view, u.type).domain !== 'water').map((u) => ({ x: u.x, y: u.y })),
+    false,
+  );
+  const fromFoe = flood(
+    view.cities.filter((c) => c.owner !== me && !c.ruined).flatMap((c) => cityTiles(c).map((t) => ({ x: t.x, y: t.y }))),
+    true,
+  );
+  if (myLand.size === 0 || fromFoe.size === 0) return null;
+
+  /*
+   * 渡口取"我方岸上那一格水面里，离对岸最近的那一块"。
+   *
+   * 为什么不是取两岸中间那一格：工程队是从自己岸边往外铺的，
+   * 目标必须落在它能开始的那一头；中间的格子只对"这条线有多长"有意义。
+   */
+  let best: { x: number; y: number } | null = null;
+  let bestScore = Infinity;
+  for (let y = 0; y < view.h; y++) {
+    for (let x = 0; x < view.w; x++) {
+      const k = y * view.w + x;
+      const tile = view.tiles[k];
+      if (!tile || (tile.terrain !== 'water' && tile.terrain !== 'deep')) continue;
+      const dFoe = fromFoe.get(k);
+      if (dFoe === undefined) continue;
+      let onMyBank = false;
+      for (const [dx, dy] of DIRS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (!inBounds(view, nx, ny)) continue;
+        if (myLand.has(ny * view.w + nx)) {
+          onMyBank = true;
+          break;
+        }
+      }
+      if (!onMyBank) continue;
+      if (dFoe < bestScore) {
+        bestScore = dFoe;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * 过河投送计划（P3 起由排序层管）。
+ *
+ * 它是**权重型**：不产生动作，只做两件事——
+ *   1. 把渡口钉住（`focus`，存进自己的口袋，下一回合优先沿用）；
+ *   2. 让建造评分和工程队走位都围着这一格转（靠 `fields.crossingSite` 传下去）。
+ *
+ * 三个"给桥让路"的老补丁（两道数量上限、工程队 mine<6 闸）现在都读这个点，
+ * 而不是各读各的 `focusOf().crossing`。
+ */
+const CROSSING_PLAN: RankedPlan = {
+  id: 'crossing',
+  kind: 'weights',
+  strength: PLAN_TUNING.strength.crossing ?? 0.9,
+  value: (c) => {
+    if (c.view.config.aiCrossing === false) return 0;
+    if (!c.view.cities.some((x) => x.owner !== c.me && !x.ruined)) return 0;
+    // 能走过去就不需要计划：架桥只是捷径，交给逐回合的分数去决定
+    if (c.canReach) return 0;
+    // 兵都没凑够就先别修桥：那会变成"为了过河把家底掏空"
+    if (c.army < 3) return 0;
+    return 1;
+  },
+  done: (c) => c.canReach || !c.view.cities.some((x) => x.owner !== c.me && !x.ruined),
+  focus: (c) => {
+    // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
+    const prev = c.state.focus as { x: number; y: number } | undefined;
+    if (prev) {
+      const tile = c.view.tiles[prev.y * c.view.w + prev.x];
+      if (tile && (tile.terrain === 'water' || tile.terrain === 'bridge')) return prev;
+    }
+    return crossingPointOf(c.view, c.me);
+  },
+};
+registerAiPlan(CROSSING_PLAN);
 
 /**
  * 这块水面值不值得架桥：从它出发，往哪个方向、跨几格水能上岸。
@@ -2403,7 +2568,14 @@ function scoreMoveInner(
     if ((def.builds ?? []).some((id) => s.unitTypes[id]?.bridges)) {
       const site = all.bridgeSite;
       const mine = unitsOf(s, unit.owner).filter((u) => utype(s, u.type).bridges).length;
-      if (site && mine < 6) {
+      /*
+       * `mine < 6` 是"别把工程队全耗在修路"的闸。计划在追的情况下它必须让路：
+       * 实测 7 座桥（大多在无关的水塘上）之后这条闸就关掉了，工程队不再往
+       * 渡口走，剩下的回合全在岸边干别的——"造了一会就不造了"就是这么来的。
+       */
+      // 计划钉住渡口期间，"桥够多了"这道闸让路（Fields.crossingSite，见 CROSSING_PLAN）
+      const underCrossingPlan = all.crossingSite != null;
+      if (site && (mine < 6 || underCrossingPlan)) {
         const step = distance(unit, site) - distance({ x, y }, site);
         // 过河阶段：往桥头走就是当前最重要的任务，给一个压过"顺手盖个磨坊"的底分
         score = (all.needBridge ? 42 : 0) + step * 6;
@@ -3552,6 +3724,8 @@ function rawBuildScore(
   scarce: ReadonlySet<string> = new Set(),
   /** 这一势力正在追的产业链（Fields.goalCommit） */
   goalCommit: AiCommit | null = null,
+  /** 过河计划钉住的渡口（Fields.crossingSite）：走廊上的桥不吃数量上限 */
+  crossingSite: { x: number; y: number } | null = null,
 ): number {
   const def = s.unitTypes[buildId];
   if (!def) return -999;
@@ -3616,7 +3790,15 @@ function rawBuildScore(
     // 不是在沿河刷桥。上一条硬上限如果不放这一格，三格宽的河永远差最后一块。
     const back = unitAt(s, spot.x - gap.dir[0], spot.y - gap.dir[1]);
     if (back && back.owner === unit.owner && utype(s, back.type).bridges) chain = 1;
-    if (near >= 5 && !chain) return -999;
+    /*
+     * 计划里的这条走廊不吃"铺够了"的上限。
+     *
+     * 上限是为了"别在河上摆家具"，但它不知道还有一条必须铺通的路：
+     * 实测工程队铺到第 5 座就停，河心差最后一格，二十四个兵在岸边来回走。
+     */
+    // 渡口由排序层的过河计划给（见 `CROSSING_PLAN.focus`），不在这里自己算
+    const onPlan = crossingSite !== null && distance(spot, crossingSite) <= 3;
+    if (near >= 5 && !chain && !onPlan) return -999;
 
     /*
      * 全局桥数上限：每城 3 座，最多 10 座。
@@ -3633,7 +3815,8 @@ function rawBuildScore(
     {
       const cities = Math.max(1, citiesOf(s, unit.owner).length);
       const total = unitsOf(s, unit.owner).filter((u) => utype(s, u.type).bridges).length;
-      if (total >= Math.min(10, cities * 3)) return -999;
+      // 同理：总量上限也不拦"正在往对岸递的那一格"
+      if (total >= Math.min(10, cities * 3) && !onPlan && !chain) return -999;
     }
     // 少铺几座优先；对岸越靠近敌方城市越值。
     // 档位加成：钢桥 120 耐久 / 6 护甲，被打塌要磨很久——同样一个建造回合，
@@ -3643,6 +3826,7 @@ function rawBuildScore(
       gap.steps * 9 -
       near * 7 +
       chain * 26 +
+      (onPlan && !chain ? 14 : 0) +
       Math.max(0, 24 - gap.farDist) * 0.5 +
       (def.era - 1) * 5 -
       def.cost * 0.04 -
@@ -3918,7 +4102,7 @@ function scoreBuild(
 ): number {
   const raw = rawBuildScore(
     s, unit, buildId, spot, all.land, all.mood, all.sea, all.era,
-    all.urgent, all.threat, all.scarce, all.goalCommit,
+    all.urgent, all.threat, all.scarce, all.goalCommit, all.crossingSite,
   );
   if (raw <= -900) return raw;
 
@@ -4146,14 +4330,157 @@ function goalApproachCandidate(
   };
 }
 
+/* ---------------- 收尾计划：派兵接管废墟 ---------------- */
+
+/** 踩进废墟（接管）的分：比常规走位高一个量级，"再走一步就赢"不该输给站位调整 */
+const RECLAIM_ENTER_SCORE = 1000;
+/** 朝废墟靠近一步的分：高于常规走位，但不至于压过开火 */
+const RECLAIM_APPROACH_SCORE = 260;
+
+/**
+ * 收尾计划的目标：对面**已经没有完好的城**，只剩废墟。
+ *
+ * 为什么只收这一种局面：
+ *   · 这是规则里唯一"打完了还结束不了"的死角——废墟不能再攻城，只有派兵
+ *     走进去掏重建费才算接管（见 `doMove` 的入驻段与 `blockedFor` 的注释）；
+ *   · 只在"对面一座好城都不剩"时触发，所以它抽不走正面战场的兵，也不会
+ *     改变常规对局的一步棋（`probe:ai-goal` 的四条指纹就是这样验的）。
+ *
+ * 以后可以放宽到"任何敌废墟都值得收"（多一座城多一份收入），但那会改变
+ * 中局走位，得单独验一批，别顺手开口子。
+ */
+function reclaimTargetOf(view: GameState, me: PlayerId): City | null {
+  const foes = view.cities.filter((c) => c.owner !== me);
+  if (foes.length === 0) return null;
+  // 还有一座好城就不算收尾：那时候该做的是打城，不是捡废墟
+  if (foes.some((c) => !c.ruined)) return null;
+  const ruins = foes.filter((c) => c.ruined);
+  if (ruins.length === 0) return null;
+  // 多座废墟时先收便宜的：重建费按城血上限算，贵的可能一辈子攒不出来
+  return [...ruins].sort((a, b) => rebuildCost(a) - rebuildCost(b) || a.id.localeCompare(b.id))[0] ?? null;
+}
+
+/**
+ * 从城的四格往外做一次 BFS：每一格离"能踩进去的那一格"还有几步。
+ *
+ * 用格子步数而不是直线距离：隔一条河的两格直线 1 步、实际要绕十步，
+ * 按直线走会把全军带到岸边排队。BFS 只看地形可走、**不看单位**——
+ * 单位会动，把它算进去等于每回合重算一张图，而且拥堵时会把兵卡在原地。
+ */
+function stepsToCityTiles(view: GameState, city: City): Map<number, number> {
+  const dist = new Map<number, number>();
+  const queue: number[] = [];
+  for (const t of cityTiles(city)) {
+    if (!inBounds(view, t.x, t.y)) continue;
+    const k = t.y * view.w + t.x;
+    if (dist.has(k)) continue;
+    dist.set(k, 0);
+    queue.push(k);
+  }
+  for (let i = 0; i < queue.length; i++) {
+    const k = queue[i]!;
+    const d = dist.get(k)!;
+    const x = k % view.w;
+    const y = Math.floor(k / view.w);
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(view, nx, ny)) continue;
+      const nk = ny * view.w + nx;
+      if (dist.has(nk)) continue;
+      const tile = view.tiles[nk];
+      if (!tile || !passable(tile.terrain)) continue;
+      dist.set(nk, d + 1);
+      queue.push(nk);
+    }
+  }
+  return dist;
+}
+
+/**
+ * 收尾计划的出口：给每个还能动的兵一条 MOVE。
+ *
+ * 两种走法：
+ *   · 这一回合就能踩进废墟、而且掏得出重建费 → 直接走进去（`doMove` 会接管）；
+ *   · 够不着或钱不够 → 朝"离废墟最近的可达格"挪一步。
+ *
+ * 钱不够时**不许踩进去**：规则会在动之前就拒（"接管要 N 金"），
+ * 提出来只会白费一步。先靠近，钱什么时候够什么时候进。
+ */
+function reclaimCandidates(
+  view: GameState,
+  me: PlayerId,
+  target: City,
+  rejected: ReadonlySet<string>,
+): Candidate[] {
+  const dist = stepsToCityTiles(view, target);
+  const cost = rebuildCost(target);
+  const gold = view.players[me].gold;
+  const targets = new Set(cityTiles(target).map((t) => t.y * view.w + t.x));
+  const out: Candidate[] = [];
+  for (const u of unitsOf(view, me)) {
+    if (u.moved || u.acted) continue;
+    if (utype(view, u.type).category === 'building') continue;
+    const reach = reachableTiles(view, u);
+    if (reach.size === 0) continue;
+    let enterKey = -1;
+    let stepKey = -1;
+    let stepD = Infinity;
+    const hereD = dist.get(u.y * view.w + u.x) ?? Infinity;
+    for (const [k] of reach) {
+      if (targets.has(k)) {
+        enterKey = k;
+        continue;
+      }
+      const d = dist.get(k);
+      if (d === undefined) continue;
+      // 只往**更近**的格子走：不更近就不动，免得原地来回蹭
+      if (d < stepD && d < hereD) {
+        stepD = d;
+        stepKey = k;
+      }
+    }
+    const into = enterKey >= 0 && gold >= cost;
+    const key = into ? enterKey : stepKey;
+    if (key < 0) continue;
+    const action: Action = { type: 'MOVE', unitId: u.id, x: key % view.w, y: Math.floor(key / view.w) };
+    if (rejected.has(aiActionKey(action))) continue;
+    out.push({ action, score: into ? RECLAIM_ENTER_SCORE : RECLAIM_APPROACH_SCORE });
+  }
+  return out;
+}
+
+/**
+ * 收尾计划（P2 起由排序层管，不再是一段 if）。
+ *
+ * `value` 给 `1e9` 是"这局赢定了"的约定值，不是金币当量——排序用比值比，
+ * 差九个数量级不影响谁当值，只影响日志好看不好看（见 15.12）。
+ *
+ * `done` 写"目标不在了就算完成"：对面重建出一座好城、或者废墟被我接管，
+ * 这条计划就该退场。注意"目标暂时不在"也会让 done 为真——冷却表负责
+ * 别让它下一回合立刻又立起来。
+ */
+const RECLAIM_PLAN: RankedPlan = {
+  id: 'reclaim',
+  kind: 'action',
+  strength: PLAN_TUNING.strength.reclaim ?? 1,
+  value: (c) => (reclaimTargetOf(c.view, c.me) ? 1e9 : 0),
+  done: (c) => reclaimTargetOf(c.view, c.me) === null,
+  next: (c) => {
+    const target = reclaimTargetOf(c.view, c.me);
+    // 分档不变：踩进去 1000，靠近 260（见 reclaimCandidates 的说明）
+    return target ? reclaimCandidates(c.view, c.me, target, new Set()) : [];
+  },
+};
+registerAiPlan(RECLAIM_PLAN);
+
 function unitCandidates(
   s: GameState,
   unit: Unit,
   all: Fields,
   traits: AiTraits,
   rejected: ReadonlySet<string>,
-): Candidate[] {
-  const out: Candidate[] = [];
+): Candidate[] {  const out: Candidate[] = [];
   const def = utype(s, unit.type);
 
   // 施工中的工地不能开火、不能围城、不能造东西（规则层会拒），
@@ -5514,7 +5841,7 @@ function buildPlan(
   // 每回合只有两个产兵名额（AI 的编制上限也压着），所以只要手头比一个兵宽裕
   // （金 ≥ 1.2 回合收入）或者编制快满，就该往贵的、能打的上面花钱。
   // 攒钱期同理：钱是要攒着买好的，再拿线性单价惩罚去压大件等于自我否定。
-  const quality = savingFor !== null || gold >= inc * 1.2 || army >= CONFIG.maxUnits - 6;
+  const quality = savingFor !== null || gold >= inc * 1.2 || army >= unitCapOf(s) - 6;
   // 弃城期一律按"精兵"花钱：钱要攒着换时代/英雄，不该拆成一堆便宜兵。
   // 换家也一样：这时候每一分钱都要换成能打穿城墙的东西，不是铺散兵线。
   const elite = quality || mood.weight.boom > 0.5 || trade;
@@ -5704,6 +6031,96 @@ function eraNowOf(s: GameState): number {
   return Math.max(s.config.startEra, ...s.cities.filter((c) => !c.ruined).map((c) => c.era));
 }
 
+/* ---------------- 决战时代（S2a：先只算不用） ---------------- */
+
+/**
+ * L0 的常数：固定奔第 5 代。
+ *
+ * 它不产出策略，只用来把"判决 → 日志 → 闸门"这条管线打通。
+ * 没有它，L2 一上线就分不清"是估算错了"还是"闸门根本没接上"。
+ * 分层方法见 docs/PLAN-AI-V3 第十二节。
+ */
+const ERA_L0_CONST = 5;
+
+/** 这一席最高的那座好城的时代（全被打成废墟就是 1） */
+function highestEraOf(s: GameState, owner: PlayerId): number {
+  let m = 1;
+  for (const c of s.cities) if (c.owner === owner && !c.ruined && c.era > m) m = c.era;
+  return m;
+}
+
+/**
+ * 这一席的"决战时代"。
+ *
+ * S2a 只有两档，且**两档都只算不用**——没有任何消费方，所以开不开都是同一盘棋。
+ * 这是故意的：先让数能被看见、被对照，再让数去影响动作。
+ *
+ *   · `const`（L0）：固定 `ERA_L0_CONST`，用来验管线；
+ *   · `foe`  （L1）：对面时代 + 1。典型错误形态是"高时代局互相拖着升"，
+ *     所以它只能作为对照，不会被当成正解。
+ *
+ * 后面两档（L2 距离场 / L3 对面节奏）加进来时，**接口不变**，
+ * 只是在这个函数里多一个分支。
+ */
+function desiredEraOf(
+  s: GameState,
+  me: PlayerId,
+  model: 'const' | 'foe',
+): { era: number; foeEra: number; desired: number; why: string } {
+  const era = highestEraOf(s, me);
+  const foeEra = Math.max(1, ...enemySeats(s, me).map((p) => highestEraOf(s, p)));
+  /*
+   * 封顶要问**规则层**，不能用 `ERAS.length`。
+   *
+   * 科技线能开到第几代取决于开了哪些包（`eraCeilingOf`）：没开装甲时代，
+   * 机械化就是终点。用 8 去钳制，模型会一直喊"奔第 6 代"，而那个动作
+   * 在这个局里根本不存在——2026-11-21 第一次跑 S2a 就是这么错的：
+   * 一个 era5 开局的局全程 desiredEra=6，看着像"AI 不肯升"，其实是没得升。
+   */
+  const maxEra = Math.max(1, Math.min(ERAS.length, eraCeilingOf(s)));
+  const capNote = maxEra < ERAS.length ? `（科技线封顶第 ${maxEra} 代）` : '';
+  /*
+   * 目标**不能低于当前时代**：已经升上去的城不会退回来。
+   *
+   * L1 不钳的话会出现"我 5 代、对面 1 代 → 我要奔 2 代"这种自降目标
+   * （2026-11-21 实测日志里真出现过，turn 87）。L0 同样钳一下，
+   * 免得以后科技线上限调高之后常数反而变成倒退。
+   */
+  const floor = era;
+  if (model === 'const') {
+    const want = Math.max(floor, Math.min(ERA_L0_CONST, maxEra));
+    return { era, foeEra, desired: want, why: `L0 常数：奔第 ${want} 代${capNote}` };
+  }
+  const want = Math.max(floor, Math.min(foeEra + 1, maxEra));
+  return { era, foeEra, desired: want, why: `L1 跟对面：对面 ${foeEra} 代，所以奔 ${want} 代${capNote}` };
+}
+
+/**
+ * 把这次判决记进局面（每席每回合至多一条）。
+ *
+ * 为什么记在 state 里：AI 必须是纯的（不碰 IO、不碰随机），否则回放会分叉。
+ * 跑批脚本导出回放时把它写成 sidecar，看回放时对照着读——
+ * 回放只能看"它做了什么"，这一列补"它为什么"。
+ */
+function noteEraDecision(s: GameState, view: GameState, me: PlayerId, model: 'const' | 'foe'): void {
+  const list = (s.aiDecisions ??= []);
+  const last = list[list.length - 1];
+  // 一回合里 AI 会被问很多次（每个兵一次），判决只该记一次
+  if (last && last.turn === s.turn && last.me === me) return;
+  const d = desiredEraOf(view, me, model);
+  list.push({
+    turn: s.turn,
+    me,
+    model,
+    era: d.era,
+    foeEra: d.foeEra,
+    desiredEra: d.desired,
+    why: d.why,
+  });
+  // 别让日志无限长：一局几千步也不该存几万行，留最近 400 条够复盘
+  if (list.length > 400) list.splice(0, list.length - 400);
+}
+
 /**
  * 这一刻"值多少钱"要看局面：移速在防守时打折、压上时加价；
  * 己方视野已经很开阔时，再买一双眼睛的边际价值下降。
@@ -5806,7 +6223,7 @@ function recruitCandidate(
   };
 
   // 和 rules 一样只数作战单位：建筑不占编制，别让几座磨坊把产线堵死
-  if (!ignoreCap && armySize(s, me) >= CONFIG.maxUnits) {
+  if (!ignoreCap && armySize(s, me) >= unitCapOf(s)) {
     deny('编制已满', '*');
     return null;
   }
@@ -6413,7 +6830,7 @@ function swapOutCandidate(
   };
   // 初级不会换血：这一档连"谁更贵"都不算，让它拆自己的兵只会拆错。
   if (aiLevelOf(s) === 'basic') return bail('初级档');
-  if (armySize(s, me) < CONFIG.maxUnits) return bail('编制没满');
+  if (armySize(s, me) < unitCapOf(s)) return bail('编制没满');
   // 攒钱期不动编制：那笔钱是留给英雄/时代的，换一个兵等于把目标拆了。
   // 例外正是"攒的就是兵"——那时候目标被编制卡着，不换血就永远买不到。
   if (plan.savingFor && plan.savingFor !== 'unit') return bail('正在攒别的目标');
@@ -6487,9 +6904,6 @@ function swapOutCandidate(
 
 function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
-  // 废墟不能升级（规则层也拦，见 doUpgrade）：这里先剔掉，免得 AI 把一次决策
-  // 花在一个必被拒绝的动作上——跑批时被拒动作要顺延，等于白丢一步。
-  if (city.ruined) return null;
   const cost = upgradeCostOf(s, city);
   if (cost === null) return null;
   const gold = s.players[s.current].gold;
@@ -7005,17 +7419,8 @@ function aiNextActionCoreInner(
    */
 
   const me = s.current;
-  /*
-   * 关键：只看自己看得见的东西，跟玩家同等信息。
-   *
-   * `clipByVision` 必须给：否则玩家一按"看全图"（`s.fog = false`），
-   * AI 也跟着全知，能打到视野外的单位。默认恒为真，
-   * 只有 `config.aiVision === false` 的调试局才让它全知。
-   *
-   * 这一段原先和 `ai.ts` 是同一份复制品，拆出来时（2026-11-21）漏了这层——
-   * 老引擎修了"关迷雾 = AI 全知"，二代又把它带回来了（合并时发现）。
-   */
-  const view = playerView(s, me, false, s.config.aiVision !== false).state;
+  // 关键：只看自己看得见的东西，跟玩家同等信息
+  const view = playerView(s, me).state;
 
   /**
    * 指挥官模式：产线和升级都由序列决定，所以调用方给的 maxRecruit / maxUpgrade
@@ -7099,6 +7504,17 @@ function aiNextActionCoreInner(
     };
   }
 
+  /*
+   * 决战时代：S2a 只在开了 `config.aiEraModel` 时算一遍并记进局面。
+   *
+   * **目前没有任何消费方**——它不影响采购、不影响走位、不影响开火。
+   * 先让数能被看见（回放 sidecar + 自动对照），再决定拿它去压什么。
+   * `depth > 0` 不记：推演分支不该往账本里塞东西。
+   */
+  if (depth === 0 && s.config.aiEraModel) {
+    noteEraDecision(s, view, me, s.config.aiEraModel);
+  }
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -7106,6 +7522,7 @@ function aiNextActionCoreInner(
     water: distanceFields(view, me, 'water'),
     air: distanceFields(view, me, 'air'),
     bridgeSite: bestBridgeSite(view, me, wade),
+    crossingSite: null,
     focusCityId: mood.focusCityId,
     flankCityId: flank.flankCityId,
     flank: flank.flank,
@@ -7177,6 +7594,45 @@ function aiNextActionCoreInner(
   // 不然钱被冻着、升级又没得升，这一回合等于白过——而且连着几个回合都白过。
   if (!mayUpgrade && plan.savingFor === 'era') plan.savingFor = null;
   fields.hold = plan.stance === 'turtle';
+
+  /*
+   * 收尾计划：对面只剩废墟时，派人去接管。
+   *
+   * 这一条是"计划 → 动作"的第一个出口，和攒钱/选目标那些分开：
+   *   · 判据每回合重算（局面会变），记忆只记"我盯的是哪座城"；
+   *   · 立约/改投的双阈值现在用不上——只有一条计划，没有第二家可投。
+   *     等计划清单长到两三条，这里换成 `{ id, valueAt }` + `COMMIT_KEEP_RATIO`
+   *     那一套（见 docs/PLAN-AI-V3 的 S2 与第八节）；现在多写一个阈值只是
+   *     多一处没人验的常数。
+   *   · 只在 `depth === 0` 写记忆：推演分支不该改我方的账本。
+   */
+  {
+    /*
+     * 计划排序层（P2）：先只把"收尾"接进来。
+     *
+     * 判据、动作、分档全部沿用搬之前那份实现，所以这一步应当**零变化**——
+     * 验收看 seed 906 仍是 76 回合、以及动作指纹逐条相同。
+     *
+     * `canReach` 填 `!fields.needBridge`：可达性只影响执行、不影响价值，
+     * 现在只给收尾用（它不看这个字段），等"决战"接进来才会读到。
+     */
+    const planCtx = planCtxOf(view, me, { canReach: !fields.needBridge });
+    const prevPlan = focusOf(s, me).plan ?? null;
+    const resolved = resolvePlans(planCtx, prevPlan, { urgent: fields.urgent });
+    /*
+     * 落点：过河计划钉住的渡口。走位、建房评分、工程队那道闸都认它，
+     * **不要各读各的状态**——两处各挑一个点，就会出现"人往东走、桥往西修"。
+     */
+    fields.crossingSite = resolved.focus;
+    if (resolved.focus) fields.bridgeSite = resolved.focus;
+    for (const item of planActions(resolved.action, planCtx)) {
+      candidates.push({ action: item.action, score: item.score ?? PLAN_TUNING.actionScore });
+    }
+    if (depth === 0) {
+      if (resolved.memo !== prevPlan) setFocus(s, me, { ...focusOf(s, me), plan: resolved.memo });
+      notePlanTrace(s, me, resolved);
+    }
+  }
   /*
    * 换家：不守了，全军去啃最软的那座城。
    *
@@ -7671,4 +8127,4 @@ export {
   aiStepCap,
   aiStallGuard,
   aiProgressFingerprint,
-} from './ai-meta.ts';
+} from '../../src/core/ai-meta.ts';

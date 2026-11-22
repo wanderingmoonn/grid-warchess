@@ -25,11 +25,17 @@
 import { applyAction } from './rules.ts';
 import { createMatch } from './setup.ts';
 import { UNIT_TYPES } from './config.ts';
-import type { Action, GameState, MatchConfig, PlayerId } from './types.ts';
+import type { Action, AiCallTrace, AiPlanTrace, AiSquadLog, GameState, MatchConfig, PlayerId } from './types.ts';
 
 /** 报告里要用到的那些字段。刻意宽松：老版本、缺字段都要能读进来 */
 export interface ReplayReport {
   v?: number;
+  /** AI 的想法（见 `ReplaySession.aiTrace`）。老报告没有这一块 */
+  aiTrace?: {
+    plans?: AiPlanTrace[];
+    calls?: AiCallTrace[];
+    squads?: AiSquadLog[];
+  };
   at?: string;
   build?: string;
   seed?: number;
@@ -82,6 +88,17 @@ export interface ReplaySession {
   readonly finalState: GameState;
   /** 终局胜方与报告是否一致；null = 没法比 */
   finalMatches: boolean | null;
+  /**
+   * AI 的"想法"（计划 / 决战判决 / 编队上报）。
+   *
+   * 复盘是逐条重放动作，**不跑 AI**，所以重放出来的 state 里这些日志是空的。
+   * 只能整份从报告里带过来，UI 按回合查（见界面里的「AI 想法」小窗口）。
+   */
+  aiTrace?: {
+    plans?: AiPlanTrace[];
+    calls?: AiCallTrace[];
+    squads?: AiSquadLog[];
+  };
 }
 
 export type ReplayBuild =
@@ -272,6 +289,7 @@ export function buildReplay(report: ReplayReport): ReplayBuild {
       stateAt,
       finalState,
       finalMatches,
+      ...(report.aiTrace ? { aiTrace: report.aiTrace } : {}),
     },
   };
 }

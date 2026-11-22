@@ -188,11 +188,11 @@ export function registerCoreGoal(goal: AiGoal): void {
   /*
    * 同一个 id 重复注册 = 跳过，不抛错（2026-11-21 改）。
    *
-   * 原因：`ai.ts` 和实验副本 `ai-v2.ts` 都会在模块加载时注册自己那份核心目标。
+   * 原因：`ai.ts` 和实验副本 `ai-v3.ts` 都会在模块加载时注册自己那份核心目标。
    * 两份 AI 同时被加载（比如 `ai-duel` 拿老 AI 当基线）时，第二个就会撞上。
    *
-   * 现在的语义是"**目标表由核心共享**"：v2 想试验不同的目标，用自己的 id
-   * （`v2-xxx`），不要跟核心抢同一个名字。
+   * 现在的语义是"**目标表由核心共享**"：v3 想试验不同的目标，用自己的 id
+   * （`v3-xxx`），不要跟核心抢同一个名字。
    */
   if (CORE_GOALS.some((g) => g.id === goal.id)) return;
   CORE_GOALS.push(goal);

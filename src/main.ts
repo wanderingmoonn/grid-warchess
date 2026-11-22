@@ -1891,6 +1891,78 @@ function renderPaintedCells(cells: number[]): void {
   renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(lastBoardUi, activeBoardId), ids);
 }
 
+/**
+ * 「AI 在想什么」小窗口（回放时默认开，对局里 `?aihud` 打开）。
+ *
+ * 数据全是 AI 自己写进局面的：
+ *   · `aiPlanTrace` —— 计划排序层当值的是哪条、净权重多少；
+ *   · `aiCalls`     —— 决战时机判"打"还是"发展"、投影比、行军回合；
+ *   · `aiSquads`    —— 编队（几支、几人、队形散布、上报结论）。
+ *
+ * 回放时按**当前帧的回合**往回找最近一条，所以拖动进度条时它会跟着变。
+ */
+function renderAiHud(): void {
+  const on = replay !== null || new URLSearchParams(location.search).has('aihud');
+  const old = document.getElementById('ai-hud');
+  if (!on) {
+    old?.remove();
+    return;
+  }
+  const el =
+    old ??
+    (() => {
+      const d = document.createElement('div');
+      d.id = 'ai-hud';
+      d.style.cssText =
+        'position:fixed;right:10px;bottom:10px;z-index:99998;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;' +
+        'background:rgba(16,18,22,.9);color:#dbe4ee;padding:10px 12px;border-radius:8px;white-space:pre;' +
+        'pointer-events:none;max-width:48ch;box-shadow:0 6px 22px rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.08)';
+      document.body.appendChild(d);
+      return d;
+    })();
+
+  const t = state.turn;
+  /*
+   * 回放里这些日志**不在 state 上**：重放只跑 applyAction，不跑 AI。
+   * 所以优先读报告里带过来的那一份（`buildMatchReport` 存的 `aiTrace`）。
+   */
+  const tracePlans = replay?.aiTrace?.plans ?? state.aiPlanTrace;
+  const traceCalls = replay?.aiTrace?.calls ?? state.aiCalls;
+  const traceSquads = replay?.aiTrace?.squads ?? state.aiSquads;
+  const lastOf = <T extends { turn: number; me: PlayerId }>(list: T[] | undefined, p: PlayerId): T | undefined =>
+    [...(list ?? [])].reverse().find((x) => x.me === p && x.turn <= t);
+
+  const lines: string[] = [`AI 想法 · t=${t}${replay ? ' · 回放' : ''}`];
+  for (const p of ['A', 'B'] as PlayerId[]) {
+    const plan = lastOf(tracePlans, p);
+    const call = lastOf(traceCalls, p);
+    const squad = lastOf(traceSquads, p);
+    if (!plan && !call && !squad) continue;
+    lines.push(`── ${p} ──`);
+    if (plan) {
+      const net = plan.net;
+      const w = net
+        ? ` ÷攻${net.attack.toFixed(2)} 经${net.econ.toFixed(2)}${net.advance !== undefined ? ` 推${net.advance.toFixed(2)}` : ''}`
+        : '';
+      lines.push(`计划 ${plan.plan ?? '无'}${w}`);
+    }
+    if (call) {
+      const ratio = call.myPower / Math.max(1, call.foePower);
+      lines.push(`决战 ${call.call === 'attack' ? '打' : '发展'} · 投影比 ${ratio.toFixed(2)} · 行军 ${call.marchTurns}`);
+    }
+    for (const sq of squad?.squads ?? []) {
+      const stateName = sq.state === 'forming' ? '组' : '走';
+      /*
+       * 标出编队类型：之前只显示 id（`atk-3`），建造编队 `build-120` 会被当成
+       * 另一种 atk；用户 2026-11-22 要求"不同种类的编队都要能看到"。
+       */
+      const kind = sq.role === 'build' ? '建造' : sq.role === 'defend' ? '防守' : '进攻';
+      lines.push(`编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}`);
+    }
+  }
+  el.textContent = lines.length > 1 ? lines.join('\n') : `AI 想法 · t=${t}\n（这一帧没有 AI 记录）`;
+}
+
 function render(): void {
   if (combatAim && (combatAim.source !== state || combatAim.sourceFog !== state.fog || combatAim.sourceBoard !== activeBoardId ||
     combatAim.forecast.action.unitId !== selectedId || state.config.commanderMode || godMode() || forceMode === 'move' ||
@@ -1899,6 +1971,7 @@ function render(): void {
   }
   ensureArtIndex();
   renderDebugHud();
+  renderAiHud();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -6160,14 +6233,14 @@ async function runAiLoop(): Promise<void> {
 let aiEnginePromise: Promise<typeof import('./core/ai.ts')> | null = null;
 let aiEngineV2Promise: Promise<typeof import('./core/ai.ts')> | null = null;
 /**
- * 手写引擎：老 AI（`core/ai.ts`）或测试 AI 二代（`core/ai-v2.ts`）。
+ * 手写引擎：老 AI（`core/ai.ts`，v1）或实验 AI（`core/ai-v3.ts`）。
  *
  * 两份文件导出同名同签名的 `aiNextAction`，所以调用方一行不用改——
  * 这就是"复制出去单独一个模型"的意义：切内核不改主循环。
  */
 function aiEngine(brain: 'script' | 'net' | 'goal' = 'script'): Promise<typeof import('./core/ai.ts')> {
   if (brain === 'goal') {
-    aiEngineV2Promise ??= import('./core/ai-v2.ts') as Promise<typeof import('./core/ai.ts')>;
+    aiEngineV2Promise ??= import('./core/ai-v3.ts') as Promise<typeof import('./core/ai.ts')>;
     return aiEngineV2Promise;
   }
   aiEnginePromise ??= import('./core/ai.ts');

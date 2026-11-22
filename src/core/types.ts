@@ -1447,10 +1447,153 @@ export interface MatchConfig {
    * 用哪份 AI 内核。
    *
    *   · `script`：`core/ai.ts`（老 AI，冻结的参考实现）
-   *   · `goal`  ：`core/ai-v2.ts`（测试 AI 二代，远期规划走目标状态机）
+   *   · `goal`  ：`core/ai-v3.ts`（实验 AI v3，远期规划走目标状态机）
    *   · `net`   ：策略网络（测试 AI，权重单独加载）
    */
   aiBrain?: 'script' | 'net' | 'goal';
+  /**
+   * 实验 AI（v3）的编制上限。**只对 v3 生效**，v1 仍然写死 `CONFIG.maxUnits = 24`。
+   *
+   * 为什么要有这个开关：`CONFIG.maxUnits` 从来不是规则（规则层不拦玩家），
+   * 是 AI 给自己戴的帽子（见 config.ts 的注释与 rules.ts 的招募函数）。
+   * v3 要回答"没有编制上限时该怎么打"，就得让这条约束可调、可对照。
+   *
+   *   · 不写 = 24（等于现状，零行为变化）
+   *   · `'none'` = 不设上限
+   *
+   * 求解器（solve-economy）与战力估值必须读同一个值，否则会出现
+   * "AI 以为能无限堆、实际堆不上"。见 docs/PLAN-AI-V3-2026-11-21.md 第二节。
+   */
+  unitCap?: number | 'none';
+  /**
+   * 战略层的"决战时代"模型（v3 专用，默认不写 = 不算、不记、零行为变化）。
+   *
+   *   · `const`：L0，固定奔第 5 代（只用来把管线跑通）
+   *   · `foe`  ：L1，对面时代 + 1
+   *
+   * 现在这两档都**只算不用**——算出来写进 `aiDecisions`，没有任何消费方，
+   * 所以开不开都跑出同一盘棋。分层方法见 docs/PLAN-AI-V3 第十二节。
+   */
+  aiEraModel?: 'const' | 'foe';
+  /**
+   * 过河投送计划（v3 专用）。不写 = 开；`false` = 关。
+   *
+   * 关掉它就是"只看逐回合打分"的老行为——用来做 A/B：这条计划改变了
+   * 造桥和工程队走位，没有开关就没法和之前的数据比。
+   */
+  aiCrossing?: boolean;
+  /**
+   * 战略姿态（2 维：x 打不打 / y 发展还是军费）。**默认关**。
+   *
+   * 2026-11-21 试了三档区间，每一档都会让"baseline 刚好打赢"的那几张图
+   * 变成平局——全局乘数太钝，它只会让已经在打的一方更凶或更软，
+   * 不会改变"要不要打"。所以先留机制、默认关，等有战力估值再谈启用。
+   * 打开方式：`--posture`（跑批）或配置里写 true。
+   */
+  aiPosture?: boolean;
+  /**
+   * 每回合产兵名额（v3 专用）。不写 = 用调用方给的预算（默认 2）。
+   *
+   *   · `'auto'` = 按"产兵点周围的空格数"放开（`productionCapacity`）
+   *   · 数字     = 固定值
+   *
+   * 规则层**不限制**每回合造几个：限制只有钱和空格子。原来那个 2 是
+   * `DEFAULT_BUDGET.maxRecruit`，最初的提交里没有写任何理由，
+   * 和编制上限 24 一样是 AI 自己戴的帽子。
+   */
+  aiRecruitCap?: number | 'auto';
+  /**
+   * 决战时机（v3 专用）。不写 = 开；`false` = 不算、不拦（做 A/B 用）。
+   *
+   * 它只压"明显送死"的进攻（越等越强、且兵力不到对面 85%），
+   * 不用来催进攻——催的代价在 P4 实测过：双方一起龟缩。
+   */
+  aiDecisive?: boolean;
+  /**
+   * 侦查（v3 专用，阶段 3）。**默认关**；`true` 才派。
+   *
+   * 机制已跑通（选人判据 / 走位 / 到位不开火 / 死亡冷却），但 2026-11-22 的
+   * 固定队列首验是净负：全量配对 0 改善 / 1 变差 / 23 相同，且回合普遍变长
+   * （Q3 87→105、219、Q4 73→97）。原因见 `docs/PLAN-INTEL-2026-11-22.md`。
+   * 留开关是为了以后"兵力富余 / 有廉价斥候"时再验，不是现在的默认打法。
+   */
+  aiScout?: boolean;
+  /**
+   * 顺路观察（v3 专用，阶段 3b 的 B 方案）。**默认关**；`true` 才开。
+   *
+   * 让"已经在往目标城走"的单位偏一点、先看一眼，不额外抽人也不禁攻。
+   * 2026-11-22 首验净负（全量配对 1↑4↓，大图回合 146→179），已关。
+   */
+  aiPeek?: boolean;
+  /**
+   * 经济上限改成"地块容量"（v3 专用）。**默认关**；`true` 才开。
+   *
+   * 旧的"每城 2 个、最多 12 个"是两道玩家没有的约束，打开后经济单位会铺到
+   * 容量（Q4 实测 11 → 40 个）。但 2026-11-22 首验净负（配对 1↑6↓）：
+   * 钱变不成兵——产兵格每回合就那么几个，所以经济做大本身不改善胜负。
+   * 留着是为了配合"出兵点"改造时再开。
+   */
+  aiEconCap?: boolean;
+  /**
+   * 经济投入由求解器决定（v3 专用）。**默认关**；`true` 才开。
+   *
+   * 求解器按"到决战还剩几回合"算 `econUntil`：值得投就按它报的个数投，
+   * 不值得就保底每城一个、其余买兵。
+   *
+   * 2026-11-22 首验净负（全量 11-8-5，Q3 1-4-1）：窗口用"最前单位到敌城"会随
+   * 部队推进从 20 掉到 3，AI 在 T4 一口气投 15 个经济、之后突然转兵——
+   * 编队只剩 3 人，被反推。需要先解决窗口抖动，再打开。
+   */
+  aiEconPlan?: boolean;
+  /**
+   * 过河分流（v3 专用）。默认开；`false` 关。
+   *
+   * 主渡口连续拥堵 3 回合后，把离新渡口最近的一支编队引过去；
+   * 新渡口离旧渡口 ≥6 格，分流后锁定 10 回合。三个数都是拍的（见 `CROSSING_PLAN.orders`）。
+   */
+  aiCrossSplit?: boolean;
+  /**
+   * 威胁感知采购（v3 专用）。默认关；`true` 才开。
+   *
+   * 三种信号：敌方 2 回合能摸到城 / 近 6 回合城被打过 / 敌城离我城 ≤6 格。
+   * 信号越多，经济分越低、兵分越高（`threatScale`）。
+   */
+  aiThreatScale?: boolean;
+  /**
+   * 采购里"质量信号"的放大倍数（v3 专用）。不写 = 2.5；1 = 老行为（信号被噪声吃掉）。
+   * 拿来 A/B 用：同一批队列跑 1 和 2.5，才知道放大质量到底有没有用。
+   */
+  aiQualityScale?: number;
+  /**
+   * 屯兵计划（v3 专用）。不写 = 开；`false` = 关（做 A/B 用）。
+   *
+   * 它管的是"僵持时别再添油"：连续 6 回合没压上去，就把推进权重压到 0.15
+   * 并停火，等兵攒到对面 1.5 倍再一起上。
+   */
+  aiMass?: boolean;
+  /**
+   * 集中突破 / 绕路（v3 专用）。不写 = 开；`false` = 关（做 A/B 用）。
+   *
+   * 僵持 8 回合后：挑守军最少的那座敌城，全军压上去（`commit`），
+   * 并集火守军的防御建筑/远程单位。换了城就等于绕路——那条路要过河的话，
+   * 过河计划会自己立起来。
+   */
+  aiBreakthrough?: boolean;
+  /**
+   * 编队（v3 专用）。不写 = 开；`false` = 关（做 A/B 用）。
+   *
+   * 编队是实体：一次性收拢"没编队"的单位，成员固定，一个目标出发；
+   * 人不够就攒、缺口报给生产端；全灭/伤亡过重/没敌城就解散。
+   */
+  aiSquad?: boolean;
+  /**
+   * 计划层申报编队规模（v3 专用）。**默认关**。
+   *
+   * 结构已就位（`PlanOrders.needSquad`：突破 9 / 屯兵 8 / 过河 6 / 守城 5），
+   * 但实测默认开会让 Q4 从 4-1-1 掉到 2-2-2（配对 -3）：编队被撑大、出发更慢，
+   * 对面先把城防堆起来。所以先关着，等"多大才够打穿"这个数被量准再开。
+   */
+  aiNeedSquad?: boolean;
   /**
    * 指挥官模式：玩家不亲自走子，只排"接下来几个回合造什么"，
    * 建造、移动、攻击、升级全部交给 AI。
@@ -1859,6 +2002,183 @@ export interface AiFocus {
   save?: AiIntent | null;
   /** 产业链承诺（形状沿用 `AiCommit`） */
   chain?: AiCommit | null;
+  /**
+   * 计划排序层当值的那一条（P2/P3 起）。每条计划的状态在自己的 `pockets` 里，
+   * 加新计划不用往这里加字段。
+   */
+  plan?: PlanMemoLike | null;
+  /** 当前活着的编队（实体）。每支有独立的组建/出发/解散生命周期 */
+  squads?: AiSquad[] | null;
+  /**
+   * 决战时机的**当前承诺**（attack / develop）。
+   *
+   * 判决每回合重算会抖（实测 4 局翻 128 次），而"打不打"这种决定不能
+   * 一小时换一次主意。所以用回滞：进入要 1.30，退出掉到 0.90 才放。
+   */
+  decide?: { call: 'attack' | 'develop'; since: number; ratioAt: number } | null;
+}
+
+/** 收尾计划（接管废墟）的跨回合记忆 */
+export interface AiExpedition {
+  /** 还剩几座废墟，先追哪一座 */
+  cityId: string;
+  /** 哪一回合立的 */
+  since: number;
+}
+
+/**
+ * 排序层记忆的形状（和 `ai-plan.ts` 的 `PlanMemo` 一致）。
+ *
+ * 在 types 里重写一份而不是 import：`ai-plan.ts` 依赖 types，反过来 import
+ * 会成环。两边字段必须同步，改一处记得改另一处（探针会撞出来）。
+ */
+export interface PlanMemoLike {
+  id: string;
+  valueAt: number;
+  since: number;
+  /** 每条计划自己的口袋：planId → 状态，互不干扰 */
+  pockets: Record<string, Record<string, unknown>>;
+  /**
+   * 跨计划存活的计数器：**不随当值计划换人而清空**。
+   *
+   * 口袋（pockets）只保留"这一刻当值"的计划，计划一退场口袋就丢。
+   * 但有些计数必须活得比计划久——比如"这座桥被拆了几次"，它正是
+   * 用来决定"还要不要继续修"的；放口袋里就会每退场一次归零，
+   * 放弃条件永远不成立（2026-11-21 实测 seed 34：桥被拆 10 次，
+   * 计数只涨到 1 就被清回去了）。
+   */
+  keep?: Record<string, unknown>;
+  cooldown?: Record<string, number>;
+}
+
+/**
+ * 一支编队（实体，不是统计分段）。
+ *
+ * 2026-11-21 用户否掉了第一版"按到主攻城的距离分前/中/后"：
+ * 32×32 上所有单位都落在"后队"，高时代射程远、移速快时"后队"的作用和前队一样——
+ * **死距离是硬编码阈值，换张图或换个扩 展包就失效**。
+ *
+ * 正确的东西是编队本身：一次性收拢一批**无编队**的单位，编成之后成员固定，
+ * 整队一个目标出发；后方继续组下一支。解散只有三种：全灭 / 收到撤退 / 伤亡过重。
+ */
+export interface AiSquad {
+  /** 'atk-1' / 'atk-2'：后方可以并行组建下一支 */
+  id: string;
+  /**
+   * attack/defend：按战斗编队那套走（收拢、出发、协同）。
+   * build：建造编队（2026-11-22）——2 个工人，目标是**一个点**（渡口/桥点），
+   *        由计划层下指令，不走"凑够人数才出发"这一套。
+   */
+  role: 'attack' | 'defend' | 'build';
+  /** forming：还在收拢；marching：已经出发 */
+  state: 'forming' | 'marching';
+  /** 编成时的成员（固定；死了就从这里剔掉，不补人） */
+  memberIds: string[];
+  /** 目标城；null = 还没定 */
+  targetCityId: string | null;
+  /** 建造编队的目标点（渡口/桥点）；只有 `role === 'build'` 用 */
+  targetPoint?: { x: number; y: number } | null;
+  since: number;
+  /** 组建时打算要几个人：缺口 = want − 实到，缺口反馈给生产端。规模由战略配额给 */
+  want: number;
+  /**
+   * 队形密集度：队里最前和最后**允许**差几格。
+   *
+   * 主力小（3~4：挤得紧、能互相掩护），侦查大（8+：散开才看得见）。
+   * 它同时替代了老的"协同前进"（`aheadOfLine`）——超过密集度就跑得快的等一等，
+   * 不用再单独算一条"你比战线靠前"。
+   */
+  spread: number;
+  /** 已经报给生产端的兵种（别每回合重复请求） */
+  requested: string[];
+}
+
+/**
+ * 编队上报：编队层往回说的东西（反向通道的雏形）。
+ *
+ * 队形用**相对**的数（spread = 队里最靠前和最靠后的距离差），
+ * 不用"到城的绝对距离"——那个随地图尺寸和时代变，是上一版翻车的原因。
+ */
+export interface AiSquadReport {
+  id: string;
+  /** 编队类型：attack/defend 战斗，build 建造（工人） */
+  role?: AiSquad['role'];
+  state: AiSquad['state'];
+  /** 还剩几个人 */
+  count: number;
+  /** 队里最靠前那个人离目标的距离 */
+  lead: number;
+  /** 队形散布：最前和最后差几格（太大 = 散兵线，太小 = 挤成一团挨溅射） */
+  spread: number;
+  /** 连续几回合没推进 */
+  stalled: number;
+  /** 这一回合掉了几个人 */
+  lost: number;
+  /** 上报结论 */
+  note: 'advance' | 'blocked' | 'attrition' | 'thin';
+}
+
+/** 一回合的编队上报（结论有变化才记一条） */
+export interface AiSquadLog {
+  turn: number;
+  me: PlayerId;
+  /** 这一回合的主攻城市 */
+  cityId: string | null;
+  squads: AiSquadReport[];
+}
+
+/** 决战时机的一条判决 */
+export interface AiCallTrace {
+  turn: number;
+  me: PlayerId;
+  marchTurns: number;
+  /** 记忆里（此刻看不见）的敌方战力：按 0.85^age 折算，8 回合清零 */
+  knownPower?: number;
+  /** 记忆中仍计入的敌方单位数 */
+  knownUnits?: number;
+  /** 对目标城守军的情报置信度 0~1（决策时用的那个数） */
+  intelConf?: number;
+  myPower: number;
+  foePower: number;
+  myPerTurn: number;
+  foePerTurn: number;
+  call: 'attack' | 'develop';
+  why: string;
+}
+
+/** 计划当值的一条记录（换计划时记一条） */
+export interface AiPlanTrace {
+  turn: number;
+  me: PlayerId;
+  /** 当值的计划；null = 这一回合没有任何计划（权重型多条时用 + 连起来） */
+  plan: string | null;
+  /** 为什么是它 */
+  reason: string;
+  /** 当时各条的估值（取整），按高到低 */
+  values: Array<{ id: string; value: number }>;
+  /** 当时合成出来的净权重（战略姿态就是从这里读 x / y） */
+  net?: { attack: number; build: number; econ: number; save: number; advance?: number };
+}
+
+/**
+ * 战略层的一次判决（写进 `GameState.aiDecisions`，导出成 sidecar）。
+ *
+ * 字段刻意只放"当时看到的数"，不放结论的推导过程：
+ * 推导是会改的，数不会。回看时按数自己重推一遍，比读一段旧的解释靠谱。
+ */
+export interface AiDecision {
+  turn: number;
+  me: PlayerId;
+  /** 用的是哪一档模型（见 ai-v3 的 `desiredEraOf`）：const / foe / march / pace */
+  model: string;
+  /** 我方当前时代（最高的那座好城） */
+  era: number;
+  /** 对面当前时代（迷雾里只看得到已知的城） */
+  foeEra: number;
+  /** 这档模型算出来的决战时代；0 = 不表态 */
+  desiredEra: number;
+  /** 一句话理由，给看回放的人 */
+  why: string;
 }
 
 export interface AiIntent {
@@ -2280,6 +2600,28 @@ export interface GameState {
    * 没有，就回落到它们；写一律写 `aiFocus`。等老存档自然淘汰了可以删。
    */
   aiFocus?: Partial<Record<PlayerId, AiFocus>>;
+  /**
+   * 战略层的**判决日志**（默认不记，开了 `config.aiEraModel` 才写）。
+   *
+   * 为什么放在 state 里而不是直接在 AI 里写文件：AI 必须是纯的（不碰 IO、
+   * 不碰 Math.random），否则回放和联机都会分叉。所以只往局面里记，
+   * 由跑批脚本在导出回放时一并写成 sidecar（`<回放>.decisions.jsonl`）。
+   *
+   * 回放只能看"它做了什么"，看不到"它为什么"——这一列就是补后半句的。
+   */
+  aiDecisions?: AiDecision[];
+  /**
+   * 计划当值记录（只记变化）。给"计划有没有被真的用上"提供可查的证据：
+   * 一条计划 value 写坏了，表现就是"AI 一点反应都没有"，和没装一模一样。
+   */
+  aiPlanTrace?: AiPlanTrace[];
+  /**
+   * 决战时机的判决记录（每席每回合一条，只记"结论变了"的那些）。
+   * 回放时对着看"它当时觉得该打还是该等"。
+   */
+  aiCalls?: AiCallTrace[];
+  /** 编队上报（只记结论变化，上限 200 条）：给"下面有没有回话"留证据 */
+  aiSquads?: AiSquadLog[];
   /**
    * 上一次"回合开始时"的资源存量（AI 用来判断"产得够不够"）。
    *

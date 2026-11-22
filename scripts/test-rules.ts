@@ -20805,14 +20805,14 @@ test('战报折叠：只有带 say 的事件才展开', () => {
   assert.equal(logEventSays(new Set(['omen']), ['omen', 'omen'], hasSay), false, 'repeat 事件重复触发：不再展开');
 });
 
-test('AI 内核：测试 AI 二代能活进 config，网络内核仍只认两席局', () => {
+test('AI 内核：实验 AI v3 能活进 config，网络内核仍只认两席局', () => {
   /*
    * 2026-11-21 接按钮时发现的白名单漏洞：`setup.ts` 只放行 `net`，
-   * `aiBrain: 'goal'`（测试 AI 二代 / core/ai-v2.ts）会被静默写成 `script`。
+   * `aiBrain: 'goal'`（实验 AI v3 / core/ai-v3.ts）会被静默写成 `script`。
    * 面板上那颗按钮点得亮、开局还是老引擎——"看着生效、其实没生效"。
    */
   const goal2 = createMatch({ ...BASE, aiBrain: 'goal' }, 7);
-  assert.equal(goal2.config.aiBrain, 'goal', '选了二代内核，config 里必须还是 goal');
+  assert.equal(goal2.config.aiBrain, 'goal', '选了 v3 内核，config 里必须还是 goal');
 
   const net2 = createMatch({ ...BASE, aiBrain: 'net' }, 7);
   assert.equal(net2.config.aiBrain, 'net', '两席局认策略网络');
@@ -20820,9 +20820,9 @@ test('AI 内核：测试 AI 二代能活进 config，网络内核仍只认两席
   const net4 = createMatch({ ...BASE, aiBrain: 'net', playerCount: 4 }, 7);
   assert.equal(net4.config.aiBrain, 'script', '策略网络没见过三/四人局，退回手写引擎');
 
-  // 二代是按"所有敌人"写的，不设两席限制（多人局弱一点，但能打）
+  // v3 是按"所有敌人"写的，不设两席限制（多人局弱一点，但能打）
   const goal3 = createMatch({ ...BASE, aiBrain: 'goal', playerCount: 3 }, 7);
-  assert.equal(goal3.config.aiBrain, 'goal', '二代内核不挑人数');
+  assert.equal(goal3.config.aiBrain, 'goal', 'v3 内核不挑人数');
 });
 
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑

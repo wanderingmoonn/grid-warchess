@@ -192,3 +192,12 @@ assert.ok(tileAt(row.x + 1, row.y).className.includes('t-hill'), '松手之后�
 
 assert.equal(errs.length, 0, `不该有运行时报错：${errs.join('; ')}`);
 console.log('通过：拖动画图逐格生效、摆兵不重写货架、「场上」数字就地更新');
+
+/*
+ * 显式退出。
+ *
+ * jsdom 的窗口会留下定时器/句柄，Node 22 下进程跑完断言也不会自己结束——
+ * `npm test` 于是卡在这一步（2026-11-22 定位：HEAD 上同样复现，与业务代码无关）。
+ * 断言已经全部执行完，这里直接退，别让跑批等一个永远不会到来的自然退出。
+ */
+process.exit(0);
