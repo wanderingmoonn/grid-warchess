@@ -2560,13 +2560,25 @@ function buildYieldChain(
     });
   });
   if (!city) return [];
+  /*
+   * 找**最远**空地，不是最近。
+   *
+   * 找最近时链很短（城格 → 2 格外的农 → 空地），外圈的人不参与，
+   * 里层的人挪一步又撞上外圈——一次只能清一列、还要好几回合。
+   * 找最远（半径 8 内）会把整列人都串进链，一次把这一列整体外移。
+   */
   const starts = cityTiles(city).map((t) => t.y * view.w + t.x);
   const prev = new Map<number, number>();
+  const dist = new Map<number, number>();
   const seen = new Set<number>(starts);
   const q: number[] = [...starts];
+  for (const k of starts) dist.set(k, 0);
   let end = -1;
-  for (let i = 0; i < q.length && end < 0; i++) {
+  let endD = -1;
+  for (let i = 0; i < q.length; i++) {
     const k = q[i]!;
+    const d = dist.get(k)!;
+    if (d > 8) continue;
     const x = k % view.w;
     const y = Math.floor(k / view.w);
     for (const [dx, dy] of DIRS) {
@@ -2581,11 +2593,15 @@ function buildYieldChain(
       if (u && u.owner !== me) continue;
       seen.add(nk);
       prev.set(nk, k);
+      dist.set(nk, d + 1);
       if (!u) {
-        end = nk;
-        break;
+        if (d + 1 > endD) {
+          endD = d + 1;
+          end = nk;
+        }
+      } else {
+        q.push(nk);
       }
-      q.push(nk);
     }
   }
   if (end < 0) return [];
