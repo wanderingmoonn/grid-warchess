@@ -101,16 +101,22 @@ const ANTIQUITY: UnitTypeDef[] = [
     vision: 2,
   },
   {
-    // 轻盾兵：跑得快、能藏林子，用来抢资源点和摸后排
+    /*
+     * 轻盾兵：跑得比步兵快、能藏林子，用来抢资源点和摸后排。
+     *
+     * 2026-11-22 平衡：移速 4 → 3、护甲 1 → 3。
+     * 原来 4 速配「潜行」，能在前排还没接触时绕到后排拆弓手，而且一旦挨打
+     * 就整队报销（护甲 1，等于没有）；现在慢半拍、但扛得住一轮齐射。
+     */
     id: 'anc_skirmisher',
     name: '轻盾兵',
     short: '轻',
     era: 1,
     category: 'combat',
     cost: 32,
-    move: 4,
+    move: 3,
     atk: 11,
-    armor: 1,
+    armor: 3,
     maxHp: 24,
     range: 1,
     vision: 4,
@@ -508,7 +514,13 @@ const MEDIEVAL: UnitTypeDef[] = [
     abilities: ['shield-wall'],
   },
   {
-    // 希腊/罗马弩炮：射程压过所有弓手，靠破甲啃方阵
+    /*
+     * 希腊/罗马弩炮：射程压过所有弓手，靠破甲啃方阵。
+     *
+     * 2026-11-22 平衡：视野 2 → 5。
+     * 射程 4 而视野只有 2，等于"看得见的打不着、打得着的看不见"，永远要有人
+     * 替它探路；5 正好盖住射程再留一格，让它能独立选目标，而不是当一门瞎子炮。
+     */
     id: 'anc_ballista',
     name: '弩炮',
     short: '弩',
@@ -520,7 +532,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     armor: 1,
     maxHp: 24,
     range: 4,
-    vision: 2,
+    vision: 5,
     abilities: ['armor-pierce'],
   },
   {
