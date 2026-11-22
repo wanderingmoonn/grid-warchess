@@ -142,6 +142,22 @@ for (const p of Object.keys(s.players) as PlayerId[]) if (p !== me) s.players[p]
 const foeUnit = placeUnit(s, foeSeat, 'militia', 11, 11);
 if (foeUnit.ok) s = foeUnit.state;
 /*
+ * 把这只兵**围死**（东南角，堵住 (10,11)/(11,10) 两格）。
+ *
+ * 不围住会测出假象：对手的兵会自己走过来，而 `tacticalMoveScore` 里经济单位
+ * 有一条"躲威胁"（`(currentThreat - futureThreat) * 2`），农民一被吓就往
+ * 远离敌人的方向跑，看起来像"经济单位自己让开了路"。
+ * 实测就是这么坑的：第 5 回合出现 22.5 分的 farmer 逃跑动作，
+ * 而我一度把它当成"让位机制开始工作"。
+ */
+for (const [x, y] of [
+  [10, 11],
+  [11, 10],
+] as Array<[number, number]>) {
+  const t = s.tiles[y * W + x];
+  if (t && !s.units.some((u) => u.x === x && u.y === y)) t.terrain = 'mountain';
+}
+/*
  * 每回合把**双方**的钱清空。
  *
  * 对手是为了不让它自己架桥/造兵；我方是为了不让它在城内攒钱造新兵——
@@ -238,14 +254,28 @@ function playRound(): { moves: number; combat: number; econ: number; acts: strin
     const r = applyAction(s, a);
     if (!r.ok) break;
     s = r.state;
-    acts.push(a.type);
-    if (a.type === 'MOVE') {
-      moves += 1;
+    /*
+     * 只统计**我方**动作。以前没筛 owner，把对手在右下角调度农民也算成
+     * "经济单位开始让位"了——实测第 5 回合那两次 MOVE 是 B 的 farmer
+     * 在 (9,7)/(8,6)，离城六格远，跟让位一点关系没有。
+     */
+    {
       const uid = 'unitId' in a ? String((a as { unitId?: string }).unitId ?? '') : '';
       const u = s.units.find((z) => z.id === uid);
-      const cat = u ? s.unitTypes[u.type]?.category : undefined;
-      if (cat === 'combat') combat += 1;
-      else econ += 1;
+      if (!u || u.owner !== me) continue;
+      acts.push(
+        `${a.type}:${u.owner}:${u.type}@${u.x},${u.y}${'x' in a ? `→${(a as { x: number }).x},${(a as { y: number }).y}` : ''}`,
+      );
+    }
+    if (a.type === 'MOVE') {
+      const uid = 'unitId' in a ? String((a as { unitId?: string }).unitId ?? '') : '';
+      const u = s.units.find((z) => z.id === uid);
+      // 只算我方：对手在右下角调度自己的农民，跟"让位"没关系
+      if (u && u.owner === me) {
+        moves += 1;
+        if (s.unitTypes[u.type]?.category === 'combat') combat += 1;
+        else econ += 1;
+      }
     }
   }
   if (!s.winner) {
