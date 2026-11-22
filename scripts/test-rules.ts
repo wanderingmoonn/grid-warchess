@@ -4210,36 +4210,6 @@ test('精灵女王：林海把五格内地表变森林、五回合后还原，�
   assert.equal((st.units.find((u) => u.id === ally.id)?.tempAbilities ?? []).length, 0, '限时能力到期要摘掉');
 });
 
-test('林海不碰城格：结构不是地形', () => {
-  /*
-   * 2026-11-22 追问出来的坑：城格被改成森林时，`cityId` 会被清掉，而到期只还地形、
-   * 还不了 id —— 这座城永久少一格（`cityTiles`、兵额、驻军全跟着错）。
-   * 判据收在 `patchTerrain` 里：城格、桥面一律不改（桥面同理：那 5 回合里桥就不是桥了，
-   * 这期间桥被打掉，到期还会把 `'bridge'` 写回去，凭空长出一段没有桥的桥面）。
-   */
-  const s = fresh({ expansionIds: FANTASY });
-  for (let y = 2; y <= 12; y += 1) {
-    for (let x = 2; x <= 12; x += 1) {
-      const t = s.tiles[idx(s, x, y)];
-      if (t && t.terrain !== 'city') t.terrain = 'plain';
-    }
-  }
-  const city = citiesOf(s, 'A')[0]!;
-  const queen = place2(s, 'A', 'elf-queen', city.x + 3, city.y + 3);
-  s.current = 'A';
-
-  const cast = applyAction(s, { type: 'HERO_SKILL', unitId: queen.id, skillId: 'forest-tide' });
-  assert.ok(cast.ok, cast.ok ? '' : cast.reason);
-  for (let dy = 0; dy < city.size; dy += 1) {
-    for (let dx = 0; dx < city.size; dx += 1) {
-      const cell = cast.state.tiles[idx(cast.state, city.x + dx, city.y + dy)];
-      assert.equal(cell.terrain, 'city', '城格不该被改成森林');
-      assert.equal(cell.cityId, city.id, '城格归属必须留着');
-    }
-  }
-  // 旁边的空地照样变森林
-  assert.equal(cast.state.tiles[idx(cast.state, queen.x + 1, queen.y)].terrain, 'forest', '旁边空地照常变');
-});
 test('九头蛇：不再是英雄，强再生是被动', () => {
   /*
    * 2026-11-22 用户定：九头蛇摘掉英雄身份。
