@@ -2186,6 +2186,36 @@ function decisiveOf(
   };
 }
 
+/* ---------------- 只读探针：迷雾 vs 全图的决战比值差（阶段 0） ---------------- */
+
+/**
+ * 同一局面、两种视角下决战判据差多少。
+ *
+ * **只给 `probe:intel` 用，不参与任何决策。** 它回答的是一个先后顺序问题：
+ * "看不见"到底把决战判断歪曲了多少？如果这个差很小，做侦查就是白工——
+ * 该去查采购/编队，而不是加一条侦察计划。
+ *
+ * 为什么把全图视角叫"作弊视角"：`playerView(s, me, true)` 会把所有单位、城市、
+ * 建筑都下发。它不代表任何合法玩家能看到的东西，只是"如果 AI 什么都知道"的上界。
+ * 真实可达到的上界是"侦查把该看的都看了"，但那已经接近这个数。
+ */
+export function decisiveViewGap(
+  s: GameState,
+  me: PlayerId,
+): { fogged: DecisiveCall; full: DecisiveCall } | null {
+  const build = (view: GameState): DecisiveCall | null => {
+    const wade = distanceFields(view, me, 'advance');
+    const land = new Map<string, number[]>();
+    for (const [id, field] of distanceFields(view, me, 'land')) {
+      land.set(id, mergeAdvanceField(field, wade.get(id) ?? []));
+    }
+    return decisiveOf(view, me, land);
+  };
+  const fogged = build(playerView(s, me).state);
+  const full = build(playerView(s, me, true).state);
+  return fogged && full ? { fogged, full } : null;
+}
+
 /**
  * 选渡口：**从两岸的陆地场往回找**，取"我这边 + 对面"总步数最小的那块水面。
  *
