@@ -151,7 +151,7 @@ import type { PlanCtx, PlanWeights } from './ai-plan.ts';
 // 注意：本文件里 `AiPlan` 已经指"这一回合的打法"（stance/savingFor），
 // 那是老东西。排序层的计划是另一个概念，这里改名避开歧义。
 import type { AiPlan as RankedPlan } from './ai-plan.ts';
-import { armyStrength, powerPerTurn, powerRace, productionCapacity } from './ai-strength.ts';
+import { armyStrength, econCapacity, powerPerTurn, powerRace, productionCapacity } from './ai-strength.ts';
 
 export type { AiBudget } from './ai-meta.ts';
 
@@ -7903,22 +7903,54 @@ function recruitCandidate(
     (u) => utype(s, u.type).category === 'combat' && !isStuck(s, u),
   ).length;
   const rough = roughShare(s);
-  const cityCount = Math.max(1, citiesOf(s, me).length);
   // 弃城期把经济线的目标抬高：这一档赢在"三个回合之后我比你富一代"，
   // 所以它要的不是"够用的农民"，而是能把整座城的产线滚起来的人手。
   /*
-   * 经济单位的目标数量：**跟着发展意愿走**（2026-11-21）。
+   * 经济单位的目标数量：**地块容量 × 发展意愿**（2026-11-22 重做）。
    *
-   * 以前固定"每城 2 个"，而战略层算出来的 `y` 根本没人读——于是"该发展阶段"
-   * 和"每城只两个农民"同时成立。现在 `econWeight`（含 y）也乘在这里，
-   * 想发展时目标翻倍、分数也放大，钱才会真的流向经济。
+   * 以前是 `min(12, 城数×2×…)`——两道玩家没有的约束：
+   *   · "每城 2 个"是拍出来的惯例（注释自己写的）；
+   *   · `min(12)` 连 git 都追不到理由。
+   * 结果 5 城时目标正好 12，24×24 上也只造 10~11 个，与地图大小无关。
+   *
+   * 现在只受地皮约束：`econCapacity` 数"我方城 6 格内、值得种、且不是产兵格的格子"。
+   * 发展意愿（boom 证据）决定用掉容量的几成，`econWeight` 只做 ±20% 的微调。
    */
-  const targetEarners = Math.min(
-    12,
-    Math.round(cityCount * 2 * Math.max(1, econWeight)) +
-      Math.round(3 * (mood?.driveRaw.boom ?? 0)) +
-      (mood?.abandonedCityId ? 2 : 0),
-  );
+  const econCap = econCapacity(s, me);
+  const boomWant = Math.max(0, Math.min(1, mood?.driveRaw.boom ?? 0.5));
+  /*
+   * 投资窗口（@tune 20 回合）：开局铺经济，过了窗口就不再往上加。
+   *
+   * 为什么必须有一条时间线：把"每城 2 个"拿掉之后，AI 会一路把容量铺满
+   * （Q4 实测 40 个经济单位、收入 401/回合），可兵只有 15 个，
+   * 四局由胜转平（87/106/111/118 → 全是 261）。钱变不成兵——产兵格每回合
+   * 就那么几个——所以"投到什么时候停"必须有个端点。
+   *
+   * 20 是"双方各十来个回合"的量级，之后再补经济只按维护性替换（目标不再涨）。
+   * 真正的解法是接 `solvePower` 的 `econUntil`（它按回本算"投到第几回合"），
+   * 这一版先给一个能跑的窗口，等第三步再换。
+   */
+  const ECON_WINDOW = 20;
+  const inWindow = s.turn <= ECON_WINDOW;
+  const econShare = inWindow
+    ? Math.max(0.3, Math.min(0.95, 0.3 + 0.5 * boomWant)) *
+      Math.max(0.8, Math.min(1.2, econWeight))
+    : 0;
+  /*
+   * 默认仍是旧的目标公式（`aiEconCap` 关）；打开后按地块容量铺。
+   * 旧的留着不是"舍不得"：这是默认行为的基线，A/B 时两边都得能跑。
+   */
+  const targetEarners =
+    s.config.aiEconCap === true
+      ? inWindow
+        ? Math.max(2, Math.round(econCap * Math.min(1, econShare)))
+        : Math.max(2, Math.min(econCap, earners))
+      : Math.min(
+          12,
+          Math.round(Math.max(1, citiesOf(s, me).length) * 2 * Math.max(1, econWeight)) +
+            Math.round(3 * boomWant) +
+            (mood?.abandonedCityId ? 2 : 0),
+        );
 
   // 高级：看现在这支部队的"远程占比"，缺什么补什么。
   //

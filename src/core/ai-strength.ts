@@ -30,7 +30,8 @@
 import { solvePower } from './power-solver.ts';
 import type { PowerEcon, PowerInput, PowerPlan, PowerUnit } from './power-solver.ts';
 import { isProducer } from './produce.ts';
-import { incomeOf, recruitSpawnCells } from './rules.ts';
+import { passable } from './config.ts';
+import { cityAt, incomeOf, recruitSpawnCells } from './rules.ts';
 import {
   damageToCity,
   distToCity,
@@ -174,6 +175,78 @@ export function productionCapacity(s: GameState, me: PlayerId): number {
 }
 
 /**
+ * 这块地形上最好的经济单位能产多少钱。
+ *
+ * 用"当前时代买得起的经济单位里最高的那一档"，而不是写死 farmer：
+ * 5 代之后种植园主在平原产 20，farmer 只有 7，写死就等于不知道时代变了。
+ */
+function bestEconOn(s: GameState, terrain: string): number {
+  let best = 0;
+  for (const d of Object.values(s.unitTypes)) {
+    if (d.category !== 'economy') continue;
+    const v = Number(d.incomeByTerrain?.[terrain as keyof typeof d.incomeByTerrain] ?? 0);
+    if (v > best) best = v;
+  }
+  return best;
+}
+
+/** @tune 一块地值得专门派个经济单位去站的最低产出（低于这个不如让它空着） */
+const ECON_MIN_YIELD = 4;
+/** @tune 经济单位只在离自家城这么近的范围里干活（再远不划算、也不安全） */
+const ECON_RANGE = 6;
+
+/**
+ * 可经济化地块数：**这是玩家唯一的约束（地皮）**，也是求解器该用的口径。
+ *
+ * 为什么要有它：`powerInputOf` 以前用"每城 2 个"当经济上限
+ * （`econRoom = 城数 × 2 − 现有`），采购侧又有 `min(12, 城数×2×…)`。
+ * 两个都是拍的惯例，叠起来把经济死死按在 10~12 个，和地图大小无关。
+ * 实测（2026-11-22）：24×24 上 v3 经济单位 10~11 个，而地块容量是它的数倍。
+ *
+ * 口径（都写清楚，免得以后又变成"惯例"）：
+ *   · 只算**我方城周围 6 格内、且离我方城比离敌方城更近**的格；
+ *   · 排除城格、不可站立、产兵格（占了城市就造不出兵，这是踩过的坑）；
+ *   · 该地形对某个经济单位的产出 ≥ `ECON_MIN_YIELD` 才算"值得种"；
+ *   · **不扣现有单位占的格**：兵会走，格子会释放，容量按"潜在"算更稳。
+ *
+ * 目前只算地球（多图的月球基地等以后要按图分组）。
+ */
+export function econCapacity(s: GameState, me: PlayerId): number {
+  const own = s.cities.filter((c) => c.owner === me && !c.ruined);
+  if (own.length === 0) return 0;
+  const foe = s.cities.filter((c) => c.owner !== me && !c.ruined);
+  const probe = Object.values(s.unitTypes)
+    .filter((d) => d.category === 'combat' && d.domain !== 'water')
+    .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+  const spawn = new Set<number>();
+  if (probe) {
+    for (const c of own) {
+      for (const t of recruitSpawnCells(s, c.id, undefined, probe.id)) {
+        spawn.add(t.y * s.w + t.x);
+      }
+    }
+  }
+  let n = 0;
+  for (let y = 0; y < s.h; y += 1) {
+    for (let x = 0; x < s.w; x += 1) {
+      const t = tileAt(s, x, y);
+      if (!t || !passable(t.terrain)) continue;
+      if (t.terrain === 'city' || cityAt(s, x, y)) continue;
+      if (spawn.has(y * s.w + x)) continue;
+      const dOwn = Math.min(...own.map((c) => Math.max(Math.abs(x - c.x), Math.abs(y - c.y))));
+      if (dOwn > ECON_RANGE) continue;
+      const dFoe = foe.length
+        ? Math.min(...foe.map((c) => Math.max(Math.abs(x - c.x), Math.abs(y - c.y))))
+        : Infinity;
+      if (dOwn > dFoe) continue;
+      if (bestEconOn(s, t.terrain) < ECON_MIN_YIELD) continue;
+      n += 1;
+    }
+  }
+  return n;
+}
+
+/**
  * 每回合能变成战力的部分（战力/回合）。
  *
  * 三个上限取最小：格子数、钱、以及"这一局最强的性价比兵"。
@@ -232,14 +305,20 @@ export function powerInputOf(s: GameState, me: PlayerId): PowerInput {
       if (inc > 0) econ.push({ id: d.id, price, income: inc });
     }
   }
-  const cities = s.cities.filter((c) => c.owner === me && !c.ruined).length;
   const haveEcon = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'economy').length;
+  const cities = s.cities.filter((c) => c.owner === me && !c.ruined).length;
   return {
     gold: s.players[me].gold,
     income: incomeOf(s, me),
     slots: productionCapacity(s, me),
-    // 每城两个经济单位的惯例，减去已经有的
-    econRoom: Math.max(0, cities * 2 - haveEcon),
+    /*
+     * 经济还能补几个。默认还是"每城 2 个"的旧口径（`aiEconCap` 关）；
+     * 打开后改用"可经济化地块数 − 现有"——那是玩家真正的约束。
+     */
+    econRoom:
+      s.config.aiEconCap === true
+        ? Math.max(0, econCapacity(s, me) - haveEcon)
+        : Math.max(0, cities * 2 - haveEcon),
     units,
     econ,
   };
