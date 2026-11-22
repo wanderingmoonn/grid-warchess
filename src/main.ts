@@ -1473,7 +1473,6 @@ function panelInput(known?: PlayerView): PanelInput {
     planReady: state.orderReady?.[me()] === true,
     forceMode,
     combatInspectMode,
-    combatDirectPreview: currentUiLayout(document.documentElement) === 'refined',
     combatTargetCount: targets.length + siege.length,
     report: reportPanel(),
     /*
@@ -3951,7 +3950,14 @@ combatPreviewEl.addEventListener('click', (event) => {
   }
 });
 
-function dispatch(action: Action, quickAttack = false): boolean {
+/**
+ * 执行一个动作。
+ *
+ * 2026-11-22 用户要求**回撤「攻击确认键」那次改动**：以前 refined UI 里
+ * 点敌人就直接开火（传 `quickAttack = true` 绕过确认），现在一律先出预览、
+ * 由「攻击预览 / 确认」那颗按钮收口——误触一下就是送一个兵，不值得省这一步。
+ */
+function dispatch(action: Action): boolean {
   /*
    * 肉鸽撤离阶段：**每个动作入口都要先把胜负按下**（2026-11-19）。
    *
@@ -4008,7 +4014,7 @@ function dispatch(action: Action, quickAttack = false): boolean {
   }
 
   if ((action.type === 'ATTACK' || action.type === 'SIEGE') && !confirmingCombat &&
-    (touchCombatInput || combatInspectMode || (currentUiLayout(document.documentElement) === 'refined' && !quickAttack)) && !godMode()) {
+    (touchCombatInput || combatInspectMode) && !godMode()) {
     if (!showCombatPreview(action, true)) toast('当前无法预览这次攻击，请重新选择单位和目标');
     return false;
   }
@@ -4680,7 +4686,7 @@ function onBoardClick(e: Event): void {
         targetId: hit.id,
         x: coords.x,
         y: coords.y,
-      }, true);
+      });
       return;
     }
     toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
@@ -4845,7 +4851,7 @@ function onBoardClick(e: Event): void {
         targetId: stacked.id,
         x: coords.x,
         y: coords.y,
-      }, wantAttack);
+      });
       return;
     }
   }
@@ -4858,7 +4864,7 @@ function onBoardClick(e: Event): void {
       targetId: clickedUnitId,
       x: coords?.x,
       y: coords?.y,
-    }, wantAttack);
+    });
     return;
   }
 
@@ -4953,7 +4959,7 @@ function onBoardClick(e: Event): void {
       cityId: city.id,
       x: coords.x,
       y: coords.y,
-    }, wantAttack);
+    });
     return;
   }
 
