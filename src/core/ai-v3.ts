@@ -1738,6 +1738,8 @@ interface Fields {
    * 因为潜行一出手就现形）。
    */
   scout: { unitId: string; cityId: string; x: number; y: number } | null;
+  /** 顺路观察：只改这个单位的走位目标，不禁攻、不建编队 */
+  peek: { unitId: string; x: number; y: number } | null;
   /**
    * 优势期：兵力和身价都压过对面一截，这时候该做的是**破城**，不是清野。
    *
@@ -3324,6 +3326,128 @@ const SCOUT_PLAN: RankedPlan = {
   weights: () => ({}),
 };
 registerAiPlan(SCOUT_PLAN);
+
+/* ---------------- 顺路观察：不抽人，只偏一点（阶段 3b 的 B 方案） ---------------- */
+
+/**
+ * 顺路观察的任务：谁、去哪看。
+ *
+ * 和 `SCOUT_PLAN` 的根本区别是**不新增成本**：
+ *   · 只挑"已经在往目标城方向走"的战斗单位（距城 5~14 格）；
+ *   · 不建编队、不禁攻、不设死亡冷却——它本来就在前线，死了是打输了；
+ *   · 看见了（conf ≥ 0.7）或没有合适的人，任务直接消失。
+ *
+ * 为什么值得先试这个：阶段 3 的完整侦查净负，但那是"抽走一个兵 + 六条执行规则"
+ * 混在一起的结果。这里只改走位偏好，用来回答一个更基本的问题——
+ * **提前几回合知道对面有多少兵，到底值不值钱？** 不值的话后面六条都不用做。
+ */
+/** 一次顺路观察最多几回合：看完就走，别在前线站着当靶子 */
+const PEEK_MAX_TURNS = 6;
+/** 观察完冷却几回合再考虑下一次（否则会每 6 回合反复停一次） */
+const PEEK_COOLDOWN = 8;
+
+function peekTaskOf(c: PlanCtx): { unitId: string; x: number; y: number } | null {
+  // 默认关：B 方案首验净负（见 docs）。`aiPeek: true` 才开
+  if (c.view.config.aiPeek !== true) return null;
+  if (c.view.turn < Number(c.keep.peekCooldown ?? 0)) return null;
+  const since = Number(c.keep.peekSince ?? 0);
+  if (since > 0 && c.view.turn - since >= PEEK_MAX_TURNS) return null;
+  const city = scoutTargetCityOf(c);
+  if (!city) return null;
+  if (Number(c.intelConf ?? 0) >= SCOUT_CONF_ENOUGH) return null;
+  const own = citiesOf(c.view, c.me);
+  let best: Unit | null = null;
+  let bestScore = -Infinity;
+  for (const u of unitsOf(c.view, c.me)) {
+    const def = utype(c.view, u.type);
+    if (def.category !== 'combat' || def.domain === 'water') continue;
+    if (u.hp / Math.max(1, def.maxHp) < 0.6) continue;
+    const d = Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y));
+    if (d < 5 || d > 14) continue;
+    // 守家的不走：家里没人比"看清对面"重要
+    if (own.some((x) => Math.max(Math.abs(u.x - x.x), Math.abs(u.y - x.y)) <= 2)) continue;
+    // 视野高的优先（看得远），离得近的优先（省路）
+    const score = (def.vision ?? 1) * 10 - d * 0.5;
+    if (score > bestScore) {
+      bestScore = score;
+      best = u;
+    }
+  }
+  if (!best) return null;
+  const spot = peekSpotFor(c.view, city, best);
+  if (!spot) return null;
+  return { unitId: best.id, ...spot };
+}
+
+/**
+ * 观察点：距城 `vision` 格的一圈（正好能看见城），森林/丘陵优先。
+ *
+ * 为什么不用"距城 vision+1"：那要多走一步还看不见，等于白跑。
+ * 为什么留一圈而不是固定一个点：城的大小、地形、自己来向都不同，固定点经常不可站。
+ */
+function peekSpotFor(
+  view: GameState,
+  city: City,
+  u: Unit,
+): { x: number; y: number } | null {
+  const v = Math.max(2, utype(view, u.type).vision ?? 2);
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  for (let dy = -v; dy <= v; dy += 1) {
+    for (let dx = -v; dx <= v; dx += 1) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) !== v) continue;
+      const x = city.x + dx;
+      const y = city.y + dy;
+      const t = tileAt(view, x, y);
+      if (!t || !passable(t.terrain)) continue;
+      if (unitAt(view, x, y)) continue;
+      if (cityAt(view, x, y)) continue;
+      let score = 0;
+      if (t.terrain === 'forest' || t.terrain === 'hill') score += 12;
+      // 离单位近一点：少走两格就少两格风险
+      score -= Math.max(Math.abs(u.x - x), Math.abs(u.y - y)) * 0.6;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
+}
+
+const PEEK_PLAN: RankedPlan = {
+  id: 'peek',
+  kind: 'weights',
+  // 权重给得很低：它是"顺手做的事"，不该和突破/收尾抢
+  strength: 0.8,
+  value: (c) => (peekTaskOf(c) ? 1.5 : 0),
+  done: () => false,
+  orders: (c) => {
+    const t = peekTaskOf(c);
+    return t ? { peek: t } : {};
+  },
+  /*
+   * 计时与冷却：第一次有任务时记开始回合，任务结束时设冷却。
+   *
+   * 没有这两个数的话，被选中的单位会一直在观察点站到 conf 升上去为止
+   * （Q2 均回合 70→97 就是这么来的）——那是"蹲着不推进"，不是"顺路看一眼"。
+   */
+  save: (c) => {
+    const since = Number(c.keep.peekSince ?? 0);
+    const t = peekTaskOf(c);
+    if (t) {
+      if (since === 0) c.keep.peekSince = c.view.turn;
+      return {};
+    }
+    if (since > 0) {
+      c.keep.peekSince = null;
+      c.keep.peekCooldown = c.view.turn + PEEK_COOLDOWN;
+    }
+    return {};
+  },
+  weights: () => ({}),
+};
+registerAiPlan(PEEK_PLAN);
 
 /**
  * 这块水面值不值得架桥：从它出发，往哪个方向、跨几格水能上岸。
@@ -5884,6 +6008,13 @@ function unitCandidates(
    * 这不是"不敢打"，是任务要求：一出手就现形，而且之后整个敌方回合都露在外面。
    */
   const isScout = all.scout?.unitId === unit.id;
+  /*
+   * 走位引导点：侦查任务（`scout`）或顺路观察（`peek`）。
+   *
+   * 两者的差别只在**攻击**：`scout` 禁攻（潜行要求），`peek` 照常打——
+   * 它只是"往那边走的时候偏一点"，被打了该还手还手。
+   */
+  const guide = isScout ? all.scout : all.peek?.unitId === unit.id ? all.peek : null;
 
   // 施工中的工地不能开火、不能围城、不能造东西（规则层会拒），
   // 所以这里根本不为它生成候选——否则 AI 会提一个必被拒绝的动作，
@@ -5966,14 +6097,14 @@ function unitCandidates(
       const destCity = cityAt(s, x, y);
       if (destCity?.ruined && s.players[me].gold < rebuildCost(destCity)) continue;
       let score: number;
-      if (isScout && all.scout) {
+      if (guide) {
         /*
          * 侦查走位：只认"离蹲点更近"，不理推进/换血那一套。
          *
          * 已经在点上（d0 = 0）时**不推移动**：下面 `holdScore` 会让它站着。
          * 不这么写的话，到了林子还会被基础走位分拽走——一挪窝就前功尽弃。
          */
-        const sp = all.scout;
+        const sp = guide;
         const d0 = Math.max(Math.abs(unit.x - sp.x), Math.abs(unit.y - sp.y));
         if (d0 === 0) continue;
         const d1 = Math.max(Math.abs(x - sp.x), Math.abs(y - sp.y));
@@ -9014,6 +9145,7 @@ function aiNextActionCoreInner(
     crossingSite: null,
     holdFire: false,
     scout: null,
+    peek: null,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -9184,6 +9316,7 @@ function aiNextActionCoreInner(
     if (resolved.orders.commit) fields.commit = true;
     // 侦查指令：派谁/去哪。为 null 时不写，保持"这回合不侦查"
     if (resolved.orders.scout) fields.scout = resolved.orders.scout;
+    if (resolved.orders.peek) fields.peek = resolved.orders.peek;
     fields.crossingSite = resolved.focus;
     fields.weights = resolved.net;
     fields.pullHome = resolved.net.pullHome;

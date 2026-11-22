@@ -176,6 +176,13 @@ export interface PlanOrders {
    * 最后一定是"人往东走、桥往西修"。
    */
   scout: { unitId: string; cityId: string; x: number; y: number } | null;
+  /**
+   * 顺路观察（阶段 3b 的 B 方案）：把 `unitId` 的**走位目标**从城改成观察点。
+   *
+   * 和 `scout` 的区别：不建编队、不抽人、**不禁止攻击**。它只是"往那边走的时候
+   * 稍微偏一点，先看一眼"，看见了就恢复正常推进。
+   */
+  peek: { unitId: string; x: number; y: number } | null;
 }
 
 /** 行动型计划吐出的一个动作（可带分） */
