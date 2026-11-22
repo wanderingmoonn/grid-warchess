@@ -7955,19 +7955,26 @@ function recruitCandidate(
   const econPlan = (() => {
     if (s.config.aiEconPlan !== true) return null;
     /*
-     * 窗口 = 主力到最近敌城的格数 ÷ 3（平均移动力）。这里自己量，不用外部传：
-     * 采购被好几处调用，多一个必填参数只会让人在某一处传错。
+     * 窗口 = **决战判决算出来的行军回合**（`aiCalls.marchTurns`）：
+     * 那是距离场里的路径回合（含绕河/过桥），不是直线距离。
+     *
+     * 为什么不用 `distToCity ÷ 3`：实测同一条 24×24 上，直线算法给 2~6 回合、
+     * 路径算法给 47 回合——差十倍。用直线时 `econUntil` 恒为 0，经济一个都投不进去。
+     * 判决不是每回合都写日志，所以取最近 6 回合内、本席的最后一条。
      */
-    const foeCities = s.cities.filter((c) => c.owner !== me && !c.ruined);
-    let focusDist = Infinity;
-    if (foeCities.length > 0) {
-      for (const u of myUnits) {
-        if (utype(s, u.type).category !== 'combat') continue;
-        for (const c of foeCities) focusDist = Math.min(focusDist, distToCity(u, c));
-      }
+    const recent = [...(s.aiCalls ?? [])]
+      .reverse()
+      .find((c) => c.me === me && s.turn - c.turn <= 6);
+    let horizon = recent?.marchTurns ?? 0;
+    if (!Number.isFinite(horizon) || horizon <= 0) {
+      // 还没判决记录（开局前几回合）：退到"城到城"的直线，按 3 格/回合估
+      const own = citiesOf(s, me);
+      const foe = s.cities.filter((c) => c.owner !== me && !c.ruined);
+      let best = Infinity;
+      for (const a of own) for (const b of foe) best = Math.min(best, distToCity(a, b));
+      horizon = Number.isFinite(best) ? best / 3 : 8;
     }
-    const horizon = Math.max(2, Math.min(20, Math.round((Number.isFinite(focusDist) ? focusDist : 8) / 3)));
-    return solvePower(powerInputOf(s, me), horizon);
+    return solvePower(powerInputOf(s, me), Math.max(2, Math.min(20, Math.round(horizon))));
   })();
   const targetEarners = econPlan
     ? econPlan.econUntil > 0

@@ -14,6 +14,7 @@ import { applyAction } from '../src/core/rules.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import { aiNextAction, decisiveViewGap } from '../src/core/ai-v3.ts';
 import { powerInputOf } from '../src/core/ai-strength.ts';
+import { distToCity, unitsOf, utype } from '../src/core/rules.ts';
 import { solvePower } from '../src/core/power-solver.ts';
 import { playerView } from '../src/core/fog.ts';
 import type { GameState } from '../src/core/types.ts';
@@ -72,9 +73,17 @@ function run(c: Case): void {
       const horizon = MODE === 'march' ? clamp(march, 2, 20) : FIXED;
       const input = powerInputOf(view, me);
       const plan = solvePower(input, horizon);
+      // 采购侧实际用的窗口：所有战斗单位到最近敌城的 min ÷ 3
+      const foeCities = view.cities.filter((c) => c.owner !== me && !c.ruined);
+      let pd = Infinity;
+      for (const u of unitsOf(view, me)) {
+        if (utype(view, u.type).category !== 'combat') continue;
+        for (const c of foeCities) pd = Math.min(pd, distToCity(u, c));
+      }
+      const buyWindow = Math.max(2, Math.min(20, Math.round((Number.isFinite(pd) ? pd : 8) / 3)));
       console.log(
         `| T${String(s.turn).padStart(3)} | ${march} | ${horizon} | **${plan.econUntil}** | ` +
-          `${plan.econ} | ${plan.units} | ${Math.round(input.income)} | ${input.slots} |`,
+          `${plan.econ} | ${plan.units} | ${Math.round(input.income)} | ${input.slots} | 采购窗口 ${buyWindow} |`,
       );
     }
     if (s.turn > LIMIT) break;

@@ -214,7 +214,12 @@ const ECON_RANGE = 6;
 export interface EconSurvey {
   /** 可经济化地块数（地皮约束） */
   capacity: number;
-  /** 从最近自家城走到这些地块的平均步数 */
+  /**
+   * **最近那批地块**的平均步数（最近 25%），不是全图平均。
+   *
+   * 全图平均在随机地形上约等于"地图中心到城的距离"——默认经济单位全往中心走，
+   * 地图越大错得越厉害。实际先占的总是城边那几块，所以按近端分位算。
+   */
   avgDist: number;
   /** 地形分布：地形 -> 地块数（用来算"某个经济单位的期望产出"） */
   terrainCounts: Record<string, number>;
@@ -244,7 +249,7 @@ export function econSurvey(s: GameState, me: PlayerId): EconSurvey {
     }
   }
   let n = 0;
-  let distSum = 0;
+  const dists: number[] = [];
   const terrainCounts: Record<string, number> = {};
   for (let y = 0; y < s.h; y += 1) {
     for (let x = 0; x < s.w; x += 1) {
@@ -260,11 +265,17 @@ export function econSurvey(s: GameState, me: PlayerId): EconSurvey {
       if (dOwn > dFoe) continue;
       if (bestEconOn(s, t.terrain) < ECON_MIN_YIELD) continue;
       n += 1;
-      distSum += dOwn;
+      dists.push(dOwn);
       terrainCounts[t.terrain] = (terrainCounts[t.terrain] ?? 0) + 1;
     }
   }
-  return { capacity: n, avgDist: n > 0 ? distSum / n : 0, terrainCounts };
+  /*
+   * 近端平均：排序后取最靠前的 25%（至少 1 块）。
+   * 用全量平均的话，一块 6 格外的次等地会把"最近的好地其实只有 2 格"这件事淹掉。
+   */
+  const near = dists.sort((a, b) => a - b).slice(0, Math.max(1, Math.ceil(dists.length * 0.25)));
+  const nearDist = near.length > 0 ? near.reduce((a, b) => a + b, 0) / near.length : 0;
+  return { capacity: n, avgDist: nearDist, terrainCounts };
 }
 
 export function econCapacity(s: GameState, me: PlayerId): number {
