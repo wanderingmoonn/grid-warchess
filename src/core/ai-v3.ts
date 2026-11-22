@@ -2145,11 +2145,21 @@ function decisiveOf(
   const marchTurns = Number.isFinite(bestCost) ? Math.ceil(bestCost / move) : 99;
 
   const myPower = armyStrength(view, me);
+  const remembered = rememberedPowerOf(ghosts, view.turn, view.unitTypes);
   let foePower = 0;
   for (const p of new Set(view.cities.filter((c) => c.owner !== me).map((c) => c.owner))) {
     foePower += armyStrength(view, p);
   }
-  const remembered = rememberedPowerOf(ghosts, view.turn, view.unitTypes);
+  /*
+   * 记忆计入分母（阶段 1b）。
+   *
+   * 口径：`可见部队 + 记得的部队 × 0.85^age`。这是"我现在对敌方兵力的最好估计"，
+   * 而不是"我看见了多少"——后者会把整片雾里的部队当成 0（阶段 0 实测中位高估 0.67）。
+   *
+   * 多人局的不精确要知道：`ghosts` 不区分席位（`KnownUnit` 没有 owner），
+   * 所以记忆战力全算在主对手头上。双人局（当前所有基准对局）下完全等价。
+   */
+  foePower += remembered.power;
   const myPerTurn = powerPerTurn(view, me);
   const foePerTurn = Math.max(
     1,
@@ -2194,11 +2204,11 @@ function decisiveOf(
      * 为什么不做 13 点的细扫：实测（第四十六节）峰值几乎总在起点，细扫只增加
      * 求解器调用——完整测试从几分钟涨到 20 分钟以上，收益是零。
      */
-    const atArrival = powerRace(view, me, foeSeat ?? null, [t0])[0];
+    const atArrival = powerRace(view, me, foeSeat ?? null, [t0], remembered.power)[0];
     let peak = atArrival;
     let readyTurns = atArrival.ratio >= DECISIVE_AT ? 0 : -1;
     if (readyTurns !== 0) {
-      const late = powerRace(view, me, foeSeat ?? null, [t0 + DECISIVE_LATE])[0];
+      const late = powerRace(view, me, foeSeat ?? null, [t0 + DECISIVE_LATE], remembered.power)[0];
       if (late.ratio > peak.ratio) peak = late;
       if (late.ratio >= DECISIVE_AT) readyTurns = DECISIVE_LATE;
     }

@@ -288,10 +288,17 @@ export function powerRace(
   me: PlayerId,
   foe: PlayerId | null,
   horizons: number[],
+  /**
+   * 分母的"额外底数"：记忆里看不见的敌方战力（`rememberedPowerOf`）。
+   *
+   * 为什么不并进 `armyStrength`：那是"此刻看得见的"，改它会污染所有调用方；
+   * 而"记忆"只有决战判断这一个消费者。放这里当常数项，正好和求解器算的增量相加。
+   */
+  foeExtra = 0,
 ): RacePoint[] {
   const myBase = armyStrength(s, me);
   const myInput = powerInputOf(s, me);
-  const foeBase = foe === null ? 0 : armyStrength(s, foe);
+  const foeBase = (foe === null ? 0 : armyStrength(s, foe)) + Math.max(0, foeExtra);
   const foeInput = foe === null ? null : powerInputOf(s, foe);
   const out: RacePoint[] = [];
   for (const h of horizons) {
