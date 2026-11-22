@@ -157,6 +157,8 @@ const NEED_SQUAD = has('need-squad');
 const QUALITY_SCALE = argOf('quality-scale', '');
 /** `--recruit-cap auto|N`：放开每回合产兵名额（默认仍是 2） */
 const RECRUIT_CAP_ARG = argOf('recruit-cap', '');
+/** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），验经济铺满时的行为 */
+const ECON_CAP = has('econ-cap');
 const RECRUIT_CAP: number | 'auto' | undefined =
   RECRUIT_CAP_ARG === 'auto' ? 'auto' : RECRUIT_CAP_ARG === '' ? undefined : Number(RECRUIT_CAP_ARG);
 
@@ -211,6 +213,7 @@ function playOne(
       ...(NO_CROSSING ? { aiCrossing: false } : {}),
       ...(QUALITY_SCALE === '' ? {} : { aiQualityScale: Number(QUALITY_SCALE) }),
       ...(POSTURE ? { aiPosture: true } : {}),
+      ...(ECON_CAP ? { aiEconCap: true } : {}),
       ...(RECRUIT_CAP === undefined ? {} : { aiRecruitCap: RECRUIT_CAP }),
       ...(NO_DECISIVE ? { aiDecisive: false } : {}),
       ...(NO_MASS ? { aiMass: false } : {}),

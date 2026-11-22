@@ -8280,7 +8280,25 @@ function recruitCandidate(
     if (d.category === 'economy') {
       const inc = maxIncome(d);
       const payback = inc > 0 ? price / inc : 99;
-      score += earners < targetEarners ? 34 - Math.min(18, payback * 1.5) : -14;
+      /*
+       * 目标缺口直接换成分数（2026-11-22 修）。
+       *
+       * 以前目标内只给 `+34 − 回本×1.5`（约 +28），而兵在速攻/紧迫加成下轻松 40+，
+       * 于是 `targetEarners` 定成 49 也只造出 2 个——目标数是个"软加成"，
+       * 根本没有名额保证。实测（24×24/era2，301 回合平）：v3 47 战 + **2 工**。
+       *
+       * 现在按缺口给：缺口越大分越高（最多 +80），补到接近目标就回落。
+       * 这不是"更爱经济"，而是让目标数真的能约束采购——和兵在同一把尺子上竞争。
+       */
+      const gap = targetEarners - earners;
+      score +=
+        s.config.aiEconCap === true
+          ? gap > 0
+            ? 40 + Math.min(40, gap * 3) - Math.min(18, payback * 1.5)
+            : -14
+          : gap > 0
+            ? 34 - Math.min(18, payback * 1.5)
+            : -14;
       // 弃城期：经济单位就是这一档的本钱，宁可晚一个兵也要先把水龙头拧大
       // （用 drive 门控，见上面"假爆发"注释）
       score += 26 * w.boom;

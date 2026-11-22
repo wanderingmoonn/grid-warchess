@@ -54,6 +54,8 @@ const QUEUES: Queue[] = [
 ];
 
 const pickArg = argOf('queue', '');
+/** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），做 A/B 用 */
+const ECON_CAP = process.argv.includes('--econ-cap');
 const WANT = pickArg ? new Set(pickArg.split(',').map((x) => x.trim().toUpperCase())) : null;
 /** 路径都相对 `scripts/` 解析（和 ai-duel 的写法一致：`--new ../src/core/ai-v3.ts`） */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -81,7 +83,14 @@ interface Result {
 /** 一局：aIsNew 决定 A 席用哪一版（同一颗种子两席各跑一次，抵掉先后手偏差） */
 function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean): Result {
   let s: GameState = createMatch(
-    { ...DEFAULT_CONFIG, startEra: q.era, aiLevel: 'tactic', size: q.size, mapSymmetry: 'fair' },
+    {
+      ...DEFAULT_CONFIG,
+      startEra: q.era,
+      aiLevel: 'tactic',
+      size: q.size,
+      mapSymmetry: 'fair',
+      ...(ECON_CAP ? { aiEconCap: true } : {}),
+    },
     seed,
   );
   const aiFor = (p: PlayerId): Ai => ((p === 'A') === aIsNew ? aiNew : aiOld);
