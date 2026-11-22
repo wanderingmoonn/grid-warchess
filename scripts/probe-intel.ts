@@ -28,6 +28,7 @@ import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { applyAction } from '../src/core/rules.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import { aiNextAction, decisiveViewGap, rememberedPowerOf } from '../src/core/ai-v3.ts';
+import { aiNextAction as oldAiNextAction } from './baselines/ai-9efb961.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 
 const argOf = (name: string, fallback = ''): string => {
@@ -37,6 +38,13 @@ const argOf = (name: string, fallback = ''): string => {
 const EVERY = Math.max(1, Number(argOf('every', '5')));
 const ONLY = argOf('case', '').toUpperCase();
 const VERBOSE = process.argv.includes('--verbose');
+/**
+ * `--vs-old`：B 席交给冻结基线（`ai-9efb961`），复现 `bench:ai` 的对局结构。
+ *
+ * 为什么要这个模式：两席都跑 v3 时，A 的兵经常还没压到城下（conf 常年 0）；
+ * 而 bench 是"新 vs 旧"，节奏不同、conf 分布也不同。阶段 2 的验收要对齐后者。
+ */
+const VS_OLD = process.argv.includes('--vs-old');
 
 /** 与 `bench-queue` 的固定队列同口径：尺寸 / 开局时代 / 回合上限 */
 interface Case {
@@ -70,6 +78,8 @@ interface Sample {
   /** 记忆里（看不见但记得）的敌方战力与单位数 */
   knownPower: number;
   knownCount: number;
+  /** 决策时用的情报置信度（0 = 完全没见过守军） */
+  intelConf: number;
 }
 
 /** 跑一局，按 `EVERY` 采样当前席位的两种视角 */
@@ -98,6 +108,7 @@ function playOne(c: Case, seed: number): { samples: Sample[]; winner: PlayerId |
           foeMissed: Math.max(0, gap.full.foePower - gap.fogged.foePower),
           knownPower: gap.fogged.rememberedPower,
           knownCount: gap.fogged.rememberedCount,
+          intelConf: gap.fogged.intelConf,
         });
       }
       lastTurn = s.turn;
@@ -105,7 +116,7 @@ function playOne(c: Case, seed: number): { samples: Sample[]; winner: PlayerId |
     const budget = { ...DEFAULT_BUDGET };
     const rejected = new Set<string>();
     for (let i = 0; i < AI_MAX_STEPS && !s.winner; i++) {
-      const a = aiNextAction(s, budget, rejected);
+      const a = VS_OLD && s.current === 'B' ? oldAiNextAction(s, budget, rejected) : aiNextAction(s, budget, rejected);
       if (!a) break;
       const r = applyAction(s, a);
       if (!r.ok) {
@@ -221,8 +232,8 @@ if (all.length === 0) {
   process.exit(0);
 }
 
-console.log('\n| 队列 | 样本 | 差的中位 | p25 | p75 | 最大 | 迷雾高估占比 | 敌方战力漏算中位 | 记得战力中位 | 有记忆占比 |');
-console.log('|---|---|---|---|---|---|---|---|---|---|');
+console.log('\n| 队列 | 样本 | 差的中位 | p25 | p75 | 最大 | 迷雾高估占比 | 敌方战力漏算中位 | 记得战力中位 | 有记忆占比 | 情报中位 | 情报=0 占比 |');
+console.log('|---|---|---|---|---|---|---|---|---|---|---|---|');
 for (const c of cases) {
   const rows = all.filter((x) => x.caseId === c.id);
   if (rows.length === 0) continue;
@@ -233,7 +244,9 @@ for (const c of cases) {
       `${fmt(quantile(ds, 0.75))} | ${fmt(Math.max(...ds))} | ` +
       `${((up / rows.length) * 100).toFixed(0)}% | ${Math.round(median(rows.map((x) => x.foeMissed)))} | ` +
       `${Math.round(median(rows.map((x) => x.knownPower)))} | ` +
-      `${((rows.filter((x) => x.knownCount > 0).length / rows.length) * 100).toFixed(0)}% |`,
+      `${((rows.filter((x) => x.knownCount > 0).length / rows.length) * 100).toFixed(0)}% | ` +
+      `${median(rows.map((x) => x.intelConf)).toFixed(2)} | ` +
+      `${((rows.filter((x) => x.intelConf <= 0.01).length / rows.length) * 100).toFixed(0)}% |`,
   );
 }
 

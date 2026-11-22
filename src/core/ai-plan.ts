@@ -78,6 +78,16 @@ export interface PlanCtx {
    * 决战时机的判断就能随情报变化——现在它只随"看得见什么"变。
    */
   intelKnown: boolean;
+  /**
+   * 对主攻目标"守军"的情报置信度（0~1）。
+   *
+   * 0 = 完全没看过、只能猜；1 = 目标城周围此刻有可见的敌方单位。
+   *
+   * **当前没有决策消费者**：2026-11-22 试过"按它收缩决战比值"，实测没有行为出口
+   * （`call` 只喂 `holdFire`，而 holdFire 的第二个条件用原始比值），已撤。
+   * 留着是给阶段 3/4 用——由它决定"值不值得派斥候去看"。
+   */
+  intelConf: number;
   /** 折算收益的时间窗（回合） */
   horizon: number;
   /**
@@ -743,6 +753,7 @@ export function planCtxOf(
     marchTurns: 0,
     projRatio: 1,
     intelKnown: false,
+    intelConf: 0,
     horizon: PLAN_TUNING.horizon,
     state: {},
     keep: {},

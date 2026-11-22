@@ -2062,6 +2062,8 @@ export interface AiCallTrace {
   knownPower?: number;
   /** 记忆中仍计入的敌方单位数 */
   knownUnits?: number;
+  /** 对目标城守军的情报置信度 0~1（决策时用的那个数） */
+  intelConf?: number;
   myPower: number;
   foePower: number;
   myPerTurn: number;

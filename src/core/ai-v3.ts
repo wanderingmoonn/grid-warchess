@@ -2026,6 +2026,8 @@ export interface DecisiveCall {
    */
   rememberedPower: number;
   rememberedCount: number;
+  /** 对主攻目标守军的情报置信度（0~1），见 `intelConfOf` */
+  intelConf: number;
   why: string;
 }
 
@@ -2064,6 +2066,42 @@ export function rememberedPowerOf(
     count += 1;
   }
   return { power, count };
+}
+
+/** 目标城周围多大一圈算"守军所在区域"（切比雪夫距离） */
+const INTEL_RADIUS = 5;
+
+/**
+ * 对主攻目标"守军"的情报置信度（0~1）。
+ *
+ * 只回答一件事：**我对这座城周围有多少敌人，是看见的、还是猜的？**
+ *   · 此刻看得见那片有敌方单位 → 1；
+ *   · 只有记忆（`ghosts`）→ 按最近一次看到的时间折：`1 − age/8`；
+ *   · 什么都没有 → 0。
+ *
+ * 为什么用"城周围 5 格"而不是"城格"：守军经常站在城边或城墙外，
+ * 只数城格会把"看得见守军"误判成 0。
+ *
+ * 为什么不做成"区域最后一次可见"：现在的记忆只存**单位**和**城市快照**，
+ * 没有"这块地多久没看了"。用单位代理是当下唯一不需要新存档字段的做法。
+ */
+function intelConfOf(
+  view: GameState,
+  me: PlayerId,
+  city: City | null,
+  ghosts: readonly KnownUnit[],
+): number {
+  if (!city) return 0;
+  const near = (u: { x: number; y: number }): boolean =>
+    Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y)) <= INTEL_RADIUS;
+  if (view.units.some((u) => u.owner !== me && near(u))) return 1;
+  let bestAge = Infinity;
+  for (const g of ghosts) {
+    if (!near(g)) continue;
+    bestAge = Math.min(bestAge, Math.max(0, view.turn - g.seenAt));
+  }
+  if (!Number.isFinite(bestAge)) return 0;
+  return Math.max(0, Math.min(1, 1 - bestAge / MEMORY_MAX_AGE));
 }
 
 /** 投影比到这个数就算"打得动" */
@@ -2222,6 +2260,7 @@ function decisiveOf(
   }
 
   const ratioNow = scan.ratio;
+  const intelConf = intelConfOf(view, me, view.cities.find((c) => c.id === cityId) ?? null, ghosts);
   const wait =
     scan.readyTurns === 0
       ? '抵达即够打'
@@ -2242,7 +2281,11 @@ function decisiveOf(
     peakTurns: scan.peakTurns,
     rememberedPower: remembered.power,
     rememberedCount: remembered.count,
-    why: `投影比 ${scan.peakRatio.toFixed(2)}@${scan.peakTurns}（抵达 ${t0} 回合后 ${ratioNow.toFixed(2)}）、行军 ${marchTurns} 回合、${wait}、记得 ${remembered.count} 个(${Math.round(remembered.power)})`,
+    intelConf,
+    why:
+      `投影比 ${scan.peakRatio.toFixed(2)}@${scan.peakTurns}（抵达 ${t0} 回合后 ${ratioNow.toFixed(2)}）、` +
+      `行军 ${marchTurns} 回合、${wait}、记得 ${remembered.count} 个(${Math.round(remembered.power)})、` +
+      `情报 ${intelConf.toFixed(2)}`,
   };
 }
 
@@ -2971,6 +3014,22 @@ function decideCallOf(c: PlanCtx): 'attack' | 'develop' {
   const prev = (c.state.call as 'attack' | 'develop' | undefined) ?? null;
   const since = Number(c.state.since ?? 0);
   const ratio = c.projRatio;
+  /*
+   * ⚠️ 2026-11-22 撤掉了"按情报置信度收缩比值"的那一版（`intelTrust`）。
+   *
+   * 它算得对、开关也生效（trust=1 与阶段 1b 逐局一致），但**没有任何行为出口**：
+   * `call` 唯一的消费者是 `weights` 里的
+   *   `holdFire: call === 'develop' && c.projRatio < 0.85`
+   * —— 第二个条件用原始比值。分三段看：
+   *   · ratio < 0.85：收缩后 judged 只会更接近 1，但首次/转打阈值仍够不到，
+   *     结论还是 develop，holdFire 照旧为真；
+   *   · ratio ≥ 0.85：不论 call 是 attack 还是 develop，holdFire 都被第二条件卡成 false。
+   * 于是 24 局（Q3/Q4）把 `intelTrust` 从 0.4 调到 0（完全收缩）都逐局不变。
+   *
+   * 结论：**这个量要接，得先有一个真的会动行为的消费者**（攻击乘数或开火闸门），
+   * 而不是让它去改一个没有差异的布尔。`intelConf` 字段留着，阶段 3/4 用来
+   * 决定"要不要派人去看"。
+   */
   const canAttack = c.marchTurns > 0 && c.marchTurns <= 14;
   let call: 'attack' | 'develop';
   if (prev === 'attack') call = ratio >= 0.9 && canAttack ? 'attack' : 'develop';
@@ -8858,7 +8917,9 @@ function aiNextActionCoreInner(
       threat: fields.threat,
       weaker: myValNow < foeValNow * 0.75,
       enemyAtGate: foeUnits.some((u) => citiesOf(view, me).some((c) => distToCity(u, c) <= 3)),
-      ...(decisive ? { marchTurns: decisive.marchTurns, projRatio: decisive.ratio } : {}),
+      ...(decisive
+        ? { marchTurns: decisive.marchTurns, projRatio: decisive.ratio, intelConf: decisive.intelConf }
+        : {}),
     });
     const prevPlan = focusOf(s, me).plan ?? null;
     const resolved = resolvePlans(planCtx, prevPlan, { urgent: fields.urgent });
@@ -8945,6 +9006,7 @@ function aiNextActionCoreInner(
           marchTurns: decisive.marchTurns,
           knownPower: Math.round(decisive.rememberedPower),
           knownUnits: decisive.rememberedCount,
+          intelConf: Number(decisive.intelConf.toFixed(2)),
           myPower: Math.round(decisive.myPower),
           foePower: Math.round(decisive.foePower),
           myPerTurn: Math.round(decisive.myPerTurn),
