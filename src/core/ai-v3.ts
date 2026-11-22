@@ -6265,6 +6265,47 @@ function unitCandidates(
 ): Candidate[] {  const out: Candidate[] = [];
   const def = utype(s, unit.type);
   /*
+   * 让位（2026-11-22 第一层）：只处理"经济/工程单位堵死产兵格"这一种。
+   *
+   * 判据用现成的 `chokedCities`（该城产兵格为 0）+ "单位在城 8 邻格内"。
+   * 不去枚举"理论产兵格"——`recruitSpawnCells` 在堵死时返回空，拿不到被占的格。
+   *
+   * 目标：最近的**空地**（可走、无敌方、非城格）。分数给 70：
+   * 高于普通经济走位（-1.5），低于救城/战斗（100+），所以不会跟打仗抢动作。
+   * 递归链不在这里做：目标格若也被占，`applyAction` 会拒，下一步自然让里面那个先走。
+   */
+  if ((def.category === 'economy' || def.category === 'builder') && all.chokedCities.length > 0) {
+    const nearChoked = citiesOf(s, unit.owner).some(
+      (c) => all.chokedCities.includes(c.id) && distToCity(unit, c) <= 1,
+    );
+    if (nearChoked) {
+      let best: { x: number; y: number } | null = null;
+      let bestD = Infinity;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = unit.x + dx;
+          const ny = unit.y + dy;
+          if (!inBounds(s, nx, ny)) continue;
+          if (nx === unit.x && ny === unit.y) continue;
+          const t = s.tiles[ny * s.w + nx];
+          if (!t || !terrainWalkable(def, t.terrain)) continue;
+          if (t.terrain === 'city' || unitAt(s, nx, ny)) continue;
+          const d = Math.abs(dx) + Math.abs(dy);
+          if (d < bestD) {
+            bestD = d;
+            best = { x: nx, y: ny };
+          }
+        }
+      }
+      if (best) {
+        out.push({
+          action: { type: 'MOVE', unitId: unit.id, x: best.x, y: best.y },
+          score: 70,
+        });
+      }
+    }
+  }
+  /*
    * 侦查单位这一回合**不许出手**。
    *
    * 潜行的成立条件是"站在森林/丘陵且这回合没出过手"（见 abilities 的 stealth），

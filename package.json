@@ -84,6 +84,7 @@
     "tune:list": "node --experimental-strip-types scripts/list-tuning.ts",
     "probe:econ-race": "node --experimental-strip-types scripts/probe-econ-race.ts",
     "probe:econ-window": "node --experimental-strip-types scripts/probe-econ-window.ts",
+    "probe:yield": "node --experimental-strip-types scripts/probe-yield.ts",
     "diag:strength": "node --experimental-strip-types scripts/diag-strength.ts",
     "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
     "replay": "node --experimental-strip-types scripts/replay-report.ts",
