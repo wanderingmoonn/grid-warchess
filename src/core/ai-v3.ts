@@ -6265,43 +6265,70 @@ function unitCandidates(
 ): Candidate[] {  const out: Candidate[] = [];
   const def = utype(s, unit.type);
   /*
-   * 让位（2026-11-22 第一层）：只处理"经济/工程单位堵死产兵格"这一种。
+   * 让位（2026-11-22 第二层：递归链）。
    *
-   * 判据用现成的 `chokedCities`（该城产兵格为 0）+ "单位在城 8 邻格内"。
-   * 不去枚举"理论产兵格"——`recruitSpawnCells` 在堵死时返回空，拿不到被占的格。
+   * 从"被堵死的城"出发 BFS 找最近空地，**允许穿过己方单位**；
+   * 回溯路径，只把**最靠近空地的那一个**己方单位移到空地（score 75）。
+   * 它挪开后，下一个单位成为"最靠近空地"的，自然接上——不需要显式建链。
    *
-   * 目标：最近的**空地**（可走、无敌方、非城格）。分数给 70：
-   * 高于普通经济走位（-1.5），低于救城/战斗（100+），所以不会跟打仗抢动作。
-   * 递归链不在这里做：目标格若也被占，`applyAction` 会拒，下一步自然让里面那个先走。
+   * 为什么从城出发：城是固定锚点，一次 BFS 就能看出"谁在挡、谁该先走"；
+   * 从单位出发则会各算各的，链上中间的人收不到候选。
+   *
+   * 只对经济/工程单位生效：战斗单位不进产兵格让位（那是走位的事）。
    */
   if ((def.category === 'economy' || def.category === 'builder') && all.chokedCities.length > 0) {
-    const nearChoked = citiesOf(s, unit.owner).some(
-      (c) => all.chokedCities.includes(c.id) && distToCity(unit, c) <= 1,
-    );
-    if (nearChoked) {
-      let best: { x: number; y: number } | null = null;
-      let bestD = Infinity;
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
-          const nx = unit.x + dx;
-          const ny = unit.y + dy;
+    const myChoked = citiesOf(s, unit.owner)
+      .filter((c) => all.chokedCities.includes(c.id))
+      .sort((a, b) => distToCity(unit, a) - distToCity(unit, b))[0];
+    if (myChoked) {
+      const startCells = cityTiles(myChoked).map((t) => t.y * s.w + t.x);
+      const prev = new Map<number, number>();
+      const seen = new Set<number>(startCells);
+      const q: number[] = [...startCells];
+      let end = -1;
+      for (let i = 0; i < q.length && end < 0; i++) {
+        const k = q[i]!;
+        const x = k % s.w;
+        const y = Math.floor(k / s.w);
+        for (const [dx, dy] of DIRS) {
+          const nx = x + dx;
+          const ny = y + dy;
           if (!inBounds(s, nx, ny)) continue;
-          if (nx === unit.x && ny === unit.y) continue;
-          const t = s.tiles[ny * s.w + nx];
-          if (!t || !terrainWalkable(def, t.terrain)) continue;
-          if (t.terrain === 'city' || unitAt(s, nx, ny)) continue;
-          const d = Math.abs(dx) + Math.abs(dy);
-          if (d < bestD) {
-            bestD = d;
-            best = { x: nx, y: ny };
+          const nk = ny * s.w + nx;
+          if (seen.has(nk)) continue;
+          const t = s.tiles[nk];
+          if (!t || t.terrain === 'city' || !terrainWalkable(def, t.terrain)) continue;
+          const other = unitAt(s, nx, ny);
+          if (other && other.owner !== unit.owner) continue;
+          seen.add(nk);
+          prev.set(nk, k);
+          if (!other) {
+            end = nk;
+            break;
           }
+          q.push(nk);
         }
       }
-      if (best) {
-        out.push({
-          action: { type: 'MOVE', unitId: unit.id, x: best.x, y: best.y },
-          score: 70,
-        });
+      if (end >= 0) {
+        const path: number[] = [end];
+        let k = end;
+        while (prev.has(k)) {
+          k = prev.get(k)!;
+          path.push(k);
+        }
+        // path: [空地, …, 城格]；从空地往回找第一个己方单位
+        for (let i = 1; i < path.length; i++) {
+          const kk = path[i]!;
+          const u = unitAt(s, kk % s.w, Math.floor(kk / s.w));
+          if (!u || u.owner !== unit.owner) continue;
+          if (u.id !== unit.id) break; // 最靠近空地的不是它，这步不给候选
+          const tk = path[i - 1]!;
+          out.push({
+            action: { type: 'MOVE', unitId: u.id, x: tk % s.w, y: Math.floor(tk / s.w) },
+            score: 75,
+          });
+          break;
+        }
       }
     }
   }
