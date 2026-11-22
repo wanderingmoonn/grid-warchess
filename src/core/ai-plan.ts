@@ -184,6 +184,13 @@ export interface PlanOrders {
    */
   altCrossing: { x: number; y: number; unitIds: string[] } | null;
   /**
+   * 建造编队的目标点（渡口/桥点）。null = 这回合不需要修桥。
+   *
+   * 和 `altCrossing` 的分工：`altCrossing` 是"哪支战斗编队改道哪个渡口"，
+   * 这个点是"工人编队去哪修"。拥堵分流时两者指向同一个新渡口。
+   */
+  buildPoint: { x: number; y: number } | null;
+  /**
    * 顺路观察（阶段 3b 的 B 方案）：把 `unitId` 的**走位目标**从城改成观察点。
    *
    * 和 `scout` 的区别：不建编队、不抽人、**不禁止攻击**。它只是"往那边走的时候

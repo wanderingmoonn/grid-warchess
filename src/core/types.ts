@@ -2049,13 +2049,20 @@ export interface PlanMemoLike {
 export interface AiSquad {
   /** 'atk-1' / 'atk-2'：后方可以并行组建下一支 */
   id: string;
-  role: 'attack' | 'defend';
+  /**
+   * attack/defend：按战斗编队那套走（收拢、出发、协同）。
+   * build：建造编队（2026-11-22）——2 个工人，目标是**一个点**（渡口/桥点），
+   *        由计划层下指令，不走"凑够人数才出发"这一套。
+   */
+  role: 'attack' | 'defend' | 'build';
   /** forming：还在收拢；marching：已经出发 */
   state: 'forming' | 'marching';
   /** 编成时的成员（固定；死了就从这里剔掉，不补人） */
   memberIds: string[];
   /** 目标城；null = 还没定 */
   targetCityId: string | null;
+  /** 建造编队的目标点（渡口/桥点）；只有 `role === 'build'` 用 */
+  targetPoint?: { x: number; y: number } | null;
   since: number;
   /** 组建时打算要几个人：缺口 = want − 实到，缺口反馈给生产端。规模由战略配额给 */
   want: number;

@@ -1743,6 +1743,8 @@ interface Fields {
   peek: { unitId: string; x: number; y: number } | null;
   /** 过河分流：某个编队改走第二个渡口（主渡口拥堵时） */
   crossingAlt: { x: number; y: number; unitIds: Set<string> } | null;
+  /** 建造编队的走位引导（成员 + 目标点），由 `squadTick` 写回后填入 */
+  buildGuide: { x: number; y: number; unitIds: Set<string> } | null;
   /**
    * 优势期：兵力和身价都压过对面一截，这时候该做的是**破城**，不是清野。
    *
@@ -2578,12 +2580,17 @@ function postureBudgetOf(
  *   · **队形用相对数**（最前和最后差几格），不用"离城的绝对距离"；
  *   · **可以有缺口**：人不够就先攒着，缺口报给生产端。
  */
+/** @tune 建造编队：桥通了之后待机几回合再解散（防拆了又修、修了又拆） */
+const BUILD_IDLE_TURNS = 3;
+
 function squadTick(
   s: GameState,
   me: PlayerId,
   planCityId: string | null,
   /** 计划层申报的编队规模（见 `PlanOrders.needSquad`）。不写就用战略默认 */
   planNeed?: number,
+  /** 建造编队的目标点（见 `PlanOrders.buildPoint`）。null = 这回合不修桥 */
+  buildPoint?: { x: number; y: number } | null,
 ): AiSquadReport[] {
   const budget = postureBudgetOf(s, me);
   const focus = focusOf(s, me);
@@ -2606,7 +2613,14 @@ function squadTick(
 
   // 1) 清理：成员死了、伤亡过重、或者已经没有敌城可打
   const kept: AiSquad[] = [];
-  for (const sq of focus.squads ?? []) {
+  /*
+   * 建造编队单独一支池子（2026-11-22）：它们不参加"收拢 → 凑够 want → 出发"，
+   * 目标是**一个点**（渡口），人数固定 2，1 个人也出发。
+   * 不分开的话，`want` 那套会把 2 人编队当成"永远没凑够"，永远不开拔。
+   */
+  const buildIn = (focus.squads ?? []).filter((sq) => sq.role === 'build');
+  const combatIn = (focus.squads ?? []).filter((sq) => sq.role !== 'build');
+  for (const sq of combatIn) {
     // 先 `Set` 去重：同一回合若 `squadTick` 被重复调用（`keep` 丢失时会发生），
     // 成员 id 会被重复 push，报告里就出现"20 人"的编队（实际 12 人）。
     // 去重 + **硬截断到 want**：实测长局里出现 31 人的编队（`squadTick` 在
@@ -2727,6 +2741,56 @@ function squadTick(
       note,
     });
     nextPrev[sq.id] = { count, lead, stalled };
+  }
+
+  /*
+   * 建造编队：清理 → 跟目标点 → 桥通了待机 → 解散。
+   *
+   * 目标点由计划层给（`buildPoint`）：桥没通时是主渡口；拥堵分流时是新渡口。
+   * 计划不给点 = 这一回合不需要修桥 → 开始待机，`BUILD_IDLE_TURNS` 回合后解散
+   * （用户 2026-11-22：待机几回合，确保桥不会被拉锯反复拆，之后再解散）。
+   */
+  const builders = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'builder');
+  const idlePrev = (focus.plan?.keep?.buildIdle ?? {}) as Record<string, number>;
+  const idleNext: Record<string, number> = {};
+  const buildKept: AiSquad[] = [];
+  for (const sq of buildIn) {
+    const alive = [...new Set(sq.memberIds)].filter((id) => builders.some((b) => b.id === id));
+    if (alive.length === 0) continue;
+    if (buildPoint) {
+      buildKept.push({ ...sq, memberIds: alive, targetPoint: buildPoint, state: 'marching' });
+      idleNext[sq.id] = 0;
+      continue;
+    }
+    const n = Number(idlePrev[sq.id] ?? 0) + 1;
+    if (n < BUILD_IDLE_TURNS) {
+      buildKept.push({ ...sq, memberIds: alive, targetPoint: null });
+      idleNext[sq.id] = n;
+    }
+  }
+  if (buildPoint && buildKept.length === 0) {
+    const busy = new Set(kept.flatMap((sq) => sq.memberIds));
+    const free = builders.filter((b) => !busy.has(b.id));
+    if (free.length >= 1) {
+      const id = `build-${s.turn}`;
+      buildKept.push({
+        id,
+        role: 'build',
+        state: 'marching',
+        memberIds: free.slice(0, 2).map((b) => b.id),
+        targetCityId: null,
+        targetPoint: buildPoint,
+        since: s.turn,
+        want: 2,
+        spread: 0,
+        requested: [],
+      });
+      idleNext[id] = 0;
+    }
+  }
+  kept.push(...buildKept);
+  if (focus.plan) {
+    focus.plan.keep = { ...(focus.plan.keep ?? {}), buildIdle: idleNext };
   }
 
   if ((focus.squads ?? null) !== null || kept.length > 0) {
@@ -3168,23 +3232,42 @@ const CROSSING_PLAN: RankedPlan = {
    *   · 分流后锁定 10 回合（否则今天分、明天回，来回抖）。
    */
   orders: (c) => {
-    if (c.view.config.aiCrossSplit === false) return {};
     const site = c.keep.crossingSite as { x: number; y: number } | undefined;
     if (!site) return {};
     /** @tune 连续拥堵几回合才分流 */
     const JAM_TURNS = 3;
     /** @tune 分流后锁定几回合不重算 */
     const SPLIT_LOCK = 10;
-    if (Number(c.keep.bridgeJam ?? 0) < JAM_TURNS) return {};
+    const out: {
+      buildPoint?: { x: number; y: number } | null;
+      altCrossing?: { x: number; y: number; unitIds: string[] } | null;
+    } = {};
+    /*
+     * 修桥点：陆路不通时就是主渡口。桥通了就不再给点——建造编队会进待机，
+     * 待机 3 回合后解散（见 `BUILD_IDLE_TURNS`），免得桥被拉锯时来回修。
+     */
+    if (!c.canReach) out.buildPoint = { x: site.x, y: site.y };
+    if (c.view.config.aiCrossSplit === false) return out;
+    /*
+     * 锁定期内**先**看旧的 alt，再看拥堵。
+     *
+     * 顺序反了会这样：拥堵一消失（分流刚把人引走）→ `jam < 3` → 立刻退回主渡口，
+     * 工人也跟着回去，新渡口永远修不成。实测 T30 指向 16,10、T36 就退回 3,11。
+     */
     const until = Number(c.keep.splitUntil ?? 0);
     const prev = c.keep.splitAlt as { x: number; y: number; unitIds: string[] } | undefined;
-    if (c.view.turn < until && prev) return { altCrossing: prev };
+    if (c.view.turn < until && prev) {
+      out.altCrossing = prev;
+      out.buildPoint = { x: prev.x, y: prev.y };
+      return out;
+    }
+    if (Number(c.keep.bridgeJam ?? 0) < JAM_TURNS) return out;
     const alt = crossingPointOf(c.view, c.me, site);
-    if (!alt) return {};
+    if (!alt) return out;
     const squads = (c.view.aiFocus?.[c.me]?.squads ?? []).filter(
       (sq) => sq.role === 'attack' && sq.memberIds.length >= 3,
     );
-    if (squads.length === 0) return {};
+    if (squads.length === 0) return out;
     // 挑离新渡口最近的那支：它绕路最少，也最可能先到
     const pick = squads
       .map((sq) => ({
@@ -3197,10 +3280,12 @@ const CROSSING_PLAN: RankedPlan = {
         ),
       }))
       .sort((a, b) => a.d - b.d)[0]!.sq;
-    const out = { x: alt.x, y: alt.y, unitIds: [...pick.memberIds] };
-    c.keep.splitAlt = out;
+    const split = { x: alt.x, y: alt.y, unitIds: [...pick.memberIds] };
+    c.keep.splitAlt = split;
     c.keep.splitUntil = c.view.turn + SPLIT_LOCK;
-    return { altCrossing: out };
+    out.altCrossing = split;
+    out.buildPoint = { x: alt.x, y: alt.y };
+    return out;
   },
   focus: (c) => {
     // 已经有陆路：不用修（这里给 null，不是让计划退场，见 value 的说明）
@@ -4036,6 +4121,17 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
   if (all.crossingAlt?.unitIds.has(unit.id)) {
     const alt = all.crossingAlt;
     score += (distance(unit, alt) - distance(moved, alt)) * 8;
+  }
+  /*
+   * 建造编队朝**计划给的点**走（+20/格，强引导）。
+   *
+   * 为什么比战斗编队的 8 更强：工人的普通评分里"往桥头挪一格"只有 4~6 分，
+   * 而"再干点别的建造"很容易更高——不压过去的话，计划指了渡口，工人还在
+   * 半路修采石场。这也是用户 2026-11-22 说的"不要让它按分数乱走"。
+   */
+  if (all.buildGuide?.unitIds.has(unit.id)) {
+    const g = all.buildGuide;
+    score += (distance(unit, g) - distance(moved, g)) * 20;
   }
   /*
    * 给造桥点让路（只在真的过不去时）：非工程单位停在桥点周围 2 格里，
@@ -8447,7 +8543,12 @@ function recruitCandidate(
           ((s.players[me].res?.food??0)<120 || (s.players[me].res?.material??0)<100)) score+=30;
     }
     if (d.category === 'builder') {
-      score += builders < 1 ? 24 : builders < 2 ? 4 : -12;
+      /*
+       * 第二个工人的分从 +4 提到 +18（2026-11-22）：建造编队要 2 人，
+       * +4 抢不过兵，实测编队长期只有 1 个工人，桥修得慢、分流渡口修不出来。
+       * 第三个开始仍然扣分（−12），不要让工人挤掉主攻编队的人。
+       */
+      score += builders < 1 ? 24 : builders < 2 ? 18 : -12;
       /*
        * 装甲基建只有「工程机组」盖得了（它的 `builds` 里才有电站/坞）。
        * 不单独给这一条，AI 会一直用前六代那个工兵：它的 builds 里没有这些东西，
@@ -9340,6 +9441,7 @@ function aiNextActionCoreInner(
     scout: null,
     peek: null,
     crossingAlt: null,
+    buildGuide: null,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -9551,10 +9653,23 @@ function aiNextActionCoreInner(
           fields.focusCityId,
           // 默认关：申报的规模实测会把编队撑大、出发更慢（见 types 的 aiNeedSquad）
           s.config.aiNeedSquad === true ? resolved.orders.needSquad : undefined,
+          resolved.orders.buildPoint ?? null,
         );
         const f2 = focusOf(s, me);
         if (f2.plan) {
           f2.plan.keep = { ...(f2.plan.keep ?? {}), squads: reps, squadTurn: s.turn };
+        }
+        /*
+         * 建造编队的走位引导：由 `squadTick` 刚写回的编队决定。
+         * 这里读一次、存进 `fields`，走位层就不再自己找"该去哪个渡口"。
+         */
+        const buildSq = (f2.squads ?? []).find((sq) => sq.role === 'build' && sq.targetPoint);
+        if (buildSq?.targetPoint) {
+          fields.buildGuide = {
+            x: buildSq.targetPoint.x,
+            y: buildSq.targetPoint.y,
+            unitIds: new Set(buildSq.memberIds),
+          };
         }
         if (reps.length > 0) {
           const sig = reps.map((x) => `${x.id}:${x.note}:${x.count}`).join('|');
