@@ -1896,7 +1896,12 @@ function renderAiHud(): void {
     }
     for (const sq of squad?.squads ?? []) {
       const stateName = sq.state === 'forming' ? '组' : '走';
-      lines.push(`编队 ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}`);
+      /*
+       * 标出编队类型：之前只显示 id（`atk-3`），建造编队 `build-120` 会被当成
+       * 另一种 atk；用户 2026-11-22 要求"不同种类的编队都要能看到"。
+       */
+      const kind = sq.role === 'build' ? '建造' : sq.role === 'defend' ? '防守' : '进攻';
+      lines.push(`编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}`);
     }
   }
   el.textContent = lines.length > 1 ? lines.join('\n') : `AI 想法 · t=${t}\n（这一帧没有 AI 记录）`;

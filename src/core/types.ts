@@ -1538,13 +1538,6 @@ export interface MatchConfig {
    */
   aiEconPlan?: boolean;
   /**
-   * 编队数量不设上限（v3 专用）。默认开；`false` 回到"最多 2 支"。
-   *
-   * 旧行为：`maxSquads = 2`，55 个兵只有 2 支编队、其余全是散兵。
-   * 现在每回合最多新建一支（`forming` 互斥），装满 `want` 就走。
-   */
-  aiSquadUnlimited?: boolean;
-  /**
    * 过河分流（v3 专用）。默认开；`false` 关。
    *
    * 主渡口连续拥堵 3 回合后，把离新渡口最近的一支编队引过去；
@@ -2086,6 +2079,8 @@ export interface AiSquad {
  */
 export interface AiSquadReport {
   id: string;
+  /** 编队类型：attack/defend 战斗，build 建造（工人） */
+  role?: AiSquad['role'];
   state: AiSquad['state'];
   /** 还剩几个人 */
   count: number;

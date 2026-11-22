@@ -2499,7 +2499,7 @@ const SQUAD_FORM_TIMEOUT = 10;
 function postureBudgetOf(
   s: GameState,
   me: PlayerId,
-): { x: number; y: number; squadCap: number; maxSquads: number; spread: number } {
+): { x: number; y: number; squadCap: number; spread: number } {
   const mine = unitsOf(s, me).filter((u) => utype(s, u.type).category === 'combat').length;
   let foe = 0;
   for (const u of s.units) {
@@ -2530,8 +2530,6 @@ function postureBudgetOf(
      * 下限 6 是实测出来的：4 人的编队打不动一座有守军的城（Q4 从 5-1-0 掉到 2-3-1）。
      */
     squadCap: Math.round(6 + 8 * x),
-    // 只有真的想打才开第二支；开太多就是散兵线
-    maxSquads: x >= 0.55 ? 2 : 1,
     // 越激进越密集（主力互相掩护）；不想打时散开（少挨溅射、便于牵制）
     spread: Math.round(6 - 3 * x),
   };
@@ -2621,14 +2619,12 @@ function squadTick(
     s.config.aiSquad !== false &&
     !forming &&
     /*
-     * 编队数量上限（2026-11-22 默认取消）。
+     * 不限制支数（2026-11-22 用户决定，实测 18-3-3 优于基线的 17-3-4）。
      *
      * 以前固定 `maxSquads = 2`，55 个兵时只有 2 支编队、其余 40 多个散兵——
-     * "限制支数防散兵线"的结果是散兵更多（只是从多支小队变成一大坨无组织的）。
-     * 现在不限制支数，靠"每支 want（5~9）+ 建队要 3 个散兵"来约束：
-     * 每回合最多新建一支（`forming` 互斥），装满就走，剩下的下回合再来。
+     * "限制支数防散兵线"的结果是散兵更多。现在靠"每支 want（5~9）+
+     * 建队要 3 个散兵"约束，每回合最多新建一支（`forming` 互斥）。
      */
-    (s.config.aiSquadUnlimited === false ? kept.length < budget.maxSquads : true) &&
     free.length >= 3 &&
     foes.length > 0
   ) {
@@ -2759,6 +2755,33 @@ function squadTick(
       });
       idleNext[id] = 0;
     }
+  }
+  /*
+   * 建造编队也要上报，否则"AI 想法"面板里只看得到 atk 编队（用户 2026-11-22）。
+   * `lead` 用成员到目标点的最小距离，和战斗编队同口径。
+   */
+  for (const sq of buildKept) {
+    const tp = sq.targetPoint ?? null;
+    let lead = 0;
+    if (tp) {
+      lead = Math.min(
+        ...sq.memberIds.map((id) => {
+          const b = builders.find((x) => x.id === id);
+          return b ? Math.max(Math.abs(b.x - tp.x), Math.abs(b.y - tp.y)) : 999;
+        }),
+      );
+    }
+    reports.push({
+      id: sq.id,
+      role: 'build',
+      state: 'marching',
+      count: sq.memberIds.length,
+      lead,
+      spread: 0,
+      stalled: 0,
+      lost: 0,
+      note: 'advance',
+    });
   }
   kept.push(...buildKept);
   if (focus.plan) {
