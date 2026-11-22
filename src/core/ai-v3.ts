@@ -1767,6 +1767,8 @@ interface Fields {
    * 城格那点回血/护甲换不来"整支军队停摆"，所以这些城里的兵必须让位。
    */
   chokedCities: string[];
+  /** 产兵格**少**（< 城格数）的城：让位要一直推到恢复，不是 1 格就停 */
+  spawnStarved: string[];
   /** 编队成员 → 目标城：编队认编队目标，散兵认全局目标（见 `SQUAD` 那一段） */
   squadTarget: Map<string, string>;
   /** 编队缺口：还在收拢的战斗编队缺几个人。>0 时采购给战斗单位加分（"反馈请求生产端"） */
@@ -6276,12 +6278,27 @@ function unitCandidates(
    *
    * 只对经济/工程单位生效：战斗单位不进产兵格让位（那是走位的事）。
    */
-  if ((def.category === 'economy' || def.category === 'builder') && all.chokedCities.length > 0) {
-    const myChoked = citiesOf(s, unit.owner)
-      .filter((c) => all.chokedCities.includes(c.id))
+  if ((def.category === 'economy' || def.category === 'builder') && all.spawnStarved.length > 0) {
+    /*
+     * 让位（2026-11-22 第二层修正）。
+     *
+     * 判据必须从"**城格上有没有经济单位**"出发，而不是"自己站在城格上"：
+     * 链尾通常在外圈（不在城格），如果只让城格上的单位触发，链尾拿不到候选，
+     * 整条链就卡死（实测：5×5 全铺，只挪 2 个，产兵格一直是 0）。
+     */
+    const myCity = citiesOf(s, unit.owner)
+      .filter((c) => all.spawnStarved.includes(c.id))
       .sort((a, b) => distToCity(unit, a) - distToCity(unit, b))[0];
-    if (myChoked) {
-      const startCells = cityTiles(myChoked).map((t) => t.y * s.w + t.x);
+    const blocked =
+      myCity !== undefined &&
+      cityTiles(myCity).some((t) => {
+        const u = unitAt(s, t.x, t.y);
+        if (!u || u.owner !== unit.owner || u.id === unit.id) return false;
+        const d = utype(s, u.type);
+        return d.category === 'economy' || d.category === 'builder';
+      });
+    if (myCity && blocked) {
+      const startCells = cityTiles(myCity).map((t) => t.y * s.w + t.x);
       const prev = new Map<number, number>();
       const seen = new Set<number>(startCells);
       const q: number[] = [...startCells];
@@ -6316,12 +6333,12 @@ function unitCandidates(
           k = prev.get(k)!;
           path.push(k);
         }
-        // path: [空地, …, 城格]；从空地往回找第一个己方单位
+        // path: [空地, …, 城格]；最靠近空地的己方单位先走
         for (let i = 1; i < path.length; i++) {
           const kk = path[i]!;
           const u = unitAt(s, kk % s.w, Math.floor(kk / s.w));
           if (!u || u.owner !== unit.owner) continue;
-          if (u.id !== unit.id) break; // 最靠近空地的不是它，这步不给候选
+          if (u.id !== unit.id) break; // 最靠近空地的不是它
           const tk = path[i - 1]!;
           out.push({
             action: { type: 'MOVE', unitId: u.id, x: tk % s.w, y: Math.floor(tk / s.w) },
@@ -9512,6 +9529,9 @@ function aiNextActionCoreInner(
     crowd: crowdField(view, me),
     chokedCities: citiesOf(view, me)
       .filter((c) => !c.ruined && spawnCellCountOf(view, c) === 0)
+      .map((c) => c.id),
+    spawnStarved: citiesOf(view, me)
+      .filter((c) => !c.ruined && spawnCellCountOf(view, c) < c.size * c.size)
       .map((c) => c.id),
     squadTarget: squadTargetsOf(view, me),
     squadNeed: squadShortfallOf(view, me),
