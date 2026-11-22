@@ -3207,45 +3207,26 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
   assert.equal(net(), null, '切回热座应该收起来');
 });
 
-check('实验 AI v3：单独一颗按钮，点了换内核，不和档位/策略网络同时亮', () => {
+check('AI 内核：高级档位就是 v3，不再有单独的「实验 AI」按钮', () => {
   /*
-   * 2026-11-21：修仙分支的「实验 AI」并进主线，改叫「测试 AI 二代」；
-   * 2026-11-22：v3 分支把它接着往下写成 v3，按钮改叫「实验 AI v3」。
+   * 2026-11-21 修仙分支的「实验 AI」并进主线；2026-11-22 接着写成 v3；
+   * 同一天用户定：**v3 转正，直接接替「高级」**——所以那颗独立开关就撤了。
    *
-   * 它是**第二个换内核的按钮**，不是第四档难度：`config.aiBrain` 从
-   * `script` 换成 `goal`，加载的是 `core/ai-v3.ts`。所以这里钉三件事：
-   *   1. 它和档位同一行（玩家是在"给对面挑对手"时看见它的）；
-   *   2. 和档位、和策略网络三选一，不许同时亮两颗；
-   *   3. 说明里写清它是"v3 内核"，别让玩家以为它是策略网络的升级版。
+   * 这里钉两件事：
+   *   1. 人机对战时档位行里没有 `[data-aibrain="goal"]`（避免两个入口说同一件事）；
+   *   2. 「高级」那颗的说明里写着 v3，玩家能看见自己面对的是哪个内核。
    */
   click('[data-ai="1"]');
-  const v2 = () => doc.querySelector<HTMLElement>('[data-aibrain="goal"]');
-  assert.ok(v2(), '人机对战时应该能选到实验 AI v3');
-  assert.ok((v2()!.textContent ?? '').includes('v3'), '按钮上要写着"v3"');
   assert.equal(
-    v2()!.closest('.ai-level-row'),
-    doc.querySelector('.ai-level-row'),
-    '它和三个档位是同一行',
-  );
-
-  click('[data-aibrain="goal"]');
-  assert.ok(v2()!.classList.contains('active'), '点它应该亮起来');
-  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了二代就不该同时亮着档位');
-  assert.equal(
-    doc.querySelector('[data-aibrain="net"].active'),
+    doc.querySelector('[data-aibrain="goal"]'),
     null,
-    '也不该同时亮着策略网络（两颗是不同内核）',
+    '不再有单独的「实验 AI v3」按钮',
   );
-  assert.ok(
-    (v2()!.closest('section')!.textContent ?? '').includes('v3 内核'),
-    '这一栏要说明它是 v3 内核，不是"第四档"',
-  );
-
+  const adv = doc.querySelector<HTMLElement>('[data-ailevel="advanced"]');
+  assert.ok(adv, '高级档位还在');
+  assert.ok((adv!.getAttribute('title') ?? '').includes('v3'), '高级的说明里要写明是 v3 内核');
   click('[data-ailevel="advanced"]');
-  assert.equal(v2()!.classList.contains('active'), false, '点档位应该切回手写引擎');
-
-  click('[data-ai="0"]');
-  assert.equal(v2(), null, '切回热座应该收起来');
+  assert.ok(adv!.classList.contains('active'), '点高级应该亮起来');
 });
 
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
