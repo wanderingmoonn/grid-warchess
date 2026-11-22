@@ -32,7 +32,7 @@ for (let y = 0; y < s.h; y++) {
   for (let x = 0; x < s.w; x++) {
     const t = s.tiles[y * s.w + x]!;
     t.terrain = 'plain';
-    t.cityId = undefined;
+    (t as { cityId?: string }).cityId = undefined;
   }
 }
 for (let y = 0; y < 2; y++) {

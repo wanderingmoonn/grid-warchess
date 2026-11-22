@@ -2545,89 +2545,67 @@ function threatScaleOf(
   return Math.min(1, (reachable ? 0.4 : 0) + (hitRecent ? 0.3 : 0) + (close ? 0.3 : 0));
 }
 
-/**
- * 疏散预订（2026-11-22）：每回合算一次"谁去哪"，而不是让每个单位各自抢最近空位。
- *
- * 抽象：多源疏散 + 空格传播。这里用"链式预订"近似最小费用流：
- *   · 按**离城距离降序**处理（最外圈先挑），每人挑最近可用空位（距离 ≤ 移动力）；
- *   · 挑完把它**原来的格**放回可用池——后面的人能直接补它的位置；
- *   · 城格格子不回池（那是产兵格，不能再被经济单位占）。
- * 一回合内串行执行，argmax 天然按"外圈先走、里层后走"排。
- *
- * 只对"产兵格变少的城 + 城边经济/工程单位"生效，不做全图疏散。
- */
-function yieldPlanOf(view: GameState, me: PlayerId): Map<string, { x: number; y: number }> {
-  const plan = new Map<string, { x: number; y: number }>();
-  for (const c of citiesOf(view, me)) {
-    if (c.ruined) continue;
-    if (spawnCellCountOf(view, c) >= c.size * c.size) continue;
-    /*
-     * 参与疏散的不只是城格上的单位：整条"链"上的人都得有目标，
-     * 否则城格的人挑中别人的格，那个人不动，`applyAction` 永远拒。
-     * 范围取"城 3 格内的经济/工程单位"（5×5 全铺足够覆盖）。
-     */
-    const blockers = unitsOf(view, me)
-      .filter((u) => {
-        const d = utype(view, u.type);
-        if (d.category !== 'economy' && d.category !== 'builder') return false;
-        return distToCity(u, c) <= 3;
-      })
-      .sort((a, b) => distToCity(b, c) - distToCity(a, c) || a.id.localeCompare(b.id));
-    if (blockers.length === 0) continue;
-    const cityBlocked = cityTiles(c).some((t) => {
+function buildYieldChain(
+  view: GameState,
+  me: PlayerId,
+): Array<{ id: string; x: number; y: number }> {
+  const city = citiesOf(view, me).find((c) => {
+    if (c.ruined) return false;
+    if (spawnCellCountOf(view, c) >= c.size * c.size) return false;
+    return cityTiles(c).some((t) => {
       const u = unitAt(view, t.x, t.y);
       if (!u || u.owner !== me) return false;
       const d = utype(view, u.type);
       return d.category === 'economy' || d.category === 'builder';
     });
-    if (!cityBlocked) continue;
-
-    /*
-     * 候选格池：城 6 格内、可走、非城格——**包括被占的**。
-     *
-     * 疏散是链式的：远处的人先走，他的格才空出来给近处的人。
-     * 只把"当前空着的格"放进池子，密集局面下池子是空的（5×5 全铺实测 0 个），
-     * 谁都没地方去。
-     */
-    const pool: Array<{ x: number; y: number }> = [];
-    for (let dy = -6; dy <= 6; dy++) {
-      for (let dx = -6; dx <= 6; dx++) {
-        const x = c.x + dx;
-        const y = c.y + dy;
-        if (!inBounds(view, x, y)) continue;
-        const t = view.tiles[y * view.w + x];
-        if (!t || t.terrain === 'city') continue;
-        // 只放**真空位**：被占的格虽然之后会腾，但当下提交就是非法动作。
-        // 链靠"挑完把原格放回池子"实现，不靠"选中别人占着的格"。
-        if (unitAt(view, x, y)) continue;
-        pool.push({ x, y });
+  });
+  if (!city) return [];
+  const starts = cityTiles(city).map((t) => t.y * view.w + t.x);
+  const prev = new Map<number, number>();
+  const seen = new Set<number>(starts);
+  const q: number[] = [...starts];
+  let end = -1;
+  for (let i = 0; i < q.length && end < 0; i++) {
+    const k = q[i]!;
+    const x = k % view.w;
+    const y = Math.floor(k / view.w);
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(view, nx, ny)) continue;
+      const nk = ny * view.w + nx;
+      if (seen.has(nk)) continue;
+      const t = view.tiles[nk];
+      if (!t || t.terrain === 'city') continue;
+      const u = unitAt(view, nx, ny);
+      if (u && u.owner !== me) continue;
+      seen.add(nk);
+      prev.set(nk, k);
+      if (!u) {
+        end = nk;
+        break;
       }
-    }
-    const used = new Set<number>();
-    for (const u of blockers) {
-      const move = Math.max(1, utype(view, u.type).move ?? 1);
-      let best: { x: number; y: number } | null = null;
-      let bestD = Infinity;
-      for (let i = 0; i < pool.length; i++) {
-        if (used.has(i)) continue;
-        const e = pool[i]!;
-        const d = Math.abs(e.x - u.x) + Math.abs(e.y - u.y);
-        if (d > move || d === 0) continue;
-        // 只往外走：不占"离城更近"的格（那是留给里层的）
-        if (distToCity(e, c) < distToCity(u, c)) continue;
-        if (d < bestD) {
-          bestD = d;
-          best = e;
-        }
-      }
-      if (!best) continue;
-      plan.set(u.id, best);
-      used.add(pool.indexOf(best));
-      // 原来的格回池（非城格才能给后面的人补）
-      if (!cityAt(view, u.x, u.y)) pool.push({ x: u.x, y: u.y });
+      q.push(nk);
     }
   }
-  return plan;
+  if (end < 0) return [];
+  // 回溯：path[0] = 空地，path[last] = 城格
+  const path: number[] = [end];
+  let k = end;
+  while (prev.has(k)) {
+    k = prev.get(k)!;
+    path.push(k);
+  }
+  const chain: Array<{ id: string; x: number; y: number }> = [];
+  for (let i = 1; i < path.length; i++) {
+    const kk = path[i]!;
+    const u = unitAt(view, kk % view.w, Math.floor(kk / view.w));
+    if (!u || u.owner !== me) continue;
+    const tk = path[i - 1]!;
+    chain.push({ id: u.id, x: tk % view.w, y: Math.floor(tk / view.w) });
+  }
+  // chain 已按"离空地近 → 远"排列（path 从 end 往回），即执行顺序
+  return chain;
 }
 
 function postureBudgetOf(
@@ -9526,6 +9504,34 @@ function aiNextActionCoreInner(
   const threatScale =
     s.config.aiThreatScale === true ? threatScaleOf(view, me, keepPrev) : 0;
 
+  /*
+   * 疏散链：回合级维护。每回合建一次；每步把"已经到了目标"的链头弹出，
+   * 只把当前链头交给 `unitCandidates`（它只给这一条候选）。
+   */
+  const keepYield = (focusOf(s, me).plan?.keep ?? {}) as Record<string, unknown>;
+  let yieldChain = keepYield.yieldChain as Array<{ id: string; x: number; y: number }> | undefined;
+  if (!Array.isArray(yieldChain) || yieldChain.length === 0 || Number(keepYield.yieldTurn ?? -1) !== view.turn) {
+    yieldChain = buildYieldChain(view, me);
+  }
+  while (yieldChain.length > 0) {
+    const head = yieldChain[0]!;
+    const u = view.units.find((x) => x.id === head.id);
+    if (!u || (u.x === head.x && u.y === head.y)) yieldChain.shift();
+    else break;
+  }
+  if (depth === 0 && focusOf(s, me).plan) {
+    focusOf(s, me).plan!.keep = {
+      ...(focusOf(s, me).plan!.keep ?? {}),
+      yieldChain,
+      yieldTurn: view.turn,
+    };
+  }
+  const yieldChainHead = new Map<string, { x: number; y: number }>();
+  if (yieldChain.length > 0) {
+    const head = yieldChain[0]!;
+    yieldChainHead.set(head.id, { x: head.x, y: head.y });
+  }
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -9570,7 +9576,7 @@ function aiNextActionCoreInner(
     spawnStarved: citiesOf(view, me)
       .filter((c) => !c.ruined && spawnCellCountOf(view, c) < c.size * c.size)
       .map((c) => c.id),
-    yieldPlan: yieldPlanOf(view, me),
+    yieldPlan: yieldChainHead,
     squadTarget: squadTargetsOf(view, me),
     squadNeed: squadShortfallOf(view, me),
     squadInfo: squadInfoOf(view, me),
