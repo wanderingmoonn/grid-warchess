@@ -35,6 +35,7 @@ const ONLY = argOf('case', '').toUpperCase();
 /** `--econ-cap`：打开"经济上限按地块容量"，和经济铺满的局对照 */
 const ECON_CAP = process.argv.includes('--econ-cap');
 const THREAT = process.argv.includes('--threat');
+const ECON_PLAN = process.argv.includes('--econ-plan');
 const LIMIT = Number(argOf('turns', '40'));
 
 interface Case {
@@ -103,6 +104,7 @@ function playOne(c: Case, seed: number): { A: Side; B: Side; winner: PlayerId | 
       mapSymmetry: 'fair',
       ...(ECON_CAP ? { aiEconCap: true } : {}),
       ...(THREAT ? { aiThreatScale: true } : {}),
+      ...(ECON_PLAN ? { aiEconPlan: true } : {}),
     },
     seed,
   );

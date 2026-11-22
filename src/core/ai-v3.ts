@@ -8204,19 +8204,23 @@ function recruitCandidate(
      * 路径算法给 47 回合——差十倍。用直线时 `econUntil` 恒为 0，经济一个都投不进去。
      * 判决不是每回合都写日志，所以取最近 6 回合内、本席的最后一条。
      */
-    const recent = [...(s.aiCalls ?? [])]
-      .reverse()
-      .find((c) => c.me === me && s.turn - c.turn <= 6);
-    let horizon = recent?.marchTurns ?? 0;
-    if (!Number.isFinite(horizon) || horizon <= 0) {
-      // 还没判决记录（开局前几回合）：退到"城到城"的直线，按 3 格/回合估
-      const own = citiesOf(s, me);
-      const foe = s.cities.filter((c) => c.owner !== me && !c.ruined);
-      let best = Infinity;
-      for (const a of own) for (const b of foe) best = Math.min(best, distToCity(a, b));
-      horizon = Number.isFinite(best) ? best / 3 : 8;
-    }
-    return solvePower(powerInputOf(s, me), Math.max(2, Math.min(20, Math.round(horizon))));
+    /*
+     * 窗口 = **城到城**的路径回合，不是"当前部队到城"。
+     *
+     * 用部队到城会随推进变小（T4 窗口 4、T8 窗口 3），经济刚起步就被判
+     * "来不及回本"，结果几乎不投（Q2 4-1-1）。城到城不会随部队变。
+     *
+     * 路径用直线 × 1.6 近似（绕河/绕山），再按 3 格/回合换算，clamp 4~12：
+     *   12×12 → 4；16×16 → 6~7；24×24 → 8~10。
+     */
+    const own = citiesOf(s, me);
+    const foe = s.cities.filter((c) => c.owner !== me && !c.ruined);
+    let best = Infinity;
+    for (const a of own) for (const b of foe) best = Math.min(best, distToCity(a, b));
+    const horizon = Number.isFinite(best)
+      ? Math.max(4, Math.min(12, Math.round((best * 1.6) / 3)))
+      : 8;
+    return solvePower(powerInputOf(s, me), horizon);
   })();
   const targetEarners = econPlan
     ? econPlan.econUntil > 0
