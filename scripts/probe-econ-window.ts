@@ -28,6 +28,8 @@ const LIMIT = Number(argOf('limit', '40'));
 const ONLY = argOf('case', '').toUpperCase();
 /** `--econ-cap`：经济上限用"地块容量"（否则 econRoom 还被"每城 2 个"卡着） */
 const ECON_CAP = process.argv.includes('--econ-cap');
+/** `--econ-plan`：经济投入交给求解器（否则 econRoom 还是"每城 2 个"） */
+const ECON_PLAN = process.argv.includes('--econ-plan');
 /** `--horizon-mode fixed|march`：窗口取固定值还是"主力到敌城的回合数" */
 const MODE = argOf('horizon-mode', 'march');
 const FIXED = Number(argOf('horizon', '10'));
@@ -56,6 +58,7 @@ function run(c: Case): void {
       size: c.size,
       mapSymmetry: 'fair',
       ...(ECON_CAP ? { aiEconCap: true } : {}),
+      ...(ECON_PLAN ? { aiEconPlan: true } : {}),
     },
     c.seed,
   );

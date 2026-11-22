@@ -176,6 +176,19 @@ function simulate(input: PowerInput, turns: number, econUntil: number): PowerPla
  * 返回里带"投经济投到第几回合"，是因为这个数本身就是决策：
  * 人也是这么想的——"还能打几个回合？够不够回本？"
  */
+/**
+ * 只读：把每个 k 的结果都列出来（k = "前 k 回合优先买经济"）。
+ *
+ * 给诊断用。`solvePower` 只返回最优那一条，"为什么它认为不划算"必须看到
+ * 所有候选的 power 才能回答——否则只能猜。
+ */
+export function planCandidates(input: PowerInput, turns: number): PowerPlan[] {
+  const span = Math.max(0, Math.floor(turns));
+  const out: PowerPlan[] = [];
+  for (let k = 0; k <= span; k += 1) out.push(simulate(input, span, k));
+  return out;
+}
+
 export function solvePower(input: PowerInput, turns: number): PowerPlan {
   const span = Math.max(0, Math.floor(turns));
   if (span === 0) return { power: 0, econUntil: 0, econ: 0, units: 0, note: '不投了' };

@@ -159,6 +159,8 @@ const QUALITY_SCALE = argOf('quality-scale', '');
 const RECRUIT_CAP_ARG = argOf('recruit-cap', '');
 /** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），验经济铺满时的行为 */
 const ECON_CAP = has('econ-cap');
+/** `--econ-plan`：经济投入交给求解器（`aiEconPlan`） */
+const ECON_PLAN = has('econ-plan');
 const RECRUIT_CAP: number | 'auto' | undefined =
   RECRUIT_CAP_ARG === 'auto' ? 'auto' : RECRUIT_CAP_ARG === '' ? undefined : Number(RECRUIT_CAP_ARG);
 
@@ -214,6 +216,7 @@ function playOne(
       ...(QUALITY_SCALE === '' ? {} : { aiQualityScale: Number(QUALITY_SCALE) }),
       ...(POSTURE ? { aiPosture: true } : {}),
       ...(ECON_CAP ? { aiEconCap: true } : {}),
+      ...(ECON_PLAN ? { aiEconPlan: true } : {}),
       ...(RECRUIT_CAP === undefined ? {} : { aiRecruitCap: RECRUIT_CAP }),
       ...(NO_DECISIVE ? { aiDecisive: false } : {}),
       ...(NO_MASS ? { aiMass: false } : {}),
