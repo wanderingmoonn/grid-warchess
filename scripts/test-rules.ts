@@ -6032,7 +6032,7 @@ test('指挥光环：2 格内友军攻击 +4', () => {
   assert.ok(plain > 0, '远处那一下照样打得出伤害');
 });
 
-test('破城：攻城伤害 ×1.5', () => {
+test('破城：攻城伤害 ×2', () => {
   const s = fresh();
   const cav = findUnit(s, 'A', 'scout');
   const city = citiesOf(s, 'B')[0];
@@ -6040,8 +6040,9 @@ test('破城：攻城伤害 ×1.5', () => {
   const normal = damageToCity(cav, city, s);
   grantAbility(s, 'scout', 'siege-master');
   const boosted = damageToCity(cav, city, s);
-  // 破城现在作用于攻击力，而不是最终伤害
-  const expected = Math.max(0, Math.round((normal + city.armor) * 1.5 - city.armor));
+  // 破城作用于攻击力，而不是最终伤害；2026-11-22 倍率 1.5 → 2
+  // （同批城血整体 ×1.5，攻城器械要保住"比普通兵快"的优势）
+  const expected = Math.max(0, Math.round((normal + city.armor) * 2 - city.armor));
   assert.equal(boosted, expected);
 });
 
@@ -18582,13 +18583,14 @@ test('攒钱额度三条边界：够得着不冻结、贴身攒、弃城期纯�
   assert.equal(savingAllowance(200, 220, 900, 2, false, 0), 0, '弃城期不出兵');
 });
 
-test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血 / 女巫换特性', () => {
+test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 / 女巫换特性', () => {
   const s = fresh({ startEra: 3, expansionIds: FANTASY });
   assert.equal(s.unitTypes['berserker']!.atk, 15, '狂战士每段 15（原 24 单发）');
   assert.equal(s.unitTypes['berserker']!.burst, 2, '狂战士改成连击 2 段');
   const serpent = s.unitTypes['serpent-man']!;
   assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
-  assert.equal(serpent.maxHp, 26, '蛇人生命 26（2026-11-04 下放到一代时压下来的）');
+  // 2026-11-22 再削 10%：26 → 23（8 甲配 26 血在同价位太耐打）
+  assert.equal(serpent.maxHp, 23, '蛇人生命 23（2026-11-22 从 26 削 10%）');
   assert.equal(serpent.era, 1, '蛇人已经下放到第 1 代');
   const witch = s.unitTypes['witch']!;
   // 2026-11-07：掠空删掉了（它在时代 1 让她"近战打不到"，胜率 87%），只剩虚咒
@@ -18654,7 +18656,8 @@ test('奇想调整（2026-11-04）：蛇人与僵尸下放第 1 代，地狱犬�
   assert.equal(serpent.era, 1, '蛇人下放到第 1 代');
   assert.equal(serpent.cost, 72, '蛇人造价 95 → 72');
   assert.equal(serpent.atk, 12, '蛇人攻击 15 → 12');
-  assert.equal(serpent.maxHp, 26, '蛇人生命 34 → 26');
+  // 26 是 2026-11-04 的值；2026-11-22 再削 10% 到 23，这里断言当前值
+  assert.equal(serpent.maxHp, 23, '蛇人生命 23（11-04 下放时 26，11-22 再削 10%）');
   assert.equal(serpent.armor, 8, '蛇人护甲保持 8');
   assert.deepEqual(serpent.abilities, ['poison-hit'], '蛇人的淬毒不变');
 
