@@ -1545,6 +1545,13 @@ export interface MatchConfig {
    */
   aiSquadUnlimited?: boolean;
   /**
+   * 过河分流（v3 专用）。默认开；`false` 关。
+   *
+   * 主渡口连续拥堵 3 回合后，把离新渡口最近的一支编队引过去；
+   * 新渡口离旧渡口 ≥6 格，分流后锁定 10 回合。三个数都是拍的（见 `CROSSING_PLAN.orders`）。
+   */
+  aiCrossSplit?: boolean;
+  /**
    * 采购里"质量信号"的放大倍数（v3 专用）。不写 = 2.5；1 = 老行为（信号被噪声吃掉）。
    * 拿来 A/B 用：同一批队列跑 1 和 2.5，才知道放大质量到底有没有用。
    */

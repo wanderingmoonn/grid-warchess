@@ -177,6 +177,13 @@ export interface PlanOrders {
    */
   scout: { unitId: string; cityId: string; x: number; y: number } | null;
   /**
+   * 过河分流：把某个编队引到第二个渡口。
+   *
+   * 只在"主渡口拥堵"时出现——9 支编队挤一座 1 格宽的桥，不如分一支去别处。
+   * `unitIds` 是那支编队的成员，走位层据此改道；其他单位仍走主渡口。
+   */
+  altCrossing: { x: number; y: number; unitIds: string[] } | null;
+  /**
    * 顺路观察（阶段 3b 的 B 方案）：把 `unitId` 的**走位目标**从城改成观察点。
    *
    * 和 `scout` 的区别：不建编队、不抽人、**不禁止攻击**。它只是"往那边走的时候

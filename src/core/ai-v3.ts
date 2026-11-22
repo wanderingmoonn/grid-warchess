@@ -1741,6 +1741,8 @@ interface Fields {
   scout: { unitId: string; cityId: string; x: number; y: number } | null;
   /** 顺路观察：只改这个单位的走位目标，不禁攻、不建编队 */
   peek: { unitId: string; x: number; y: number } | null;
+  /** 过河分流：某个编队改走第二个渡口（主渡口拥堵时） */
+  crossingAlt: { x: number; y: number; unitIds: Set<string> } | null;
   /**
    * 优势期：兵力和身价都压过对面一截，这时候该做的是**破城**，不是清野。
    *
@@ -2341,7 +2343,11 @@ export function decisiveViewGap(
  * 这里的判据是可验的：两个洪泛（我方陆地 / 敌方陆地）都够得到的水面，
  * 才是"一条能走通的渡口"。找不到就是这张图真的过不去，返回 null。
  */
-function crossingPointOf(view: GameState, me: PlayerId): { x: number; y: number } | null {
+function crossingPointOf(
+  view: GameState,
+  me: PlayerId,
+  avoid?: { x: number; y: number },
+): { x: number; y: number } | null {
   const flood = (
     seeds: Array<{ x: number; y: number }>,
     throughWater: boolean,
@@ -2416,6 +2422,8 @@ function crossingPointOf(view: GameState, me: PlayerId): { x: number; y: number 
         }
       }
       if (!onMyBank) continue;
+      // 分流用：离已用的渡口太近就不算"另一个渡口"（两座桥挨着等于一座）
+      if (avoid && Math.max(Math.abs(x - avoid.x), Math.abs(y - avoid.y)) < 6) continue;
       if (dFoe < bestScore) {
         bestScore = dFoe;
         best = { x, y };
@@ -3121,7 +3129,78 @@ const CROSSING_PLAN: RankedPlan = {
     // 计数写进 `keep`（不随计划退场丢失），不写口袋——见 types 里 `keep` 的说明
     if (typeof prev === 'number' && mine < prev) c.keep.lost = Number(c.keep.lost ?? 0) + 1;
     c.keep.bridges = mine;
+    /*
+     * 渡口拥堵（2026-11-22）：判据只用**我方单位的位置**，不需要敌人信息。
+     *
+     *   · 距渡口 ≤3 格的战斗单位数（`near`）；
+     *   · 这些单位属于几支编队（`sqNear`）——9 支挤一座桥时，这个数先涨。
+     *
+     * `jam` 成立就累加连续回合数，不成立清零。分流要的是"持续拥堵"，
+     * 单帧人多可能只是刚好路过。
+     */
+    const site =
+      (c.state.focus as { x: number; y: number } | undefined) ??
+      (c.keep.crossingSite as { x: number; y: number } | undefined);
+    if (site) {
+      c.keep.crossingSite = site;
+      const near = unitsOf(c.view, c.me).filter(
+        (u) =>
+          utype(c.view, u.type).category === 'combat' &&
+          Math.max(Math.abs(u.x - site.x), Math.abs(u.y - site.y)) <= 3,
+      );
+      const squads = c.view.aiFocus?.[c.me]?.squads ?? [];
+      const sqNear = squads.filter((sq) =>
+        sq.memberIds.some((id) => near.some((u) => u.id === id)),
+      ).length;
+      c.keep.bridgeUnits = near.length;
+      c.keep.bridgeSquads = sqNear;
+      const jam = near.length >= 10 || sqNear >= 2;
+      c.keep.bridgeJam = jam ? Number(c.keep.bridgeJam ?? 0) + 1 : 0;
+    }
     return {};
+  },
+  /*
+   * 分流（2026-11-22）：主渡口持续拥堵时，把**一支**编队引到第二个渡口。
+   *
+   * 三个 @tune 值都是拍的，理由写在数值旁边：
+   *   · 连续拥堵 3 回合才分流（1~2 回合可能只是路过/刚好一波人）；
+   *   · 新渡口离旧渡口 ≥6 格（挨着等于一座，见 `crossingPointOf` 的 avoid）；
+   *   · 分流后锁定 10 回合（否则今天分、明天回，来回抖）。
+   */
+  orders: (c) => {
+    if (c.view.config.aiCrossSplit === false) return {};
+    const site = c.keep.crossingSite as { x: number; y: number } | undefined;
+    if (!site) return {};
+    /** @tune 连续拥堵几回合才分流 */
+    const JAM_TURNS = 3;
+    /** @tune 分流后锁定几回合不重算 */
+    const SPLIT_LOCK = 10;
+    if (Number(c.keep.bridgeJam ?? 0) < JAM_TURNS) return {};
+    const until = Number(c.keep.splitUntil ?? 0);
+    const prev = c.keep.splitAlt as { x: number; y: number; unitIds: string[] } | undefined;
+    if (c.view.turn < until && prev) return { altCrossing: prev };
+    const alt = crossingPointOf(c.view, c.me, site);
+    if (!alt) return {};
+    const squads = (c.view.aiFocus?.[c.me]?.squads ?? []).filter(
+      (sq) => sq.role === 'attack' && sq.memberIds.length >= 3,
+    );
+    if (squads.length === 0) return {};
+    // 挑离新渡口最近的那支：它绕路最少，也最可能先到
+    const pick = squads
+      .map((sq) => ({
+        sq,
+        d: Math.min(
+          ...sq.memberIds.map((id) => {
+            const u = c.view.units.find((x) => x.id === id);
+            return u ? Math.max(Math.abs(u.x - alt.x), Math.abs(u.y - alt.y)) : 999;
+          }),
+        ),
+      }))
+      .sort((a, b) => a.d - b.d)[0]!.sq;
+    const out = { x: alt.x, y: alt.y, unitIds: [...pick.memberIds] };
+    c.keep.splitAlt = out;
+    c.keep.splitUntil = c.view.turn + SPLIT_LOCK;
+    return { altCrossing: out };
   },
   focus: (c) => {
     // 已经有陆路：不用修（这里给 null，不是让计划退场，见 value 的说明）
@@ -3948,6 +4027,16 @@ function tacticalMoveScore(s: GameState, unit: Unit, x: number, y: number, all: 
     riskMul;
 
   if (all.needBridge && all.bridgeSite) score += (distance(unit,all.bridgeSite)-distance(moved,all.bridgeSite))*4;
+  /*
+   * 分流的编队朝**自己的渡口**走（+8/格，比主渡口的 4 更强）。
+   *
+   * 主渡口那条只在 `needBridge` 时生效；分流发生在"已经能过河、只是挤"的时候，
+   * 所以必须单独给一条，否则被分出去的那支会被推进评分拽回主桥头。
+   */
+  if (all.crossingAlt?.unitIds.has(unit.id)) {
+    const alt = all.crossingAlt;
+    score += (distance(unit, alt) - distance(moved, alt)) * 8;
+  }
   /*
    * 给造桥点让路（只在真的过不去时）：非工程单位停在桥点周围 2 格里，
    * 工程队就永远进不去。已经在里面的不罚——那是"离开"，不是"靠近"。
@@ -9250,6 +9339,7 @@ function aiNextActionCoreInner(
     holdFire: false,
     scout: null,
     peek: null,
+    crossingAlt: null,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -9421,6 +9511,13 @@ function aiNextActionCoreInner(
     // 侦查指令：派谁/去哪。为 null 时不写，保持"这回合不侦查"
     if (resolved.orders.scout) fields.scout = resolved.orders.scout;
     if (resolved.orders.peek) fields.peek = resolved.orders.peek;
+    if (resolved.orders.altCrossing) {
+      fields.crossingAlt = {
+        x: resolved.orders.altCrossing.x,
+        y: resolved.orders.altCrossing.y,
+        unitIds: new Set(resolved.orders.altCrossing.unitIds),
+      };
+    }
     fields.crossingSite = resolved.focus;
     fields.weights = resolved.net;
     fields.pullHome = resolved.net.pullHome;
