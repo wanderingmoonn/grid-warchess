@@ -3197,7 +3197,8 @@ registerSkillEffect('forest-tide', (c) => {
       const tile = c.api.tileAt(c.view, x, y);
       if (!tile) continue;
       if (c.api.distance(c.self, { x, y }) > radius) continue;
-      // 水域不动：水不会变成森林
+      // 水域不动：水不会变成森林。城格与桥面也不动——那两个是"这里有一座城/
+      // 一座桥"，不是地表材质；判据在 `patchTerrain` 里统一挡（别处改造地形同样受益）
       if (tile.terrain === 'water' || tile.terrain === 'deep') continue;
       cells.push({ x, y });
     }

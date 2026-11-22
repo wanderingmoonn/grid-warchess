@@ -305,10 +305,19 @@ export function patchTerrain(
     const t = s.tiles[y * s.w + x];
     if (!t) continue;
     if (t.terrain === terrain) continue;
+    /*
+     * **结构不是地形**：城格和桥面一律不动（2026-11-22 修正）。
+     *
+     * 它们不是"一片地长什么样"，而是"这里有一座城/一座桥"：
+     *   · 城格被改成森林、`cityId` 被清掉之后，还原时那个 id 是补不回来的——
+     *     等于这座城永久少一格（`cityTiles`、兵额、驻军全跟着错）；
+     *   · 桥面改成森林，那 5 回合里桥就不是桥了；更糟的是这期间桥被打掉，
+     *     到期会把 `'bridge'` 又写回去，凭空长出一段没有桥的桥面。
+     * 所以判据放在这里，而不是让每个扩展各自记得避开。
+     */
+    if (t.terrain === 'city' || t.terrain === 'bridge') continue;
     patch.push({ x, y, from: t.terrain, until });
     t.terrain = terrain;
-    // 地形换了，城格标记要跟着清：森林不是城
-    if (terrain !== 'city') t.cityId = null;
     changed += 1;
   }
   return changed;
