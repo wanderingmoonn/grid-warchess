@@ -83,7 +83,8 @@ const sceneHeight = Math.ceil(2 * size * halfHeight + 78);
 const project = (x: number, y: number, lift = 0): Point =>
   [sceneWidth / 2 + (x - y) * halfWidth, 37 + (x + y) * halfHeight - lift];
 
-const heights: Partial<Record<Terrain, number>> = { hill: 8, mountain: 25, bridge: 2 };
+const boardFloor = -13;
+const heights: Partial<Record<Terrain, number>> = { water: -9, shallow: -4, hill: 8, mountain: 25, bridge: 2 };
 const colors: Partial<Record<Terrain, string>> = {
   plain: '#dce4c7', forest: '#b0c28f', hill: '#d5bf8f', mountain: '#a3adba',
   water: '#9ebfd2', shallow: '#a9cfc5', bridge: '#ba9a6d', city: '#c5cbb1',
@@ -113,10 +114,20 @@ function at(state: GameState, x: number, y: number): Terrain | undefined {
 
 function heightAt(state: GameState, x: number, y: number): number {
   const terrain = at(state, x, y);
-  if (!terrain) return 0;
+  if (!terrain) return boardFloor;
   const elevation = heights[terrain] ?? 0;
   if (terrain === 'mountain' && at(state, x + 1, y) === 'mountain') return elevation + 5;
   return elevation;
+}
+
+function faceColors(terrain: Terrain, neighbor: Terrain | undefined): readonly [string, string, string] {
+  if (!neighbor) return ['#695c4d', '#81745e', '#534638'];
+  if (terrain === 'mountain') return ['#647282', '#768594', '#424d58'];
+  if (terrain === 'shallow' && neighbor === 'water') return ['#749cab', '#86abb4', '#658999'];
+  if ((terrain === 'plain' || terrain === 'forest') && (neighbor === 'water' || neighbor === 'shallow')) {
+    return ['#788467', '#939e7d', '#68755b'];
+  }
+  return ['#a28357', '#b49a69', '#7b643d'];
 }
 
 function paintTerrain(ctx: CanvasRenderingContext2D, x: number, y: number, state: GameState): void {
@@ -124,15 +135,15 @@ function paintTerrain(ctx: CanvasRenderingContext2D, x: number, y: number, state
   const elevation = heightAt(state, x, y);
   const south = heightAt(state, x, y + 1);
   const east = heightAt(state, x + 1, y);
-  const edge = terrain === 'mountain' ? '#424d58' : '#7b643d';
-  const faces = terrain === 'mountain' ? ['#647282', '#768594'] : ['#a28357', '#b49a69'];
   if (elevation > east) {
+    const [face, , edge] = faceColors(terrain, at(state, x + 1, y));
     polygon(ctx, [project(x + 1, y, elevation), project(x + 1, y + 1, elevation),
-      project(x + 1, y + 1, east), project(x + 1, y, east)], faces[0]!, edge);
+      project(x + 1, y + 1, east), project(x + 1, y, east)], face, edge);
   }
   if (elevation > south) {
+    const [, face, edge] = faceColors(terrain, at(state, x, y + 1));
     polygon(ctx, [project(x, y + 1, elevation), project(x + 1, y + 1, elevation),
-      project(x + 1, y + 1, south), project(x, y + 1, south)], faces[1]!, edge);
+      project(x + 1, y + 1, south), project(x, y + 1, south)], face, edge);
   }
   const water = terrain === 'water' || terrain === 'shallow';
   const rock = terrain === 'mountain';
@@ -155,7 +166,7 @@ function paintTerrain(ctx: CanvasRenderingContext2D, x: number, y: number, state
       polygon(ctx, [[left - 5, top], [left, top - 15], [left - 0.3, top - 1]], '#668650');
     }
   } else if (water && (x + y * 3) % 4 === 0) {
-    const [left, top] = project(x + 0.43, y + 0.49);
+    const [left, top] = project(x + 0.43, y + 0.49, elevation);
     ctx.fillStyle = '#eff5ec66';
     ctx.fillRect(left - 5, top, 10, 1);
   } else if (terrain === 'plain' && (x * 3 + y * 11) % 7 === 0) {
@@ -221,12 +232,9 @@ const cityTexture = new Image();
 
 function paintTilted(): void {
   ctx.clearRect(0, 0, sceneWidth, sceneHeight);
-  const top = rhombus(0, 0, size, 0);
-  const bottom = rhombus(0, 0, size, -11);
+  const bottom = rhombus(0, 0, size, boardFloor);
   polygon(ctx, bottom.map(([x, y]) => [x + 4, y + 9]), '#62564424');
-  polygon(ctx, [top[1]!, top[2]!, bottom[2]!, bottom[1]!], '#695c4d', '#534638');
-  polygon(ctx, [top[3]!, top[2]!, bottom[2]!, bottom[3]!], '#81745e', '#534638');
-  polygon(ctx, top, '#dce4c7');
+  polygon(ctx, bottom, '#736953');
   for (let diagonal = 0; diagonal < 2 * size - 1; diagonal++) {
     for (let y = Math.max(0, diagonal - size + 1); y <= Math.min(size - 1, diagonal); y++) {
       const x = diagonal - y;
