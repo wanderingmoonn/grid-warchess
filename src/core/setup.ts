@@ -765,6 +765,7 @@ export function createMatch(
       ...(config.aiCrossing === false ? { aiCrossing: false } : {}),
       ...(config.aiPosture === true ? { aiPosture: true } : {}),
       ...(config.aiDecisive === false ? { aiDecisive: false } : {}),
+      ...(config.aiScout === true ? { aiScout: true } : {}),
       ...(config.aiMass === false ? { aiMass: false } : {}),
       ...(config.aiBreakthrough === false ? { aiBreakthrough: false } : {}),
       ...(config.aiSquad === false ? { aiSquad: false } : {}),

@@ -164,10 +164,18 @@ export interface PlanOrders {
    *
    * 战略层给的是**总配额**，具体要多大由任务定：
    *   集中突破 12 人、屯兵 8 人、过河 6 人、守城 5 人；
-   *   以后"侦查/骚扰"报 3 人就够，不用改走位代码。
+   *   "侦查"报 1 人（`SCOUT_PLAN` 自己选人，不走编队）。
    * 不写就用战略层的默认规模。
    */
   needSquad: number;
+  /**
+   * 侦查指令：派 `unitId` 去 `(x,y)` 蹲着看 `cityId` 这座城。
+   *
+   * 为什么走 `orders` 而不是计划的 `focus`：`focus` 已经被"过河渡口"独占
+   * （核心把它写进 `fields.crossingSite/bridgeSite`）。两个语义共用一处出口，
+   * 最后一定是"人往东走、桥往西修"。
+   */
+  scout: { unitId: string; cityId: string; x: number; y: number } | null;
 }
 
 /** 行动型计划吐出的一个动作（可带分） */

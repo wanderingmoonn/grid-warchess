@@ -1732,6 +1732,13 @@ interface Fields {
   /** 不许开火（压 ATTACK/SIEGE）：决战时机判"发展且明显落后"时给 */
   holdFire: boolean;
   /**
+   * 本回合的侦查任务：派谁、去哪、看哪座城（`SCOUT_PLAN` 的 `orders`）。
+   *
+   * null = 这回合不侦查。读它的只有两处：走位（往点上带）与开火（不给候选，
+   * 因为潜行一出手就现形）。
+   */
+  scout: { unitId: string; cityId: string; x: number; y: number } | null;
+  /**
    * 优势期：兵力和身价都压过对面一截，这时候该做的是**破城**，不是清野。
    *
    * 战棋里"赢"只有一个方向——把对面的城全变成自己的。可推进评分里除了城市
@@ -2568,8 +2575,19 @@ function squadTick(
 ): AiSquadReport[] {
   const budget = postureBudgetOf(s, me);
   const focus = focusOf(s, me);
+  /*
+   * 正在执行侦查任务的那个兵不参加编队。
+   *
+   * 不排除的话，`SCOUT_PLAN` 前脚把它派出去、`squadTick` 后脚把它编进主攻队，
+   * 于是编队永远少一人、斥候被"编队目标"带着往城下冲（而且它还不许开火）。
+   */
+  const scoutId =
+    (focus.plan?.keep as { scout?: { unitId?: string | null } } | undefined)?.scout?.unitId ?? null;
   const combat = unitsOf(s, me).filter(
-    (u) => utype(s, u.type).category === 'combat' && utype(s, u.type).domain !== 'water',
+    (u) =>
+      utype(s, u.type).category === 'combat' &&
+      utype(s, u.type).domain !== 'water' &&
+      u.id !== scoutId,
   );
   const byId = new Map(combat.map((u) => [u.id, u]));
   const foes = s.cities.filter((c) => c.owner !== me && !c.ruined);
@@ -3108,6 +3126,204 @@ const CROSSING_PLAN: RankedPlan = {
   },
 };
 registerAiPlan(CROSSING_PLAN);
+
+/* ---------------- 侦查：选人、蹲点、放弃（阶段 3） ---------------- */
+
+/*
+ * 选人判据的权重（每一项都要能说出理由，别拍）：
+ *
+ *   · 视野 8/格：4 格能罩住一整座城（城 2×2），2 格只能看到城墙一角；
+ *   · 潜行 +30：森林/丘陵上不出手，敌人要贴到相邻才发现——**这是能长期蹲住的前提**；
+ *   · 移动 2/点：4 速的斥候两回合到点，2 速的民兵要五回合，路上就被打死了；
+ *   · 造价 −0.05/金：死得起。50 金的斥候 = −2.5 分，400 金的坦克 = −20 分；
+ *   · 残血直接排除：半血出门等于送人头。
+ *
+ * 这套分的实际效果：斥候（视 4 + 潜行 + 移 4 + 50 金）≈ 67 分；
+ * 民兵（视 2 + 移 2 + 25 金）≈ 19 分；弓手（视 3 + 移 2 + 35 金）≈ 24 分。
+ * 没有斥候的局就用"视野最高的散兵"，不会去找坦克。
+ */
+const SCOUT_VISION = 8;
+const SCOUT_STEALTH = 30;
+const SCOUT_MOVE = 2;
+const SCOUT_COST = 0.05;
+/**
+ * 低于这个分不如不派。
+ *
+ * 15 是"弓手（视 3）也能去"的线：视野 4 的斥候 67 分、弓手 24 分、民兵 19 分。
+ * 第一版定 25，结果没买斥候的局**永远不侦查**（早期只有民兵/弓手）——
+ * 而"看不见"最严重的恰恰是那些局。
+ */
+const SCOUT_MIN_FIT = 15;
+/** 情报到这个数就算"看清了"，计划退场 */
+const SCOUT_CONF_ENOUGH = 0.7;
+
+/**
+ * 一个兵适不适合去侦查（越高越合适；负数 = 不合格）。
+ *
+ * 为什么不是"兵种 id 白名单"：扩展包里每个时代都可能有潜行兵，
+ * 写死 `scout` 会在没有斥候的图/时代直接失效。判据只看**能力**：
+ * 战斗单位、非水军、血够、视野高、能潜行、跑得快、死得起。
+ */
+export function scoutFitOf(view: GameState, u: Unit): number {
+  const d = utype(view, u.type);
+  if (d.category !== 'combat') return -1;
+  if (d.domain === 'water') return -1;
+  if (u.hp / Math.max(1, d.maxHp) < 0.5) return -1;
+  const stealth = d.abilities?.includes('stealth') ? SCOUT_STEALTH : 0;
+  return (
+    (d.vision ?? 1) * SCOUT_VISION +
+    stealth +
+    (d.move ?? 1) * SCOUT_MOVE -
+    (d.cost ?? 0) * SCOUT_COST
+  );
+}
+
+/** 这次要去看哪座城：主攻城优先，没有就挑离我最近的敌城 */
+function scoutTargetCityOf(c: PlanCtx): City | null {
+  const foes = c.view.cities.filter((x) => x.owner !== c.me && !x.ruined);
+  if (foes.length === 0) return null;
+  const wanted = c.focusCityId ? foes.find((x) => x.id === c.focusCityId) : null;
+  if (wanted) return wanted;
+  let best = foes[0]!;
+  let bestD = Infinity;
+  for (const city of foes) {
+    for (const u of unitsOf(c.view, c.me)) {
+      const d = Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y));
+      if (d < bestD) {
+        bestD = d;
+        best = city;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * 蹲在哪一格：城周围 3~4 格的一圈，森林/丘陵优先（潜行 + 掩体）。
+ *
+ * 为什么是 3~4 而不是贴身：视野 4 的斥候站 3~4 格刚好罩住城中心，
+ * 而贴身会被城墙上的塔和守军直接打掉——潜行只在"不出手"时成立，
+ * 距离太近就没有第二次机会。
+ */
+function scoutSpotOf(
+  view: GameState,
+  me: PlayerId,
+  city: City,
+): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  const mine = unitsOf(view, me);
+  for (let dy = -4; dy <= 4; dy += 1) {
+    for (let dx = -4; dx <= 4; dx += 1) {
+      const ring = Math.max(Math.abs(dx), Math.abs(dy));
+      if (ring < 3 || ring > 4) continue;
+      const x = city.x + dx;
+      const y = city.y + dy;
+      const t = tileAt(view, x, y);
+      if (!t || !passable(t.terrain)) continue;
+      if (unitAt(view, x, y)) continue;
+      if (cityAt(view, x, y)) continue;
+      let score = 0;
+      if (t.terrain === 'forest' || t.terrain === 'hill') score += 40;
+      // 离自己人近一点：路上更安全，也方便被打残时撤回去
+      let near = Infinity;
+      for (const u of mine) near = Math.min(near, Math.max(Math.abs(u.x - x), Math.abs(u.y - y)));
+      if (Number.isFinite(near)) score -= near * 0.5;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
+}
+
+/** 这一回合派谁：适格分最高的那个；没有就 null（宁可不派，也别让民兵去送） */
+function scoutUnitOf(c: PlanCtx): Unit | null {
+  let best: Unit | null = null;
+  let bestFit = SCOUT_MIN_FIT - 1;
+  for (const u of unitsOf(c.view, c.me)) {
+    const fit = scoutFitOf(c.view, u);
+    if (fit > bestFit) {
+      bestFit = fit;
+      best = u;
+    }
+  }
+  return best;
+}
+
+const SCOUT_PLAN: RankedPlan = {
+  id: 'scout',
+  kind: 'weights',
+  strength: PLAN_TUNING.strength.scout ?? 1,
+  value: (c) => {
+    // 默认关：阶段 3 首验净负（见 docs 与 types 的注释）。`aiScout: true` 才派
+    if (c.view.config.aiScout !== true) return 0;
+    if (c.view.turn < Number(c.keep.scoutCooldown ?? 0)) return 0;
+    const city = scoutTargetCityOf(c);
+    if (!city) return 0;
+    /*
+     * 目标还远就先别派。
+     *
+     * 第一版没有这条：开局主攻城在 39 回合外、conf=0 → value 拉满 → 派一个兵
+     * 横穿地图，路上被打死或白走（Q2 两局由胜转负/平）。侦查是"决战前的准备"，
+     * 不是"开局就出去探险"。12 回合大约是两个编队集结周期。
+     */
+    if (c.marchTurns > 12) return 0;
+    /*
+     * 兵力不富余就不派。
+     *
+     * 实测（2026-11-22，Q1/Q2 12 局）：抽走一个战斗单位，在兵力紧的局里是直接亏损——
+     * 赢的局变负、快的局变慢。侦查是"有余力才做的准备"，不是刚需；
+     * 8 是"至少有一支编队之外的人"的量级。
+     */
+    if (c.army < 8) return 0;
+    // 已经看清（或守军就在眼前）就不必再派人
+    if (Number(c.intelConf ?? 0) >= SCOUT_CONF_ENOUGH) return 0;
+    if (!scoutUnitOf(c)) return 0;
+    /*
+     * 价值尺度：3~9。比"收尾"（1e9）低两个数量级，不会抢它的活；
+     * 但比默认的竞争线高，能在没别的大事时当值。
+     * 越看不清越想去——这就是"侦查请求"的最简形式（自己发现自己需要）。
+     */
+    return 3 + (1 - Math.max(0, Math.min(1, Number(c.intelConf ?? 0)))) * 6;
+  },
+  done: () => false,
+  orders: (c) => {
+    const city = scoutTargetCityOf(c);
+    const u = scoutUnitOf(c);
+    if (!city || !u) return {};
+    const spot = scoutSpotOf(c.view, c.me, city);
+    if (!spot) return {};
+    return { scout: { unitId: u.id, cityId: city.id, ...spot } };
+  },
+  save: (c) => {
+    /*
+     * 死亡与冷却。
+     *
+     * `keep.scout` 记"上次派的是谁"；这一回合它不在场 → 记一次损失。
+     * 冷却：死一次 12 回合，连续两次 25 回合（用户：能牺牲，但别一直送）。
+     * `deadTurn` 防同一回合重复计数（`save` 可能被多次调用）。
+     */
+    const prev = c.keep.scout as
+      | { unitId?: string | null; lost?: number; deadTurn?: number }
+      | undefined;
+    const alive = new Set(unitsOf(c.view, c.me).map((u) => u.id));
+    let lost = Number(prev?.lost ?? 0);
+    let deadTurn = Number(prev?.deadTurn ?? -1);
+    if (prev?.unitId && !alive.has(prev.unitId) && deadTurn !== c.view.turn) {
+      lost += 1;
+      deadTurn = c.view.turn;
+      c.keep.scoutCooldown = c.view.turn + (lost >= 2 ? 25 : 12);
+    }
+    const next = scoutUnitOf(c);
+    c.keep.scout = { unitId: next?.id ?? null, lost, deadTurn };
+    return {};
+  },
+  // 不改权重：侦查只动"派谁去哪"，不压全军
+  weights: () => ({}),
+};
+registerAiPlan(SCOUT_PLAN);
 
 /**
  * 这块水面值不值得架桥：从它出发，往哪个方向、跨几格水能上岸。
@@ -5660,11 +5876,19 @@ function unitCandidates(
   rejected: ReadonlySet<string>,
 ): Candidate[] {  const out: Candidate[] = [];
   const def = utype(s, unit.type);
+  /*
+   * 侦查单位这一回合**不许出手**。
+   *
+   * 潜行的成立条件是"站在森林/丘陵且这回合没出过手"（见 abilities 的 stealth），
+   * 所以给它生成 ATTACK/SIEGE 候选，就等于把"蹲住开视野"这件事自己废掉。
+   * 这不是"不敢打"，是任务要求：一出手就现形，而且之后整个敌方回合都露在外面。
+   */
+  const isScout = all.scout?.unitId === unit.id;
 
   // 施工中的工地不能开火、不能围城、不能造东西（规则层会拒），
   // 所以这里根本不为它生成候选——否则 AI 会提一个必被拒绝的动作，
   // 而执行方遇到非法动作就中断整回合，整局直接卡死。
-  if (!unit.acted && !underConstruction(unit)) {
+  if (!isScout && !unit.acted && !underConstruction(unit)) {
     for (const t of attackableTargets(s, unit)) {
       // 装甲要指定武器：不指定就退到"第一件能开火的"，装了防空炮又装加农的
       // 装甲会拿防空炮去打地面目标 → 被规则层拒 → 调度器中断整回合。
@@ -5741,7 +5965,25 @@ function unitCandidates(
       // rules 的 doMove 会拒绝，AI 提出来又是一次整回合中断。
       const destCity = cityAt(s, x, y);
       if (destCity?.ruined && s.players[me].gold < rebuildCost(destCity)) continue;
-      let score = scoreMove(s, unit, x, y, all, traits);
+      let score: number;
+      if (isScout && all.scout) {
+        /*
+         * 侦查走位：只认"离蹲点更近"，不理推进/换血那一套。
+         *
+         * 已经在点上（d0 = 0）时**不推移动**：下面 `holdScore` 会让它站着。
+         * 不这么写的话，到了林子还会被基础走位分拽走——一挪窝就前功尽弃。
+         */
+        const sp = all.scout;
+        const d0 = Math.max(Math.abs(unit.x - sp.x), Math.abs(unit.y - sp.y));
+        if (d0 === 0) continue;
+        const d1 = Math.max(Math.abs(x - sp.x), Math.abs(y - sp.y));
+        score = 120 + (d0 - d1) * 60 + (d1 === 0 ? 40 : 0);
+        if (!best || score > best.score) {
+          best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
+        }
+        continue;
+      }
+      score = scoreMove(s, unit, x, y, all, traits);
       /*
        * 空壳素体走向装配坞。
        *
@@ -8771,6 +9013,7 @@ function aiNextActionCoreInner(
     bridgeSite: bestBridgeSite(view, me, wade),
     crossingSite: null,
     holdFire: false,
+    scout: null,
     pullHome: 0,
     weights: neutralWeights(),
     focusCityId: mood.focusCityId,
@@ -8939,6 +9182,8 @@ function aiNextActionCoreInner(
         resolved.orders.focusUnitId ?? pickFocusTarget(view, me, resolved.orders.focusCityId);
     }
     if (resolved.orders.commit) fields.commit = true;
+    // 侦查指令：派谁/去哪。为 null 时不写，保持"这回合不侦查"
+    if (resolved.orders.scout) fields.scout = resolved.orders.scout;
     fields.crossingSite = resolved.focus;
     fields.weights = resolved.net;
     fields.pullHome = resolved.net.pullHome;

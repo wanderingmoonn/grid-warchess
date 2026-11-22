@@ -58,6 +58,24 @@ while (!s.winner && s.turn <= cap) {
 }
 
 console.log(`winner=${s.winner} turn=${s.turn} 版本=${useOld ? '旧(07a2742)' : '当前'}`);
+// 计划当值统计：验"某条计划有没有真的被用上"（一条写坏的计划 = 和没装一样）
+const keepScout = (s.aiFocus?.[side]?.plan?.keep as { scout?: { unitId?: string | null } } | undefined)
+  ?.scout;
+if (keepScout?.unitId) console.log(`侦查任务：unitId=${keepScout.unitId}`);
+const planCount = new Map<string, number>();
+for (const t of s.aiPlanTrace ?? []) {
+  if (t.me !== side) continue;
+  planCount.set(t.plan ?? '无', (planCount.get(t.plan ?? '无') ?? 0) + 1);
+}
+if (planCount.size > 0) {
+  console.log(
+    '计划当值：' +
+      [...planCount.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${k}×${v}`)
+        .join(' · '),
+  );
+}
 for (const c of (s.aiCalls ?? []).filter((x) => x.me === side)) {
   console.log(
     `T${String(c.turn).padStart(3)} ${c.call.padEnd(7)} 行军${String(c.marchTurns).padStart(2)} ` +
