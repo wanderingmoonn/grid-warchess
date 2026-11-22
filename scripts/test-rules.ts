@@ -2755,11 +2755,16 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     // 它同时吃到"信息化射程 4→5"和"陨卵自己选落点"，640 已经压不住）。
     // 把上限整体抬到 700 会让别的英雄跟着水涨船高，那是另一件事。
     const cap = u.id === 'evil-dragon-king' ? 700 : 650;
-    assert.ok(u.cost >= 300 && u.cost <= cap, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    // 兽人酋长（2026-11-22）：**二代**英雄，260 金——它就是来填"早期没有英雄"的
+    // 那个洞，不该被按三代以上写的 300 下限卡住。
+    const floor = u.id === 'orc-chieftain' ? 240 : 300;
+    assert.ok(u.cost >= floor && u.cost <= cap, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
     // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵。
     // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火器时代（320 金），
     // 这一条"涨"的规则对它不成立。
-    if (u.id === 'night-necromancer') continue;
+    // 兽人酋长同理：它是**二代**英雄（300 金），340 这条下限是按三代以上写的，
+    // 拿它去卡二代英雄，等于逼着"早期英雄"卖成三代价。
+    if (u.id === 'night-necromancer' || u.id === 'orc-chieftain') continue;
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
 });
@@ -3359,13 +3364,14 @@ test('招魂：付生产价格把倒下的友军拉回来，且同一具只能�
   for (const [x, y] of [[5, 5], [6, 5], [7, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
   const necro = place2(s, 'A', 'night-necromancer', 5, 5);
   const doomed = place2(s, 'A', 'militia', 6, 5);
-  const hydra = place2(s, 'B', 'hydra', 7, 5);
+  // 靶子必须是一只**英雄**：招魂不收英雄，2026-11-22 九头蛇不再是英雄，改用矮人王
+  const foeHero = place2(s, 'B', 'dwarf-king', 7, 5);
   doomed.hp = 1; // 让它必然死于反击
 
   const goldBefore = s.players.A.gold;
   // 开局本来就有民兵，所以数"多出来几个"，而不是数总数
   const militiaBefore = s.units.filter((u) => u.owner === 'A' && u.type === 'militia').length;
-  const atk = applyAction(s, { type: 'ATTACK', unitId: doomed.id, targetId: hydra.id });
+  const atk = applyAction(s, { type: 'ATTACK', unitId: doomed.id, targetId: foeHero.id });
   assert.ok(atk.ok, atk.ok ? '' : atk.reason);
   assert.ok(
     !atk.state.units.some((u) => u.id === doomed.id),
@@ -3398,7 +3404,7 @@ test('招魂：付生产价格把倒下的友军拉回来，且同一具只能�
   again.skillTurn = undefined;
   r.state.fallen = [
     ...(r.state.fallen ?? []),
-    { owner: 'A', type: 'hydra', x: 6, y: 6, turn: r.state.turn },
+    { owner: 'A', type: 'foeHero', x: 6, y: 6, turn: r.state.turn },
   ];
   const r2 = applyAction(r.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
   assert.equal(r2.ok, false, '同一具不能被反复招起来');
@@ -4168,22 +4174,18 @@ test('投斧：默认只能近身，开了技能才够得着三格', () => {
   assert.equal(far, Math.round(melee * 0.6), `远程 ${far} 应该等于近身 ${melee} 的六成`);
 });
 
-test('再生：立刻回四成，冷却两回合', () => {
+test('九头蛇：不再是英雄，强再生是被动', () => {
+  /*
+   * 2026-11-22 用户定：九头蛇摘掉英雄身份。
+   * 原来它靠主动技「再生」回 40%，而"强再生"本来就是被动（把每回合 10% 翻成 20%），
+   * 主动那一下只是把同一件事又做了一遍。现在它是一只普通的高价肉盾。
+   */
   const s = fresh({ expansionIds: FANTASY });
-  s.tiles[idx(s, 5, 5)].terrain = 'plain';
-  const hydra = place2(s, 'A', 'hydra', 5, 5);
-  const maxHp = s.unitTypes.hydra!.maxHp;
-  hydra.hp = 20;
-  s.current = 'A';
-  const r = applyAction(s, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
-  assert.ok(r.ok, r.ok ? '' : r.reason);
-  const h = r.state.units.find((u) => u.id === hydra.id)!;
-  assert.equal(h.hp, 20 + Math.round(maxHp * 0.4), '回 40%');
-  assert.equal(h.skillCd?.regrow, 2, '冷却两回合');
-  const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
-  assert.equal(again.ok, false, '冷却中不能再开');
+  const def = s.unitTypes.hydra!;
+  assert.equal(def.hero ?? false, false, '不再占英雄位');
+  assert.equal(def.skills ?? undefined, undefined, '没有主动技');
+  assert.ok((def.abilities ?? []).includes('regenerate-plus'), '强再生还是被动');
 });
-
 test('烈焰俯冲：移动 +2，攻击额外点燃两层', () => {
   const s = fresh({ expansionIds: FANTASY });
   for (const [x, y] of [[5, 5], [5, 4], [5, 3]]) s.tiles[idx(s, x, y)].terrain = 'plain';

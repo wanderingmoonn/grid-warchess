@@ -90,6 +90,13 @@ export interface AbilityApi {
    * 没有空地就返回 null（不生成）。
    */
   spawnNear(s: GameState, owner: PlayerId, type: string, near: Unit): Unit | null;
+  /**
+   * 把一个单位淹死（浅水那一档，会走 hurtUnit，所以有战报、能被装甲吸掉）。
+   *
+   * 海妖把人拖进水里要用它——"拖进水域直接秒杀"如果写成 `hp = 0`，
+   * 就绕过了死亡钩子（自爆、亡语、战报全不触发），看着像"人凭空消失"。
+   */
+  drown(s: GameState, u: Unit): boolean;
   /** 造一个单位并放到盘上（召唤、分裂、筑墙都走它）；`board` 不传就是地球 */
   spawn(
     s: GameState,

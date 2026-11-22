@@ -328,6 +328,10 @@ export const abilityApi: AbilityApi = {
     s.units.push(u);
     return u;
   },
+  drown: (s, u) => {
+    drownUnit(s, u, false);
+    return u.hp > 0;
+  },
   pushLog,
   citiesOf,
   distToCity,

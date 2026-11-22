@@ -662,6 +662,63 @@ const FANTASY_ABILITIES: AbilityDef[] = [
     },
   },
   {
+    /*
+     * 拖入深海（海妖，2026-11-22）。
+     *
+     * 攻击之后把目标**朝自己方向拉两格**。它是"击退"的反向版本，但多一条判据：
+     * 目标格如果是水，地面单位就直接淹死——这正是海妖的用法，"站在岸边的人
+     * 被拖下水"。水域单位（船）和飞行单位不受这一条影响，它们本来就站得住。
+     */
+    id: 'drag-to-sea',
+    name: '拖入深海',
+    summary: '攻击后把目标朝自己拉两格；地面单位被拉进水里会淹死。',
+    group: 'attack',
+    hooks: {
+      onStrike: [
+        {
+          stage: STRIKE_STAGE.afterStatus,
+          apply: (c) => {
+            if (c.target.hp <= 0) return;
+            const targetDef = c.api.utype(c.state, c.target.type);
+            const canFloat = targetDef.domain === 'water' || targetDef.layer === 'air';
+            let pulled = 0;
+            for (let i = 0; i < 2; i += 1) {
+              const dx = Math.sign(c.self.x - c.target.x);
+              const dy = Math.sign(c.self.y - c.target.y);
+              if (dx === 0 && dy === 0) break;
+              const nx = c.target.x + dx;
+              const ny = c.target.y + dy;
+              const tile = c.api.tileAt(c.view, nx, ny);
+              if (!tile) break;
+              const water = tile.terrain === 'water' || tile.terrain === 'deep';
+              if (water) {
+                // 水里：船和飞行照常站，地面单位拖进去就淹死
+                c.target.x = nx;
+                c.target.y = ny;
+                pulled += 1;
+                if (!canFloat) {
+                  c.api.drown(c.state, c.target);
+                  c.api.pushLog(
+                    c.state,
+                    c.self.owner,
+                    `${c.api.utype(c.state, c.self.type).name}把 ${targetDef.name} 拖进了水里`,
+                  );
+                }
+                break;
+              }
+              // 陆地：这一格要能站（没被占、地形可站），否则拉不动
+              if (!c.api.canStandAt(c.view, nx, ny, c.target.type)) break;
+              c.target.x = nx;
+              c.target.y = ny;
+              pulled += 1;
+            }
+            if (pulled > 0) c.result.pushed = true;
+          },
+        },
+      ],
+    },
+  },
+  {
     id: 'poison-hit',
     name: '淬毒',
     summary: '打中活人就让其中毒 3 回合，每回合掉 6% 生命上限。打不死人，但会让它不敢站着。',
@@ -1514,7 +1571,7 @@ const BEASTS: Expansion = {
   scale: 'large',
   name: '奇想·荒兽',
   summary:
-    '十六个野性单位：狼骑士、蜘蛛骑士、蛇人、蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、骷髅飞龙。便宜的快、贵的硬，怕火的特别多。',
+    '二十四个野性单位：兽人狼骑士、蜘蛛骑士、蛇人、蝙蝠、树人、食人魔、双头巨人、半人马、牛头人、巨魔、狼人、史莱姆、哥布林陷阱师、石像鬼、鹰身女妖、骷髅飞龙，以及哥布林投矛手、兽人萨满、哥布林皮划艇、海妖、矮人攻城车、哥布林战营（会自己产小兵）与它产出的哥布林小兵、兽人步兵。便宜的快、贵的硬，怕火的特别多。',
   requires: ['fantasy-core'],
   hooks: {},
   units: [
@@ -1549,7 +1606,8 @@ const BEASTS: Expansion = {
     // ── 2 级：便宜、快、脆，靠数量和时间差 ────────────────────────────────
     {
       id: 'wolf-rider',
-      name: '狼骑士',
+      // 2026-11-22 改名：它是兽人一家的骑兵，名字里得写出来（id 不变）
+      name: '兽人狼骑士',
       short: '狼',
       era: 2,
       category: 'combat',
@@ -1828,6 +1886,146 @@ const BEASTS: Expansion = {
       flight: true,
       layer: 'air',
       abilities: ['siege-master'],
+    },
+    /*
+     * ── 2026-11-22 新增八只（用户定）──────────────────────────
+     * 哥布林/兽人这一家的低阶兵，加上海里的两只、攻城的一只，
+     * 以及一座会自己产兵的营地。
+     */
+    {
+      // 哥布林投矛手：跑得快、射程 3、能钻林子，代价是 16 血一碰就碎。
+      id: 'goblin-spearthrower',
+      name: '哥布林投矛手',
+      short: '矛',
+      era: 1,
+      category: 'combat',
+      cost: 45,
+      move: 4,
+      atk: 10,
+      armor: 1,
+      maxHp: 16,
+      range: 3,
+      vision: 4,
+      abilities: ['forest-walk'],
+    },
+    {
+      // 兽人萨满：1 代里最贵的远程，换来 40 血 + 3 甲 + 射程 3。
+      id: 'orc-shaman',
+      name: '兽人萨满',
+      short: '萨',
+      era: 1,
+      category: 'combat',
+      cost: 95,
+      move: 2,
+      atk: 12,
+      armor: 3,
+      maxHp: 40,
+      range: 3,
+      vision: 3,
+      // 萨满不是纯数值块：身边友军每回合回一点（heal-aura）
+      abilities: ['heal-aura'],
+    },
+    {
+      // 哥布林皮划艇：最便宜的水面火力，4 移 2 射程，血薄。
+      id: 'goblin-kayak',
+      name: '哥布林皮划艇',
+      short: '艇',
+      era: 2,
+      category: 'combat',
+      cost: 60,
+      move: 4,
+      atk: 10,
+      armor: 1,
+      maxHp: 22,
+      range: 2,
+      vision: 3,
+      domain: 'water',
+      // 打了就跑：水上唯一会风筝的廉价火力
+      abilities: ['kite'],
+    },
+    {
+      // 海妖：射程 3 的水面炮台，攻击后把目标往自己这边拖两格；
+      // 地面单位被拖进水里直接淹死（能力见 drag-to-sea）。
+      id: 'siren',
+      name: '海妖',
+      short: '妖',
+      era: 4,
+      category: 'combat',
+      cost: 200,
+      move: 4,
+      atk: 20,
+      armor: 3,
+      maxHp: 45,
+      range: 3,
+      vision: 4,
+      domain: 'water',
+      abilities: ['drag-to-sea'],
+    },
+    {
+      // 矮人攻城车：4 速近战，带破城。同时代最贵的近战之一，专为拆城而生。
+      id: 'dwarf-siegecart',
+      name: '矮人攻城车',
+      short: '攻',
+      era: 2,
+      category: 'combat',
+      cost: 150,
+      move: 4,
+      atk: 14,
+      armor: 4,
+      maxHp: 45,
+      range: 1,
+      vision: 2,
+      abilities: ['siege-master'],
+    },
+    {
+      // 哥布林战营：每回合自动产一个小兵（summoner + summon.every = 1），
+      // 上限 3 个——它是"免费的产线"，不是第二座城。
+      id: 'goblin-warcamp',
+      name: '哥布林战营',
+      short: '营',
+      era: 1,
+      category: 'building',
+      cost: 160,
+      move: 0,
+      atk: 4,
+      armor: 4,
+      maxHp: 45,
+      range: 1,
+      vision: 2,
+      abilities: ['summoner'],
+      summon: { type: 'goblin-grunt', every: 1, max: 3 },
+    },
+    {
+      // 哥布林小兵：战营产出来的，不进产兵表（summonedOnly）。
+      id: 'goblin-grunt',
+      name: '哥布林小兵',
+      short: '卒',
+      era: 1,
+      category: 'combat',
+      cost: 20,
+      move: 3,
+      atk: 7,
+      armor: 1,
+      maxHp: 14,
+      range: 1,
+      vision: 2,
+      summonedOnly: true,
+    },
+    {
+      // 兽人步兵：酋长战吼召出来的四个，高肉低速。
+      id: 'orc-grunt',
+      name: '兽人步兵',
+      short: '兽',
+      era: 2,
+      category: 'combat',
+      cost: 55,
+      move: 2,
+      atk: 12,
+      armor: 3,
+      maxHp: 45,
+      range: 1,
+      vision: 2,
+      summonedOnly: true,
     },
   ],
   // 哥布林陷阱是"荒兽"这一家带来的格子上的东西（陷阱师埋的）
@@ -2261,7 +2459,6 @@ const ARCANE: Expansion = {
 // 漏一个，界面按它筛兵就会少一个能买的英雄。
 const HERO_IDS = [
   'dwarf-king',
-  'hydra',
   'phoenix',
   'archmage',
   'angel',
@@ -2290,6 +2487,45 @@ const HERO_IDS = [
 // 涨到 600 以上，五个英雄就变成"解锁费之后再交一道钱墙"，节奏被拖垮的是
 // 玩家自己。所以按 +半成 走，谁的血涨得多谁多掏一点，最终都还落在原档位里。
 const HERO_UNITS: UnitTypeDef[] = [
+  /*
+   * 兽人酋长（2026-11-22 新增）：**第二代的英雄**。
+   *
+   * 之前英雄全在 3~8 代，二代局一个可买的英雄都没有——早期局只能拼普通兵。
+   * 它的定位是"扛线 + 一次翻盘"：6 甲 120 血，但 2 移以外只有 3 移，
+   * 追不上轻骑；战吼整局一次，召出来的四个兽人步兵是"顶住这一波"用的，
+   * 不是第二支军队（2 移、45 血、12 攻）。
+   */
+  {
+    id: 'orc-chieftain',
+    name: '兽人酋长',
+    short: '酋',
+    era: 2,
+    category: 'combat',
+    // 300：这条线要求"血厚了价也得跟着走"，260 会被按三代写的下限卡住
+    cost: 300,
+    move: 3,
+    atk: 22,
+    armor: 6,
+    maxHp: 120,
+    range: 1,
+    vision: 3,
+    hero: true,
+    unlockCost: 80,
+    abilities: ['shield-wall'],
+    skills: [
+      {
+        id: 'war-cry',
+        name: '战吼',
+        summary: '整局只能喊一次：在身边召出 4 个兽人步兵。',
+        effect: 'summon-squad',
+        // 充能 1 发、999 回合回一发 = 整局只此一次（见 SkillDef.charges 的注释：
+        // 冷却和充能二选一，这里要的是"总量 1"，不是"隔多少回合能再放"）
+        charges: 1,
+        regen: 999,
+        power: 4,
+      },
+    ],
+  },
   // 矮人王：近战是本职（atk 32，射程 1），投斧是**技能**（开一回合，射程 3 但只有六成）。
   //
   // 改动前它是"射程 3 的兵，贴身打不打折"，等于永远在远程位。现在默认只能近身，
@@ -2323,34 +2559,29 @@ const HERO_UNITS: UnitTypeDef[] = [
       },
     ],
   },
-  // 九头蛇：145 血 + 每回合两成回复。解法只有一个——火。
+  /*
+   * 九头蛇：**不再是英雄**（2026-11-22 用户定）。
+   *
+   * 以前它是第十一个英雄——自带「再生」主动技、每局只能招一只、还要付解锁费。
+   * 但它的"强再生"本来就是被动（见 regenerate-plus：把每回合 10% 翻成 20%），
+   * 主动那一下只是把同一件事又做了一遍。把英雄身份摘掉之后它变成一只**普通的高价
+   * 肉盾**：谁都能买、想买几只买几只，代价是数值和价格都跟着下调。
+   */
   {
     id: 'hydra',
     name: '九头蛇',
     short: '九',
     era: 4,
     category: 'combat',
-    cost: 490,
+    cost: 360,
     move: 3,
-    atk: 36,
-    armor: 7,
-    maxHp: 145,
+    atk: 30,
+    armor: 6,
+    maxHp: 115,
     range: 1,
     vision: 4,
-    hero: true,
-    unlockCost: 200,
     abilities: ['regenerate-plus', 'siege-master'],
     weak: { fire: 2 },
-    skills: [
-      {
-        id: 'regrow',
-        name: '再生',
-        summary: '立刻回复 40% 生命。',
-        effect: 'regenerate',
-        cooldown: 2,
-        power: 0.4,
-      },
-    ],
   },
   // 不死鸟：每局从灰烬里站起来一次。它不硬，但它死不完。
   {
@@ -2840,7 +3071,7 @@ const HEROES: Expansion = {
   scale: 'large',
   name: '奇想·英雄',
   summary:
-    '十一个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、九头蛇（再生：回 40% 生命）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本轮倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）、圣剑勇者（圣剑觉醒：永久 +8 攻 / +2 甲 / +8 魔攻 / +2 魔抗 / +30 生命上限并回血，剑气直线溅射）、邪龙王（陨卵：9 格内落下魔龙卵，落点周围吃暗属性魔法，两回合后孵出魔龙；本体飞行）。第一次招募要额外付解锁费，解锁后永久开放。后两位需要同时开启「信息化」扩展。',
+    '十一个全场唯一的英雄，每人每回合有一个主动技能：矮人王（投斧：白送一次三格远程攻击）、兽人酋长（战吼：整局一次，召出四个兽人步兵）、不死鸟（烈焰俯冲：加速并点燃两层；阵亡后留下一枚蛋，孵化带一半生命）、至尊法师（转属性：火/水/自然/暗四种形态，护甲 6、射程 5、同属性伤害减半）、天使（降临：半径 3 回 20% 并清空负面状态）、刺客大师（隐匿：藏到你的下个回合，斩杀后还能再走一次）、史莱姆牢大（裂殖：裂成四只大史莱姆，它们能再聚合回来）、暗夜死灵法师（招魂：付生产价格把本轮倒下的一名友军拉回来）、神圣骑士长（圣旗：半径 2 内友军护甲 +3、魔抗 +4、获得阵列）、圣剑勇者（圣剑觉醒：永久 +8 攻 / +2 甲 / +8 魔攻 / +2 魔抗 / +30 生命上限并回血，剑气直线溅射）、邪龙王（陨卵：9 格内落下魔龙卵，落点周围吃暗属性魔法，两回合后孵出魔龙；本体飞行）。第一次招募要额外付解锁费，解锁后永久开放。后两位需要同时开启「信息化」扩展。',
   requires: ['fantasy-core'],
   hooks: {},
   units: HERO_UNITS,
@@ -2875,6 +3106,39 @@ registerSkillEffect('regenerate', (c) => {
     c.result.ok = false;
     c.result.reason = '已经是满血了';
   }
+});
+
+/**
+ * 战吼（兽人酋长）：在身边召出 N 个兽人步兵，整局只有一次（充能 1、不回充能）。
+ *
+ * 为什么写死兵种：`SkillDef` 的公开字段只有 power/radius 这几个通用参数，
+ * 为了一条技能往类型里加 `summonType` 会让"技能数据"变成"每个扩展自己的结构"。
+ * 效果名本身已经和内容绑定了（`summon-squad` 就是"召一队兽人步兵"），
+ * 真要第二家再用，到时候再加参数不迟。
+ */
+registerSkillEffect('summon-squad', (c) => {
+  const n = Math.max(1, Math.round(c.skill.power ?? 4));
+  const type = 'orc-grunt';
+  if (!c.state.unitTypes[type]) {
+    c.result.ok = false;
+    c.result.reason = '本局没有兽人步兵这个兵种';
+    return;
+  }
+  let spawned = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (!c.api.spawnNear(c.state, c.self.owner, type, c.self)) break;
+    spawned += 1;
+  }
+  if (spawned === 0) {
+    c.result.ok = false;
+    c.result.reason = '周围没有空地放得下兽人步兵';
+    return;
+  }
+  c.api.pushLog(
+    c.state,
+    c.self.owner,
+    `${c.api.utype(c.state, c.self.type).name} 战吼召出 ${spawned} 个兽人步兵`,
+  );
 });
 
 /** 烈焰俯冲：本回合移动力加成 + 攻击带灼烧层数 */
