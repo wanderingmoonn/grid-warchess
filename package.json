@@ -81,6 +81,7 @@
     "probe:power-solver": "node --experimental-strip-types scripts/probe-power-solver.ts",
     "probe:decisive": "node --experimental-strip-types scripts/probe-decisive.ts",
     "probe:intel": "node --experimental-strip-types scripts/probe-intel.ts",
+    "tune:list": "node --experimental-strip-types scripts/list-tuning.ts",
     "diag:strength": "node --experimental-strip-types scripts/diag-strength.ts",
     "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
     "replay": "node --experimental-strip-types scripts/replay-report.ts",

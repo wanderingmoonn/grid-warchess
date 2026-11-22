@@ -2040,8 +2040,9 @@ export interface DecisiveCall {
   why: string;
 }
 
-/** 记忆里的敌人每回合折这么多；超过 `MEMORY_MAX_AGE` 就当忘了 */
+/** @tune 记忆衰减系数（每回合）：用户 2026-11-22 拍 0.85，未标定 */
 const MEMORY_DECAY = 0.85;
+/** @tune 记忆有效期（回合）：超过就当忘了，同样是拍的 */
 const MEMORY_MAX_AGE = 8;
 
 /**
@@ -2077,7 +2078,7 @@ export function rememberedPowerOf(
   return { power, count };
 }
 
-/** 目标城周围多大一圈算"守军所在区域"（切比雪夫距离） */
+/** @tune 目标城周围多大一圈算"守军区域"（切比雪夫距离）：5 是拍的 */
 const INTEL_RADIUS = 5;
 
 /**
@@ -3144,11 +3145,17 @@ registerAiPlan(CROSSING_PLAN);
  * 民兵（视 2 + 移 2 + 25 金）≈ 19 分；弓手（视 3 + 移 2 + 35 金）≈ 24 分。
  * 没有斥候的局就用"视野最高的散兵"，不会去找坦克。
  */
+/** @tune 侦查选人：视野每格值几分 */
 const SCOUT_VISION = 8;
+/** @tune 侦查选人：潜行加多少分 */
 const SCOUT_STEALTH = 30;
+/** @tune 侦查选人：移动每点值几分 */
 const SCOUT_MOVE = 2;
+/** @tune 侦查选人：造价每金扣几分 */
 const SCOUT_COST = 0.05;
 /**
+ * @tune 侦查选人门槛：15 = 弓手也能去
+ *
  * 低于这个分不如不派。
  *
  * 15 是"弓手（视 3）也能去"的线：视野 4 的斥候 67 分、弓手 24 分、民兵 19 分。
@@ -3156,7 +3163,7 @@ const SCOUT_COST = 0.05;
  * 而"看不见"最严重的恰恰是那些局。
  */
 const SCOUT_MIN_FIT = 15;
-/** 情报到这个数就算"看清了"，计划退场 */
+/** @tune 情报到什么程度算"看清了"（计划退场、不再派人） */
 const SCOUT_CONF_ENOUGH = 0.7;
 
 /**
@@ -3341,9 +3348,9 @@ registerAiPlan(SCOUT_PLAN);
  * 混在一起的结果。这里只改走位偏好，用来回答一个更基本的问题——
  * **提前几回合知道对面有多少兵，到底值不值钱？** 不值的话后面六条都不用做。
  */
-/** 一次顺路观察最多几回合：看完就走，别在前线站着当靶子 */
+/** @tune 顺路观察最多几回合（防"站着不走"） */
 const PEEK_MAX_TURNS = 6;
-/** 观察完冷却几回合再考虑下一次（否则会每 6 回合反复停一次） */
+/** @tune 顺路观察冷却回合 */
 const PEEK_COOLDOWN = 8;
 
 function peekTaskOf(c: PlanCtx): { unitId: string; x: number; y: number } | null {
