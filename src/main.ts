@@ -20,7 +20,7 @@ import { activeExpansions, expansionById } from './core/expansions.ts';
 import type { BoardView } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
-import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import { DEFAULT_BUDGET, aiLevelOf, aiNameOf, anyAiSide, engineForAi, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, validateLevel } from './core/level.ts';
@@ -6301,7 +6301,13 @@ async function runAiTurn(
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
   const rejected = new Set<string>();
-  const engine = await aiEngine(state.config.aiBrain === 'goal' ? 'goal' : 'script');
+  /*
+   * 内核选择走 core 的 `engineForAi`（2026-11-22）：
+   * **「高级」这一档现在就是 v3**，不再需要单独勾一颗"实验 AI"。
+   * 网络内核（`aiBrain === 'net'`）在下面另走一条路，这里不加载手写引擎。
+   */
+  const engineId = engineForAi({ level: aiLevelOf(state), brain: state.config.aiBrain ?? null });
+  const engine = await aiEngine(engineId === 'v3' ? 'goal' : 'script');
 
   /*
    * 网络内核：只在 `config.aiBrain === 'net'` 时加载。
