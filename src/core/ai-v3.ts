@@ -2626,7 +2626,15 @@ function squadTick(
   } else if (
     s.config.aiSquad !== false &&
     !forming &&
-    kept.length < budget.maxSquads &&
+    /*
+     * 编队数量上限（2026-11-22 默认取消）。
+     *
+     * 以前固定 `maxSquads = 2`，55 个兵时只有 2 支编队、其余 40 多个散兵——
+     * "限制支数防散兵线"的结果是散兵更多（只是从多支小队变成一大坨无组织的）。
+     * 现在不限制支数，靠"每支 want（5~9）+ 建队要 3 个散兵"来约束：
+     * 每回合最多新建一支（`forming` 互斥），装满就走，剩下的下回合再来。
+     */
+    (s.config.aiSquadUnlimited === false ? kept.length < budget.maxSquads : true) &&
     free.length >= 3 &&
     foes.length > 0
   ) {

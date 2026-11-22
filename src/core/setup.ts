@@ -769,6 +769,7 @@ export function createMatch(
       ...(config.aiPeek === true ? { aiPeek: true } : {}),
       ...(config.aiEconCap === true ? { aiEconCap: true } : {}),
       ...(config.aiEconPlan === true ? { aiEconPlan: true } : {}),
+      ...(config.aiSquadUnlimited === false ? { aiSquadUnlimited: false } : {}),
       ...(config.aiMass === false ? { aiMass: false } : {}),
       ...(config.aiBreakthrough === false ? { aiBreakthrough: false } : {}),
       ...(config.aiSquad === false ? { aiSquad: false } : {}),

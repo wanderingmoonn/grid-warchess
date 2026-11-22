@@ -1538,6 +1538,13 @@ export interface MatchConfig {
    */
   aiEconPlan?: boolean;
   /**
+   * 编队数量不设上限（v3 专用）。默认开；`false` 回到"最多 2 支"。
+   *
+   * 旧行为：`maxSquads = 2`，55 个兵只有 2 支编队、其余全是散兵。
+   * 现在每回合最多新建一支（`forming` 互斥），装满 `want` 就走。
+   */
+  aiSquadUnlimited?: boolean;
+  /**
    * 采购里"质量信号"的放大倍数（v3 专用）。不写 = 2.5；1 = 老行为（信号被噪声吃掉）。
    * 拿来 A/B 用：同一批队列跑 1 和 2.5，才知道放大质量到底有没有用。
    */
