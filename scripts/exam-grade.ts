@@ -162,6 +162,8 @@ type Stat = {
   /** 我方单位的位置与分类：`unitsNear` 要按当期的记录算，不能用终局 */
   mine: Array<{ x: number; y: number; category: string }>;
   alive: number;
+  /** 我方可累计造兵数（从开局到现在） */
+  recruited: number;
   /** 我方经济兵本手总产出（金）。经济题的核心量：站对格子才高 */
   econYield: number;
   meCities: number;
@@ -175,6 +177,13 @@ let lostMe = 0;
 let lostFoe = 0;
 const disbanded = new Set<string>();
 let prevIds = new Set(s0.units.map((u) => u.id));
+/**
+ * 我方**累计造兵数**（不管后来死没死）。
+ *
+ * 经济题要一条"有没有把钱换成兵"的累加量：兵力是存量（会被打死），金币会被收入补上，
+ * 只有"造了几个"是单调的，而且直接对应"钱花出去了"。
+ */
+let meRecruits = 0;
 
 function capture(s: GameState): void {
   const city: Stat['city'] = {};
@@ -200,6 +209,7 @@ function capture(s: GameState): void {
     cityMinHp: { ...cityMinHp },
     count,
     mine,
+    recruited: meRecruits,
     econYield: s.units
       .filter((u) => u.owner === ME && utype(s, u.type).category === 'economy')
       .reduce((n, u) => n + (unitYieldAt(s, u, u.x, u.y).gold ?? 0), 0),
@@ -243,7 +253,10 @@ function aiTurn(s: GameState, ai: AiFn | null): GameState {
       }
       rejected.clear();
       if (a.type === 'DISBAND' && 'unitId' in a) disbanded.add(String((a as { unitId?: string }).unitId));
-      if (a.type === 'RECRUIT') budget.recruited += 1;
+      if (a.type === 'RECRUIT') {
+        budget.recruited += 1;
+        if (cur.current === ME) meRecruits += 1;
+      }
       if (a.type === 'UPGRADE') budget.upgraded += 1;
       cur = r.state;
     }
@@ -263,6 +276,7 @@ function answerTurn(s: GameState, acts: Array<Record<string, unknown>>): GameSta
       continue;
     }
     if (a.type === 'DISBAND' && 'unitId' in a) disbanded.add(String(a.unitId));
+    if (a.type === 'RECRUIT') meRecruits += 1;
     cur = r.state;
   }
   if (cur.winner) return cur;
@@ -340,6 +354,11 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
           (!c.category || u.category === c.category),
       ).length;
       return { ok: c.min === undefined || n >= c.min, got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个` };
+    }
+    case 'recruited': {
+      /* "有没有把钱换成兵"。累加量，不受打死、也不被收入补回去影响。 */
+      const n = st.recruited;
+      return { ok: c.min === undefined || n >= c.min, got: `累计造兵 ${n}` };
     }
     case 'econYield': {
       /* 经济兵按脚下地形产金：伐木工森林 12 / 平原 3，牧民丘陵 8 / 森林 2，农民平原 7 / 森林 3。
