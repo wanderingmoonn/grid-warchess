@@ -103,7 +103,8 @@ const FOE: PlayerId = ME === 'A' ? 'B' : 'A';
 const must = criteria.must ?? [];
 const mustNot = criteria.mustNot ?? [];
 const soft = criteria.soft ?? [];
-const window = criteria.window ?? Math.max(0, ...[...must, ...mustNot].map((c) => c.in));
+/** `--window N`：临时改跑多少手（探"到底要多久"，不改判据文件） */
+const window = Number(argOf('window', '0')) || criteria.window || Math.max(0, ...[...must, ...mustNot].map((c) => c.in));
 
 /* ── 局面 ───────────────────────────────────────────────────── */
 const raw = JSON.parse(readFileSync(snapPath, 'utf8')) as { state: GameState };
@@ -148,6 +149,8 @@ type Stat = {
   mine: Array<{ x: number; y: number; category: string }>;
   alive: number;
   meCities: number;
+  /** 敌方还剩几座活城（废墟不算）。「把对方打到没有城」才是收尾的终点 */
+  foeCities: number;
 };
 const record = new Map<number, Stat>();
 const cityMinHp: Record<string, number> = {};
@@ -183,6 +186,7 @@ function capture(s: GameState): void {
     mine,
     alive: s.units.length,
     meCities: s.cities.filter((c) => c.owner === ME && !c.ruined).length,
+    foeCities: s.cities.filter((c) => c.owner === FOE && !c.ruined).length,
   });
 
   // 损失：消失的单位里，剔掉自己拆掉的（拆单位是回收，不是伤亡）
@@ -332,16 +336,32 @@ function evalOne(c: Criterion, st: Stat | undefined): { ok: boolean | null; got:
       return { ok: st.meCities >= ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
     case 'capturedCity':
       return { ok: st.meCities > ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
+    case 'foeCities': {
+      // 「拿下」和「打塌」都算收尾：编成一条，免得"赢了却判红"（S-001 第一版就是这么翻的）
+      const lowOk = c.min === undefined || st.foeCities >= c.min;
+      const highOk = c.max === undefined || st.foeCities <= c.max;
+      return { ok: lowOk && highOk, got: `敌城 ${st.foeCities}` };
+    }
     default:
       return { ok: null, got: `不认识的判据 ${c.kind}` };
   }
 }
 
+/**
+ * 取"第 N 手那一刻的记录"。局面可能在 N 之前就分胜负（提前打赢是好结果），
+ * 那时候没有第 N 手的记录——退到**最后一次记录**才是对的，否则"赢太快"会被判成失败。
+ */
+const statAt = (turn: number): Stat | undefined => {
+  let best: Stat | undefined;
+  for (const [t, st] of record) if (t <= turn && (!best || t > best.turn)) best = st;
+  return best;
+};
+
 const rows: Array<{ c: Criterion; mustNot: boolean; ok: boolean | null; got: string }> = [];
-for (const c of must) rows.push({ c, mustNot: false, ...evalOne(c, record.get(START + c.in)) });
-for (const c of mustNot) rows.push({ c, mustNot: true, ...evalOne(c, record.get(START + c.in)) });
+for (const c of must) rows.push({ c, mustNot: false, ...evalOne(c, statAt(START + c.in)) });
+for (const c of mustNot) rows.push({ c, mustNot: true, ...evalOne(c, statAt(START + c.in)) });
 /* soft 只进报表，不进结论——见 README「判据不许写成必须走这一步」 */
-const softRows = soft.map((c) => ({ c, ...evalOne(c, record.get(START + c.in)) }));
+const softRows = soft.map((c) => ({ c, ...evalOne(c, statAt(START + c.in)) }));
 
 /* `ok` 在两种判据里语义一致：true = 这条要求满足了（must 是"做到"，mustNot 是"没犯"） */
 const pass = rows.every((r) => r.ok === true);
