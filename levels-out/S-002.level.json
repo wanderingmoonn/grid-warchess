@@ -1,0 +1,293 @@
+{
+  "id": "level:s-002",
+  "version": 1,
+  "dev": true,
+  "name": "S-002（考卷）",
+  "brief": "30 手之内打掉东北那座城。这一回合你会怎么做？（最多 3 步）",
+  "map": {
+    "id": "levelmap:s-002",
+    "name": "S-002",
+    "w": 14,
+    "h": 14,
+    "rows": [
+      "..............",
+      "..............",
+      "..............",
+      "....ff........",
+      "..............",
+      "..............",
+      "..........ff..",
+      "..............",
+      "..............",
+      "....ff........",
+      "..............",
+      "..............",
+      "..............",
+      ".............."
+    ],
+    "citiesA": [
+      {
+        "x": 1,
+        "y": 11
+      }
+    ],
+    "citiesB": [
+      {
+        "x": 10,
+        "y": 1
+      }
+    ],
+    "source": "builtin"
+  },
+  "seats": {
+    "count": 2,
+    "ai": [
+      "B"
+    ],
+    "cityEra": {
+      "A": 3,
+      "B": 4
+    }
+  },
+  "setup": {
+    "startEra": 3,
+    "firstSide": "A"
+  },
+  "events": [
+    {
+      "id": "exam-setup",
+      "when": {
+        "kind": "turn",
+        "at": 1
+      },
+      "do": [
+        {
+          "kind": "gold",
+          "seat": "A",
+          "amount": -9999
+        },
+        {
+          "kind": "gold",
+          "seat": "B",
+          "amount": -9999
+        }
+      ]
+    }
+  ],
+  "deploy": {
+    "A": [
+      {
+        "type": "hussar",
+        "x": 1,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 2,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 3,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 4,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 5,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 6,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 7,
+        "y": 8
+      },
+      {
+        "type": "hussar",
+        "x": 8,
+        "y": 8
+      },
+      {
+        "type": "halberdier",
+        "x": 1,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 2,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 3,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 4,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 5,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 6,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 7,
+        "y": 9
+      },
+      {
+        "type": "musketeer",
+        "x": 1,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 2,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 3,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 4,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 5,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 6,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 7,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 8,
+        "y": 10
+      },
+      {
+        "type": "musketeer",
+        "x": 3,
+        "y": 11
+      },
+      {
+        "type": "musketeer",
+        "x": 4,
+        "y": 11
+      },
+      {
+        "type": "musketeer",
+        "x": 5,
+        "y": 11
+      },
+      {
+        "type": "musketeer",
+        "x": 6,
+        "y": 11
+      },
+      {
+        "type": "musketeer",
+        "x": 3,
+        "y": 12
+      },
+      {
+        "type": "musketeer",
+        "x": 4,
+        "y": 12
+      },
+      {
+        "type": "musketeer",
+        "x": 5,
+        "y": 12
+      }
+    ],
+    "B": [
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 1
+      },
+      {
+        "type": "rifleman",
+        "x": 12,
+        "y": 1
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 12,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 12,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 8,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 13,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 4
+      },
+      {
+        "type": "rifleman",
+        "x": 12,
+        "y": 4
+      }
+    ]
+  }
+}

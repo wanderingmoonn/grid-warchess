@@ -1,0 +1,128 @@
+{
+  "id": "S-003",
+  "ask": "废墟就在你右前方 3 格（仍算敌方的），东北还有一座活城。6 手内让那座废墟变成你的。这一回合你会怎么做？",
+  "size": 12,
+  "startEra": 3,
+  "fog": false,
+  "me": "A",
+  "seed": 31,
+  "gold": {
+    "A": 400,
+    "B": 0
+  },
+  "map": [
+    "............",
+    "............",
+    "............",
+    "....ff......",
+    "............",
+    "............",
+    "........ff..",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............"
+  ],
+  "cities": [
+    {
+      "owner": "A",
+      "x": 1,
+      "y": 10,
+      "era": 3
+    },
+    {
+      "owner": "B",
+      "x": 6,
+      "y": 3,
+      "era": 3,
+      "ruined": true
+    },
+    {
+      "owner": "B",
+      "x": 10,
+      "y": 9,
+      "era": 3
+    }
+  ],
+  "units": [
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 2,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 3,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 4,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 5,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 2,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 4,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "owner": "B",
+      "type": "musketeer",
+      "x": 5,
+      "y": 3
+    },
+    {
+      "owner": "B",
+      "type": "halberdier",
+      "x": 6,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "halberdier",
+      "x": 9,
+      "y": 8
+    },
+    {
+      "owner": "B",
+      "type": "musketeer",
+      "x": 11,
+      "y": 8
+    },
+    {
+      "owner": "B",
+      "type": "halberdier",
+      "x": 10,
+      "y": 10
+    }
+  ]
+}

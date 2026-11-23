@@ -944,17 +944,135 @@ function inDanger(s: GameState, owner: PlayerId, x: number, y: number): boolean 
 }
 
 /**
- * 这座城还剩几个能出兵的空格（用最便宜的陆军战斗兵种探）。
+ * 一格"必须腾出来"的位置。
  *
- * 0 = 城被自己人占满，**再也造不出兵**。这个数不是"产能估计"，
- * 是规则层 `recruitSpawnCells` 的原话——它返回空，造兵动作就会被拒。
+ * 2026-11-22 第 1 步（`docs/PLAN-YIELD-2026-11-22.md`）：把三类让位的关键格
+ * 收敛到一处。`critical` **暂时没有消费者**——它是第 2 步洞搬迁求解器的入口，
+ * 现在先立字段，不许顺手改任何评分。
  */
-function spawnCellCountOf(s: GameState, city: City): number {
-  const probe = Object.values(s.unitTypes)
+interface CriticalCell {
+  /**
+   * spawn = 产兵格被经济/建造单位占着（要让出来给新兵）；
+   * exit  = 军队被关在城里，城外这一格被经济单位占着（要让出来给军队出城）。
+   */
+  kind: 'spawn' | 'exit';
+  x: number;
+  y: number;
+  /** 0~1：整座城堵死 = 1，半堵 = 0.5，出城通道 = 0.8。只有层 1（洞搬迁）排序用 */
+  urgency: number;
+  /** 这一格本该留给谁 */
+  needRole: 'newborn' | 'combat';
+  cityId: string;
+}
+
+/**
+ * 本回合"哪里有东西必须挪开"的**唯一出处**。
+ *
+ * 重构前这三件事各算各的（`chokedCities` / `spawnStarved` / `bridgeClear`
+ * 三处各自 filter、各自调 `spawnCellCountOf`、`bestBridgeSite` 还调了两遍）。
+ * 取值与重构前**逐字相同**，验收口径是 `probe:ai-goal` 四个种子指纹不变。
+ */
+interface SlotPlan {
+  /** 产兵格 = 0 的城：整座城造不出兵，最急 */
+  chokedCities: string[];
+  /** 产兵格 < 城格数的城：没满，但要一直推到恢复，不是清一格就停 */
+  starvedCities: string[];
+  /** `bestBridgeSite` 的结果。注意只在真的过不去时才会被塞进 `bridgeArea` */
+  bridgeSite: { x: number; y: number } | null;
+  /** 桥点周围 2 格。是**软区域**（"最好别站"），不是硬格 */
+  bridgeArea: Set<number>;
+  /** 硬格：城格上被占住的那几格。第 2 步的洞搬迁从这里取门口 */
+  critical: CriticalCell[];
+}
+
+/**
+ * 算一遍三类关键格。
+ *
+ * 探针兵种必须取"最便宜的陆军战斗单位"：换兵种会改"哪些格能出兵"
+ * （有的兵要产兵建筑），口径一漂，`spawnStarved` 的判定就跟着漂。
+ * 这也是原来 `spawnCellCountOf` 的口径，原样搬过来。
+ */
+function buildSlotPlan(
+  view: GameState,
+  me: PlayerId,
+  bridgeSite: { x: number; y: number } | null,
+): SlotPlan {
+  const probe = Object.values(view.unitTypes)
     .filter((d) => d.category === 'combat' && d.domain !== 'water')
     .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
-  if (!probe) return 0;
-  return recruitSpawnCells(s, city.id, undefined, probe.id).length;
+
+  const chokedCities: string[] = [];
+  const starvedCities: string[] = [];
+  const critical: CriticalCell[] = [];
+  const seen = new Set<string>();
+  const push = (cell: CriticalCell): void => {
+    const k = `${cell.x},${cell.y}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    critical.push(cell);
+  };
+  for (const c of citiesOf(view, me)) {
+    if (c.ruined) continue;
+    const spawnCount = probe ? recruitSpawnCells(view, c.id, undefined, probe.id).length : 0;
+    if (spawnCount === 0) chokedCities.push(c.id);
+    if (spawnCount >= c.size * c.size) continue;
+    starvedCities.push(c.id);
+    const urgency = spawnCount === 0 ? 1 : 0.5;
+    let combatInside = false;
+    for (const t of cityTiles(c)) {
+      const u = unitAt(view, t.x, t.y);
+      if (!u || u.owner !== me) continue;
+      /*
+       * 只收**经济/建造**单位：它们读 `yieldPlan`。战斗单位不读
+       * （它读的是战术走位 + `chokedCities` 的"出城 +150"），
+       * 把它们写进 critical 只会生成一条没人接的链。
+       */
+      if (utype(view, u.type).category === 'combat') {
+        combatInside = true;
+        continue;
+      }
+      push({ kind: 'spawn', x: t.x, y: t.y, urgency, needRole: 'newborn', cityId: c.id });
+    }
+    /*
+     * 军队被关在城里（2026-11-22）：城格全被战斗单位占着，城外一圈又被
+     * 经济单位占满。这时候"出城 +150"一个合法落点都没有——`reachableTiles`
+     * 返回不了被占的格，候选表里压根没有这一步。
+     *
+     * 所以要让的不是城格，是**城外的必经格**：把外围那圈经济单位往外挪一格，
+     * 军队就有地方出去。这一条是 `probe:combat-trap` 逼出来的：
+     * 8 回合 0 动作，两条机制都不覆盖这个局面。
+     */
+    if (combatInside && spawnCount === 0) {
+      for (const t of cityTiles(c)) {
+        for (const [dx, dy] of DIRS) {
+          const x = t.x + dx;
+          const y = t.y + dy;
+          if (!inBounds(view, x, y)) continue;
+          const tile = view.tiles[y * view.w + x];
+          if (!tile || tile.terrain === 'city' || !passable(tile.terrain)) continue;
+          const u = unitAt(view, x, y);
+          if (!u || u.owner !== me) continue;
+          const d = utype(view, u.type);
+          if (d.category !== 'economy' && d.category !== 'builder') continue;
+          push({ kind: 'exit', x, y, urgency: 0.8, needRole: 'combat', cityId: c.id });
+        }
+      }
+    }
+  }
+
+  const bridgeArea = new Set<number>();
+  if (bridgeSite) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const x = bridgeSite.x + dx;
+        const y = bridgeSite.y + dy;
+        if (!inBounds(view, x, y)) continue;
+        bridgeArea.add(y * view.w + x);
+      }
+    }
+  }
+
+  return { chokedCities, starvedCities, bridgeSite, bridgeArea, critical };
 }
 
 /**
@@ -1804,6 +1922,13 @@ interface Fields {
    */
   bridgeClear: Set<number>;
   /**
+   * 本回合的让位关键格（2026-11-22 第 1 步）。
+   *
+   * 原来 `chokedCities` / `spawnStarved` / `bridgeClear` 各算各的，
+   * 现在都从这份表取；`critical` 留给第 2 步的洞搬迁，暂时没人读。
+   */
+  slots: SlotPlan;
+  /**
    * 编队成员 → 队形信息（目标城、自己到目标、全队最前/最后、允许的密集度）。
    *
    * 用它替代老的"协同前进"（`aheadOfLine` 比全局战线）：队形该多紧由**编队**定，
@@ -2545,40 +2670,51 @@ function threatScaleOf(
   return Math.min(1, (reachable ? 0.4 : 0) + (hitRecent ? 0.3 : 0) + (close ? 0.3 : 0));
 }
 
-function buildYieldChain(
+/**
+ * 让位：把「洞」搬到关键格上（2026-11-22 第 2 步）。
+ *
+ * 和旧版 `buildYieldChain` 的差别：
+ *   · 旧版只挑**一座**城、只建**一条**链，一回合最多清一格；
+ *   · 新版从所有空格出发做一次多源 BFS，得到"每格到最近空地的距离"，
+ *     每个关键格（被占的产兵格）各配一个洞、各出一条链——一回合能清多格。
+ *
+ * 为什么不再"找最远空地"：那是单链时代的补丁。一条链必须拉得长，才能把整列
+ * 人串起来一起外移；多链之后，每个关键格配最近的那个洞就够了，成本还更低。
+ *
+ * 方向：`path[0]` 是关键格、`path[last]` 是洞，路径上的人逐个朝洞走一步。
+ * 目标格被占时 `unitCandidates` 不给候选，等前面的人走开自然递补。
+ */
+function buildYieldPlan(
   view: GameState,
   me: PlayerId,
+  slots: SlotPlan,
 ): Array<{ id: string; x: number; y: number }> {
-  const city = citiesOf(view, me).find((c) => {
-    if (c.ruined) return false;
-    if (spawnCellCountOf(view, c) >= c.size * c.size) return false;
-    return cityTiles(c).some((t) => {
-      const u = unitAt(view, t.x, t.y);
-      if (!u || u.owner !== me) return false;
-      const d = utype(view, u.type);
-      return d.category === 'economy' || d.category === 'builder';
-    });
-  });
-  if (!city) return [];
+  if (slots.critical.length === 0) return [];
+
   /*
-   * 找**最远**空地，不是最近。
+   * 多源 BFS：种子是**所有能站的空格**（城格除外）。
    *
-   * 找最近时链很短（城格 → 2 格外的农 → 空地），外圈的人不参与，
-   * 里层的人挪一步又撞上外圈——一次只能清一列、还要好几回合。
-   * 找最远（半径 8 内）会把整列人都串进链，一次把这一列整体外移。
+   * 城格不算洞：它是关键格，是"要空出来的地方"，不是"可以塞人的地方"。
+   * 穿过己方单位要计一步（那个人得先让开）；敌人和不可通行直接挡死。
    */
-  const starts = cityTiles(city).map((t) => t.y * view.w + t.x);
-  const prev = new Map<number, number>();
   const dist = new Map<number, number>();
-  const seen = new Set<number>(starts);
-  const q: number[] = [...starts];
-  for (const k of starts) dist.set(k, 0);
-  let end = -1;
-  let endD = -1;
-  for (let i = 0; i < q.length; i++) {
-    const k = q[i]!;
+  const prev = new Map<number, number>();
+  const queue: number[] = [];
+  for (let y = 0; y < view.h; y++) {
+    for (let x = 0; x < view.w; x++) {
+      const k = y * view.w + x;
+      const t = view.tiles[k];
+      if (!t || !passable(t.terrain) || t.terrain === 'city') continue;
+      if (unitAt(view, x, y)) continue;
+      dist.set(k, 0);
+      queue.push(k);
+    }
+  }
+  const MAX_DIST = 8;
+  for (let i = 0; i < queue.length; i++) {
+    const k = queue[i]!;
     const d = dist.get(k)!;
-    if (d > 8) continue;
+    if (d >= MAX_DIST) continue;
     const x = k % view.w;
     const y = Math.floor(k / view.w);
     for (const [dx, dy] of DIRS) {
@@ -2586,43 +2722,66 @@ function buildYieldChain(
       const ny = y + dy;
       if (!inBounds(view, nx, ny)) continue;
       const nk = ny * view.w + nx;
-      if (seen.has(nk)) continue;
+      if (dist.has(nk)) continue;
       const t = view.tiles[nk];
-      if (!t || t.terrain === 'city') continue;
+      if (!t || !passable(t.terrain)) continue;
       const u = unitAt(view, nx, ny);
       if (u && u.owner !== me) continue;
-      seen.add(nk);
-      prev.set(nk, k);
       dist.set(nk, d + 1);
-      if (!u) {
-        if (d + 1 > endD) {
-          endD = d + 1;
-          end = nk;
-        }
-      } else {
-        q.push(nk);
-      }
+      prev.set(nk, k);
+      queue.push(nk);
     }
   }
-  if (end < 0) return [];
-  // 回溯：path[0] = 空地，path[last] = 城格
-  const path: number[] = [end];
-  let k = end;
-  while (prev.has(k)) {
-    k = prev.get(k)!;
-    path.push(k);
+
+  /*
+   * 关键格按紧急度降序配洞；同一条链占过的格记进 `used`，后面的链不许抢。
+   * 抢了会怎样：两条链指着同一格，前一条的人走过去、后一条的人目标落空，
+   * 一回合白丢两个单位的行动。
+   */
+  const used = new Set<number>();
+  const out: Array<{ id: string; x: number; y: number }> = [];
+  const targets = [...slots.critical].sort((a, b) => b.urgency - a.urgency);
+  /*
+   * 每回合最多挪几个人（@tune）。
+   *
+   * 旧版一回合只走一个（链头），多链之后不加闸会**一次动八个**：Q3/Q4 跑批
+   * 从 9-2-1 掉到 6-1-5，三局胜负被拖成 261 回合平局——经济单位集体搬家，
+   * 产出跟不上，前线就没兵可打。
+   * 4 = 刚好够"城格四格全堵"那种局面一回合清出一圈，又不至于把经济拆散。
+   */
+  const MAX_PER_TURN = 4;
+  outer: for (const cell of targets) {
+    const key = cell.y * view.w + cell.x;
+    if (used.has(key)) continue;
+    if (!dist.has(key)) continue;
+    const path: number[] = [key];
+    let cur = key;
+    while (prev.has(cur)) {
+      cur = prev.get(cur)!;
+      path.push(cur);
+    }
+    /*
+     * 链内**不能**用 `used` 判冲突：`path[i]` 刚被上一步写成占用，
+     * 下一步再查就必然 break——实测每条链因此只走一格（`out` 恒等于
+     * 关键格数量），整列根本不动。冲突只在**链之间**才该判。
+     */
+    const mine: number[] = [];
+    for (let i = 0; i < path.length - 1; i++) {
+      if (out.length >= MAX_PER_TURN) break outer;
+      const from = path[i]!;
+      const to = path[i + 1]!;
+      if (used.has(from) || used.has(to)) break;
+      const u = unitAt(view, from % view.w, Math.floor(from / view.w));
+      if (!u || u.owner !== me) break;
+      out.push({ id: u.id, x: to % view.w, y: Math.floor(to / view.w) });
+      mine.push(from, to);
+    }
+    for (const c of mine) used.add(c);
+    used.add(key);
   }
-  const chain: Array<{ id: string; x: number; y: number }> = [];
-  for (let i = 1; i < path.length; i++) {
-    const kk = path[i]!;
-    const u = unitAt(view, kk % view.w, Math.floor(kk / view.w));
-    if (!u || u.owner !== me) continue;
-    const tk = path[i - 1]!;
-    chain.push({ id: u.id, x: tk % view.w, y: Math.floor(tk / view.w) });
-  }
-  // chain 已按"离空地近 → 远"排列（path 从 end 往回），即执行顺序
-  return chain;
+  return out;
 }
+
 
 function postureBudgetOf(
   s: GameState,
@@ -3002,7 +3161,7 @@ function squadShortfallOf(s: GameState, me: PlayerId): number {
  * 每回合只更新一次（`keep.stallTurn` 去重）——`value` 每步决策都会被调，
  * 不去重会把同一回合算十几次，计数直接失真。
  */
-/* ---------------- 编队：编制 + 上报（2026-11-21） ---------------- */
+/* ---------------- 编队：阵容 + 上报（2026-11-21） ---------------- */
 
 function stallOf(c: PlanCtx): { turns: number; median: number } {
   const turn = c.view.turn;
@@ -3305,6 +3464,14 @@ const DECISIVE_PLAN: RankedPlan = {
 };
 registerAiPlan(DECISIVE_PLAN);
 
+/**
+ * @tune 连续多少回合过不去就换渡口。
+ *
+ * 30 的依据：实测平局局 `noLink` 到 130、胜利局 2~35。30 落在中间，
+ * 既能甩掉"修不通的点"，又不会在刚开局的绕路阶段乱换。
+ */
+const STUCK_TURNS = 30;
+
 const CROSSING_PLAN: RankedPlan = {
   id: 'crossing',
   kind: 'weights',
@@ -3365,8 +3532,38 @@ const CROSSING_PLAN: RankedPlan = {
       c.keep.bridgeUnits = near.length;
       c.keep.bridgeSquads = sqNear;
       const jam = near.length >= 10 || sqNear >= 2;
-      c.keep.bridgeJam = jam ? Number(c.keep.bridgeJam ?? 0) + 1 : 0;
+      /*
+       * 计数必须**每回合只加一次**。
+       *
+       * `save` 是 `resolvePlans` 调用的，而 `resolvePlans` **每次决策都跑**
+       * （一回合里 AI 要选好几个动作）。原来直接 `+1`，于是"连续 3 回合"实际
+       * 不到 1 回合就成立——实测 `bridgeJam` 在 140 个回合里涨到 536
+       * （≈ 4 次/回合），分流从头到尾一直在触发，`JAM_TURNS` 的防抖等于没有。
+       */
+      if (Number(c.keep.jamTurn ?? -1) !== c.view.turn) {
+        c.keep.jamTurn = c.view.turn;
+        c.keep.bridgeJam = jam ? Number(c.keep.bridgeJam ?? 0) + 1 : 0;
+        /*
+         * `noLink` 管"一直修不通"，`cut` 管"通了又被拆"——两件不同的事。
+         *
+         * `cut` 只在**上一回合还是通的**（`noLink` 被清成 0）而这一回合不通时 +1。
+         * 一开始就不通的局不会被误记（那时 `noLink` 还是 undefined）。
+         * 原来是数"桥单位总数减少"（`lost`），填湖的桥也算——8 座里 0 座联通时
+         * 它照样涨，抓的不是"关键桥被拆"。
+         */
+        const before = c.keep.noLink;
+        c.keep.noLink = c.canReach ? 0 : Number(before ?? 0) + 1;
+        if (!c.canReach && before === 0) c.keep.cut = Number(c.keep.cut ?? 0) + 1;
+      }
     }
+    /*
+     * `noLink`（连续多少回合过不去）是**唯一没有污染的进度信号**，见上面守卫块。
+     *
+     * `keep.bridges` 数的是桥单位数量，而实测 Q3/seed30 里 8 座桥有 **0 座**
+     * 真的把两岸连起来——那些桥在填湖、在河湾抄近路，数量涨得越多越像在干活。
+     * `canReach` 是地形 BFS 的结论，不认"造了几座桥"。
+     * 先只记账、不参与决策，让它能在诊断里被看见。
+     */
     return {};
   },
   /*
@@ -3436,10 +3633,34 @@ const CROSSING_PLAN: RankedPlan = {
   focus: (c) => {
     // 已经有陆路：不用修（这里给 null，不是让计划退场，见 value 的说明）
     if (c.canReach) return null;
-    // 拆够两次就别修了：实测一局桥被拆 10 次、造了 12 座，钱全填河
-    if (Number(c.keep.lost ?? 0) >= 2) return null;
-    // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
+    /*
+     * 连续过不去太久 → **换渡口**，别在同一个点耗钱（2026-11-23）。
+     *
+     * 实测 Q3/seed30：8 座桥、关键 0 座、坐标从 T120 到 T260 一字未变，
+     * `noLink` 一路涨到 130 回合。AI 不是不修，是**在同一个修不通的点上反复修**。
+     *
+     * 判据从 `lost`（桥被拆几次）换成 `noLink`：前者数的是桥单位减少，
+     * 填湖的桥也算，8 座里 0 座联通时它照样触发"放弃"。
+     */
+    const stuck = Number(c.keep.noLink ?? 0);
     const prev = c.state.focus as { x: number; y: number } | undefined;
+    if (stuck >= STUCK_TURNS && prev) {
+      const alt = crossingPointOf(c.view, c.me, prev);
+      if (alt) return alt;
+    }
+    /*
+     * 通了又被拆 ≥2 次 → **也换渡口**（2026-11-23）。
+     *
+     * 原来是 `return null`（放弃）。但 `focus` 给 null 只让工人失去走位目标，
+     * `orders.buildPoint` 照样读 `keep.crossingSite` 派活——"计划说放弃、工人还在修"，
+     * 而那正是"桥被拆 10 次、造了 12 座"那局的形状。
+     * 现在和 `stuck` 走同一个出口：换个地方修，而不是停在一个修不住的点上。
+     */
+    if (Number(c.keep.cut ?? 0) >= 2 && prev) {
+      const alt = crossingPointOf(c.view, c.me, prev);
+      if (alt) return alt;
+    }
+    // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
     if (prev) {
       const tile = c.view.tiles[prev.y * c.view.w + prev.x];
       if (tile && (tile.terrain === 'water' || tile.terrain === 'bridge')) return prev;
@@ -4754,7 +4975,7 @@ export type RosterRole = 'tank' | 'melee' | 'ranged' | 'support' | 'siege';
  * 这几个数字是照着"能推进、能顶住、能持久"三条给的，不是理论最优解：
  * 前排不够，远程一被贴脸就散；远程不够，压到城下只能拿人命填；
  * 支援为 0，一条线打完就没有第二条线。
- * 攻城器不占常备编制——它是"到了墙下才买"的一次性工具。
+ * 攻城器不进常备阵容——它是"到了墙下才买"的一次性工具。
  */
 const ROLE_TARGET: Record<RosterRole, number> = {
   tank: 0.3,
@@ -4770,11 +4991,11 @@ const ROLE_TARGET: Record<RosterRole, number> = {
  */
 const TEMPLATE_ROLES: RosterRole[] = ['tank', 'melee', 'ranged', 'support'];
 
-/** 这个兵在编制里顶哪一档 */
+/** 这个兵在阵容里顶哪一档 */
 export function rosterRoleOf(def: UnitTypeDef): RosterRole {
   const ab = def.abilities ?? [];
   // 英雄不算攻城器：九头蛇带 siege-master 是因为它砸墙也疼，
-  // 但它进编制是去当主力的，编制里不给它记"攻城"这一档。
+  // 但它进阵容是去当主力的，阵容里不给它记"攻城"这一档。
   if (!def.hero && ab.includes('siege-master')) return 'siege';
   // 能打的支援兵（天使 42 攻、矮人王 34 攻）算前排：它们本职是站在线上，
   // 光环只是顺带。自己打不动的（牧师、巫医、召唤师）才算支援。
@@ -5760,7 +5981,7 @@ function rawBuildScore(
     // 经济建筑 2 点护甲，对面一个民兵两下就拆了，还顺手带走建造者。
     if (risky) return -999;
     // 每座城两座经济建筑封顶。
-    // 以前"建筑不占编制"之后，钱一多就变成满地的磨坊：模拟里青铜局 60 场盖了 682 座，
+    // 不加这条，钱一多就变成满地的磨坊：模拟里青铜局 60 场盖了 682 座，
     // 场面像集市不像战场。经济建筑本身也会继续生钱，越盖越多，最后全在滚利息。
     const sameKind = unitsOf(s, unit.owner).filter((u) => u.type === def.id).length;
     if (sameKind >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
@@ -7778,15 +7999,10 @@ function buildPlan(
   );
   const trade = doomedNow && myVal > 0 && foeVal > myVal * TRADE_AT && army >= 4 && reachFoe;
   /*
-   * 精兵姿态：**留着，但砍掉那条"编制快满就精兵"的触发**（2026-11-21）。
+   * 精兵姿态：手头宽裕时买更好的兵，而不是把同一袋钱摊成五个便宜兵
+   * （同样一袋钱，"坦克"和"五个民兵"的战斗力不一样）。
    *
-   * 先试过整条删掉，对 v1 的胜率从 75% 掉到 33%——说明"手头宽裕时买好的"
-   * 这件事和帽子无关：同样一袋钱，买 5 个民兵和 1 个坦克的战斗力不一样，
-   * 便宜兵再多也顶不住质量。帽子只该背它自己的那一份：
-   * （v3 没有编制上限，那条"编制快满就精兵"的触发早就删了。）
-   *
-   * 所以 `quality` 现在只剩三条与帽子无关的来源：在攒钱、手头比一个兵宽裕、
-   * 或者这一局性格偏发展。
+   * 触发只有三条：在攒钱、金 ≥ 1.2 回合收入、这一局性格偏发展。
    */
   const quality = savingFor !== null || gold >= inc * 1.2 || mood.weight.boom > 0.5;
   const elite = quality || trade;
@@ -9457,7 +9673,7 @@ function aiNextActionCoreInner(
     typeof s.config.aiRecruitCap === 'number'
       ? Math.max(0, s.config.aiRecruitCap)
       : // 默认（未写 / 'auto'）按空格子数放开：规则层本来就不限每回合造几个，
-        // 限制只有钱和格子。帽子留成"低难度开关"（`--recruit-cap 2`）
+      // 真正的限制只有钱和格子。
         Math.max(budget.maxRecruit, productionCapacity(view, me));
   const mayRecruit = commander
     ? !idleHead && head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
@@ -9534,32 +9750,43 @@ function aiNextActionCoreInner(
     s.config.aiThreatScale === true ? threatScaleOf(view, me, keepPrev) : 0;
 
   /*
-   * 疏散链：回合级维护。每回合建一次；每步把"已经到了目标"的链头弹出，
-   * 只把当前链头交给 `unitCandidates`（它只给这一条候选）。
+   * 关键格表：三类让位的"哪里必须腾出来"只在这里算一次。
+   *
+   * `bestBridgeSite` 原来在 fields 里算一遍、在 `bridgeClear` 的立即函数里再算一遍
+   * （同一个 view/wade，纯函数，结果必然相同）。现在只算一次，省一遍全图扫描。
+   * `bridgeArea` 只在 `needBridgeNow` 时才有内容——这条不能丢：`bridgeSite`
+   * 是"最近的水面"，任何图上都有值，忘了加条件就会让全军在所有图躲水面
+   * （2026-11-21 实测：全量 58% → 38%）。
+   */
+  const bridgeSiteGuess = bestBridgeSite(view, me, wade);
+  const slots = buildSlotPlan(view, me, needBridgeNow ? bridgeSiteGuess : null);
+
+  /*
+   * 让位：回合级维护（2026-11-22 第 2 步改多链）。
+   *
+   * 每回合建一次，之后每步把"已经到位 / 单位已经没了"的条目剔掉。
+   * 和旧版的差别：不再只把**链头**交给 `unitCandidates`，而是把整份
+   * `unitId → 目标格` 交出去——于是多个关键格能同回合各清一格。
+   * 目标格被占时 `unitCandidates` 不给候选，等前面的人走开自然递补。
    */
   const keepYield = (focusOf(s, me).plan?.keep ?? {}) as Record<string, unknown>;
-  let yieldChain = keepYield.yieldChain as Array<{ id: string; x: number; y: number }> | undefined;
-  if (!Array.isArray(yieldChain) || yieldChain.length === 0 || Number(keepYield.yieldTurn ?? -1) !== view.turn) {
-    yieldChain = buildYieldChain(view, me);
+  let yieldMoves = keepYield.yieldMoves as Array<{ id: string; x: number; y: number }> | undefined;
+  if (!Array.isArray(yieldMoves) || Number(keepYield.yieldTurn ?? -1) !== view.turn) {
+    yieldMoves = buildYieldPlan(view, me, slots);
   }
-  while (yieldChain.length > 0) {
-    const head = yieldChain[0]!;
-    const u = view.units.find((x) => x.id === head.id);
-    if (!u || (u.x === head.x && u.y === head.y)) yieldChain.shift();
-    else break;
-  }
+  yieldMoves = yieldMoves.filter((m) => {
+    const u = view.units.find((x) => x.id === m.id);
+    return !!u && !(u.x === m.x && u.y === m.y);
+  });
   if (depth === 0 && focusOf(s, me).plan) {
     focusOf(s, me).plan!.keep = {
       ...(focusOf(s, me).plan!.keep ?? {}),
-      yieldChain,
+      yieldMoves,
       yieldTurn: view.turn,
     };
   }
-  const yieldChainHead = new Map<string, { x: number; y: number }>();
-  if (yieldChain.length > 0) {
-    const head = yieldChain[0]!;
-    yieldChainHead.set(head.id, { x: head.x, y: head.y });
-  }
+  const yieldPlan = new Map<string, { x: number; y: number }>();
+  for (const m of yieldMoves) yieldPlan.set(m.id, { x: m.x, y: m.y });
 
   const fields: Fields = {
     tactical: tacticalMap(view, me),
@@ -9567,7 +9794,7 @@ function aiNextActionCoreInner(
     wade,
     water: distanceFields(view, me, 'water'),
     air: distanceFields(view, me, 'air'),
-    bridgeSite: bestBridgeSite(view, me, wade),
+    bridgeSite: bridgeSiteGuess,
     crossingSite: null,
     holdFire: false,
     scout: null,
@@ -9599,13 +9826,9 @@ function aiNextActionCoreInner(
     // 战线 / 站位密度：集结的两个半边，见 Fields 里的说明
     lineRef: frontLineRef(view, me, land, mood.focusCityId),
     crowd: crowdField(view, me),
-    chokedCities: citiesOf(view, me)
-      .filter((c) => !c.ruined && spawnCellCountOf(view, c) === 0)
-      .map((c) => c.id),
-    spawnStarved: citiesOf(view, me)
-      .filter((c) => !c.ruined && spawnCellCountOf(view, c) < c.size * c.size)
-      .map((c) => c.id),
-    yieldPlan: yieldChainHead,
+    chokedCities: slots.chokedCities,
+    spawnStarved: slots.starvedCities,
+    yieldPlan,
     squadTarget: squadTargetsOf(view, me),
     squadNeed: squadShortfallOf(view, me),
     squadInfo: squadInfoOf(view, me),
@@ -9614,20 +9837,8 @@ function aiNextActionCoreInner(
       citiesOf(view, me)
         .filter((c) => !c.ruined)
         .sort((a, b) => b.hp - a.hp)[0]?.id ?? null,
-    bridgeClear: (() => {
-      const out = new Set<number>();
-      const site = needBridgeNow ? bestBridgeSite(view, me, wade) : null;
-      if (!site) return out;
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
-          const x = site.x + dx;
-          const y = site.y + dy;
-          if (!inBounds(view, x, y)) continue;
-          out.add(y * view.w + x);
-        }
-      }
-      return out;
-    })(),
+    bridgeClear: slots.bridgeArea,
+    slots,
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
     // 对方手里有几个经济单位：攻城加分与僵持破局都要读它（整回合算一次）
     foeEcon: enemyUnitsOf(view, me).filter((u) => utype(view, u.type).category === 'economy').length,

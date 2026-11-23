@@ -23,7 +23,8 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiLevelOf, aiNameOf, anyAiSide, engineForAi, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { goalText, validateLevel } from './core/level.ts';
+import { goalText, levelById, validateLevel } from './core/level.ts';
+import { loadUserLevels } from './core/userLevels.ts';
 import {
   RUN_KEY,
   canRestart,
@@ -476,8 +477,94 @@ let hasRealSave = bootSave !== null;
  * 只在显式带参数时生效，线上行为不变。
  */
 const forceLoadSave = new URLSearchParams(location.search).get('loadSave') === '1';
-let state: GameState = bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
-if (hasRealSave && !forceLoadSave) {
+
+/*
+ * `?exam=<题号>`：**按题号直达一个出题局面**（2026-11-23）。
+ *
+ * 考卷是一个 `dev: true` 的关卡——那种关卡不进选关菜单（见 core/level.ts 的三处过滤），
+ * 所以测试员没法在菜单里找到它，只能靠这个参数一步到位。
+ *
+ * 和「导入对局」是同一类操作：换掉当前局、照常落盘。所以不挂起自动存档
+ * （挂起了测试员一刷新就丢进度，比"覆盖存档"更烦人）。
+ *
+ * **强制打开 `recordDetail`**：答案要能被录下来，判分器才有 `--answers` 可吃。
+ * 这一条不能指望测试员自己去设置里勾——他不会知道有这回事。
+ */
+const examParam = new URLSearchParams(location.search).get('exam');
+/*
+ * **先把用户关卡读进内存再查**（2026-11-23 踩过）。
+ *
+ * 玩家自己做的关卡存在 localStorage，`level.ts` 用"注册回调"的方式取它，
+ * 而那个回调要 `loadUserLevels()` 先跑过才有内容。没加载就查 `user:xxx`
+ * 一律返回 null——表现是"?exam=user:xxx 停在首页，而且日志说找不到题号"。
+ */
+if (examParam) loadUserLevels();
+
+/**
+ * 要不要显示「导出动作」这颗按钮。
+ *
+ * 两种情况：① 这是 `?exam=` 局（考卷，测试员要交答案）；
+ * ② 地址栏带 `?debug`（从「编辑器」里试玩时用得上——那条路不经过 `?exam=`）。
+ * 玩家正常打开游戏两个条件都不成立，所以永远看不到它。
+ */
+function examActionsWanted(): boolean {
+  if (new URLSearchParams(location.search).has('debug')) return true;
+  /* 局面自己带的考卷标记：覆盖「导入对局」那条路（URL 上看不出来） */
+  if (state.config.examId) return true;
+  /* 关卡里试玩（从「编辑器」进来）：勾了「记录详细数据」就能导出，
+   * 那样作者不必特意去记 ?exam= 的链接。玩家正常打关卡不会勾这个。 */
+  return !!state.config.level && state.config.recordDetail === true;
+}
+/*
+ * 题号有两种写法：内置关 `lone-city`（补成 `level:lone-city`）、
+ * 玩家关卡 `user:xxxx`（**已经带冒号，一个字都不许再补**）。
+ * 第一版只判断了 `startsWith('level:')`，于是 `user:xxx` 被拼成 `level:user:xxx`，
+ * 查不到、退回普通开局、还停在首页——2026-11-23 用户报的就是这个。
+ */
+const examLevel = examParam
+  ? levelById(examParam.includes(':') ? examParam : `level:${examParam}`)
+  : null;
+let state: GameState = examLevel
+  ? createMatch(
+      {
+        ...DEFAULT_CONFIG,
+        level: examLevel,
+        recordDetail: true,
+        /*
+         * **考卷的对手固定用 v1（战术档）**，不跟"高级 = v3"走（2026-11-23）。
+         *
+         * 两个理由：
+         *   ① 可复现——判分器复现的是同一份 `core/ai.ts`，档位一变，同一份答案就打出不同的局面；
+         *   ② 难度基准——题库的判据线是按 v1 对手量的，换成 v3 会全线偏移。
+         * v4 自己要跟谁比是另一件事，不该塞进考卷里。
+         */
+        aiLevel: 'tactic',
+      },
+      randomSeed(),
+      loadCustomUnits(),
+    )
+  : (bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits()));
+if (examLevel) {
+  /*
+   * 考卷 = **人和电脑打**：除了"我"那一席，其余一律交给电脑。
+   *
+   * 为什么不信任关卡里写的 `seats.ai`：玩家从「编辑器」存的关卡可能把这条弄丢
+   * （2026-11-23 用户实机报"两方都是人类在操作"）。丢了的后果不是报错，是
+   * 两个席位都归人——看起来像"对手不动"，其实是在等人去操作它。
+   * 考卷的对手本来就应该由 AI 扮演，所以这条在这里兜底。
+   *
+   * 人坐哪一席：取关卡声明的先手（没写就是 A）。题卡上的"我方"就是它。
+   */
+  const meSeat: PlayerId = examLevel.setup?.firstSide === 'B' ? 'B' : 'A';
+  const foes = seatsOf(state).filter((p) => p !== meSeat);
+  state.config.aiSeats = foes;
+  state.config.aiOpponent = foes.includes('B');
+  state.aiControl = undefined;
+  console.info(`[考卷] 已按 ?exam=${examParam} 开局：${examLevel.id}，人坐 ${meSeat}，对手 ${foes.join('/') || '无'}`);
+} else if (examParam) {
+  console.warn(`[考卷] 找不到题号「${examParam}」，按普通开局走了`);
+}
+if (!examLevel && hasRealSave && !forceLoadSave) {
   // 占位局：别让它覆盖真正的存档
   state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   suspendSaves(true);
@@ -1659,7 +1746,15 @@ function exitReplay(): void {
   resetZoom();
   clearSelection();
   renderWithCamera(loadMatchCamera(state));
-  kickAiIfNeeded();
+  /*
+   * 退出复盘**直接回首页**（2026-11-23 用户：每退一次都落到某一局，
+   * 想连着看几个复盘得先手动回首页，太绕）。
+   *
+   * 仍然先把借来的那局还回去：首页的「继续上一局」读的就是它。
+   * 只是不再 `kickAiIfNeeded()` —— 那样会在这里把 AI 跑起来，
+   * 而首页用 `pauseAi` 明确要求"别在没人看的时候自己下"。
+   */
+  showTitle({ pauseAi: true });
 }
 
 /** 跳到第 index 步（会被夹到 [0, 真的走到的那一步]） */
@@ -5709,6 +5804,37 @@ function handleAction(act: string, el: HTMLElement): void {
           return state;
         },
       });
+      return;
+    }
+
+    /*
+     * 「导出动作」：把这一局人走过的每一步抄出来（`?exam=` 局才有这颗按钮）。
+     *
+     * 判分器要的是"人工答案"——测试员在游戏里怎么解的，就得有东西记下来。
+     * `actionLog` 本来就一步步记着（AI 和人都记，带 `by`），这里只是给它一个出口。
+     * 导出的是一段纯文本，粘到文件里存成 `xxx.actions.json`，
+     * 再用 `scripts/actions-to-answers.ts` 转成判分器的 `--answers` 格式。
+     */
+    case 'export-actions': {
+      if (!actionLog) {
+        toast('这一局没开「记录详细数据」，动作没被记下来——用 ?exam= 开局（会自动打开），或在开局面板勾上它');
+        return;
+      }
+      /* 存成局部量：`actionLog` 是模块级 `let`，进了回调就不再被收窄了 */
+      const steps = actionLog;
+      const payload = {
+        kind: 'exam-actions',
+        exam: examLevel?.id ?? null,
+        seed: state.seed,
+        at: new Date().toISOString(),
+        dropped: actionDropped,
+        actions: steps,
+      };
+      const text = JSON.stringify(payload, null, 2);
+      void navigator.clipboard
+        ?.writeText(text)
+        .then(() => toast(`已复制 ${steps.length} 步动作到剪贴板`))
+        .catch(() => window.prompt('复制下面的内容存成文件：', text));
       return;
     }
 
@@ -10924,7 +11050,12 @@ if (drift) {
  * 想看门面又不想清存档，就在地址后面加 ?home=1。
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
-if (forceHome || invited.length < 4) showTitle();
+/*
+ * `?exam=` 时不弹首页：那个参数的用途就是"直接坐到题目前面"，
+ * 再盖一张首页上去等于没生效（2026-11-23 用户报的第一版就是这样）。
+ * `?home=1` 仍然压过它——想回门面随时能回。
+ */
+if (forceHome || (invited.length < 4 && !examLevel)) showTitle();
 
 /*
  * 审核台：`&admin=1` 打开（2026-11-16）。
@@ -10965,6 +11096,7 @@ function openSettings(): void {
       unitArt: uiArtOn(),
       terrainArt: uiTerrainOn(),
       replay: replay !== null,
+      exam: examLevel !== null || examActionsWanted(),
       showAll: state.showAll === true,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。

@@ -54,6 +54,24 @@ const QUEUES: Queue[] = [
 ];
 
 const pickArg = argOf('queue', '');
+/*
+ * `--seeds 40-49` / `--seeds 40,41,42`：换一批种子（默认每条队列 30/31/32）。
+ *
+ * 收尾验收要"换种子再跑一遍"——原来那三个种子被调参看过太多次，
+ * 同一批种子上好看不代表泛化。范围写法省得每次都列一遍。
+ */
+const SEEDS_ARG = argOf('seeds', '');
+const SEEDS = (() => {
+  if (!SEEDS_ARG) return null;
+  const out: number[] = [];
+  for (const part of SEEDS_ARG.split(',')) {
+    const m = part.trim().match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      for (let i = Number(m[1]); i <= Number(m[2]); i++) out.push(i);
+    } else if (part.trim()) out.push(Number(part.trim()));
+  }
+  return out.length > 0 ? out : null;
+})();
 /** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），做 A/B 用 */
 const ECON_CAP = process.argv.includes('--econ-cap');
 /** `--threat`：打开威胁感知采购（`aiThreatScale`） */
@@ -82,6 +100,21 @@ interface Result {
   turn: number;
   /** 新 AI 这一局的结果：1 胜 / 0 平 / -1 负 */
   score: 1 | 0 | -1;
+  /**
+   * 平局的形状（只对 `winner === null` 有意义）。
+   *
+   * 为什么要记它：跑批的对手是 v1 内核（`ai-9efb961`），它**没有收废墟的逻辑**
+   * ——对面占优也拿不到最后一座废墟，于是拖到回合上限判平。
+   * 不标注的话，这批"平"会被当成五五开。
+   */
+  draw?: {
+    /** 场上还剩几座废墟（没人接管） */
+    ruins: number;
+    /** 我方还剩几座完好城 */
+    myCities: number;
+    /** 对手还剩几座完好城 */
+    foeCities: number;
+  };
 }
 
 /** 一局：aIsNew 决定 A 席用哪一版（同一颗种子两席各跑一次，抵掉先后手偏差） */
@@ -135,6 +168,15 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
   }
   const newSide: PlayerId = aIsNew ? 'A' : 'B';
   const winner = s.winner ?? null;
+  const foeSide: PlayerId = aIsNew ? 'B' : 'A';
+  const draw =
+    winner === null
+      ? {
+          ruins: s.cities.filter((c) => c.ruined).length,
+          myCities: s.cities.filter((c) => c.owner === newSide && !c.ruined).length,
+          foeCities: s.cities.filter((c) => c.owner === foeSide && !c.ruined).length,
+        }
+      : undefined;
   return {
     queue: q.id,
     seed,
@@ -142,6 +184,7 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
     winner,
     turn: s.turn,
     score: winner === null ? 0 : winner === newSide ? 1 : -1,
+    ...(draw ? { draw } : {}),
   };
 }
 
@@ -168,11 +211,18 @@ async function main(): Promise<void> {
   const results: Result[] = [];
 
   for (const q of queues) {
-    for (const seed of q.seeds) {
+    for (const seed of SEEDS ?? q.seeds) {
       for (const aIsNew of [true, false]) {
         const r = playOne(aiNew, aiOld, q, seed, aIsNew);
         results.push(r);
-        const tag = r.score > 0 ? '新胜' : r.score < 0 ? '新负' : '平';
+        const tag =
+          r.score > 0
+            ? '新胜'
+            : r.score < 0
+              ? '新负'
+              : r.draw
+                ? `平[废墟${r.draw.ruins}·我城${r.draw.myCities}·敌城${r.draw.foeCities}]`
+                : '平';
         process.stderr.write(
           `${q.id} seed=${seed} 新${aIsNew ? '先' : '后'} → ${tag} (${r.turn} 回合)\n`,
         );
@@ -208,6 +258,26 @@ async function main(): Promise<void> {
   rows.push(
     `| **合计** | ${n} | **${W}-${L}-${D}** | **${pct(W / n)} [${pct(lo)}, ${pct(hi)}]** | ${pct(D / n)} | ${(turns / Math.max(1, n)).toFixed(0)} |`,
   );
+  /*
+   * 平局的形状：跑批对手是 v1 内核，它**没有收废墟的逻辑**，
+   * 于是"对面占优也拿不到最后一座废墟"会一直拖到回合上限。
+   * 不分开数的话，这批"平"会被当成五五开。
+   */
+  const draws = results.filter((r) => r.score === 0 && r.draw);
+  if (draws.length > 0) {
+    const ruins = draws.filter((r) => r.draw!.ruins > 0).length;
+    const wiped = draws.filter((r) => r.draw!.myCities === 0 || r.draw!.foeCities === 0).length;
+    const detail = draws
+      .map((r) => `${r.queue}|${r.seed}|${r.newSide} 废墟${r.draw!.ruins} 我城${r.draw!.myCities} 敌城${r.draw!.foeCities}`)
+      .join('；');
+    rows.push('');
+    rows.push(
+      `**平局的形状**：${draws.length} 局平局里，**${ruins} 局还剩废墟没被占**、${wiped} 局有一方已被打到 0 城。` +
+        `（对手 v1 没有收废墟逻辑，这类"平"可能是败局）`,
+    );
+    rows.push('');
+    rows.push(`平局明细：${detail}`);
+  }
 
   let verdict = '';
   if (COMPARE) {
