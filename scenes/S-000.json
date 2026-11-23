@@ -1,0 +1,139 @@
+{
+  "id": "S-000",
+  "ask": "12 个三代兵对 4 个二代守军、一座三代城。30 手之内赢下来。这一回合你会怎么做？（最多 3 步）",
+  "size": 12,
+  "startEra": 3,
+  "fog": false,
+  "me": "A",
+  "seed": 3,
+  "gold": {
+    "A": 200,
+    "B": 0
+  },
+  "map": [
+    "............",
+    "............",
+    ".......hh...",
+    ".......hh...",
+    "............",
+    "............",
+    "...fff......",
+    "...fff......",
+    "............",
+    "............",
+    "............",
+    "............"
+  ],
+  "cities": [
+    {
+      "owner": "A",
+      "x": 1,
+      "y": 10,
+      "era": 3
+    },
+    {
+      "owner": "B",
+      "x": 10,
+      "y": 1,
+      "era": 3
+    }
+  ],
+  "units": [
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 2,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 5,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 7,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 2,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 5,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 6,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 7,
+      "y": 9
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "longbow",
+      "x": 10,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "owner": "B",
+      "type": "longbow",
+      "x": 10,
+      "y": 3
+    }
+  ]
+}

@@ -1,0 +1,144 @@
+{
+  "id": "level:s-000",
+  "version": 1,
+  "dev": true,
+  "name": "S-000（考卷）",
+  "brief": "12 个三代兵对 4 个二代守军、一座三代城。30 手之内赢下来。这一回合你会怎么做？（最多 3 步）",
+  "map": {
+    "id": "levelmap:s-000",
+    "name": "S-000",
+    "w": 12,
+    "h": 12,
+    "rows": [
+      "............",
+      "............",
+      ".......hh...",
+      ".......hh...",
+      "............",
+      "............",
+      "...fff......",
+      "...fff......",
+      "............",
+      "............",
+      "............",
+      "............"
+    ],
+    "citiesA": [
+      {
+        "x": 1,
+        "y": 10
+      }
+    ],
+    "citiesB": [
+      {
+        "x": 10,
+        "y": 1
+      }
+    ],
+    "source": "builtin"
+  },
+  "seats": {
+    "count": 2,
+    "ai": [
+      "B"
+    ],
+    "cityEra": {
+      "A": 3,
+      "B": 3
+    }
+  },
+  "setup": {
+    "startEra": 3,
+    "firstSide": "A",
+    "gold": {
+      "A": 200,
+      "B": 0
+    }
+  },
+  "deploy": {
+    "A": [
+      {
+        "type": "musketeer",
+        "x": 2,
+        "y": 8
+      },
+      {
+        "type": "musketeer",
+        "x": 3,
+        "y": 8
+      },
+      {
+        "type": "musketeer",
+        "x": 4,
+        "y": 8
+      },
+      {
+        "type": "musketeer",
+        "x": 5,
+        "y": 8
+      },
+      {
+        "type": "musketeer",
+        "x": 6,
+        "y": 8
+      },
+      {
+        "type": "musketeer",
+        "x": 7,
+        "y": 8
+      },
+      {
+        "type": "halberdier",
+        "x": 2,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 3,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 4,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 5,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 6,
+        "y": 9
+      },
+      {
+        "type": "halberdier",
+        "x": 7,
+        "y": 9
+      }
+    ],
+    "B": [
+      {
+        "type": "spearman",
+        "x": 9,
+        "y": 2
+      },
+      {
+        "type": "longbow",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "spearman",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "longbow",
+        "x": 10,
+        "y": 3
+      }
+    ]
+  }
+}
