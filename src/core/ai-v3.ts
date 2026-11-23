@@ -3524,8 +3524,28 @@ const CROSSING_PLAN: RankedPlan = {
       c.keep.bridgeUnits = near.length;
       c.keep.bridgeSquads = sqNear;
       const jam = near.length >= 10 || sqNear >= 2;
-      c.keep.bridgeJam = jam ? Number(c.keep.bridgeJam ?? 0) + 1 : 0;
+      /*
+       * 计数必须**每回合只加一次**。
+       *
+       * `save` 是 `resolvePlans` 调用的，而 `resolvePlans` **每次决策都跑**
+       * （一回合里 AI 要选好几个动作）。原来直接 `+1`，于是"连续 3 回合"实际
+       * 不到 1 回合就成立——实测 `bridgeJam` 在 140 个回合里涨到 536
+       * （≈ 4 次/回合），分流从头到尾一直在触发，`JAM_TURNS` 的防抖等于没有。
+       */
+      if (Number(c.keep.jamTurn ?? -1) !== c.view.turn) {
+        c.keep.jamTurn = c.view.turn;
+        c.keep.bridgeJam = jam ? Number(c.keep.bridgeJam ?? 0) + 1 : 0;
+        c.keep.noLink = c.canReach ? 0 : Number(c.keep.noLink ?? 0) + 1;
+      }
     }
+    /*
+     * `noLink`（连续多少回合过不去）是**唯一没有污染的进度信号**，见上面守卫块。
+     *
+     * `keep.bridges` 数的是桥单位数量，而实测 Q3/seed30 里 8 座桥有 **0 座**
+     * 真的把两岸连起来——那些桥在填湖、在河湾抄近路，数量涨得越多越像在干活。
+     * `canReach` 是地形 BFS 的结论，不认"造了几座桥"。
+     * 先只记账、不参与决策，让它能在诊断里被看见。
+     */
     return {};
   },
   /*
