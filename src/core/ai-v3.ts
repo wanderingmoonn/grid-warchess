@@ -3464,6 +3464,14 @@ const DECISIVE_PLAN: RankedPlan = {
 };
 registerAiPlan(DECISIVE_PLAN);
 
+/**
+ * @tune 连续多少回合过不去就换渡口。
+ *
+ * 30 的依据：实测平局局 `noLink` 到 130、胜利局 2~35。30 落在中间，
+ * 既能甩掉"修不通的点"，又不会在刚开局的绕路阶段乱换。
+ */
+const STUCK_TURNS = 30;
+
 const CROSSING_PLAN: RankedPlan = {
   id: 'crossing',
   kind: 'weights',
@@ -3615,10 +3623,24 @@ const CROSSING_PLAN: RankedPlan = {
   focus: (c) => {
     // 已经有陆路：不用修（这里给 null，不是让计划退场，见 value 的说明）
     if (c.canReach) return null;
+    /*
+     * 连续过不去太久 → **换渡口**，别在同一个点耗钱（2026-11-23）。
+     *
+     * 实测 Q3/seed30：8 座桥、关键 0 座、坐标从 T120 到 T260 一字未变，
+     * `noLink` 一路涨到 130 回合。AI 不是不修，是**在同一个修不通的点上反复修**。
+     *
+     * 判据从 `lost`（桥被拆几次）换成 `noLink`：前者数的是桥单位减少，
+     * 填湖的桥也算，8 座里 0 座联通时它照样触发"放弃"。
+     */
+    const stuck = Number(c.keep.noLink ?? 0);
+    const prev = c.state.focus as { x: number; y: number } | undefined;
+    if (stuck >= STUCK_TURNS && prev) {
+      const alt = crossingPointOf(c.view, c.me, prev);
+      if (alt) return alt;
+    }
     // 拆够两次就别修了：实测一局桥被拆 10 次、造了 12 座，钱全填河
     if (Number(c.keep.lost ?? 0) >= 2) return null;
     // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
-    const prev = c.state.focus as { x: number; y: number } | undefined;
     if (prev) {
       const tile = c.view.tiles[prev.y * c.view.w + prev.x];
       if (tile && (tile.terrain === 'water' || tile.terrain === 'bridge')) return prev;

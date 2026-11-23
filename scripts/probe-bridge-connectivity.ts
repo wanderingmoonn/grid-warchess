@@ -57,12 +57,20 @@ let s: GameState = createMatch(
  */
 function components(bridgeAsWall: boolean): { comp: Int16Array; count: number } {
   const comp = new Int16Array(s.w * s.h).fill(-1);
+  /*
+   * 地图自带的桥（`s.mapBridges`）**不能**当墙。
+   *
+   * 第一版只判 `terrain === 'bridge'`，把地图桥也拆了，于是"无桥时断开"全线报假——
+   * 这局地图上本来就有 `3,3 / 4,4 / 5,4 / 6,5` 一条栈道。工兵桥才是"要拆掉看看"的那个。
+   */
+  const statics = new Set(s.mapBridges ?? []);
+  const isWall = (k: number, t: Terrain): boolean => bridgeAsWall && t === 'bridge' && !statics.has(k);
   let count = 0;
   for (let start = 0; start < s.w * s.h; start++) {
     if (comp[start] !== -1) continue;
     const t = s.tiles[start]!.terrain;
     if (!passable(t)) continue;
-    if (bridgeAsWall && t === 'bridge') continue;
+    if (isWall(start, t)) continue;
     const id = count++;
     const queue = [start];
     comp[start] = id;
@@ -83,7 +91,7 @@ function components(bridgeAsWall: boolean): { comp: Int16Array; count: number } 
         if (comp[nk] !== -1) continue;
         const nt = s.tiles[nk]!.terrain;
         if (!passable(nt)) continue;
-        if (bridgeAsWall && nt === 'bridge') continue;
+        if (isWall(nk, nt)) continue;
         comp[nk] = id;
         queue.push(nk);
       }
@@ -92,21 +100,51 @@ function components(bridgeAsWall: boolean): { comp: Int16Array; count: number } 
   return { comp, count };
 }
 
-/** 我方城 ↔ 敌方城（任一座）是否连通 */
-function linked(bridgeAsWall: boolean): { linked: boolean; compA: number; compB: number[]; count: number } {
+/** 城格号（按城的真实 `size`，不是硬编码 2×2——大城是 3×3） */
+function cityCells(c: (typeof s.cities)[number]): number[] {
+  const out: number[] = [];
+  for (let dy = 0; dy < c.size; dy++) {
+    for (let dx = 0; dx < c.size; dx++) {
+      const k = (c.y + dy) * s.w + (c.x + dx);
+      if (k >= 0 && k < s.w * s.h) out.push(k);
+    }
+  }
+  return out;
+}
+
+/** 这座城落在哪个连通块（取城格里第一个可通行的） */
+function compOfCity(comp: Int16Array, c: (typeof s.cities)[number]): number {
+  for (const k of cityCells(c)) {
+    const id = comp[k]!;
+    if (id >= 0) return id;
+  }
+  return -1;
+}
+
+/**
+ * 我方城 ↔ 敌方城（任一座）是否连通。
+ *
+ * `noMine` = 我方已经没城了（输掉的那种局）——这时"断不断开"没有意义，
+ * 不能报成"需要桥"。第一版就把它当成了 `compA = -1 → 断开`。
+ */
+function linked(bridgeAsWall: boolean): {
+  linked: boolean;
+  noMine: boolean;
+  noFoe: boolean;
+  count: number;
+} {
   const { comp, count } = components(bridgeAsWall);
   const my = s.cities.filter((c) => c.owner === SIDE && !c.ruined);
   const foe = s.cities.filter((c) => c.owner !== SIDE && !c.ruined);
-  const tilesOf = (c: (typeof s.cities)[number]): number[] => {
-    const out: number[] = [];
-    for (let dy = 0; dy < 2; dy++) {
-      for (let dx = 0; dx < 2; dx++) out.push((c.y + dy) * s.w + (c.x + dx));
-    }
-    return out;
+  if (my.length === 0) return { linked: false, noMine: true, noFoe: foe.length === 0, count };
+  const compA = compOfCity(comp, my[0]!);
+  const compB = foe.map((c) => compOfCity(comp, c)).filter((b) => b >= 0);
+  return {
+    linked: compA >= 0 && compB.some((b) => b === compA),
+    noMine: false,
+    noFoe: foe.length === 0,
+    count,
   };
-  const compA = my.length > 0 ? comp[tilesOf(my[0]!)[0]!]! : -1;
-  const compB = foe.map((c) => comp[tilesOf(c)[0]!]!);
-  return { linked: compB.some((b) => b !== -1 && b === compA), compA, compB, count };
 }
 
 /**
@@ -122,6 +160,26 @@ function isCriticalBridge(x: number, y: number): boolean {
   const r = linked(false);
   s.tiles[k]!.terrain = saved;
   return !r.linked;
+}
+
+/**
+ * 每个陆地连通块里有几座城。
+ *
+ * 用来区分两种"断开"：
+ *   · **关键分割**——我方城和敌方城分在两边，必须过河；
+ *   · **无关分割**——某一块压根没有城，打不打它都不影响胜负。
+ * 如果是后者，`noLink` 长期为正也不该催着修桥。
+ */
+function blockCities(): { counts: number[]; emptyBlocks: number } {
+  const { comp, count } = components(false);
+  const counts = new Array<number>(count).fill(0);
+  for (const c of s.cities) {
+    if (c.ruined) continue;
+    const k = c.y * s.w + c.x;
+    const id = comp[k]!;
+    if (id >= 0) counts[id] = (counts[id] ?? 0) + 1;
+  }
+  return { counts, emptyBlocks: counts.filter((n) => n === 0).length };
 }
 
 const terrainCount = (): string => {
@@ -203,7 +261,11 @@ const finBridges = s.units.filter((u) => u.owner === SIDE && u.type.startsWith('
 const finConnected = linked(false).linked;
 const finCritical = finConnected ? finBridges.filter((b) => isCriticalBridge(b.x, b.y)).length : 0;
 const finOk = !fin.linked ? '无桥断开→需要桥' : '无桥也连通→不需要桥';
+const finKeep = ((s.aiFocus as Record<string, { plan?: { keep?: Record<string, unknown> } }> | undefined)?.[SIDE]?.plan?.keep ?? {}) as Record<string, unknown>;
+const bc = blockCities();
 console.log(
   `终局 ${s.winner ?? '平'}（${s.turn} 回合）· ${finOk} · 实际连通 ${finConnected ? '是' : '否'}` +
-    ` · 桥 ${finBridges.length}（关键 ${finCritical}）`,
+    ` · 桥 ${finBridges.length}（关键 ${finCritical}）` +
+    ` · 块城数 [${bc.counts.join(',')}]${bc.emptyBlocks > 0 ? `（无城块 ${bc.emptyBlocks}）` : ''}` +
+    ` · 断路 ${finKeep.noLink ?? '-'}`,
 );
