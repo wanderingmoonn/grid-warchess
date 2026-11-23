@@ -1660,7 +1660,15 @@ function exitReplay(): void {
   resetZoom();
   clearSelection();
   renderWithCamera(loadMatchCamera(state));
-  kickAiIfNeeded();
+  /*
+   * 退出复盘**直接回首页**（2026-11-23 用户：每退一次都落到某一局，
+   * 想连着看几个复盘得先手动回首页，太绕）。
+   *
+   * 仍然先把借来的那局还回去：首页的「继续上一局」读的就是它。
+   * 只是不再 `kickAiIfNeeded()` —— 那样会在这里把 AI 跑起来，
+   * 而首页用 `pauseAi` 明确要求"别在没人看的时候自己下"。
+   */
+  showTitle({ pauseAi: true });
 }
 
 /** 跳到第 index 步（会被夹到 [0, 真的走到的那一步]） */
