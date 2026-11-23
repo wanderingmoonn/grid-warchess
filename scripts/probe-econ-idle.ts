@@ -161,7 +161,9 @@ while (!s.winner && s.turn <= q.cap) {
       if (a.type === 'MOVE' && 'unitId' in a) {
         const uid = String((a as { unitId?: string }).unitId ?? '');
         const z = s.units.find((q) => q.id === uid);
-        if (z && z.owner === SIDE && s.unitTypes[z.type]?.category === 'economy') econActsThisTurn += 1;
+        if (z && z.owner === SIDE && s.unitTypes[z.type]?.category === 'economy') {
+          econActsThisTurn += 1;
+        }
       }
     }
     if (!r.ok) {
@@ -180,6 +182,18 @@ while (!s.winner && s.turn <= q.cap) {
     if (a.type === 'UPGRADE') budget.upgraded += 1;
   }
   if (s.winner) break;
+  /*
+   * 经济产出快照（每 20 回合）：总产出是"经济单位站得好不好"的**客观**度量，
+   * 不依赖任何一版判据——空转率换了三次口径（43.9% / 2.2% / 21.7%），
+   * 得出的方向互相矛盾，所以验收要看这个数。
+   */
+  if (s.turn % 20 === 0) {
+    const econ = s.units.filter(
+      (u) => u.owner === SIDE && s.unitTypes[u.type]?.category === 'economy' && !underConstruction(u),
+    );
+    const prod = econ.reduce((a, u) => a + valueOf(unitYield(s, u), SIDE), 0);
+    console.log(`  T${String(s.turn).padStart(3)} 经济 ${econ.length} 个 · 总产出 ${prod.toFixed(1)} · 金 ${s.players[SIDE].gold}`);
+  }
   totalActs += actsThisTurn;
   econActs += econActsThisTurn;
 
