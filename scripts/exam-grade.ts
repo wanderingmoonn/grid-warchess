@@ -26,7 +26,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { applyAction, utype } from '../src/core/rules.ts';
+import { applyAction, unitYieldAt, utype } from '../src/core/rules.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 
@@ -162,6 +162,8 @@ type Stat = {
   /** 我方单位的位置与分类：`unitsNear` 要按当期的记录算，不能用终局 */
   mine: Array<{ x: number; y: number; category: string }>;
   alive: number;
+  /** 我方经济兵本手总产出（金）。经济题的核心量：站对格子才高 */
+  econYield: number;
   meCities: number;
   /** 敌方还剩几座活城（废墟不算）。「把对方打到没有城」才是收尾的终点 */
   foeCities: number;
@@ -198,6 +200,9 @@ function capture(s: GameState): void {
     cityMinHp: { ...cityMinHp },
     count,
     mine,
+    econYield: s.units
+      .filter((u) => u.owner === ME && utype(s, u.type).category === 'economy')
+      .reduce((n, u) => n + (unitYieldAt(s, u, u.x, u.y).gold ?? 0), 0),
     alive: s.units.length,
     meCities: s.cities.filter((c) => c.owner === ME && !c.ruined).length,
     foeCities: s.cities.filter((c) => c.owner === FOE && !c.ruined).length,
@@ -335,6 +340,12 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
           (!c.category || u.category === c.category),
       ).length;
       return { ok: c.min === undefined || n >= c.min, got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个` };
+    }
+    case 'econYield': {
+      /* 经济兵按脚下地形产金：伐木工森林 12 / 平原 3，牧民丘陵 8 / 森林 2，农民平原 7 / 森林 3。
+       * 站对格子和站错差 3~4 倍，所以这条能干净地区分"有没有把经济兵摆对"。 */
+      const y = st.econYield;
+      return { ok: c.min === undefined || y >= c.min, got: `经济总产 ${y}` };
     }
     case 'unitsInZone': {
       /* 区域推进类判据："过河了没有""压到哪条线了"。比 unitsNear 好用，
