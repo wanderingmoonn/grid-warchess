@@ -115,7 +115,12 @@ v1 在 40 手里 0 损失 0 战果——**它根本没渡过那条一格宽的�
 |---|---|
 | `scripts/make-exam.ts` | 从回放里切一格（真实局面） |
 | `scripts/make-scene.ts` | 手摆一格（单机制题；`scenes/*.json`） |
+| `scripts/scene-to-level.ts` | 把手摆局面转成**关卡**，好在游戏编辑器里画布打开、继续改 |
 | `scripts/exam-grade.ts` | 判分：`--me-ai v3/v1/none` 或 `--answers`，跑 N 手看判据红绿 |
+
+出题的三条路、以及"怎么不把开发者功能暴露给玩家"，见
+`docs/DESIGN-EXAM-WORKBENCH-2026-11-23.md`。**一句话：考卷是 `dev: true` 的关卡，
+玩家菜单里看不到；工具入口挂 `?` 参数。**
 
 三者共用 `scripts/lib/exam-kit.ts` 写文件，所以题卡长相永远一致。
 

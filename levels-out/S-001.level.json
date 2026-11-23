@@ -1,0 +1,221 @@
+{
+  "id": "level:s-001",
+  "version": 1,
+  "dev": true,
+  "name": "S-001（考卷）",
+  "brief": "24 手之内把河对岸那座城打掉。这一回合你会怎么做？（最多 3 步）",
+  "map": {
+    "id": "levelmap:s-001",
+    "name": "S-001",
+    "w": 12,
+    "h": 12,
+    "rows": [
+      ".......~....",
+      ".......~....",
+      ".......~....",
+      ".......~....",
+      ".......~....",
+      ".......~....",
+      ".......=....",
+      ".......~....",
+      ".......~....",
+      ".......~....",
+      ".......~....",
+      ".......~...."
+    ],
+    "citiesA": [
+      {
+        "x": 1,
+        "y": 9
+      }
+    ],
+    "citiesB": [
+      {
+        "x": 9,
+        "y": 1
+      }
+    ],
+    "source": "builtin"
+  },
+  "seats": {
+    "count": 2,
+    "ai": [
+      "B"
+    ],
+    "cityEra": {
+      "A": 3,
+      "B": 4
+    }
+  },
+  "setup": {
+    "startEra": 3,
+    "firstSide": "A"
+  },
+  "events": [
+    {
+      "id": "exam-setup",
+      "when": {
+        "kind": "turn",
+        "at": 1
+      },
+      "do": [
+        {
+          "kind": "gold",
+          "seat": "A",
+          "amount": -9999
+        },
+        {
+          "kind": "gold",
+          "seat": "B",
+          "amount": -9999
+        }
+      ]
+    }
+  ],
+  "deploy": {
+    "A": [
+      {
+        "type": "hussar",
+        "x": 3,
+        "y": 5
+      },
+      {
+        "type": "hussar",
+        "x": 4,
+        "y": 5
+      },
+      {
+        "type": "hussar",
+        "x": 5,
+        "y": 5
+      },
+      {
+        "type": "hussar",
+        "x": 6,
+        "y": 5
+      },
+      {
+        "type": "musketeer",
+        "x": 3,
+        "y": 6
+      },
+      {
+        "type": "musketeer",
+        "x": 4,
+        "y": 6
+      },
+      {
+        "type": "musketeer",
+        "x": 5,
+        "y": 6
+      },
+      {
+        "type": "musketeer",
+        "x": 6,
+        "y": 6
+      },
+      {
+        "type": "musketeer",
+        "x": 3,
+        "y": 7
+      },
+      {
+        "type": "musketeer",
+        "x": 4,
+        "y": 7
+      },
+      {
+        "type": "halberdier",
+        "x": 5,
+        "y": 7
+      },
+      {
+        "type": "halberdier",
+        "x": 6,
+        "y": 7
+      },
+      {
+        "type": "halberdier",
+        "x": 3,
+        "y": 8
+      },
+      {
+        "type": "halberdier",
+        "x": 4,
+        "y": 8
+      },
+      {
+        "type": "halberdier",
+        "x": 5,
+        "y": 8
+      },
+      {
+        "type": "halberdier",
+        "x": 6,
+        "y": 8
+      },
+      {
+        "type": "longbow",
+        "x": 2,
+        "y": 5
+      },
+      {
+        "type": "longbow",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "longbow",
+        "x": 2,
+        "y": 7
+      },
+      {
+        "type": "longbow",
+        "x": 2,
+        "y": 8
+      }
+    ],
+    "B": [
+      {
+        "type": "halberdier",
+        "x": 8,
+        "y": 1
+      },
+      {
+        "type": "halberdier",
+        "x": 11,
+        "y": 1
+      },
+      {
+        "type": "halberdier",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "halberdier",
+        "x": 10,
+        "y": 3
+      },
+      {
+        "type": "musketeer",
+        "x": 8,
+        "y": 2
+      },
+      {
+        "type": "musketeer",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "crossbow",
+        "x": 8,
+        "y": 3
+      },
+      {
+        "type": "crossbow",
+        "x": 11,
+        "y": 3
+      }
+    ]
+  }
+}

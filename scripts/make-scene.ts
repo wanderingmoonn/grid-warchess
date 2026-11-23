@@ -28,8 +28,8 @@
  * }
  * ```
  *
- * 地图字符：`.` 平原　`f` 森林　`^` 丘陵　`~` 水　`M` 山　`=` 桥（架在水上）
- * 　　　　　`p` 台地　`v` 谷地　`,` 沼泽　`d` 沙丘
+ * 地图字符（和游戏、关卡编辑器同一张表）：`.` 平原　`f` 森林　`h` 丘陵　`~` 水
+ * 　　　　　　　　　　　　`^` 山　`=` 桥（架在水上）　`P` 台地　`v` 谷地　`w` 沼泽　`d` 沙丘
  *
  * `map` 省略时按 `size` 随机生成一张公平图（这时它和 `make-exam` 差不多，意义不大）。
  * 城和单位都不写 `hp` 就用默认满血；写了就按写的来（残血局面要靠它）。
@@ -76,16 +76,21 @@ const ME: PlayerId = scene.me === 'B' ? 'B' : 'A';
 const ID = scene.id ?? 'S-000';
 const SIZE = scene.size ?? (scene.map ? scene.map.length : 12);
 
+/*
+ * 地图字符**和游戏自己的那张表一模一样**（`core/mapgen.ts` 的 `CHAR`）。
+ * 一开始我用的是自己编的（`^` 丘陵、`M` 山、`,` 沼泽），后来发现关卡编辑器也用那张表——
+ * 两套字符意味着"脚本造的地图进不了编辑器"，等于自己给自己修了一堵墙。
+ */
 const LEGEND: Record<string, Terrain> = {
   '.': 'plain',
   f: 'forest',
-  '^': 'hill',
+  h: 'hill',
   '~': 'water',
-  M: 'mountain',
+  '^': 'mountain',
   '=': 'bridge',
-  p: 'plateau',
+  P: 'plateau',
   v: 'valley',
-  ',': 'marsh',
+  w: 'marsh',
   d: 'dune',
 };
 
