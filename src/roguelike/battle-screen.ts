@@ -13,7 +13,8 @@
  */
 import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../core/ai.ts';
 import { DEFAULT_BUDGET } from '../core/ai-meta.ts';
-import { attackableTargets, maxHpOf, reachableTiles, siegeTargets, unitsOf, utype } from '../core/rules.ts';
+import { attackableTargets, maxHpOf, reachableTiles, siegeTargets, unitById, unitsOf, utype } from '../core/rules.ts';
+import { describeUnit, unitStatLine } from '../core/info.ts';
 import { playerView } from '../core/fog.ts';
 import { cellAtPoint, renderBoard } from '../ui/board.ts';
 import type { BoardUi } from '../ui/board.ts';
@@ -41,6 +42,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   let disposed = false;
   /** 撤回栈：每次我方动作之前压一份，结束回合清空（和本体一个口径） */
   const undoStack: GameState[] = [];
+  /** 敌人这一场已经补了几个兵（`AiBudget.maxRecruit` 是**每回合**的额度，得自己累计） */
+  let enemyRecruited = 0;
 
   host.innerHTML = `
     <div class="rg-battle">
@@ -56,6 +59,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
           <button class="rg-btn ghost" data-act="quit">认输</button>
         </div>
       </div>
+      <div class="rg-hovercard" id="rg-hovercard" hidden></div>
       <div class="rg-battle-body">
         <div class="rg-boardwrap">
           <div class="board rg-board" id="rg-board"></div>
@@ -78,12 +82,47 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     </div>`;
 
   const boardEl = host.querySelector<HTMLElement>('#rg-board');
+  const hoverEl = host.querySelector<HTMLElement>('#rg-hovercard');
   const hudEl = host.querySelector<HTMLElement>('#rg-hud');
   const armyEl = host.querySelector<HTMLElement>('#rg-army');
   const foeEl = host.querySelector<HTMLElement>('#rg-foes');
   const tipEl = host.querySelector<HTMLElement>('#rg-tip');
   const undoBtn = host.querySelector<HTMLButtonElement>('#rg-undo');
-  if (!boardEl || !hudEl || !armyEl || !foeEl || !tipEl || !undoBtn) throw new Error('战斗界面结构缺失');
+  if (!boardEl || !hudEl || !armyEl || !foeEl || !tipEl || !undoBtn || !hoverEl) {
+    throw new Error('战斗界面结构缺失');
+  }
+
+  /** 单位属性卡：和本体一样，指到谁就看谁 */
+  function statCardHtml(u: Unit): string {
+    const def = utype(state, u.type);
+    const lines = describeUnit(state, def, u.owner, u);
+    const hp = `${u.hp}/${maxHpOf(state, u)}`;
+    return `<div class="rg-hc-head"><b>${escapeHtml(def.name)}</b><i>${u.owner === 'A' ? '我方' : '敌方'}</i></div>
+      <div class="rg-hc-hp"><span style="width:${Math.max(0, Math.min(100, (u.hp / Math.max(1, maxHpOf(state, u))) * 100))}%"></span><em>${hp}</em></div>
+      <div class="rg-hc-stats">${escapeHtml(unitStatLine(def))}</div>
+      ${lines.map((l) => `<div class="rg-hc-line">${escapeHtml(l)}</div>`).join('')}`;
+  }
+
+  boardEl.addEventListener('mouseover', (e) => {
+    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset.id;
+    const u = id ? unitById(state, id) : undefined;
+    if (!u || !hoverEl) return;
+    hoverEl.innerHTML = statCardHtml(u);
+    hoverEl.hidden = false;
+  });
+  boardEl.addEventListener('mousemove', (e) => {
+    if (!hoverEl || hoverEl.hidden) return;
+    const ev = e as MouseEvent;
+    const x = Math.min(window.innerWidth - 220, ev.clientX + 16);
+    const y = Math.min(window.innerHeight - 160, ev.clientY + 12);
+    hoverEl.style.left = `${x}px`;
+    hoverEl.style.top = `${y}px`;
+  });
+  boardEl.addEventListener('mouseout', (e) => {
+    const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
+    if (to && to.closest?.('[data-id]')) return;
+    if (hoverEl) hoverEl.hidden = true;
+  });
 
   function selected(): Unit | undefined {
     return selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
@@ -235,7 +274,16 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
      * 玩家没有城，本来就没法补；让对面能补就是单方面加血——实测攻坚关里
      * 敌人每两回合摸出一个民兵，玩家再能打也磨不过。`AiBudget` 就是现成的闸门。
      */
-    const budget: AiBudget = { ...DEFAULT_BUDGET, maxRecruit: 0, maxUpgrade: 0 };
+    /*
+     * 有城的关卡允许敌人补员（最多 init.enemyRecruit 个），没城的关卡一个都不给——
+     * 那是"开局编队"的仗。补员要占它的金币，所以城是有价值的，但撑不了无限磨。
+     */
+    const budget: AiBudget = {
+      ...DEFAULT_BUDGET,
+      // 整场总量，不是每回合：额度减掉已经补过的，补满就再也不补
+      maxRecruit: Math.max(0, init.enemyRecruit - enemyRecruited),
+      maxUpgrade: 0,
+    };
     const rejected = new Set<string>();
     for (let i = 0; i < AI_MAX_STEPS; i += 1) {
       if (disposed || finished || state.current !== 'B' || outcomeOf(state)) break;
@@ -248,7 +296,10 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       }
       rejected.clear();
       state = r.state;
-      if (action.type === 'RECRUIT') budget.recruited += 1;
+      if (action.type === 'RECRUIT') {
+        budget.recruited += 1;
+        enemyRecruited += 1;
+      }
       if (action.type === 'UPGRADE') budget.upgraded += 1;
       render();
       await sleep(40);

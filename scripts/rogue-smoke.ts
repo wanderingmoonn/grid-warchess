@@ -122,8 +122,11 @@ console.log('\n[2] 流程推进（60 局，全部走完三层）');
         afterRoom(run);
       } else if (node.kind === 'shop') {
         const stock = shopStock(run, rng);
-        const affordable = stock.find((s) => -(s.effect.gold ?? 0) <= run.gold);
-        if (affordable) applyEffect(run, affordable.effect, rng);
+        const affordable = stock.find((s) => s.price <= run.gold);
+        if (affordable) {
+          run.gold -= affordable.price;
+          applyEffect(run, affordable.effect, rng);
+        }
         afterRoom(run);
       } else if (node.kind === 'rest') {
         const opts = restOptions(run, rng);

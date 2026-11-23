@@ -6,6 +6,9 @@
  */
 import { STRATEGIES, armyText, eventById, relicById, themeOf } from './run.ts';
 import {
+  applyDecision,
+  decisionOptions,
+  refreshCost,
   afterRoom,
   applyEffect,
   armyCount,
@@ -226,36 +229,7 @@ function enterRoom(root: HTMLElement, node: RoomNode): void {
     return;
   }
   if (node.kind === 'shop') {
-    const stock = shopStock(run, rng);
-    openModal(
-      root,
-      `<h3>行商</h3><p class="rg-body">摊子支在路边，货不多，价也不便宜。</p>`,
-      [...stock.map((s) => ({ id: s.id, title: s.title, sub: s.sub, effect: s.effect })),
-        { id: 'leave', title: '离开', sub: '不买了' }],
-      (pick) => {
-        const item = stock.find((s) => s.id === pick);
-        if (item) {
-          const cost = -(item.effect.gold ?? 0);
-          if (run!.gold < cost) {
-            run!.log.push('钱不够，行商把货收回去了');
-            afterRoom(run!);
-            showResultThen(root, '行商', '钱不够，什么都没买成');
-            return;
-          }
-          const notes = applyEffect(run!, item.effect, rng);
-          run!.log.push(`买下 ${item.title}`);
-          afterRoom(run!);
-          showResultThen(root, '行商', notes.join('，'));
-          return;
-        }
-        afterRoom(run!);
-        showMap(root);
-      },
-      () => {
-        afterRoom(run!);
-        showMap(root);
-      },
-    );
+    openShop(root);
     return;
   }
   // rest
@@ -294,22 +268,128 @@ function startBattle(root: HTMLElement, node: RoomNode): void {
 
 function enterBoss(root: HTMLElement): void {
   if (!run) return;
-  if (autoWin()) {
-    const r = run;
-    if (!r) return;
-    onBossDone(root, { kind: 'boss', title: '层末会战', sub: '' }, {
-      win: true,
-      survivors: r.army.map((a) => ({ ...a })),
-      gold: r.gold,
-      turns: 1,
-    });
-    return;
-  }
+  /*
+   * 临战决议：打之前先做一次三选一。
+   *
+   * 这是设计里的固定节点（层末必有），选项只影响这一场：夜袭 / 强攻 / 买通 /
+   * 就地征召 / 工兵破墙。钱不够的选项直接不出现，免得点了没反应。
+   * 内容预览（`?rogueAuto=win`）也走这一步——预览要能看见全流程，包括决议。
+   */
+  const affordable = decisionOptions(run, rng).filter((o) => (o.cost ?? 0) <= (run as RunState).gold);
+  const opts = affordable.length > 0 ? affordable : decisionOptions(run, rng);
+  openModal(
+    root,
+    `<h3>临战决议</h3><p class="rg-body">${escapeHtml(
+      run.layer === 3 ? '钟楼就在前面。' : '再往前就是他们的城了。',
+    )}这一仗怎么打，你说了算。</p>`,
+    opts.map((o) => ({ id: o.id, title: o.label, sub: o.hint })),
+    (pick) => {
+      const opt = opts.find((o) => o.id === pick);
+      if (opt) applyDecision(run!, opt);
+      const r = run;
+      if (!r) return;
+      if (autoWin()) {
+        onBossDone(root, { kind: 'boss', title: '层末会战', sub: '' }, {
+          win: true,
+          survivors: r.army.map((a) => ({ ...a })),
+          gold: r.gold,
+          turns: 1,
+        });
+        return;
+      }
+      startBossFight(root);
+    },
+  );
+}
+
+function startBossFight(root: HTMLElement): void {
+  if (!run) return;
   const { node, init } = bossFor(run, (run.seed ^ (run.layer * 99991)) >>> 0);
   const host = document.createElement('div');
   root.innerHTML = '';
   root.appendChild(host);
   cleanupBattle = mountInto(host, init, (result) => onBossDone(root, node, result));
+}
+
+/**
+ * 商店：三行（兵种 / 藏品 / 补给），买完不关店，可以接着买，也能花钱刷新。
+ *
+ * 上一版是"三选一，选完就走"，那不是商店，是奖励房。现在按组分行摆，
+ * 每件标价、买过的置灰、刷新换一批。
+ */
+function openShop(root: HTMLElement): void {
+  if (!run) return;
+  const r = run;
+  let stock = shopStock(r, rng);
+  const bought = new Set<string>();
+
+  const host = document.createElement('div');
+  host.className = 'rg-mask';
+  document.body.appendChild(host);
+
+  const paint = (): void => {
+    const row = (group: 'unit' | 'relic' | 'supply', title: string): string => {
+      const items = stock.filter((it) => it.group === group);
+      if (items.length === 0) return '';
+      return `<div class="rg-shop-row"><h5>${title}</h5><div class="rg-shop-items">
+        ${items
+          .map((it) => {
+            const sold = bought.has(it.id);
+            const poor = r.gold < it.price;
+            return `<button class="rg-shop-item" data-buy="${it.id}" ${sold || poor ? 'disabled' : ''}>
+              <b>${escapeHtml(it.title)}</b>
+              <span>${escapeHtml(it.sub)}</span>
+              <em>${sold ? '已售' : poor ? '钱不够' : `${it.price} 金`}</em>
+            </button>`;
+          })
+          .join('')}
+      </div></div>`;
+    };
+    host.innerHTML = `<div class="rg-modal wide">
+      <h3>行商</h3>
+      <p class="rg-body">摊子支在路边。<b>身上 ${r.gold} 金</b>，看中哪件点哪件，买完可以接着挑。</p>
+      <div class="rg-shop">
+        ${row('unit', '兵种')}
+        ${row('relic', '藏品')}
+        ${row('supply', '补给')}
+      </div>
+      <div class="rg-shop-foot">
+        <button class="rg-btn ghost" data-shop="refresh">刷新（${refreshCost()} 金）</button>
+        <button class="rg-btn" data-shop="leave">离开</button>
+      </div>
+    </div>`;
+  };
+
+  host.onclick = (e) => {
+    const el = e.target as HTMLElement | null;
+    const buyId = el?.closest<HTMLElement>('[data-buy]')?.dataset.buy;
+    if (buyId) {
+      const item = stock.find((it) => it.id === buyId);
+      if (!item || bought.has(item.id) || r.gold < item.price) return;
+      r.gold -= item.price;
+      applyEffect(r, item.effect, rng);
+      r.log.push(`买下 ${item.title}（${item.price} 金）`);
+      bought.add(item.id);
+      paint();
+      return;
+    }
+    const act = el?.closest<HTMLElement>('[data-shop]')?.dataset.shop;
+    if (act === 'refresh') {
+      const cost = refreshCost();
+      if (r.gold < cost) return;
+      r.gold -= cost;
+      stock = shopStock(r, rng);
+      bought.clear();
+      paint();
+      return;
+    }
+    if (act === 'leave') {
+      host.remove();
+      afterRoom(r);
+      showMap(root);
+    }
+  };
+  paint();
 }
 
 /** 动态 import 战斗屏：不进战斗就不加载 AI 那三十多 KB */

@@ -1,5 +1,5 @@
 /**
- * 一局肉鸽的纯逻辑：房间图生成、效果结算、跨层推进。
+ * 一局肉鸽的纯逻辑：房间图生成、效果结算、跨层推进、敌人编成。
  *
  * 这里**不碰 DOM，也不碰规则层**——除了查一下兵种造价。
  * 好处是整套流程可以在 node 里直接跑（见 scripts/rogue-smoke.ts），
@@ -7,11 +7,12 @@
  */
 import { UNIT_TYPES } from '../core/config.ts';
 import {
+  DECISIONS,
   EVENTS,
   LAYERS,
+  PLACE_NAMES,
   RELICS,
   REST_OPTIONS,
-  PLACE_NAMES,
   STRATEGIES,
   eventById,
   pickEnemyTypes,
@@ -19,13 +20,14 @@ import {
   strategyById,
   unitName,
 } from './data.ts';
-import type { LayerTheme } from './data.ts';
+import type { DecisionOption, LayerTheme } from './data.ts';
 import { makeRng } from './rng.ts';
 import type { Rng } from './rng.ts';
 import type {
   ArmyEntry,
   BattleInit,
   BattleResult,
+  Buffs,
   Effect,
   EventDef,
   LayerId,
@@ -43,6 +45,10 @@ const costOf = (id: string): number => UNIT_TYPES[id]?.cost ?? 0;
 
 export function themeOf(layer: LayerId): LayerTheme {
   return LAYERS[layer];
+}
+
+export function emptyBuffs(): Buffs {
+  return { atk: 0, armor: 0, hp: 0, enemyCut: 0, cityDamage: 0, tempUnits: 0 };
 }
 
 // ---------------------------------------------------------------- 军队
@@ -75,22 +81,48 @@ export function armyText(army: ArmyEntry[]): string {
   return army.map((a) => `${unitName(a.type)}×${a.count}`).join('、');
 }
 
-/** 本层最便宜的兵（补员用） */
-function cheapestOf(theme: LayerTheme): string {
-  let best = theme.pool[0] as string;
-  for (const id of theme.pool) if (costOf(id) < costOf(best)) best = id;
-  return best;
+/** 按造价排序后的池子 */
+function byPrice(pool: readonly string[]): string[] {
+  return [...pool].sort((a, b) => costOf(a) - costOf(b));
 }
 
-/** 本层池子里"中间档"和"最高档"的兵，事件里用来区分奖励高低 */
+function cheapestOf(theme: LayerTheme): string {
+  return byPrice(theme.pool)[0] as string;
+}
+
 function midOf(theme: LayerTheme): string {
-  const sorted = [...theme.pool].sort((a, b) => costOf(a) - costOf(b));
+  const sorted = byPrice(theme.pool);
   return sorted[Math.floor(sorted.length / 2)] as string;
 }
 
 function highOf(theme: LayerTheme): string {
-  const sorted = [...theme.pool].sort((a, b) => costOf(a) - costOf(b));
+  const sorted = byPrice([...theme.pool, ...theme.poolHigh]);
   return sorted[sorted.length - 1] as string;
+}
+
+/**
+ * 换装：进新一层时把旧兵换成这一代的同职能兵。
+ *
+ * 为什么要有：三层跨了 1→3→5 代，上一层的兵到下一层基本是活靶子；
+ * 而玩家没有产线，只能靠奖励零散补几个。不换装的话，第二层开局就废一半。
+ * 映射表写在 `data.ts` 的 `refit` 里（一眼能看出谁换成了谁）。
+ */
+export function refitArmy(run: RunState): string[] {
+  const map = themeOf(run.layer).refit;
+  if (Object.keys(map).length === 0) return [];
+  const notes: string[] = [];
+  for (const entry of run.army) {
+    const to = map[entry.type];
+    if (to && to !== entry.type) {
+      entry.type = to;
+      notes.push(unitName(to));
+    }
+  }
+  // 换完会撞车（戈兵和长枪兵都换成戟兵）：同兵种要合并，否则列表里出现两行戟兵
+  const merged = new Map<string, number>();
+  for (const e of run.army) merged.set(e.type, (merged.get(e.type) ?? 0) + e.count);
+  run.army = [...merged.entries()].map(([type, count]) => ({ type, count }));
+  return [...new Set(notes)];
 }
 
 // ---------------------------------------------------------------- 房间图
@@ -111,7 +143,6 @@ const BAG: RoomKind[] = [
  *   · 第 1 步两扇门都是战斗（入场必战，选从哪边杀进来）；
  *   · 第 3、7 步各有一扇商店门（保证一局至少逛两次店）；
  *   · 第 4、8 步各有一扇休整门（保证喘得上气）。
- * 锚点只钉"这一步有这门"，不钉"哪一扇"，同一步的两扇门顺序也会洗。
  */
 export function planLayer(layer: LayerId, rng: Rng): LayerPlan {
   const slots: Array<RoomKind | null> = Array<RoomKind | null>(ROOMS_PER_LAYER).fill(null);
@@ -124,7 +155,6 @@ export function planLayer(layer: LayerId, rng: Rng): LayerPlan {
   slots[at(3, rng.int(2))] = 'rest';
   slots[at(7, rng.int(2))] = 'rest';
 
-  // 锚点已经用掉的数量要从袋子里扣掉
   const bag: RoomKind[] = [];
   const need: Record<string, number> = {};
   for (const k of BAG) need[k] = (need[k] ?? 0) + 1;
@@ -142,25 +172,21 @@ export function planLayer(layer: LayerId, rng: Rng): LayerPlan {
     const doors: RoomNode[] = [];
     for (let door = 0; door < 2; door += 1) {
       const kind = slots[at(step, door)] as RoomKind;
-      doors.push(makeRoom(kind, layer, rng, () => {
-        const def = eventPool[eventCursor % eventPool.length] as EventDef;
-        eventCursor += 1;
-        return def.id;
-      }));
+      doors.push(
+        makeRoom(kind, layer, rng, () => {
+          const def = eventPool[eventCursor % eventPool.length] as EventDef;
+          eventCursor += 1;
+          return def.id;
+        }),
+      );
     }
     steps.push(doors);
   }
   return { steps };
 }
 
-function makeRoom(
-  kind: RoomKind,
-  layer: LayerId,
-  rng: Rng,
-  nextEvent: () => string,
-): RoomNode {
-  const places = PLACE_NAMES[layer];
-  const place = rng.pick(places);
+function makeRoom(kind: RoomKind, layer: LayerId, rng: Rng, nextEvent: () => string): RoomNode {
+  const place = rng.pick(PLACE_NAMES[layer]);
   switch (kind) {
     case 'battle':
       return { kind, title: '遭遇战', sub: `${place} · 无人据守的野地` };
@@ -185,7 +211,7 @@ export function startRun(seed: number, strategyId: string): RunState {
   const strategy = strategyById(strategyId);
   const rng = makeRng((seed ^ 0x9e3779b9) >>> 0);
   const army = strategy.army.map((a) => ({ ...a }));
-  const run: RunState = {
+  return {
     seed,
     strategyId,
     layer: 1,
@@ -195,12 +221,11 @@ export function startRun(seed: number, strategyId: string): RunState {
     relics: [],
     plan: planLayer(1, rng),
     clock: 0,
-    nextAtk: 0,
+    buffs: emptyBuffs(),
     bossDone: false,
     log: [`开局：${strategy.name}，${armyText(army)}`],
     over: null,
   };
-  return run;
 }
 
 // ---------------------------------------------------------------- 效果
@@ -215,16 +240,26 @@ export function applyEffect(run: RunState, effect: Effect, rng: Rng): string[] {
     notes.push(`${effect.gold > 0 ? '+' : ''}${effect.gold} 金`);
   }
   if (typeof effect.nextAtk === 'number' && effect.nextAtk !== 0) {
-    run.nextAtk += effect.nextAtk;
+    run.buffs.atk += effect.nextAtk;
     notes.push(`下一战攻击 ${effect.nextAtk > 0 ? '+' : ''}${effect.nextAtk}`);
+  }
+  if (typeof effect.nextArmor === 'number' && effect.nextArmor !== 0) {
+    run.buffs.armor += effect.nextArmor;
+    notes.push(`下一战护甲 +${effect.nextArmor}`);
+  }
+  if (typeof effect.nextHp === 'number' && effect.nextHp !== 0) {
+    run.buffs.hp += effect.nextHp;
+    notes.push(`下一战生命 +${effect.nextHp}`);
   }
   if (effect.add) {
     const type =
-      effect.add.type === 'layer-mid'
-        ? midOf(theme)
-        : effect.add.type === 'layer-high'
-          ? highOf(theme)
-          : effect.add.type;
+      effect.add.type === 'layer-low'
+        ? cheapestOf(theme)
+        : effect.add.type === 'layer-mid'
+          ? midOf(theme)
+          : effect.add.type === 'layer-high'
+            ? highOf(theme)
+            : effect.add.type;
     addUnits(run.army, type, effect.add.count);
     notes.push(`${unitName(type)} ×${effect.add.count}`);
   }
@@ -242,9 +277,7 @@ export function applyEffect(run: RunState, effect: Effect, rng: Rng): string[] {
       notes.push('重复的藏品折成 +60 金');
     }
   }
-  if (effect.promote) {
-    notes.push('整训完成');
-  }
+  if (effect.promote) notes.push('整训完成');
   for (const n of notes) run.log.push(n);
   return notes;
 }
@@ -259,16 +292,49 @@ export function afterRoom(run: RunState): void {
 
 /**
  * 敌方编成：**按我方全军造价乘一个 k**（文档里的那条"敌人永远是你的镜像"）。
- *
- * 以前是按层写死预算，结果 L1 的敌人比玩家初始编成强、L3 又偏弱；
- * 现在玩家打到 L3 时部队早就换过血，预算跟着部队走才不会忽强忽弱。
  * 时代钟再叠一点：逛得越久，对面越硬。
  */
 function enemyScale(kind: RoomKind, myCost: number, clock: number): { budget: number; gold: number } {
   const clockK = 1 + clock * 0.04;
-  const k: Record<string, number> = { battle: 0.6, elite: 0.75, siege: 0.85, boss: 0.95 };
-  const budget = Math.max(45, Math.round(myCost * (k[kind] ?? 0.8) * clockK));
-  return { budget, gold: Math.round(budget * 0.35) };
+  const k: Record<string, number> = { battle: 0.6, elite: 0.72, siege: 0.7, boss: 0.85 };
+  const budget = Math.max(45, Math.round(myCost * (k[kind] ?? 0.6) * clockK));
+  return { budget, gold: Math.round(budget * 0.25) };
+}
+
+/** 藏品 + 方略 + 攒下的一次性加成，合成这一场的我军加成 */
+export function bonusOf(run: RunState): {
+  atk: number;
+  armor: number;
+  hp: number;
+  move: number;
+  enemyCut: number;
+  cityDamage: number;
+  tempUnits: number;
+} {
+  let atk = 0;
+  let armor = 0;
+  let hp = 0;
+  let move = 0;
+  let enemyCut = 0;
+  let cityDamage = 0;
+  for (const id of run.relics) {
+    const e = relicById(id)?.effect;
+    if (!e) continue;
+    atk += e.atk ?? 0;
+    armor += e.armor ?? 0;
+    hp += e.hp ?? 0;
+    move += e.move ?? 0;
+    enemyCut += e.enemyCut ?? 0;
+    cityDamage += e.cityDamage ?? 0;
+  }
+  if (run.strategyId === 'frontier') armor += 1;
+  if (run.strategyId === 'horse') move += 1;
+  atk += run.buffs.atk;
+  armor += run.buffs.armor;
+  hp += run.buffs.hp;
+  enemyCut += run.buffs.enemyCut;
+  cityDamage += run.buffs.cityDamage;
+  return { atk, armor, hp, move, enemyCut, cityDamage, tempUnits: run.buffs.tempUnits };
 }
 
 export function battleFor(run: RunState, node: RoomNode, seed: number): BattleInit {
@@ -276,17 +342,25 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const isBoss = node.kind === 'boss';
   const idx = isBoss ? 3 : node.kind === 'siege' ? 2 : node.kind === 'elite' ? 1 : 0;
   const size = theme.size[idx] as number;
-  // 遭遇/精英：双方无城；攻坚 1 座；层末第 1、2 层 1 座，钟楼（第 3 层）2 座
-  const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss && run.layer >= 3 ? 2 : 0;
-  const bossCities: 0 | 1 | 2 = isBoss ? (run.layer >= 3 ? 2 : 1) : enemyCityCount;
-  const era = isBoss ? theme.eraHigh : run.clock >= 6 ? theme.eraHigh : theme.eraLow;
+  // 时代钟靠后（≥6）或层末 → 用高代兵池
+  const high = isBoss || run.clock >= 6;
+  const era = high ? theme.eraHigh : theme.eraLow;
+  const pool = high ? theme.poolHigh : theme.pool;
+  // 遭遇/精英：双方无城；攻坚 1 座；层末 L1–L2 一座、L3 两座
+  const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
   const scale = enemyScale(node.kind, armyCost(run.army), isBoss ? STEPS_PER_LAYER : run.clock);
-  const types = pickEnemyTypes(theme.pool, scale.budget, costOf);
+  const types = pickEnemyTypes(pool, scale.budget, costOf);
+  const bonus = bonusOf(run);
+  // 斥候网 / 买通：从敌人里减兵（至少留 1 个）
+  const cut = Math.min(Math.max(0, types.length - 1), bonus.enemyCut);
+  const kept = cut > 0 ? types.slice(0, types.length - cut) : types;
+
   /*
    * 回合上限按小图重算：8×8 的遭遇战打 30 轮是不可能的，那是"两边都不想打"。
-   * 小图 + 短兵相接，10~16 轮就该分出结果；攻坚要啃两座城，多给一些。
+   * 有城的关卡 AI 会守，多给几轮。
    */
-  const roundLimit = isBoss ? 30 : node.kind === 'siege' ? 26 : node.kind === 'elite' ? 18 : 16;
+  const roundLimit = isBoss ? 34 : node.kind === 'siege' ? 30 : node.kind === 'elite' ? 18 : 16;
+  const tempUnits: ArmyEntry[] = bonus.tempUnits > 0 ? [{ type: cheapestOf(theme), count: bonus.tempUnits }] : [];
 
   return {
     kind: node.kind,
@@ -295,15 +369,25 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     sub: node.sub,
     size,
     era,
+    cityEra: theme.eraLow,
     playerArmy: run.army.map((a) => ({ ...a })),
     playerGold: run.gold,
-    enemyCityCount: bossCities,
-    enemyTypes: types,
-    // 无城关卡没有产线，给钱也没用；有城的关卡给一笔，让它能补员
+    enemyCityCount,
+    enemyTypes: kept,
     enemyGold: enemyCityCount > 0 ? scale.gold : 0,
+    // 有城的关让敌人守（它得守住城），没城的关让它抢攻
+    // 整场最多补这么多个（不是每回合）——城因此有防守价值，但撑不了无限磨
+    enemyRecruit: enemyCityCount > 0 ? 2 : 0,
+    enemyDoctrine: enemyCityCount > 0 ? 'boom' : 'rush',
+    expansions: theme.expansions,
+    bonusAtk: bonus.atk,
+    bonusArmor: bonus.armor,
+    bonusHp: bonus.hp,
+    bonusMove: bonus.move,
+    cityDamage: bonus.cityDamage,
+    tempUnits,
     relics: [...run.relics],
     strategyId: run.strategyId,
-    nextAtk: run.nextAtk,
     seed,
     roundLimit,
   };
@@ -332,8 +416,7 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
    * 收编：每打赢一场，自动补 1 个本层基础兵。
    *
    * 为什么需要：玩家没有城、也不能在战斗里造兵，编制只减不增；实测一场胜仗要
-   * 折掉两三个人，打到第 4 个房就没人了。这不是难度，是算术——战利品一次只给一个，
-   * 补不上损耗。收编把"打赢就有兵"变成稳定收入，长局才跑得下去。
+   * 折掉两三个人，打到第 4 个房就没人了。这不是难度，是算术。
    */
   if (after > 0) {
     const type = cheapestOf(themeOf(run.layer));
@@ -341,14 +424,17 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
     notes.push(`收编：${unitName(type)} ×1`);
   }
 
-  // 随军医官：一场战斗后返还 1 个阵亡单位（用最低级的兵补）
-  if (run.relics.includes('medic') && after < before) {
+  // 随军医官：一场战斗后返还 N 个阵亡单位（用最低级的兵补）
+  const revive = run.relics.reduce((n, id) => n + (relicById(id)?.effect.revive ?? 0), 0);
+  if (revive > 0 && after < before) {
     const type = cheapestOf(themeOf(run.layer));
-    addUnits(run.army, type, 1);
-    notes.push(`随军医官：${unitName(type)} ×1 归队`);
+    const n = Math.min(revive, before - after);
+    addUnits(run.army, type, n);
+    notes.push(`随军医官：${unitName(type)} ×${n} 归队`);
   }
 
-  run.nextAtk = 0;
+  // 一次性加成只作用于刚打完的这一场
+  run.buffs = emptyBuffs();
   notes.push(`幸存 ${armyCount(run.army)} 人`);
   for (const n of notes) run.log.push(n);
   return notes;
@@ -363,73 +449,128 @@ export function rewardOptions(run: RunState, kind: RoomKind, rng: Rng): RewardOp
   const unit = kind === 'boss' ? highOf(theme) : midOf(theme);
 
   const out: RewardOption[] = [
-    {
-      id: 'unit',
-      title: `${unitName(unit)} ×1`,
-      sub: '编进队伍，跨层保留',
-      effect: { add: { type: unit, count: 1 } },
-    },
-    {
-      id: 'gold',
-      title: `${gold} 金`,
-      sub: '军饷，能带进下一层',
-      effect: { gold },
-    },
+    { id: 'unit', title: `${unitName(unit)} ×1`, sub: '编进队伍，跨层保留', effect: { add: { type: unit, count: 1 } } },
+    { id: 'gold', title: `${gold} 金`, sub: '军饷，能带进下一层', effect: { gold } },
   ];
   if (relic) {
     out.push({ id: `relic-${relic.id}`, title: `藏品「${relic.name}」`, sub: relic.desc, effect: { relic: relic.id } });
   } else {
     out.push({ id: 'drill', title: '整训', sub: '下一战我军攻击 +2', effect: { nextAtk: 2 } });
   }
-  // 抽掉一条，避免每局都是"永远选第一项"
   return rng.shuffle(out).slice(0, 3);
 }
 
-/** 商店货架：两个本层兵 + 一件藏品，价格随层数上浮 */
-export function shopStock(run: RunState, rng: Rng): RewardOption[] {
-  const theme = themeOf(run.layer);
-  const pool = rng.shuffle([...theme.pool]).slice(0, 2);
-  const owned = new Set(run.relics);
-  const relic = rng.pick(RELICS.filter((r) => !owned.has(r.id)).length > 0
-    ? RELICS.filter((r) => !owned.has(r.id))
-    : RELICS);
-  const markup = 1 + (run.layer - 1) * 0.1;
+/** 商店的一件货 */
+export interface ShopItem {
+  id: string;
+  group: 'unit' | 'relic' | 'supply';
+  title: string;
+  sub: string;
+  price: number;
+  effect: Effect;
+}
 
-  const stock: RewardOption[] = pool.map((id) => ({
+const SHOP_REFRESH_COST = 40;
+
+export function refreshCost(): number {
+  return SHOP_REFRESH_COST;
+}
+
+/** 商店价格折扣（行军图） */
+function shopDiscount(run: RunState): number {
+  let off = 0;
+  for (const id of run.relics) off += relicById(id)?.effect.shopOff ?? 0;
+  return Math.min(0.5, off);
+}
+
+/**
+ * 商店货架：**三行**——兵种 / 藏品 / 补给。
+ *
+ * 一次给 6 件（3 + 2 + 1），买完不关店，可以接着买；不满意可以花钱刷新。
+ * 上一版一次只出一件、买完就走，等于把商店做成了三选一，那不是商店。
+ */
+export function shopStock(run: RunState, rng: Rng): ShopItem[] {
+  const theme = themeOf(run.layer);
+  const off = shopDiscount(run);
+  const price = (base: number): number =>
+    Math.max(10, Math.round(base * (1 - off) * (1 + (run.layer - 1) * 0.08)));
+
+  const units = rng.shuffle([...theme.pool, ...theme.poolHigh]).slice(0, 3);
+  const owned = new Set(run.relics);
+  const relicPool = rng.shuffle(RELICS.filter((r) => !owned.has(r.id)));
+  const relics = relicPool.slice(0, 2);
+
+  const stock: ShopItem[] = units.map((id) => ({
     id: `buy-${id}`,
+    group: 'unit',
     title: unitName(id),
-    sub: `${Math.round(costOf(id) * markup)} 金`,
-    effect: { add: { type: id, count: 1 }, gold: -Math.round(costOf(id) * markup) },
+    sub: `${costOf(id)} 造价的兵`,
+    price: price(costOf(id)),
+    effect: { add: { type: id, count: 1 } },
   }));
+  for (const r of relics) {
+    stock.push({
+      id: `buy-relic-${r.id}`,
+      group: 'relic',
+      title: `藏品「${r.name}」`,
+      sub: r.desc,
+      price: price(170),
+      effect: { relic: r.id },
+    });
+  }
   stock.push({
-    id: `buy-relic-${relic.id}`,
-    title: `藏品「${relic.name}」`,
-    sub: `${Math.round(170 * markup)} 金 · ${relic.desc}`,
-    effect: { relic: relic.id, gold: -Math.round(170 * markup) },
+    id: 'buy-supply',
+    group: 'supply',
+    title: '随军补给',
+    sub: '下一战我军最大生命 +6、护甲 +1',
+    price: price(90),
+    effect: { nextHp: 6, nextArmor: 1 },
   });
   return stock;
 }
 
-/** 休整房：从池里抽 3 个选项（池只有 3 个，等于固定，正式版会扩） */
+/** 休整房：从池里抽 3 个选项 */
 export function restOptions(run: RunState, rng: Rng): RewardOption[] {
   const theme = themeOf(run.layer);
-  const opts = rng.shuffle([...REST_OPTIONS]);
+  const opts = rng.shuffle([...REST_OPTIONS]).slice(0, 3);
   return opts.map((o) => ({
     id: o.id,
     title: o.label,
     sub: o.hint,
     effect:
-      o.effect === 'reinforce'
+      o.id === 'reinforce'
         ? { add: { type: cheapestOf(theme), count: 1 } }
-        : o.effect === 'wage'
+        : o.id === 'wage'
           ? { gold: 90 }
-          : { nextAtk: 2 },
+          : o.id === 'drill'
+            ? { nextAtk: 2 }
+            : o.id === 'harden'
+              ? { nextHp: 6 }
+              : { gold: -80, add: { type: highOf(theme), count: 1 } },
   }));
+}
+
+/** 临战决议：抽 3 个给玩家选 1 个 */
+export function decisionOptions(run: RunState, rng: Rng): DecisionOption[] {
+  void run;
+  return rng.shuffle([...DECISIONS]).slice(0, 3);
+}
+
+/** 把决议的加成写进 run（在开 boss 之前调用） */
+export function applyDecision(run: RunState, opt: DecisionOption): void {
+  if (opt.cost) run.gold = Math.max(0, run.gold - opt.cost);
+  run.buffs.atk += opt.atk ?? 0;
+  run.buffs.hp += opt.hp ?? 0;
+  run.buffs.armor += opt.armor ?? 0;
+  run.buffs.enemyCut += opt.enemyCut ?? 0;
+  run.buffs.cityDamage += opt.cityDamage ?? 0;
+  run.buffs.tempUnits += opt.tempUnits ?? 0;
+  run.log.push(`临战决议：${opt.label}`);
 }
 
 // ---------------------------------------------------------------- 层推进
 
-/** 走到下一层：发军饷袋、重排房间图。返回 false 表示这一局已经打完了 */
+/** 走到下一层：发军饷袋/军粮袋、换装、重排房间图。返回 false 表示这一局已经打完了 */
 export function nextLayer(run: RunState, seed: number): boolean {
   if (run.layer >= 3) {
     run.over = {
@@ -444,13 +585,28 @@ export function nextLayer(run: RunState, seed: number): boolean {
   run.step = 0;
   run.clock = 0;
   run.bossDone = false;
+  run.buffs = emptyBuffs();
   const rng = makeRng((seed ^ (layer * 0x2545f491)) >>> 0);
   run.plan = planLayer(layer, rng);
-  if (run.relics.includes('purse')) {
-    run.gold += 90;
-    run.log.push('军饷袋：+90 金');
+
+  const notes: string[] = [];
+  const refit = refitArmy(run);
+  if (refit.length > 0) notes.push(`换装：${refit.join('、')}`);
+  for (const id of run.relics) {
+    const e = relicById(id)?.effect;
+    if (!e) continue;
+    if (e.goldPerLayer) {
+      run.gold += e.goldPerLayer;
+      notes.push(`军饷袋：+${e.goldPerLayer} 金`);
+    }
+    if (e.unitPerLayer) {
+      const type = cheapestOf(themeOf(layer));
+      addUnits(run.army, type, e.unitPerLayer);
+      notes.push(`军粮袋：${unitName(type)} ×${e.unitPerLayer}`);
+    }
   }
   run.log.push(`进入${themeOf(layer).name}`);
+  for (const n of notes) run.log.push(n);
   return true;
 }
 
@@ -463,4 +619,17 @@ export function loseRun(run: RunState, why: string): void {
   };
 }
 
-export { EVENTS, RELICS, REST_OPTIONS, STRATEGIES, eventById, strategyById, relicById, unitName, cheapestOf, midOf, highOf };
+export {
+  DECISIONS,
+  EVENTS,
+  RELICS,
+  REST_OPTIONS,
+  STRATEGIES,
+  eventById,
+  relicById,
+  strategyById,
+  unitName,
+  cheapestOf,
+  midOf,
+  highOf,
+};
