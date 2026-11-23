@@ -2173,6 +2173,9 @@ interface Fields {
  * 这是"该不该造桥"的总开关：能走过去，桥就只是捷径；
  * 走不过去，桥就是唯一的通路，全军的行动目标都得换。
  */
+/** @tune 旱路代价 ÷ 直线距离 的上限：超过才算"得修桥" */
+const WALK_DETOUR_MAX = 3;
+
 function canReachEnemyByLand(s: GameState, owner: PlayerId, onlyCityId?: string): boolean {
   /*
    * `onlyCityId`：只问"能不能走到**这一座**城"。
@@ -2182,6 +2185,20 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId, onlyCityId?: string)
    */
   const foe = s.cities.filter((c) => c.owner !== owner && (!onlyCityId || c.id === onlyCityId));
   if (foe.length === 0) return true;
+  return s.config.aiReachCost === true
+    ? reachableByCost(s, owner, foe)
+    : reachableBySteps(s, owner, foe);
+}
+
+/**
+ * 老口径：等步数 BFS，超过 `min(w,h)` 步判"过不去"。
+ *
+ * 两个毛病（2026-11-23 量出来，见 `ANALYSIS-CANREACH`）：
+ *   · 步数不看地形成本——20 格宽的**浅流**（陆军能趟）按 20 步记，很容易越过上限，
+ *     于是明明能走过去，却被判成"要修桥"；
+ *   · 上限是绝对步数——24×24 上是 24 步，绕一格就可能越界，判据在边界上抖。
+ */
+function reachableBySteps(s: GameState, owner: PlayerId, foe: readonly City[]): boolean {
 
   /*
    * 判据问的是"**能不能**走过去"，不是"有没有人已经在那儿"。
@@ -2243,6 +2260,91 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId, onlyCityId?: string)
     }
   }
   return false;
+}
+
+/**
+ * 新口径：**按代价判 + 相对绕路上限**。
+ *
+ * 和 `marchTurns` 用同一张图（`advance`：水按 `WADE_COST` 计、浅流走真实步价），
+ * 所以"能走过去吗"和"要走几回合"不会互相打脸。
+ *
+ * 判据分两步：
+ *   1. 从自家城格做代价洪泛，取"贴着敌城"那几格的最小代价；
+ *   2. 和**直线距离**比：`代价 / 直线距离` 超过 `WALK_DETOUR_MAX` 就算绕得太远
+ *      （直线已经含了"最省"的含义：1 格平地 = 1）。
+ *
+ * 为什么这样可以同时治好三种病（2026-11-23）：
+ *   · **宽浅流**：浅流按真实步价（1~2），路径几乎就是直线 → 比值接近 1，判"能走过去"，
+ *     不会再被当成河去修桥；
+ *   · **真河**：每格水 14，五格河就是 70 对直线 5 → 比值 14，判"过不去"，照旧修桥；
+ *   · **绝对步数上限**：换成相对倍数之后，不同尺寸的地图不用各调一次，
+ *     也不会"绕一格就越界"。
+ */
+function reachableByCost(s: GameState, owner: PlayerId, foe: readonly City[]): boolean {
+  const starts: Array<{ x: number; y: number }> = [];
+  for (const c of citiesOf(s, owner)) for (const t of cityTiles(c)) starts.push(t);
+  if (starts.length === 0) return false;
+  /*
+   * **水仍然是墙**（这一条不能松）。
+   *
+   * 第一版这里用的是 `advance` 场（水按 14 计价、可以"过"），结果它把
+   * "中间隔一格水但两岸都是陆地"的地图判成"走得过去"——而 `blockedFor` 根本
+   * 不让陆军进水，于是桥不修了，部队开到岸边就停住（实测 Q4|30|A 直接由胜变平）。
+   *
+   * 所以这里只改两件事：**地形按真实步价**（浅流/沼泽不再当 1 格平地）、
+   * **上限从绝对步数换成相对倍数**。水该拦还是拦。
+   */
+  const cost = new Array<number>(s.w * s.h).fill(Infinity);
+  const queue: number[] = [];
+  for (const t of starts) {
+    const i = t.y * s.w + t.x;
+    if (cost[i] === 0) continue;
+    cost[i] = 0;
+    queue.push(i);
+  }
+  for (let head = 0; head < queue.length; head++) {
+    const k = queue[head]!;
+    const d = cost[k]!;
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
+    const from = s.tiles[k]?.terrain ?? 'plain';
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(s, nx, ny)) continue;
+      const j = ny * s.w + nx;
+      const t = s.tiles[j];
+      if (!t || !passable(t.terrain)) continue;
+      /* 敌城格不能进，但"贴到它旁边"就是目标，上面已经记过 */
+      if (t.cityId) {
+        const c = cityById(s, t.cityId);
+        if (c && c.owner !== owner) continue;
+      }
+      const nd = d + stepCostBetween(s, from, t.terrain);
+      if (nd < (cost[j] ?? Infinity)) {
+        cost[j] = nd;
+        queue.push(j);
+      }
+    }
+  }
+
+  let bestCost = Infinity;
+  let bestStraight = Infinity;
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if (!foe.some((c) => distToCity({ x, y }, c) <= 1)) continue;
+      const d = cost[y * s.w + x] ?? Infinity;
+      if (!Number.isFinite(d) || d >= bestCost) continue;
+      let straight = Infinity;
+      for (const t of starts) straight = Math.min(straight, Math.abs(t.x - x) + Math.abs(t.y - y));
+      if (d < bestCost) {
+        bestCost = d;
+        bestStraight = straight;
+      }
+    }
+  }
+  if (!Number.isFinite(bestCost)) return false;
+  return bestCost <= bestStraight * WALK_DETOUR_MAX;
 }
 
 /**

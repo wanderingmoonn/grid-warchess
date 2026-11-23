@@ -62,6 +62,7 @@ const HUB = process.argv.includes('--hub');
 const CITY_SITE = process.argv.includes('--city-site');
 const GARRISON = process.argv.includes('--garrison');
 const RUIN_SAFE = process.argv.includes('--ruin-safe');
+const REACH_COST = process.argv.includes('--reach-cost');
 let s: GameState = createMatch(
   {
     ...DEFAULT_CONFIG,
@@ -73,6 +74,7 @@ let s: GameState = createMatch(
     ...(CITY_SITE ? { aiCitySite: true } : {}),
     ...(GARRISON ? { aiGarrison: true } : {}),
     ...(RUIN_SAFE ? { aiRuinSafe: true } : {}),
+    ...(REACH_COST ? { aiReachCost: true } : {}),
   },
   SEED,
 );
