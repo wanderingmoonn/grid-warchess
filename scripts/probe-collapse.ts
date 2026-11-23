@@ -59,12 +59,6 @@ const runOne = (QID: string, SEED: number, SIDE: PlayerId): void => {
       aiLevel: 'tactic',
       size: q.size,
       mapSymmetry: 'fair',
-      // 和跑批对齐：不传就是全关（默认行为）
-      ...(process.argv.includes('--hub') ? { aiHub: true } : {}),
-      ...(process.argv.includes('--city-site') ? { aiCitySite: true } : {}),
-      ...(process.argv.includes('--garrison') ? { aiGarrison: true } : {}),
-      ...(process.argv.includes('--ruin-safe') ? { aiRuinSafe: true } : {}),
-      ...(process.argv.includes('--reach-cost') ? { aiReachCost: true } : {}),
     },
     SEED,
   );

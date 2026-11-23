@@ -54,22 +54,30 @@ const QUEUES: Queue[] = [
 ];
 
 const pickArg = argOf('queue', '');
+/*
+ * `--seeds 40-49` / `--seeds 40,41,42`：换一批种子（默认每条队列 30/31/32）。
+ *
+ * 收尾验收要"换种子再跑一遍"——原来那三个种子被调参看过太多次，
+ * 同一批种子上好看不代表泛化。范围写法省得每次都列一遍。
+ */
+const SEEDS_ARG = argOf('seeds', '');
+const SEEDS = (() => {
+  if (!SEEDS_ARG) return null;
+  const out: number[] = [];
+  for (const part of SEEDS_ARG.split(',')) {
+    const m = part.trim().match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      for (let i = Number(m[1]); i <= Number(m[2]); i++) out.push(i);
+    } else if (part.trim()) out.push(Number(part.trim()));
+  }
+  return out.length > 0 ? out : null;
+})();
 /** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），做 A/B 用 */
 const ECON_CAP = process.argv.includes('--econ-cap');
 /** `--threat`：打开威胁感知采购（`aiThreatScale`） */
 const THREAT = process.argv.includes('--threat');
 /** `--econ-plan`：经济投入交给求解器（`aiEconPlan`） */
 const ECON_PLAN = process.argv.includes('--econ-plan');
-/** `--city-site`：采购选址按城画像给分（`aiCitySite`，默认关，见 types.ts 的标定） */
-const CITY_SITE = process.argv.includes('--city-site');
-/** `--hub`：升级目标改成"产兵枢纽"（`aiHub`，默认关，见 types.ts 的标定） */
-const HUB = process.argv.includes('--hub');
-/** `--garrison`：守军给产兵格让位（`aiGarrison`，默认关） */
-const GARRISON = process.argv.includes('--garrison');
-/** `--ruin-safe`：废墟安全闸（`aiRuinSafe`，默认关） */
-const RUIN_SAFE = process.argv.includes('--ruin-safe');
-/** `--reach-cost`：能不能走过去按代价判（`aiReachCost`，默认关） */
-const REACH_COST = process.argv.includes('--reach-cost');
 const WANT = pickArg ? new Set(pickArg.split(',').map((x) => x.trim().toUpperCase())) : null;
 /** 路径都相对 `scripts/` 解析（和 ai-duel 的写法一致：`--new ../src/core/ai-v3.ts`） */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -121,11 +129,6 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
       ...(ECON_CAP ? { aiEconCap: true } : {}),
       ...(THREAT ? { aiThreatScale: true } : {}),
       ...(ECON_PLAN ? { aiEconPlan: true } : {}),
-      ...(CITY_SITE ? { aiCitySite: true } : {}),
-      ...(HUB ? { aiHub: true } : {}),
-      ...(GARRISON ? { aiGarrison: true } : {}),
-      ...(RUIN_SAFE ? { aiRuinSafe: true } : {}),
-      ...(REACH_COST ? { aiReachCost: true } : {}),
     },
     seed,
   );
@@ -208,7 +211,7 @@ async function main(): Promise<void> {
   const results: Result[] = [];
 
   for (const q of queues) {
-    for (const seed of q.seeds) {
+    for (const seed of SEEDS ?? q.seeds) {
       for (const aIsNew of [true, false]) {
         const r = playOne(aiNew, aiOld, q, seed, aIsNew);
         results.push(r);

@@ -1076,157 +1076,6 @@ function buildSlotPlan(
 }
 
 /**
- * @tune 采购选址：出兵点离"该在的地方"每多一回合，扣几分。
- *
- * **这个数的正确量级是"够压过噪声、不够压过兵种差异"**：
- * · 同分是病灶（各城逐位相同），所以要大于 `aiNoise` 的 ±2 和 `band`（≈1.5%）；
- * · 但它只是**破平**，不能拿它盖过"坦克 vs 民兵"那 10~20 分的真实差距——
- *   第一版写了 4（一回合 4 分、封顶 25），配对 1↑4↓，就是把编成打乱了。
- */
-const SITE_TURN_COST = 3;
-/** @tune 采购选址：扣分上限。12 分 ≈ 够压过噪声(±2)和同档差异，又不改写兵种选择 */
-const SITE_CAP = 12;
-
-/**
- * 城画像：每座自家城"是什么"，一次算好，给采购 / 经济 / 升级三个消费者读。
- *
- * 为什么要它（2026-11-23 实测）：`recruitCandidate` 的评分里**没有任何一项**
- * 依赖产兵点的位置（全表唯一例外是 `royalComboBonus` 的"国王 4 格内"）。
- * 于是同一兵种在每座城算出来的分**逐位相同**，落进 `tied` 区间按 `aiNoise` 抽一个
- * ——等于在城之间均匀随机。实测（`probe:city-role`，Q3|31|A）：29 次战斗采购里
- * 13 次（45%）出在"比最靠前的城远 ≥2 格"的城，平均多跑 1.93 格。
- *
- * 经济侧是同一个病：`maxIncome(d)` 取的是兵种**自己最好的地形**（牧民丘陵 8 /
- * 农民平原 7），不是这座城周边有什么，所以平原城也会造牧民。
- *
- * 三个消费者**共用一张表**，是为了避免重演"城里五个各自为政的口径"
- * （`focusCityId` / `homeCityId`=血最多的城 / `guardCityId` / `abandonedCityId` / 无）。
- */
-export interface CityPlan {
-  id: string;
-  x: number;
-  y: number;
-  /** 产兵格数（用最便宜的陆军战斗单位探，和 `buildSlotPlan` 同口径） */
-  slots: number;
-  /** 威胁 0~1：最近敌方战斗单位的接近度 6 成 + 城墙缺口 4 成 */
-  heat: number;
-  /**
-   * 这个城**守不守得住**（0~1）：5 格内我方战斗单位的战力 / 我方+6 格内敌方战力
-   * （6 成）加上城墙剩余（4 成）。0.5 = 五五开。
-   *
-   * 为什么要它、和 `heat` 有什么区别：`heat` 只说"敌人多近"，不说"打不打得过"。
-   * 上来就用"离敌人近就退"，结果前线城永远追不上时代（P1-3 第一版就栽在这）。
-   * 判断"要不要继续往这座城投资 / 要不要把兵放进城里守"，两个都要：
-   * 敌人近但守得住 → 投；敌人近又守不住 → 撤。
-   */
-  hold: number;
-  /** 到最近敌城的**近似**行军回合（切比雪夫 ÷ 3，和 `econPlan` 的 horizon 同口径） */
-  front: number;
-  /** 周边 `ECON_R` 格内"值得种"的地块数（产出 ≥ 4） */
-  econNear: number;
-  /** 周边 `ECON_R` 格的地形分布：地形 → 块数（经济兵种按它算"在这儿能挣多少"） */
-  near: Record<string, number>;
-  role: 'front' | 'rear' | 'abandon';
-}
-
-/** @tune 城画像的地皮半径：和 `econSurvey` 的 `ECON_RANGE` 一致，别单独拍一个 */
-const CITY_ECON_R = 4;
-/** @tune 威胁到多少算"前线"：最近敌兵 5 格内、或城墙掉了 15% 以上 */
-const CITY_FRONT_HEAT = 0.3;
-/** @tune 这块地值得专门派个经济单位去站的最低产出（同 `ai-strength` 的 ECON_MIN_YIELD） */
-const CITY_ECON_MIN_YIELD = 4;
-
-/**
- * 算一遍所有自家城的画像。
- *
- * 成本：每城一圈 `(2R+1)² = 81` 格，`recruitSpawnCells` 一次。和 `recruitCandidate`
- * 里本来就在跑的 `econCapacity`（全图扫）相比可以忽略。
- */
-function buildCityPlans(
-  view: GameState,
-  me: PlayerId,
-  foeCombat: readonly Unit[],
-  abandonedId: string | null,
-): Map<string, CityPlan> {
-  const out = new Map<string, CityPlan>();
-  /* 探针兵种：最便宜的陆军战斗单位（换兵种会改"哪些格能出兵"） */
-  const probe = Object.values(view.unitTypes)
-    .filter((d) => d.category === 'combat' && d.domain !== 'water' && !d.legacy && !d.summonedOnly)
-    .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
-  const foeCity = view.cities.filter((c) => c.owner !== me && !c.ruined);
-  const econTypes = Object.values(view.unitTypes).filter((d) => d.category === 'economy');
-  /* 双方战斗单位的"血量加权战力"，守不守得住就按它比 */
-  const myCombat = unitsOf(view, me).filter(
-    (u) => u.hp > 0 && utype(view, u.type).category === 'combat',
-  );
-  const powerNear = (list: readonly Unit[], c: City, r: number): number =>
-    list.reduce(
-      (n, u) =>
-        n +
-        (distToCity(u, c) <= r
-          ? unitValue(view, u) * (Math.max(0, u.hp) / Math.max(1, utype(view, u.type).maxHp))
-          : 0),
-      0,
-    );
-
-  let hottest = 0;
-  for (const c of citiesOf(view, me)) {
-    if (c.ruined) continue;
-    const slots = probe ? recruitSpawnCells(view, c.id, undefined, probe.id).length : 0;
-    const nearest = foeCombat.reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
-    const hpGap = 1 - c.hp / Math.max(1, c.maxHp);
-    const heat = Number.isFinite(nearest)
-      ? Math.max(0, Math.min(1, 0.6 * Math.max(0, (9 - nearest) / 9) + 0.4 * hpGap))
-      : 0.4 * hpGap;
-    const front = foeCity.length
-      ? Math.max(1, Math.round(Math.min(...foeCity.map((f) => distToCity(c, f))) / 3))
-      : 99;
-    const def = powerNear(myCombat, c, 5);
-    const atk = powerNear(foeCombat, c, 6);
-    const wall = c.hp / Math.max(1, c.maxHp);
-    const hold = clamp01(0.6 * (def + atk <= 0 ? 1 : def / (def + atk)) + 0.4 * wall);
-    const near: Record<string, number> = {};
-    let econNear = 0;
-    for (let dy = -CITY_ECON_R; dy <= CITY_ECON_R; dy++) {
-      for (let dx = -CITY_ECON_R; dx <= CITY_ECON_R; dx++) {
-        const t = tileAt(view, c.x + dx, c.y + dy);
-        if (!t || !passable(t.terrain)) continue;
-        if (t.terrain === 'city') continue;
-        near[t.terrain] = (near[t.terrain] ?? 0) + 1;
-        const best = econTypes.reduce(
-          (n, d) => Math.max(n, Number(d.incomeByTerrain?.[t.terrain as keyof typeof d.incomeByTerrain] ?? 0)),
-          0,
-        );
-        if (best >= CITY_ECON_MIN_YIELD) econNear += 1;
-      }
-    }
-    out.set(c.id, {
-      id: c.id,
-      x: c.x,
-      y: c.y,
-      slots,
-      heat,
-      hold,
-      front,
-      econNear,
-      near,
-      role: c.id === abandonedId ? 'abandon' : heat >= CITY_FRONT_HEAT ? 'front' : 'rear',
-    });
-    if (heat > hottest) hottest = heat;
-  }
-  /*
-   * 只有一座热城时把它标成 front 就够了；不过要防"两座城都 0.31 都算前线"，
-   * 所以再把"除最热那座之外、同分"的降级——前线的意义是**唯一的主战场**。
-   */
-  if (hottest >= CITY_FRONT_HEAT) {
-    let topId: string | null = null;
-    for (const cp of out.values()) if (cp.heat === hottest) topId = cp.id;
-    for (const cp of out.values()) if (cp.id !== topId && cp.role === 'front') cp.role = 'rear';
-  }
-  return out;
-}
-
-/**
  * 地图有多"糙"：森林 + 丘陵占的比例。
  *
  * 这两种地形进门要 2 点移动力，所以 move 1 的单位一步都进不去。
@@ -2062,37 +1911,6 @@ interface Fields {
   /** 最近的自家城：编队打仗时，没编队的散兵回这里守（见走位的 objective） */
   homeCityId: string | null;
   /**
-   * 城画像：每座自家城的 slots / heat / front / 经济地皮（见 `CityPlan`）。
-   *
-   * 消费者：采购选址（`siteBoost`）、升级选城（`upgradeCandidate`）。
-   * "经济兵种 × 出生城"（用本城地皮算回本，而不是兵种上限）在 P0-4b，
-   * **必须单独一批跑**——和选址混在一起就分不清谁让它掉的。
-   * **不要再为这几件事各拍一个新口径**，
-   * 这一层存在的意义就是"一张表，所有人读同一份"。
-   */
-  cityPlans: Map<string, CityPlan>;
-  /**
-   * 这一回合"兵该往哪儿出"：有城在挨打就是那座城，否则是主攻的敌城。
-   *
-   * 采购用它算"从这座城出发要跑几回合"，**只影响选哪座城出兵，不影响走位**
-   * （走位那条 2026-11-22 试过 50 分的驱赶，配对 3↑5↓）。
-   */
-  needCityId: string | null;
-  /**
-   * 废墟 → 这一回合抢下来守不守得住（视野里没有敌兵**下回合就能打到这座废墟**）。
-   *
-   * 判据直接用 `enemyThreatAt`（敌人移动力 + 射程），和"城下有人"是同一把尺子，
-   * 不另拍一个数字。没有记录的废墟当作安全（营地/推演分支不查这张表）。
-   */
-  ruinSafe: Map<string, boolean>;
-  /** 城 → 观察到的易手次数（跨回合记忆，见 `AiFocus.ruinFlips`）。反复易手 → 权重按 1/(1+n) 降 */
-  cityFlips: Map<string, number>;
-  /**
-   * 产兵枢纽（见 `hubCityOf`）：升级、出兵点、守军让位三处共用同一个答案。
-   * 三处各算一遍迟早互相打架——"前线升了时代、后方还在造兵"就是这么来的。
-   */
-  hubCityId: string | null;
-  /**
    * 造桥点周围 2 格（**只在真的过不去时**才有内容）。
    *
    * 用户 2026-11-21 的观察：平局局里大批军队堆在桥头，工程队靠不近那一格，
@@ -2173,9 +1991,6 @@ interface Fields {
  * 这是"该不该造桥"的总开关：能走过去，桥就只是捷径；
  * 走不过去，桥就是唯一的通路，全军的行动目标都得换。
  */
-/** @tune 旱路代价 ÷ 直线距离 的上限：超过才算"得修桥" */
-const WALK_DETOUR_MAX = 3;
-
 function canReachEnemyByLand(s: GameState, owner: PlayerId, onlyCityId?: string): boolean {
   /*
    * `onlyCityId`：只问"能不能走到**这一座**城"。
@@ -2185,20 +2000,6 @@ function canReachEnemyByLand(s: GameState, owner: PlayerId, onlyCityId?: string)
    */
   const foe = s.cities.filter((c) => c.owner !== owner && (!onlyCityId || c.id === onlyCityId));
   if (foe.length === 0) return true;
-  return s.config.aiReachCost === true
-    ? reachableByCost(s, owner, foe)
-    : reachableBySteps(s, owner, foe);
-}
-
-/**
- * 老口径：等步数 BFS，超过 `min(w,h)` 步判"过不去"。
- *
- * 两个毛病（2026-11-23 量出来，见 `ANALYSIS-CANREACH`）：
- *   · 步数不看地形成本——20 格宽的**浅流**（陆军能趟）按 20 步记，很容易越过上限，
- *     于是明明能走过去，却被判成"要修桥"；
- *   · 上限是绝对步数——24×24 上是 24 步，绕一格就可能越界，判据在边界上抖。
- */
-function reachableBySteps(s: GameState, owner: PlayerId, foe: readonly City[]): boolean {
 
   /*
    * 判据问的是"**能不能**走过去"，不是"有没有人已经在那儿"。
@@ -2260,91 +2061,6 @@ function reachableBySteps(s: GameState, owner: PlayerId, foe: readonly City[]): 
     }
   }
   return false;
-}
-
-/**
- * 新口径：**按代价判 + 相对绕路上限**。
- *
- * 和 `marchTurns` 用同一张图（`advance`：水按 `WADE_COST` 计、浅流走真实步价），
- * 所以"能走过去吗"和"要走几回合"不会互相打脸。
- *
- * 判据分两步：
- *   1. 从自家城格做代价洪泛，取"贴着敌城"那几格的最小代价；
- *   2. 和**直线距离**比：`代价 / 直线距离` 超过 `WALK_DETOUR_MAX` 就算绕得太远
- *      （直线已经含了"最省"的含义：1 格平地 = 1）。
- *
- * 为什么这样可以同时治好三种病（2026-11-23）：
- *   · **宽浅流**：浅流按真实步价（1~2），路径几乎就是直线 → 比值接近 1，判"能走过去"，
- *     不会再被当成河去修桥；
- *   · **真河**：每格水 14，五格河就是 70 对直线 5 → 比值 14，判"过不去"，照旧修桥；
- *   · **绝对步数上限**：换成相对倍数之后，不同尺寸的地图不用各调一次，
- *     也不会"绕一格就越界"。
- */
-function reachableByCost(s: GameState, owner: PlayerId, foe: readonly City[]): boolean {
-  const starts: Array<{ x: number; y: number }> = [];
-  for (const c of citiesOf(s, owner)) for (const t of cityTiles(c)) starts.push(t);
-  if (starts.length === 0) return false;
-  /*
-   * **水仍然是墙**（这一条不能松）。
-   *
-   * 第一版这里用的是 `advance` 场（水按 14 计价、可以"过"），结果它把
-   * "中间隔一格水但两岸都是陆地"的地图判成"走得过去"——而 `blockedFor` 根本
-   * 不让陆军进水，于是桥不修了，部队开到岸边就停住（实测 Q4|30|A 直接由胜变平）。
-   *
-   * 所以这里只改两件事：**地形按真实步价**（浅流/沼泽不再当 1 格平地）、
-   * **上限从绝对步数换成相对倍数**。水该拦还是拦。
-   */
-  const cost = new Array<number>(s.w * s.h).fill(Infinity);
-  const queue: number[] = [];
-  for (const t of starts) {
-    const i = t.y * s.w + t.x;
-    if (cost[i] === 0) continue;
-    cost[i] = 0;
-    queue.push(i);
-  }
-  for (let head = 0; head < queue.length; head++) {
-    const k = queue[head]!;
-    const d = cost[k]!;
-    const x = k % s.w;
-    const y = Math.floor(k / s.w);
-    const from = s.tiles[k]?.terrain ?? 'plain';
-    for (const [dx, dy] of DIRS) {
-      const nx = x + dx;
-      const ny = y + dy;
-      if (!inBounds(s, nx, ny)) continue;
-      const j = ny * s.w + nx;
-      const t = s.tiles[j];
-      if (!t || !passable(t.terrain)) continue;
-      /* 敌城格不能进，但"贴到它旁边"就是目标，上面已经记过 */
-      if (t.cityId) {
-        const c = cityById(s, t.cityId);
-        if (c && c.owner !== owner) continue;
-      }
-      const nd = d + stepCostBetween(s, from, t.terrain);
-      if (nd < (cost[j] ?? Infinity)) {
-        cost[j] = nd;
-        queue.push(j);
-      }
-    }
-  }
-
-  let bestCost = Infinity;
-  let bestStraight = Infinity;
-  for (let y = 0; y < s.h; y++) {
-    for (let x = 0; x < s.w; x++) {
-      if (!foe.some((c) => distToCity({ x, y }, c) <= 1)) continue;
-      const d = cost[y * s.w + x] ?? Infinity;
-      if (!Number.isFinite(d) || d >= bestCost) continue;
-      let straight = Infinity;
-      for (const t of starts) straight = Math.min(straight, Math.abs(t.x - x) + Math.abs(t.y - y));
-      if (d < bestCost) {
-        bestCost = d;
-        bestStraight = straight;
-      }
-    }
-  }
-  if (!Number.isFinite(bestCost)) return false;
-  return bestCost <= bestStraight * WALK_DETOUR_MAX;
 }
 
 /**
@@ -5050,17 +4766,7 @@ function scoreMoveInner(
     // 重建它等于把这几个回合攒的东西又埋回去。
     if (rc.id === all.mood.abandonedCityId) continue;
     const affordable = s.players[unit.owner].gold >= rebuildCost(rc);
-    /*
-     * 安全 + 易手次数的折价。
-     *
-     * 不安全（有敌兵下回合能打到这座废墟）时按"掏不起钱"那一档给坡度——
-     * 也就是别往那儿集结，省得整支部队被一座抢不住的废墟拴住。
-     * 反复易手的废墟再按 1/(1+n) 折：抢一次被人打空一次的地方，抢第 N 次只会更亏。
-     */
-    const gate = s.config.aiRuinSafe === true;
-    const safe = !gate || all.ruinSafe.get(rc.id) !== false;
-    const decay = gate ? 1 / (1 + (all.cityFlips.get(rc.id) ?? 0)) : 1;
-    const perTile = (affordable && safe ? 35 : rc.owner === unit.owner ? 8 : 10) * decay;
+    const perTile = affordable ? 35 : rc.owner === unit.owner ? 8 : 10;
     const before = distToCity(unit, rc);
     const after = distToCity({ x, y }, rc);
     if (before > 0) score += (before - after) * perTile;
@@ -5077,17 +4783,9 @@ function scoreMoveInner(
   const destCity = cityAt(s, x, y);
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
-    const gate = s.config.aiRuinSafe === true;
-    const safe = !gate || all.ruinSafe.get(destCity.id) !== false;
-    const decay = gate ? 1 / (1 + (all.cityFlips.get(destCity.id) ?? 0)) : 1;
-    /*
-     * 只有"掏得起 + 这一回合没人能打到它"才给接管分。
-     * 不安全就别进去：钱照付，城照丢，兵还可能留在那儿。
-     * 反复易手的废墟按 1/(1+n) 折——一次比一次不值。
-     */
-    if (s.players[unit.owner].gold >= price && safe) {
-      score += (destCity.owner === unit.owner ? 150 : 220) * decay;
-    } else score -= 90;
+    if (s.players[unit.owner].gold >= price) score += destCity.owner === unit.owner ? 150 : 220;
+    // 钱不够就**别走进去**：doMove 会拒绝，AI 这一回合就卡死在这一步上
+    else score -= 90;
   }
 
   // 残血别往枪口上撞
@@ -5216,38 +4914,8 @@ function scoreMoveInner(
       const mates = unitsOf(s, unit.owner).filter(
         (a) => a.id !== unit.id && tiles.some((t) => t.x === a.x && t.y === a.y),
       ).length;
-      /*
-       * ── 守军让位（2026-11-23，三件套的第三件）──
-       *
-       * 两个约束，都只在这条走位分上用：
-       *   ① **城格是唯一的产兵位**。枢纽城被守军蹲满就再也造不出兵，
-       *      所以枢纽城至少留一格（`want` 不超过城格数 − 1）。
-       *   ② **守不住的城不派人进去**。以前只要"最近敌兵 ≤ 9 格且危险度 ≥ 3"
-       *      就往里塞 1~2 个人，于是 24×24 上常见"两个兵守一座必丢的城"：
-       *      城里那点回血（+3/回合）换不来一个兵，人还白白送掉。
-       *      判据用 `hold`（打得过吗），不是 `heat`（离得多近）。
-       *
-       * 关着（`aiGarrison` 未开）时两条都不生效，行为与默认一致。
-       */
-      /*
-       * ── 守军让位（2026-11-23，三件套的第三件）──
-       *
-       * 两个约束，都只在这条走位分上用：
-       *   ① **城格是唯一的产兵位**。枢纽城被守军蹲满就再也造不出兵，
-       *      所以枢纽城至少留一格（`want` 不超过城格数 − 1）。
-       *   ② **守不住的城不派人进去**。以前只要"最近敌兵 ≤ 9 格且危险度 ≥ 3"
-       *      就往里塞 1~2 个人，于是 24×24 上常见"两个兵守一座必丢的城"：
-       *      城里那点回血（+3/回合）换不来一个兵，人还白白送掉。
-       *      判据用 `hold`（打得过吗），不是 `heat`（离得多近）。
-       *
-       * 关着（`aiGarrison` 未开）时两条都不生效，行为与默认一致。
-       */
-      const cp = all.cityPlans.get(gc.id);
-      const guardOn = s.config.aiGarrison === true;
-      const capOf = guardOn && cp && cp.id === all.hubCityId ? Math.max(1, tiles.length - 1) : tiles.length;
-      const holdOk = !guardOn || !cp || cp.hold >= 0.45;
-      const want = holdOk ? Math.min(capOf, gc.hp < gc.maxHp * 0.9 ? 2 : 1) : 0;
-      if (want > 0 && mates < want) {
+      const want = gc.hp < gc.maxHp * 0.9 ? 2 : 1;
+      if (mates < want) {
         const before = distToCity(unit, gc);
         const after = distToCity({ x, y }, gc);
         score += (before - after) * 7;
@@ -7600,101 +7268,6 @@ export interface AiPlan {
   urgent: boolean;
   /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
   threat: number;
-  /**
-   * 产兵枢纽：这一局"升级的钱该投给哪座城"（见 `hubCityOf`）。
-   *
-   * 升级候选按它给"集中升一座"的分；攒时代的 gate 也只许升这一座。
-   * null = 没有可升的城。
-   */
-  hubCityId: string | null;
-}
-
-/** @tune 枢纽城"撑得住"的下限：守不守得住到 0.5（五五开）以下就不当枢纽 */
-const HUB_MIN_HOLD = 0.5;
-/** @tune 或者敌人还没到跟前（heat 低于这个）也算安全，可以当枢纽 */
-const HUB_SAFE_HEAT = 0.35;
-
-/**
- * 老的升级目标城：**时代最高的那座**（2026-11-02 的补丁，给 v1 用的）。
- *
- * v1 会挑"便宜的那座"升级，于是副城先升、主城永远差一口气，所以钉死"升最高代那座"。
- * v3 有了城画像之后，这个判据只是"历史结果"——谁先升级谁就永远是最高代，
- * 于是升级永远投给后方城、前线的城追不上时代。`aiHub` 打开时改用 `hubCityOf`。
- */
-function mainCityOf(s: GameState, mood: AiMood, myCities: readonly City[]): City | null {
-  return (
-    myCities
-      .filter((c) => !c.ruined && c.id !== mood.abandonedCityId)
-      .sort((a, b) => b.era - a.era || (upgradeCostOf(s, b) ?? 0) - (upgradeCostOf(s, a) ?? 0))[0] ??
-    null
-  );
-}
-
-/**
- * 产兵枢纽（hub）：这一局"升级的钱该投给哪座城"。
- *
- * 这是 P1-3。改之前这里是"**时代最高的那座城**"（`sort(b.era - a.era)`），
- * 于是一个自我加强的循环：谁先升级，谁就永远是"最高代"，下一笔升级还给它。
- * 结果升的总是那座**在后面**的城，前线的城一直停在低一代——而
- * `eraWindowOk` 让低代城造不出当代兵，兵只好从后方造出来再走过去。
- * `probe:city-role` 的样本原样写着：
- *
- *     T19 halberdier 出在 c2（离敌 7 格）· 最近的是 c1（3 格）· 多跑 4
- *                          · 产兵格 c1(e2):1格 c2(e3):2格
- *
- * 所以判据换成"**离兵该去的地方最近、还能产兵、又不会马上丢**"：
- *   · `slots >= 1`：产不出来兵的城升了也没用；
- *   · `hold >= 0.5` 或 `heat < 0.35`：**守得住**才投（守不住就是给对面留战利品）；
- *   · 距离按 `needCityId`（有城挨打就是那座城，否则是主攻方向）折算成回合。
- *
- * **必须粘住**：`prev.goal === 'era'` 时沿用上次那座城。不粘的话 hub 在两座城
- * 之间抖，升级价 360/540 跟着变、`since` 被重置——`ANALYSIS-SAVE-FREEZE` 里
- * 量到的"攒钱目标永远差一口气"有一半就是这么来的。
- */
-function hubCityOf(
-  s: GameState,
-  me: PlayerId,
-  mood: AiMood,
-  myCities: readonly City[],
-  ctx?: { cityPlans: Map<string, CityPlan>; needCityId: string | null },
-): City | null {
-  const alive = myCities.filter((c) => !c.ruined && c.id !== mood.abandonedCityId);
-  if (alive.length === 0) return null;
-  /** 没有城画像时退回老口径：时代最高的那座 */
-  const fallback = [...alive].sort(
-    (a, b) => b.era - a.era || (upgradeCostOf(s, b) ?? 0) - (upgradeCostOf(s, a) ?? 0),
-  )[0]!;
-  if (!ctx) return fallback;
-
-  /*
-   * 合格的枢纽：有产兵格，而且**撑得住或者敌人还没到跟前**。
-   * 判据用 `hold`（守不守得住）而不是"离敌人多远"——用距离当判据那一版
-   * 会让前线城永远当不上枢纽（它必然离敌人近），然后永远追不上时代。
-   */
-  const ok = (c: City): boolean => {
-    const cp = ctx.cityPlans.get(c.id);
-    return !!cp && cp.slots >= 1 && (cp.hold >= HUB_MIN_HOLD || cp.heat < HUB_SAFE_HEAT);
-  };
-  /* 粘住上一次的 era 目标（它自己还合格的话） */
-  const prev = focusOf(s, me).save ?? null;
-  if (prev?.goal === 'era' && prev.cityId) {
-    const held = alive.find((c) => c.id === prev.cityId);
-    if (held && ok(held)) return held;
-  }
-
-  const need = ctx.needCityId ? (s.cities.find((c) => c.id === ctx.needCityId) ?? null) : null;
-  if (!need) return alive.some(ok) ? [...alive].filter(ok).sort((a, b) => b.era - a.era)[0]! : fallback;
-
-  let best: { city: City; v: number } | null = null;
-  for (const c of alive) {
-    if (!ok(c)) continue;
-    const cp = ctx.cityPlans.get(c.id)!;
-    /* 到"该去的地方"的行军回合：每多一回合扣 6 分（一格产兵名额约值 3 分） */
-    const turns = distToCity(c, need) / 3;
-    const v = -6 * turns + Math.min(12, cp.slots * 3);
-    if (!best || v > best.v) best = { city: c, v };
-  }
-  return best?.city ?? fallback;
 }
 
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
@@ -8011,18 +7584,6 @@ function buildPlan(
   my: Unit[],
   foe: Unit[],
   mood: AiMood,
-  /**
-   * 城画像、出兵方向，以及**已经算好的枢纽城**。
-   *
-   * 枢纽由调用方算一次（`fields` 要用它、这里也要用），别在这里重算：
-   * 重算一次不贵，但两处各算一遍就有"两处答案不一致"的可能，
-   * 而"升级的城和出兵的城不是同一座"正是这一轮要治的病。
-   */
-  hubCtx?: {
-    cityPlans: Map<string, CityPlan>;
-    needCityId: string | null;
-    hub: City | null;
-  },
 ): AiPlan {
   const gold = s.players[me].gold;
   const inc = Math.max(1, incomeResOf(s, me).gold ?? 0);
@@ -8090,13 +7651,9 @@ function buildPlan(
    * 先升上去，主城永远差一口气。人集中升一座城是有道理的（只有到顶那座能造新兵，
    * 见 rules 的 eraWindowOk），而这个 min 恰好把 AI 推向了反面。
    */
-  /*
-   * 枢纽城**总是算**（很便宜）：三个消费者各自按开关决定读不读它。
-   * 但"攒时代的钱攒给谁"只在 `aiHub` 打开时才换成枢纽——否则升级目标城
-   * 的价钱（360 / 540）会变，攒钱计划跟着变，等于偷偷改了默认行为。
-   */
-  const hubCity = hubCtx ? hubCtx.hub : null;
-  const mainCity = s.config.aiHub === true ? hubCity : mainCityOf(s, mood, myCities);
+  const mainCity = myCities
+    .filter((c) => !c.ruined && c.id !== mood.abandonedCityId)
+    .sort((a, b) => b.era - a.era || (upgradeCostOf(s, b) ?? 0) - (upgradeCostOf(s, a) ?? 0))[0];
   const mainEraCost = mainCity ? upgradeCostOf(s, mainCity) : null;
   const eraCost = mainEraCost ?? (eraCosts.length > 0 ? Math.min(...eraCosts) : null);
 
@@ -8120,11 +7677,6 @@ function buildPlan(
     .filter((c) =>
       my.some((u) => !u.moved && distToCity(u, c) <= Math.max(2, utype(s, u.type).move + 1)),
     )
-    /*
-     * 只给"这一回合抢得下来"的废墟攒钱：有敌兵下回合就能打到它，攒的这笔钱
-     * 会连人一起送出去（冻结采购的代价还不止这笔钱）。关掉开关时不过滤。
-     */
-    .filter((c) => s.config.aiRuinSafe !== true || enemyThreatAt(s, me, c.x, c.y).n === 0)
     .sort((a, b) => rebuildCost(a) - rebuildCost(b))[0];
 
   /*
@@ -8491,9 +8043,6 @@ function buildPlan(
     savingFor,
     targetCost,
     targetUnitId,
-    /* 枢纽城：升级、出兵点、守军让位三处共用（各自按开关读） */
-    /* 枢纽城：升级、出兵点、守军让位三处共用（各自按开关读） */
-    hubCityId: hubCity?.id ?? null,
     allowance,
     buildAllowance,
     targetGoalId,
@@ -8775,14 +8324,6 @@ function recruitCandidate(
    * 等于把"相对偏好"放大成平方，越调越偏。
    */
   econWeight = 1,
-  /**
-   * 产兵点的"交付分"（负分，越靠后的城越低）：由调用方按 `CityPlan` 算。
-   *
-   * 为什么不在函数里自己算：同一回合所有城共用一份城画像，逐候选重算一遍
-   * 只会白烧时间；而且"兵该往哪儿出"（`needCityId`）是**回合级**的判断，
-   * 不该跟着每个产兵点各算一次。
-   */
-  siteBoost = 0,
 ): Candidate | null {
   // 没传就是"不带战术倾向"（指挥官模式排产草稿、单元测试都会走这条），
   // 权重全零时下面每一条加成都是 0，行为和改动前一模一样。
@@ -9172,12 +8713,6 @@ function recruitCandidate(
     let score = 50;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
-      /*
-       * 交付分：从这座城出发，它要跑几回合才能到"该在的地方"。
-       * 只给战斗单位——经济单位该在哪由地皮决定（见下面的经济分支），
-       * 给它加交付分等于逼它去前线种田。
-       */
-      score += siteBoost;
       // 威胁越大，兵越优先（0~40 分，和"编队缺口"叠加）
       if (threatScale > 0) score += 40 * threatScale;
       // 编队缺口：还在收拢的编队缺人 → 采购优先补（每条缺口 4 分，封顶 24）
@@ -9561,14 +9096,7 @@ export function flankSplit(
 
 
 
-function upgradeCandidate(
-  s: GameState,
-  city: City,
-  mood?: AiMood,
-  plan?: AiPlan,
-  /** 城画像：产兵格数 / 威胁（见 `CityPlan`） */
-  cp?: CityPlan,
-): Candidate | null {
+function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
   // 废墟不能升级（规则层也拦，见 doUpgrade）：这里先剔掉，免得 AI 把一次决策
   // 花在一个必被拒绝的动作上——跑批时被拒动作要顺延，等于白丢一步。
@@ -9586,14 +9114,7 @@ function upgradeCandidate(
    * 一半靠的是"这笔钱我不动"，而 AI 以前连"这笔钱是留给谁的"都没记。
    */
   if (plan?.savingFor === 'era' && gold < (plan.targetCost ?? 0)) {
-    /*
-     * 攒时代那笔钱是**指定给枢纽城**的（`hubCityOf`）：它既是"该产兵的地方"，
-     * 也是攒钱目标报的那座城。以前这里取"时代最高的城"，于是永远加固
-     * "谁本来就领先，谁继续领先"，前线的城永远追不上。
-     */
-    const hub =
-      s.config.aiHub === true && plan.hubCityId ? cityById(s, plan.hubCityId) : null;
-    const top = hub ?? [...citiesOf(s, city.owner)]
+    const top = [...citiesOf(s, city.owner)]
       .filter((c) => !c.ruined)
       .sort((a, b) => b.era - a.era)[0];
     if (top && top.id !== city.id) return null;
@@ -9624,17 +9145,7 @@ function upgradeCandidate(
   //
   // 幅度只有 6/4：升级的底分本来就比招兵高（见上面 88/52/14），再叠一个大数
   // 会把"产线"整条挤掉——实测 900 金的局面里 AI 连着十二回合只顾升城、一个兵不造。
-  /*
-   * 集中升一座城，而不是把两座城都升到半高。
-   *
-   * 判据从"时代最高的那座"换成**枢纽城**（P1-3）：老判据是个自我加强的循环，
-   * 谁先升级谁就永远是"最高代"，于是升级永远投给后方的城，前线的城停低一代、
-   * `eraWindowOk` 造不出当代兵，兵只好从后方造好再走过去（实测平均多跑 1.93 格）。
-   * 幅度照旧 18/-10——再大就会把整条产线挤掉（注释里记过"连着十二回合只顾升城"）。
-   */
-  const hubId = s.config.aiHub === true ? (plan?.hubCityId ?? null) : null;
-  const isHub = hubId ? city.id === hubId : city.era >= myEra;
-  if (isHub) score += 18;
+  if (city.era >= myEra) score += 18;
   else score -= 10;
 
   // 战术倾向：弃城期升级是**兑现**（攒那几个回合就是为了这一下），
@@ -9644,20 +9155,6 @@ function upgradeCandidate(
   // 实测直接让"十二个回合只有两种选择"，战术多样性反而没了。
   if (mood) {
     score += 25 * mood.drive.boom + 2 * mood.drive.rush - 8 * mood.drive.harass;
-  }
-
-  /*
-   * 城画像（P1-3，`aiHub` 打开时才生效）：
-   *   · `slots`——产兵格多，这笔升级才真的变成"每回合多几个兵"（P0-3 的瓶颈）；
-   *     每格 3 分、封顶 12。**它加在所有城上**，所以同时也抬高了整条升级线
-   *     （这也是它在大图上把三局胜打成 261 回合平局的原因之一，见 types.ts 的标定）。
-   *   · `heat`——升级本身加城墙耐久和护甲，守城时是划算的，**只在"敌人贴脸 +
-   *     城快空"（≥0.85）时退**：那笔钱是给对面留的战利品。
-   */
-  if (cp && s.config.aiHub === true) {
-    score += Math.min(12, cp.slots * 3);
-    /* 守不住的城别投：判据是 hold（打不打得过），不是 heat（离得多近） */
-    if (cp.hold < 0.4) score -= 10;
   }
 
   return { action: { type: 'UPGRADE', cityId: city.id }, score };
@@ -9757,7 +9254,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true, threat: 0, hubCityId: null },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true, threat: 0 },
         null,
         mood,
       );
@@ -10177,7 +9674,7 @@ function aiNextActionCoreInner(
       ? Math.max(0, s.config.aiRecruitCap)
       : // 默认（未写 / 'auto'）按空格子数放开：规则层本来就不限每回合造几个，
       // 真正的限制只有钱和格子。
-      Math.max(budget.maxRecruit, productionCapacity(view, me));
+        Math.max(budget.maxRecruit, productionCapacity(view, me));
   const mayRecruit = commander
     ? !idleHead && head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
     : budget.recruited < recruitCap;
@@ -10291,76 +9788,6 @@ function aiNextActionCoreInner(
   const yieldPlan = new Map<string, { x: number; y: number }>();
   for (const m of yieldMoves) yieldPlan.set(m.id, { x: m.x, y: m.y });
 
-  /*
-   * 城画像 + "这一回合兵该往哪儿出"。
-   *
-   * `needCityId` 的顺序就是优先级：**有城在挨打就守那座城**（兵出在自己城里，
-   * 出生即到位，还顺手加 3 点驻军护甲）；没人挨打就朝主攻方向出
-   * （少跑几格 = 早一两个回合接战）。
-   */
-  const cityPlans = buildCityPlans(view, me, foeUnits, mood.abandonedCityId);
-  const hottest = [...cityPlans.values()].sort((a, b) => b.heat - a.heat)[0];
-  const needCityId =
-    hottest && hottest.heat >= CITY_FRONT_HEAT
-      ? hottest.id
-      : (mood.focusCityId ?? s.cities.find((c) => c.owner !== me && !c.ruined)?.id ?? null);
-
-  /*
-   * 枢纽城：升级、出兵点、守军让位三处共用同一个答案。
-   * 算在 `fields` 之前（`fields` 要带上它），**只读**上一回合的攒钱意向（用来粘住）。
-   */
-  const hubCity = hubCityOf(view, me, mood, citiesOf(view, me), { cityPlans, needCityId });
-
-  /*
-   * 废墟安全表 + 易手次数。
-   *
-   * 安全 = 视野里没有敌兵**下回合能打到这座废墟**（`enemyThreatAt` 用的就是
-   * "移动力 + 射程"，和"城下有人"同一个口径）。不安​​全的废墟不给接管分——
-   * 踩进去要付 `maxHp×2.5`，付完还大概率被打空，等于白送一笔钱。
-   */
-  const ruinSafe = new Map<string, boolean>();
-  for (const c of view.cities) {
-    if (!c.ruined) continue;
-    ruinSafe.set(c.id, enemyThreatAt(view, me, c.x, c.y).n === 0);
-  }
-  const cityFlips = new Map<string, number>();
-  {
-    const f = focusOf(s, me);
-    const seen = { ...(f.cityCaptured ?? {}) };
-    const flips = { ...(f.ruinFlips ?? {}) };
-    let dirty = false;
-    for (const c of view.cities) {
-      const now = Number(c.capturedTurn ?? -1);
-      const before = seen[c.id];
-      /*
-       * 接管次数按 `capturedTurn` 变没变来数，不按"归属变没变"。
-       *
-       * 废墟被打空**不改归属**：同一方可以反复接管自己那座被打空的城，
-       * 按归属计会漏掉一大半（实测一座城 22 次接管里绝大多数是同一方回头再进）。
-       */
-      if (before !== undefined && now !== before) {
-        flips[c.id] = (flips[c.id] ?? 0) + 1;
-        dirty = true;
-      }
-      if (now !== before) dirty = true;
-      seen[c.id] = now;
-    }
-    if (dirty && depth === 0) {
-      f.cityCaptured = seen;
-      f.ruinFlips = flips;
-    }
-    for (const [id, n] of Object.entries(flips)) cityFlips.set(id, n);
-  }
-
-  /*
-   * 本回合的计划：攒不攒钱、收不收缩、升哪座城。采购和走位都要看它，
-   * 所以在这里算一次，整回合共用（和 traits 一样）。
-   *
-   * 顺序很关键：必须在 `cityPlans` 之后（要看城画像）、在 `fields` 之前
-   * （`fields.hubCityId` 要读它）。而 `hubCityOf` 读的是**上一回合**的攒钱意向，
-   * 所以 plan 放在这里也刚好不会把自己这一回合刚写的意向当成"上次的"。
-   */
-
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -10410,15 +9837,6 @@ function aiNextActionCoreInner(
       citiesOf(view, me)
         .filter((c) => !c.ruined)
         .sort((a, b) => b.hp - a.hp)[0]?.id ?? null,
-    /*
-     * 城画像（`CityPlan`）：采购选址、经济兵种、升级选城三处共用一份。
-     * 算在 `guardCityId` 之后——"哪座城在挨打"已经是回合级判断，不再各算一遍。
-     */
-    cityPlans,
-    needCityId: needCityId,
-    hubCityId: hubCity?.id ?? null,
-    ruinSafe,
-    cityFlips,
     bridgeClear: slots.bridgeArea,
     slots,
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
@@ -10449,14 +9867,9 @@ function aiNextActionCoreInner(
     }
   }
 
-  // 本回合的计划：攒不攒钱、收不收缩、升哪座城。采购和走位都要看它，
+  // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
-  // 位置不能提前到 `fields` 之前：`buildPlan` 要读上面那句"产业链承诺"写下的记忆。
-  const plan = buildPlan(view, me, unitsOf(view, me), foeUnits, mood, {
-    cityPlans,
-    needCityId,
-    hub: hubCity,
-  });
+  const plan = buildPlan(view, me, unitsOf(view, me), foeUnits, mood);
   if (aiTrace.on && fields.flank.size > 0) aiTrace.flankUnits += fields.flank.size;
   /*
    * 把"在攒什么"搬回真状态。
@@ -10800,29 +10213,6 @@ function aiNextActionCoreInner(
       // 已经决定放弃的城不再往里面出兵：兵出在门口就是给对面送的，
       // 而且这一档的钱要留着换时代/英雄。（只剩它一座时就照常造，别把自己憋死。）
       if (city.id === mood.abandonedCityId && citiesOf(view, me).length > 1) continue;
-      const cp = fields.cityPlans.get(city.id);
-      /*
-       * 交付分：从这座城到"该在的地方"要跑几回合，每回合扣 `SITE_TURN_COST`。
-       *
-       * 幅度是这么定的：军营"省一趟路"值 +6，而实测平均多跑 1.93 格 ≈ 半趟路，
-       * 所以城与城之间的差应该落在 6~12 分量级。**不能写成 50**——
-       * "桥位驱赶"用 50 分，配对 3↑5↓，那是把战术走位一起打乱了；
-       * 这一刀只进采购，不进走位（`tacticalMoveScore` 一个字都没动）。
-       */
-      /*
-       * 出兵点：**离枢纽城几回合**。
-       *
-       * 上一版按"离敌城/离危城几回合"算，单开时配对 0↑3↓——因为它和"哪座城
-       * 造得出当代兵"是两件事。现在统一到枢纽（升级也升它），两件事才指向同一座城。
-       * 关着时这一项恒 0：同兵种在各城分数逐位相同、按噪声抽签，行为和默认一致。
-       */
-      const hub = view.config.aiCitySite === true && fields.hubCityId
-        ? cityById(view, fields.hubCityId)
-        : null;
-      const siteBoost =
-        hub && cp && city.id !== hub.id
-          ? -Math.min(SITE_CAP, SITE_TURN_COST * (distToCity(cp, hub) / 3))
-          : 0;
       const c = recruitCandidate(
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
@@ -10838,7 +10228,6 @@ function aiNextActionCoreInner(
          * 而战斗单位带质量项能到 100 上下——不放大到 2~3 倍，经济永远排不上。
          */
         fields.weights.econ * (1 + 3 * fields.developBias),
-        siteBoost,
       );
       if (c) candidates.push(c);
     }
@@ -10870,13 +10259,7 @@ function aiNextActionCoreInner(
       // 「升级时代」那一格也能指定城市：玩家常想"先升那座靠前的主城"。
       // 指定的是军营时不匹配任何城市，这一格就空转（营不会升级）。
       if (orderSite && city.id !== orderSite) continue;
-      const c = upgradeCandidate(
-        view,
-        city,
-        mood,
-        plan,
-        view.config.aiHub === true ? fields.cityPlans.get(city.id) : undefined,
-      );
+      const c = upgradeCandidate(view, city, mood, plan);
       if (c) candidates.push({ ...c,score:c.score+(commander && head===ORDER_UPGRADE ? 1000 : 0) });
     }
   }

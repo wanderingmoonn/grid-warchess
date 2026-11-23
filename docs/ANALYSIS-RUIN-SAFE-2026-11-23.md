@@ -1,3 +1,6 @@
+> **已归档（2026-11-23 v3 收尾）**：结论已并入 `docs/V3-CLOSEOUT-2026-11-23.md`。
+> 本文只作依据与复现记录，**不再更新**；要动手请看收尾文档的"留给 v4"一节。
+
 # 废墟安全闸（2026-11-23）
 
 > 开关 `aiRuinSafe`（默认关），`bench:ai --ruin-safe` / `export-bench-replay --ruin-safe`。
