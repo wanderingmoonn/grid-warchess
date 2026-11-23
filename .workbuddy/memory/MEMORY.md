@@ -253,3 +253,19 @@ rules 剩 6 个、`ai.ts` 的 heroSkillCandidate（AI 认识奇想技能）、`u
 一句话：默认开 = 分流 + 建造编队 + 缺口通道 + 让位；默认关 = 威胁分 / econ-cap / econ-plan。
 基线 18-3-3；econ-plan 残值 R=4 是 9-3-0（差 1 胜）。
 最优先未完成：让位链同回合多次重算（现在一回合只清一列，新的经济单位又从城格出生，拉锯）。
+
+## 城盲区与三局负（2026-11-23）
+
+读 `docs/ANALYSIS-CITY-PROFILE-2026-11-23.md`。两条要记住：
+
+- **产兵点不看城**：`recruitCandidate` 的 score 没有任何一项依赖 `src` 坐标
+  （唯一例外 `royalComboBonus` 的"国王 4 格内"；camp +6、city +0）。同兵种在各城
+  分数逐位相同 → tied 里 `aiNoise` 抽一个 = 均匀随机。实测 45% 战斗采购落在
+  比最靠前城远 ≥2 格的城（平均多跑 1.93 格）。
+- **攒钱目标是三局负的形状**：`savingFor='era'` 360~540 从 T20 挂到输，账面
+  121~540 来回震、一次没攒到。**但"按兵力比关闸"已证伪**
+  （Q1/Q2 10-2-0 → 9-3-0 → 8-4-0，三局负回合数逐局不变，闸零触发）——
+  原因是 AI 自己不认为落后。只能改"目标评分"（存活折现），不能靠关闸。
+
+探针：`npm run probe:city-role` / `npm run probe:collapse`。
+读攒钱目标要读 `s.aiFocus[me].save`（`s.aiIntent` 是旧字段，别处已清）。

@@ -127,6 +127,19 @@ const runOne = (QID: string, SEED: number, SIDE: PlayerId): void => {
           ` | ${act}`,
       );
     }
+    if (trace.on && EACH) {
+      const it = (s as unknown as {
+        aiFocus?: Record<string, { save?: { goal?: string; cost?: number; since?: number } }>;
+      }).aiFocus?.[SIDE]?.save;
+      const mineNow = fight(s, SIDE);
+      const delta = Math.round(s.players[SIDE].gold - goldAtStart);
+      console.log(
+        `    T${String(s.turn).padStart(3)} 兵${String(mineNow.n).padStart(2)} 金${String(Math.round(s.players[SIDE].gold)).padStart(4)}` +
+          ` 净${delta >= 0 ? '+' : ''}${delta}` +
+          ` 攒=${it?.goal ? `${it.goal}@${it.cost}(立${s.turn - (it.since ?? s.turn)})` : '—'}` +
+          ` 买=${buys.length ? buys.join(',') : '—'}`,
+      );
+    }
     if (trace.on && buys.length === 0 && goldAtStart > 120) {
       /*
        * 攒的是什么：`aiIntent` 是跨回合的攒钱目标（见 `types.ts` 的 AiIntent）。
@@ -150,5 +163,7 @@ const runOne = (QID: string, SEED: number, SIDE: PlayerId): void => {
 };
 
 const only = argOf('queue', '');
+/** 逐回合打印（看"攒钱闸门"是不是在开/关之间抖） */
+const EACH = process.argv.includes('--each');
 if (only) runOne(only.toUpperCase(), Number(argOf('seed', '30')), (argOf('side', 'A').toUpperCase() as PlayerId));
 else for (const g of GAMES) runOne(g.q, g.seed, g.side);

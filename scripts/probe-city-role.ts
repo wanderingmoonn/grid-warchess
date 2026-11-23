@@ -19,7 +19,7 @@
  *   node --experimental-strip-types scripts/probe-city-role.ts --queue Q1 --seed 30 --side A
  */
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
-import { applyAction, unitYieldAt } from '../src/core/rules.ts';
+import { applyAction, recruitSpawnCells, unitYieldAt } from '../src/core/rules.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import type { GameState, PlayerId, Unit } from '../src/core/types.ts';
 
@@ -149,6 +149,8 @@ let econWrongType = 0;
 const wrongSamples: string[] = [];
 /** B3：经济兵的兵种与出生城周边地形不匹配的次数 */
 let econMatchSum = 0;
+/** B4：买的兵种是不是这座城当地最擅长的（用户说的"平原城造牧民"） */
+let econTypeOk = 0;
 
 const noteRecruit = (cityId: string, city: { x: number; y: number }, unitType: string): void => {
   const def = s.unitTypes[unitType];
@@ -170,8 +172,21 @@ const noteRecruit = (cityId: string, city: { x: number; y: number }, unitType: s
         rearPicks += 1;
         if (samplesA.length < 12) {
           const front = gaps.filter((g) => g.gap === nearest).map((g) => g.id);
+          /*
+           * 顺带报产兵格：前线城经常被打成 0 格——守军自己站在城格上
+           * （`guardCityId` 那条走位分），规则层就不许在那儿出兵了。
+           * 分不清"AI 不会选"和"它根本没得选"就白改。
+           */
+          const probeDef = Object.values(s.unitTypes)
+            .filter((d) => d.category === 'combat' && d.domain !== 'water' && !d.legacy && !d.summonedOnly)
+            .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+          const slotTxt = probeDef
+            ? gaps
+                .map((g) => `${g.id}(e${g.c.era}):${recruitSpawnCells(s, g.id, undefined, probeDef.id).length}格`)
+                .join(' ')
+            : '';
           samplesA.push(
-            `T${s.turn} ${unitType} 出在 ${cityId}（离敌 ${mine.gap} 格）· 最近的是 ${front.join('/')}（${nearest} 格）· 多跑 ${extra}`,
+            `T${s.turn} ${unitType} 出在 ${cityId}（离敌 ${mine.gap} 格）· 最近的是 ${front.join('/')}（${nearest} 格）· 多跑 ${extra} · 产兵格 ${slotTxt}`,
           );
         }
       }
@@ -189,6 +204,13 @@ const noteRecruit = (cityId: string, city: { x: number; y: number }, unitType: s
     const global = Math.max(...own.map((c) => bestIncomeNear(c, unitType)));
     econSpawnBestSum += here;
     econGlobalBestSum += global;
+    /*
+     * B4：**这一座城**上，买的这个兵种是不是当地最擅长的那个。
+     * 这就是用户说的"平原城造牧民"——比"站错地"更直接：
+     * 它测的是采购那一刻的配对，不受后面走位影响。
+     */
+    const localTop = bestIncomeNear(city, null);
+    if (here >= localTop) econTypeOk += 1;
     /*
      * B3：这个兵种擅长的地形，在出生城周围**占多大比例**。
      * 牧民擅丘陵、农民擅平原——在平原城里出生一个牧民，等于一出生就错了。
@@ -347,6 +369,10 @@ console.log(
 for (const x of wrongSamples) console.log('    ' + x);
 console.log(
   `— B3 经济兵擅长的地形在出生城 7×7 里的占比：平均 ${((econMatchSum / Math.max(1, econRecruits)) * 100).toFixed(0)}%`,
+);
+console.log(
+  `— B4 买的兵种 = 出生城当地最擅长的那个：${econTypeOk}/${econRecruits}` +
+    `（${((econTypeOk / Math.max(1, econRecruits)) * 100).toFixed(0)}%）`,
 );
 console.log('— C 威胁响应 —');
 console.log(

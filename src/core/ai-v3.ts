@@ -1076,6 +1076,129 @@ function buildSlotPlan(
 }
 
 /**
+ * @tune 采购选址：出兵点离"该在的地方"每多一回合，扣几分。
+ *
+ * **这个数的正确量级是"够压过噪声、不够压过兵种差异"**：
+ * · 同分是病灶（各城逐位相同），所以要大于 `aiNoise` 的 ±2 和 `band`（≈1.5%）；
+ * · 但它只是**破平**，不能拿它盖过"坦克 vs 民兵"那 10~20 分的真实差距——
+ *   第一版写了 4（一回合 4 分、封顶 25），配对 1↑4↓，就是把编成打乱了。
+ */
+const SITE_TURN_COST = 2.5;
+/** @tune 采购选址：扣分上限（8 分 ≈ 破平够用，再多就开始改写编成） */
+const SITE_CAP = 8;
+
+/**
+ * 城画像：每座自家城"是什么"，一次算好，给采购 / 经济 / 升级三个消费者读。
+ *
+ * 为什么要它（2026-11-23 实测）：`recruitCandidate` 的评分里**没有任何一项**
+ * 依赖产兵点的位置（全表唯一例外是 `royalComboBonus` 的"国王 4 格内"）。
+ * 于是同一兵种在每座城算出来的分**逐位相同**，落进 `tied` 区间按 `aiNoise` 抽一个
+ * ——等于在城之间均匀随机。实测（`probe:city-role`，Q3|31|A）：29 次战斗采购里
+ * 13 次（45%）出在"比最靠前的城远 ≥2 格"的城，平均多跑 1.93 格。
+ *
+ * 经济侧是同一个病：`maxIncome(d)` 取的是兵种**自己最好的地形**（牧民丘陵 8 /
+ * 农民平原 7），不是这座城周边有什么，所以平原城也会造牧民。
+ *
+ * 三个消费者**共用一张表**，是为了避免重演"城里五个各自为政的口径"
+ * （`focusCityId` / `homeCityId`=血最多的城 / `guardCityId` / `abandonedCityId` / 无）。
+ */
+export interface CityPlan {
+  id: string;
+  x: number;
+  y: number;
+  /** 产兵格数（用最便宜的陆军战斗单位探，和 `buildSlotPlan` 同口径） */
+  slots: number;
+  /** 威胁 0~1：最近敌方战斗单位的接近度 6 成 + 城墙缺口 4 成 */
+  heat: number;
+  /** 到最近敌城的**近似**行军回合（切比雪夫 ÷ 3，和 `econPlan` 的 horizon 同口径） */
+  front: number;
+  /** 周边 `ECON_R` 格内"值得种"的地块数（产出 ≥ 4） */
+  econNear: number;
+  /** 周边 `ECON_R` 格的地形分布：地形 → 块数（经济兵种按它算"在这儿能挣多少"） */
+  near: Record<string, number>;
+  role: 'front' | 'rear' | 'abandon';
+}
+
+/** @tune 城画像的地皮半径：和 `econSurvey` 的 `ECON_RANGE` 一致，别单独拍一个 */
+const CITY_ECON_R = 4;
+/** @tune 威胁到多少算"前线"：最近敌兵 5 格内、或城墙掉了 15% 以上 */
+const CITY_FRONT_HEAT = 0.3;
+/** @tune 这块地值得专门派个经济单位去站的最低产出（同 `ai-strength` 的 ECON_MIN_YIELD） */
+const CITY_ECON_MIN_YIELD = 4;
+
+/**
+ * 算一遍所有自家城的画像。
+ *
+ * 成本：每城一圈 `(2R+1)² = 81` 格，`recruitSpawnCells` 一次。和 `recruitCandidate`
+ * 里本来就在跑的 `econCapacity`（全图扫）相比可以忽略。
+ */
+function buildCityPlans(
+  view: GameState,
+  me: PlayerId,
+  foeCombat: readonly Unit[],
+  abandonedId: string | null,
+): Map<string, CityPlan> {
+  const out = new Map<string, CityPlan>();
+  /* 探针兵种：最便宜的陆军战斗单位（换兵种会改"哪些格能出兵"） */
+  const probe = Object.values(view.unitTypes)
+    .filter((d) => d.category === 'combat' && d.domain !== 'water' && !d.legacy && !d.summonedOnly)
+    .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+  const foeCity = view.cities.filter((c) => c.owner !== me && !c.ruined);
+  const econTypes = Object.values(view.unitTypes).filter((d) => d.category === 'economy');
+
+  let hottest = 0;
+  for (const c of citiesOf(view, me)) {
+    if (c.ruined) continue;
+    const slots = probe ? recruitSpawnCells(view, c.id, undefined, probe.id).length : 0;
+    const nearest = foeCombat.reduce((m, u) => Math.min(m, distToCity(u, c)), Infinity);
+    const hpGap = 1 - c.hp / Math.max(1, c.maxHp);
+    const heat = Number.isFinite(nearest)
+      ? Math.max(0, Math.min(1, 0.6 * Math.max(0, (9 - nearest) / 9) + 0.4 * hpGap))
+      : 0.4 * hpGap;
+    const front = foeCity.length
+      ? Math.max(1, Math.round(Math.min(...foeCity.map((f) => distToCity(c, f))) / 3))
+      : 99;
+    const near: Record<string, number> = {};
+    let econNear = 0;
+    for (let dy = -CITY_ECON_R; dy <= CITY_ECON_R; dy++) {
+      for (let dx = -CITY_ECON_R; dx <= CITY_ECON_R; dx++) {
+        const t = tileAt(view, c.x + dx, c.y + dy);
+        if (!t || !passable(t.terrain)) continue;
+        if (t.terrain === 'city') continue;
+        near[t.terrain] = (near[t.terrain] ?? 0) + 1;
+        const best = econTypes.reduce(
+          (n, d) => Math.max(n, Number(d.incomeByTerrain?.[t.terrain as keyof typeof d.incomeByTerrain] ?? 0)),
+          0,
+        );
+        if (best >= CITY_ECON_MIN_YIELD) econNear += 1;
+      }
+    }
+    out.set(c.id, {
+      id: c.id,
+      x: c.x,
+      y: c.y,
+      slots,
+      heat,
+      front,
+      econNear,
+      near,
+      role: c.id === abandonedId ? 'abandon' : heat >= CITY_FRONT_HEAT ? 'front' : 'rear',
+    });
+    if (heat > hottest) hottest = heat;
+  }
+  /*
+   * 只有一座热城时把它标成 front 就够了；不过要防"两座城都 0.31 都算前线"，
+   * 所以再把"除最热那座之外、同分"的降级——前线的意义是**唯一的主战场**。
+   */
+  if (hottest >= CITY_FRONT_HEAT) {
+    let topId: string | null = null;
+    for (const cp of out.values()) if (cp.heat === hottest) topId = cp.id;
+    for (const cp of out.values()) if (cp.id !== topId && cp.role === 'front') cp.role = 'rear';
+  }
+  return out;
+}
+
+/**
  * 地图有多"糙"：森林 + 丘陵占的比例。
  *
  * 这两种地形进门要 2 点移动力，所以 move 1 的单位一步都进不去。
@@ -1910,6 +2033,23 @@ interface Fields {
   developBias: number;
   /** 最近的自家城：编队打仗时，没编队的散兵回这里守（见走位的 objective） */
   homeCityId: string | null;
+  /**
+   * 城画像：每座自家城的 slots / heat / front / 经济地皮（见 `CityPlan`）。
+   *
+   * 消费者：采购选址（`siteBoost`）、升级选城（`upgradeCandidate`）。
+   * "经济兵种 × 出生城"（用本城地皮算回本，而不是兵种上限）在 P0-4b，
+   * **必须单独一批跑**——和选址混在一起就分不清谁让它掉的。
+   * **不要再为这几件事各拍一个新口径**，
+   * 这一层存在的意义就是"一张表，所有人读同一份"。
+   */
+  cityPlans: Map<string, CityPlan>;
+  /**
+   * 这一回合"兵该往哪儿出"：有城在挨打就是那座城，否则是主攻的敌城。
+   *
+   * 采购用它算"从这座城出发要跑几回合"，**只影响选哪座城出兵，不影响走位**
+   * （走位那条 2026-11-22 试过 50 分的驱赶，配对 3↑5↓）。
+   */
+  needCityId: string | null;
   /**
    * 造桥点周围 2 格（**只在真的过不去时**才有内容）。
    *
@@ -8329,6 +8469,14 @@ function recruitCandidate(
    * 等于把"相对偏好"放大成平方，越调越偏。
    */
   econWeight = 1,
+  /**
+   * 产兵点的"交付分"（负分，越靠后的城越低）：由调用方按 `CityPlan` 算。
+   *
+   * 为什么不在函数里自己算：同一回合所有城共用一份城画像，逐候选重算一遍
+   * 只会白烧时间；而且"兵该往哪儿出"（`needCityId`）是**回合级**的判断，
+   * 不该跟着每个产兵点各算一次。
+   */
+  siteBoost = 0,
 ): Candidate | null {
   // 没传就是"不带战术倾向"（指挥官模式排产草稿、单元测试都会走这条），
   // 权重全零时下面每一条加成都是 0，行为和改动前一模一样。
@@ -8718,6 +8866,12 @@ function recruitCandidate(
     let score = 50;
     if (d.category === 'combat') {
       score += 12 + d.era * 4;
+      /*
+       * 交付分：从这座城出发，它要跑几回合才能到"该在的地方"。
+       * 只给战斗单位——经济单位该在哪由地皮决定（见下面的经济分支），
+       * 给它加交付分等于逼它去前线种田。
+       */
+      score += siteBoost;
       // 威胁越大，兵越优先（0~40 分，和"编队缺口"叠加）
       if (threatScale > 0) score += 40 * threatScale;
       // 编队缺口：还在收拢的编队缺人 → 采购优先补（每条缺口 4 分，封顶 24）
@@ -9161,6 +9315,15 @@ function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan
   if (mood) {
     score += 25 * mood.drive.boom + 2 * mood.drive.rush - 8 * mood.drive.harass;
   }
+
+  /*
+   * 城画像（2026-11-23，补 P1-3）：以前的升级选城只看"余钱够不够、时代低不低"，
+   * 于是经常把一代科技升在一座**只剩一格产兵**、或者**下回合就要易主**的城里。
+   *
+   * 幅度故意压得比 18/−10 那对小：升级的底分本来就比招兵高一档，
+   * 再加一个大数会把整条产线挤掉（注释里记过"连着十二回合只顾升城"那次）。
+   * 产兵格按每格 3 分（满格五六格也就 +15），危险城扣 10。
+   */
 
   return { action: { type: 'UPGRADE', cityId: city.id }, score };
 }
@@ -9793,6 +9956,20 @@ function aiNextActionCoreInner(
   const yieldPlan = new Map<string, { x: number; y: number }>();
   for (const m of yieldMoves) yieldPlan.set(m.id, { x: m.x, y: m.y });
 
+  /*
+   * 城画像 + "这一回合兵该往哪儿出"。
+   *
+   * `needCityId` 的顺序就是优先级：**有城在挨打就守那座城**（兵出在自己城里，
+   * 出生即到位，还顺手加 3 点驻军护甲）；没人挨打就朝主攻方向出
+   * （少跑几格 = 早一两个回合接战）。
+   */
+  const cityPlans = buildCityPlans(view, me, foeUnits, mood.abandonedCityId);
+  const hottest = [...cityPlans.values()].sort((a, b) => b.heat - a.heat)[0];
+  const needCityId =
+    hottest && hottest.heat >= CITY_FRONT_HEAT
+      ? hottest.id
+      : (mood.focusCityId ?? s.cities.find((c) => c.owner !== me && !c.ruined)?.id ?? null);
+
   const fields: Fields = {
     tactical: tacticalMap(view, me),
     land,
@@ -9842,6 +10019,12 @@ function aiNextActionCoreInner(
       citiesOf(view, me)
         .filter((c) => !c.ruined)
         .sort((a, b) => b.hp - a.hp)[0]?.id ?? null,
+    /*
+     * 城画像（`CityPlan`）：采购选址、经济兵种、升级选城三处共用一份。
+     * 算在 `guardCityId` 之后——"哪座城在挨打"已经是回合级判断，不再各算一遍。
+     */
+    cityPlans,
+    needCityId: needCityId,
     bridgeClear: slots.bridgeArea,
     slots,
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,
@@ -10218,6 +10401,24 @@ function aiNextActionCoreInner(
       // 已经决定放弃的城不再往里面出兵：兵出在门口就是给对面送的，
       // 而且这一档的钱要留着换时代/英雄。（只剩它一座时就照常造，别把自己憋死。）
       if (city.id === mood.abandonedCityId && citiesOf(view, me).length > 1) continue;
+      const cp = fields.cityPlans.get(city.id);
+      /*
+       * 交付分：从这座城到"该在的地方"要跑几回合，每回合扣 `SITE_TURN_COST`。
+       *
+       * 幅度是这么定的：军营"省一趟路"值 +6，而实测平均多跑 1.93 格 ≈ 半趟路，
+       * 所以城与城之间的差应该落在 6~12 分量级。**不能写成 50**——
+       * "桥位驱赶"用 50 分，配对 3↑5↓，那是把战术走位一起打乱了；
+       * 这一刀只进采购，不进走位（`tacticalMoveScore` 一个字都没动）。
+       */
+      const need = fields.needCityId ? cityById(view, fields.needCityId) : null;
+      /*
+       * 买账口径：`aiCitySite` 打开才给分（默认关，见 types.ts 的标定）。
+       * 关着的时候这一项恒 0——同兵种在各城分数**逐位相同**，行为和改动前一样。
+       */
+      const siteBoost =
+        view.config.aiCitySite === true && cp && need
+          ? -Math.min(SITE_CAP, SITE_TURN_COST * (distToCity(cp, need) / 3))
+          : 0;
       const c = recruitCandidate(
         view,
         { kind: 'city', id: city.id, x: city.x, y: city.y, era: city.era },
@@ -10233,6 +10434,7 @@ function aiNextActionCoreInner(
          * 而战斗单位带质量项能到 100 上下——不放大到 2~3 倍，经济永远排不上。
          */
         fields.weights.econ * (1 + 3 * fields.developBias),
+        siteBoost,
       );
       if (c) candidates.push(c);
     }

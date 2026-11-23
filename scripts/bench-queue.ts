@@ -60,6 +60,8 @@ const ECON_CAP = process.argv.includes('--econ-cap');
 const THREAT = process.argv.includes('--threat');
 /** `--econ-plan`：经济投入交给求解器（`aiEconPlan`） */
 const ECON_PLAN = process.argv.includes('--econ-plan');
+/** `--city-site`：采购选址按城画像给分（`aiCitySite`，默认关，见 types.ts 的标定） */
+const CITY_SITE = process.argv.includes('--city-site');
 const WANT = pickArg ? new Set(pickArg.split(',').map((x) => x.trim().toUpperCase())) : null;
 /** 路径都相对 `scripts/` 解析（和 ai-duel 的写法一致：`--new ../src/core/ai-v3.ts`） */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -96,6 +98,7 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
       ...(ECON_CAP ? { aiEconCap: true } : {}),
       ...(THREAT ? { aiThreatScale: true } : {}),
       ...(ECON_PLAN ? { aiEconPlan: true } : {}),
+      ...(CITY_SITE ? { aiCitySite: true } : {}),
     },
     seed,
   );
