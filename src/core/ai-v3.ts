@@ -983,17 +983,6 @@ interface SlotPlan {
   bridgeArea: Set<number>;
   /** 硬格：城格上被占住的那几格。第 2 步的洞搬迁从这里取门口 */
   critical: CriticalCell[];
-  /**
-   * 军队**堆在城里**的城：产兵格没满、且城格上站着 ≥2 个我方战斗单位。
-   *
-   * 这是"出城"那条的触发条件（2026-11-23）。不能用 `starvedCities`：
-   * 大城的城格 3×3 很少站满，`没满`几乎恒真，军队会被永久钉在城外
-   * （实测 Q3/Q4 从 8-2-2 掉到 4-1-7，平局暴增到 7）。
-   * 也不能用 `chokedCities`（产兵格 = 0）：军队让出一格就不触发，
-   * 奖励一撤就被推进分拉回城——5,4 ↔ 2,4 来回震荡。
-   * "≥2 个人还在城里"正好落在两者之间：还堵着就继续赶，都出去了就停。
-   */
-  packedCities: string[];
 }
 
 /**
@@ -1014,7 +1003,6 @@ function buildSlotPlan(
 
   const chokedCities: string[] = [];
   const starvedCities: string[] = [];
-  const packedCities: string[] = [];
   const critical: CriticalCell[] = [];
   const seen = new Set<string>();
   const push = (cell: CriticalCell): void => {
@@ -1030,7 +1018,7 @@ function buildSlotPlan(
     if (spawnCount >= c.size * c.size) continue;
     starvedCities.push(c.id);
     const urgency = spawnCount === 0 ? 1 : 0.5;
-    let combatInside = 0;
+    let combatInside = false;
     for (const t of cityTiles(c)) {
       const u = unitAt(view, t.x, t.y);
       if (!u || u.owner !== me) continue;
@@ -1040,7 +1028,7 @@ function buildSlotPlan(
        * 把它们写进 critical 只会生成一条没人接的链。
        */
       if (utype(view, u.type).category === 'combat') {
-        combatInside += 1;
+        combatInside = true;
         continue;
       }
       push({ kind: 'spawn', x: t.x, y: t.y, urgency, needRole: 'newborn', cityId: c.id });
@@ -1054,8 +1042,7 @@ function buildSlotPlan(
      * 军队就有地方出去。这一条是 `probe:combat-trap` 逼出来的：
      * 8 回合 0 动作，两条机制都不覆盖这个局面。
      */
-    if (combatInside >= 2) packedCities.push(c.id);
-    if (combatInside > 0 && spawnCount === 0) {
+    if (combatInside && spawnCount === 0) {
       for (const t of cityTiles(c)) {
         for (const [dx, dy] of DIRS) {
           const x = t.x + dx;
@@ -1085,7 +1072,7 @@ function buildSlotPlan(
     }
   }
 
-  return { chokedCities, starvedCities, bridgeSite, bridgeArea, critical, packedCities };
+  return { chokedCities, starvedCities, bridgeSite, bridgeArea, critical };
 }
 
 /**
@@ -6682,33 +6669,16 @@ function unitCandidates(
        *
        * 分要按**定额**给：僵持局面里走位评分常常是 -100 上下的推进负分
        * （"出去也打不过"），加几十点压不住。量级照抄下面素体走向装配坞那段（120/80）。
-       *
-       * ── 2026-11-23 修"出城又被拽回来"（三段因果，缺一段都不震荡）──
-       *
-       * 1. 判据原来是 `chokedCities`（产兵格 **= 0**），二值的：军队让出一格、
-       *    产兵格变 1，整段奖励立刻撤掉；
-       * 2. 城格常常**恰好更靠近敌城**，于是"回城"本身是 `progress * 9` 的**正分**；
-       * 3. 回城这一步没有任何惩罚——`home` 只认"单位**当前**在城格内"。
-       *
-       * 于是：出城（+150）→ 产兵格变 1、奖励撤 → 推进分把它拉回来 → 又堵 → 再出。
-       * `probe:combat-trap` 里就是 5,4 ↔ 2,4 来回转，8 回合没出到城外 3 格。
-       *
-       * 修法：判据换成 `spawnStarved`（**没满**就触发，和让位那条同口径），
-       * 并给"从外面回城"同样的 −150。实测：军队稳定停在离城 2 格，不再震荡。
        */
-      if (def.category === 'combat' && all.slots.packedCities.length > 0) {
+      if (def.category === 'combat' && all.chokedCities.length > 0) {
         const home = citiesOf(s, me).find(
           (c) =>
-            all.slots.packedCities.includes(c.id) &&
+            all.chokedCities.includes(c.id) &&
             cityTiles(c).some((t) => t.x === unit.x && t.y === unit.y),
         );
-        const toInside = all.slots.packedCities.some((id) => {
-          const c = cityById(s, id);
-          return !!c && cityTiles(c).some((t) => t.x === x && t.y === y);
-        });
-        if (home && !toInside) score += 150;
-        // 回城也罚：不然"出城拿 150、回城拿推进分、再出去拿 150"可以无限刷
-        else if (!home && toInside) score -= 150;
+        if (home && !cityTiles(home).some((t) => t.x === x && t.y === y)) {
+          score += 150;
+        }
       }
       if (def.armorFrame && weaponsOf(unit).length === 0) {
         const dock = nearestOwnDock(s, me, unit);
