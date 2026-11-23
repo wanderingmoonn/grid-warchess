@@ -131,7 +131,8 @@
     "probe:dark-turmoil": "node --experimental-strip-types scripts/probe-dark-turmoil.ts",
     "test:fast": "node --experimental-strip-types scripts/run-tests.ts --parallel 6",
     "test:serial": "node --experimental-strip-types scripts/run-tests.ts",
-    "ci": "npx tsc --noEmit && npm run test:rules && npm run test:ai-optimization && npm run test:ui && npm run manual && git diff --ignore-cr-at-eol --exit-code -- public/manual.html 'public/manual-*.html' && npm run build"
+    "ci": "npx tsc --noEmit && npm run test:rules && npm run test:ai-optimization && npm run test:ui && npm run manual && git diff --ignore-cr-at-eol --exit-code -- public/manual.html 'public/manual-*.html' && npm run build",
+    "replay:city": "node --experimental-strip-types scripts/replay-city-timeline.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^30.0.0",

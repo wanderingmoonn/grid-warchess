@@ -7408,6 +7408,78 @@ export interface AiPlan {
   urgent: boolean;
   /** 威胁值（`threatLevelOf`）：产业链靠它判断要不要放弃投资 */
   threat: number;
+  /**
+   * 产兵枢纽：这一局"升级的钱该投给哪座城"（见 `hubCityOf`）。
+   *
+   * 升级候选按它给"集中升一座"的分；攒时代的 gate 也只许升这一座。
+   * null = 没有可升的城。
+   */
+  hubCityId: string | null;
+}
+
+/** @tune 枢纽城的安全上限：heat 到这就别把钱押在它身上（敌人贴脸 + 城快空） */
+const HUB_MAX_HEAT = 0.75;
+
+/**
+ * 产兵枢纽（hub）：这一局"升级的钱该投给哪座城"。
+ *
+ * 这是 P1-3。改之前这里是"**时代最高的那座城**"（`sort(b.era - a.era)`），
+ * 于是一个自我加强的循环：谁先升级，谁就永远是"最高代"，下一笔升级还给它。
+ * 结果升的总是那座**在后面**的城，前线的城一直停在低一代——而
+ * `eraWindowOk` 让低代城造不出当代兵，兵只好从后方造出来再走过去。
+ * `probe:city-role` 的样本原样写着：
+ *
+ *     T19 halberdier 出在 c2（离敌 7 格）· 最近的是 c1（3 格）· 多跑 4
+ *                          · 产兵格 c1(e2):1格 c2(e3):2格
+ *
+ * 所以判据换成"**离兵该去的地方最近、还能产兵、又不会马上丢**"：
+ *   · `slots >= 1`：产不出来兵的城升了也没用；
+ *   · `heat < HUB_MAX_HEAT`：押在快丢的城上，等于给对面留战利品；
+ *   · 距离按 `needCityId`（有城挨打就是那座城，否则是主攻方向）折算成回合。
+ *
+ * **必须粘住**：`prev.goal === 'era'` 时沿用上次那座城。不粘的话 hub 在两座城
+ * 之间抖，升级价 360/540 跟着变、`since` 被重置——`ANALYSIS-SAVE-FREEZE` 里
+ * 量到的"攒钱目标永远差一口气"有一半就是这么来的。
+ */
+function hubCityOf(
+  s: GameState,
+  me: PlayerId,
+  mood: AiMood,
+  myCities: readonly City[],
+  ctx?: { cityPlans: Map<string, CityPlan>; needCityId: string | null },
+): City | null {
+  const alive = myCities.filter((c) => !c.ruined && c.id !== mood.abandonedCityId);
+  if (alive.length === 0) return null;
+  /** 没有城画像时退回老口径：时代最高的那座 */
+  const fallback = [...alive].sort(
+    (a, b) => b.era - a.era || (upgradeCostOf(s, b) ?? 0) - (upgradeCostOf(s, a) ?? 0),
+  )[0]!;
+  if (!ctx) return fallback;
+
+  const ok = (c: City): boolean => {
+    const cp = ctx.cityPlans.get(c.id);
+    return !!cp && cp.slots >= 1 && cp.heat < HUB_MAX_HEAT;
+  };
+  /* 粘住上一次的 era 目标（它自己还合格的话） */
+  const prev = focusOf(s, me).save ?? null;
+  if (prev?.goal === 'era' && prev.cityId) {
+    const held = alive.find((c) => c.id === prev.cityId);
+    if (held && ok(held)) return held;
+  }
+
+  const need = ctx.needCityId ? (s.cities.find((c) => c.id === ctx.needCityId) ?? null) : null;
+  if (!need) return alive.some(ok) ? [...alive].filter(ok).sort((a, b) => b.era - a.era)[0]! : fallback;
+
+  let best: { city: City; v: number } | null = null;
+  for (const c of alive) {
+    if (!ok(c)) continue;
+    const cp = ctx.cityPlans.get(c.id)!;
+    /* 到"该去的地方"的行军回合：每多一回合扣 6 分（一格产兵名额约值 3 分） */
+    const turns = distToCity(c, need) / 3;
+    const v = -6 * turns + Math.min(12, cp.slots * 3);
+    if (!best || v > best.v) best = { city: c, v };
+  }
+  return best?.city ?? fallback;
 }
 
 /** 攒钱的时间视野：几回合之内够得着才值得停手 */
@@ -7724,6 +7796,8 @@ function buildPlan(
   my: Unit[],
   foe: Unit[],
   mood: AiMood,
+  /** 城画像与"兵该往哪儿出"：升级选城要靠它（见 `hubCityOf`） */
+  hubCtx?: { cityPlans: Map<string, CityPlan>; needCityId: string | null },
 ): AiPlan {
   const gold = s.players[me].gold;
   const inc = Math.max(1, incomeResOf(s, me).gold ?? 0);
@@ -7791,9 +7865,7 @@ function buildPlan(
    * 先升上去，主城永远差一口气。人集中升一座城是有道理的（只有到顶那座能造新兵，
    * 见 rules 的 eraWindowOk），而这个 min 恰好把 AI 推向了反面。
    */
-  const mainCity = myCities
-    .filter((c) => !c.ruined && c.id !== mood.abandonedCityId)
-    .sort((a, b) => b.era - a.era || (upgradeCostOf(s, b) ?? 0) - (upgradeCostOf(s, a) ?? 0))[0];
+  const mainCity = hubCityOf(s, me, mood, myCities, hubCtx);
   const mainEraCost = mainCity ? upgradeCostOf(s, mainCity) : null;
   const eraCost = mainEraCost ?? (eraCosts.length > 0 ? Math.min(...eraCosts) : null);
 
@@ -8188,6 +8260,12 @@ function buildPlan(
     savingFor,
     targetCost,
     targetUnitId,
+    /*
+     * 只有拿到城画像（`aiHub` 打开）时才对外宣称"枢纽城"：关着的时候
+     * `upgradeCandidate` 必须走老判据（`city.era >= myEra`），否则这一行
+     * 就等于把"集中升一座"悄悄换成了"升 mainCity"，行为立刻漂移。
+     */
+    hubCityId: hubCtx ? (mainCity?.id ?? null) : null,
     allowance,
     buildAllowance,
     targetGoalId,
@@ -9255,7 +9333,14 @@ export function flankSplit(
 
 
 
-function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan): Candidate | null {
+function upgradeCandidate(
+  s: GameState,
+  city: City,
+  mood?: AiMood,
+  plan?: AiPlan,
+  /** 城画像：产兵格数 / 威胁（见 `CityPlan`） */
+  cp?: CityPlan,
+): Candidate | null {
   if (city.id === mood?.abandonedCityId) return null;
   // 废墟不能升级（规则层也拦，见 doUpgrade）：这里先剔掉，免得 AI 把一次决策
   // 花在一个必被拒绝的动作上——跑批时被拒动作要顺延，等于白丢一步。
@@ -9273,7 +9358,13 @@ function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan
    * 一半靠的是"这笔钱我不动"，而 AI 以前连"这笔钱是留给谁的"都没记。
    */
   if (plan?.savingFor === 'era' && gold < (plan.targetCost ?? 0)) {
-    const top = [...citiesOf(s, city.owner)]
+    /*
+     * 攒时代那笔钱是**指定给枢纽城**的（`hubCityOf`）：它既是"该产兵的地方"，
+     * 也是攒钱目标报的那座城。以前这里取"时代最高的城"，于是永远加固
+     * "谁本来就领先，谁继续领先"，前线的城永远追不上。
+     */
+    const hub = plan.hubCityId ? cityById(s, plan.hubCityId) : null;
+    const top = hub ?? [...citiesOf(s, city.owner)]
       .filter((c) => !c.ruined)
       .sort((a, b) => b.era - a.era)[0];
     if (top && top.id !== city.id) return null;
@@ -9304,7 +9395,17 @@ function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan
   //
   // 幅度只有 6/4：升级的底分本来就比招兵高（见上面 88/52/14），再叠一个大数
   // 会把"产线"整条挤掉——实测 900 金的局面里 AI 连着十二回合只顾升城、一个兵不造。
-  if (city.era >= myEra) score += 18;
+  /*
+   * 集中升一座城，而不是把两座城都升到半高。
+   *
+   * 判据从"时代最高的那座"换成**枢纽城**（P1-3）：老判据是个自我加强的循环，
+   * 谁先升级谁就永远是"最高代"，于是升级永远投给后方的城，前线的城停低一代、
+   * `eraWindowOk` 造不出当代兵，兵只好从后方造好再走过去（实测平均多跑 1.93 格）。
+   * 幅度照旧 18/-10——再大就会把整条产线挤掉（注释里记过"连着十二回合只顾升城"）。
+   */
+  const hubId = plan?.hubCityId ?? null;
+  const isHub = hubId ? city.id === hubId : city.era >= myEra;
+  if (isHub) score += 18;
   else score -= 10;
 
   // 战术倾向：弃城期升级是**兑现**（攒那几个回合就是为了这一下），
@@ -9317,13 +9418,17 @@ function upgradeCandidate(s: GameState, city: City, mood?: AiMood, plan?: AiPlan
   }
 
   /*
-   * 城画像（2026-11-23，补 P1-3）：以前的升级选城只看"余钱够不够、时代低不低"，
-   * 于是经常把一代科技升在一座**只剩一格产兵**、或者**下回合就要易主**的城里。
-   *
-   * 幅度故意压得比 18/−10 那对小：升级的底分本来就比招兵高一档，
-   * 再加一个大数会把整条产线挤掉（注释里记过"连着十二回合只顾升城"那次）。
-   * 产兵格按每格 3 分（满格五六格也就 +15），危险城扣 10。
+   * 城画像（P1-3，`aiHub` 打开时才生效）：
+   *   · `slots`——产兵格多，这笔升级才真的变成"每回合多几个兵"（P0-3 的瓶颈）；
+   *     每格 3 分、封顶 12。**它加在所有城上**，所以同时也抬高了整条升级线
+   *     （这也是它在大图上把三局胜打成 261 回合平局的原因之一，见 types.ts 的标定）。
+   *   · `heat`——升级本身加城墙耐久和护甲，守城时是划算的，**只在"敌人贴脸 +
+   *     城快空"（≥0.85）时退**：那笔钱是给对面留的战利品。
    */
+  if (cp) {
+    score += Math.min(12, cp.slots * 3);
+    if (cp.heat >= 0.85) score -= 8;
+  }
 
   return { action: { type: 'UPGRADE', cityId: city.id }, score };
 }
@@ -9422,7 +9527,7 @@ export function planOrders(s: GameState, player: PlayerId = s.current): string[]
         traits,
         // 排产（指挥官模式）只是一份"想要什么"的草案，不该在这里攒钱：
         // urgent=true 让采购保持原来的纯 argmax 口径
-        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true, threat: 0 },
+        { stance: 'push', savingFor: null, targetCost: 0, targetUnitId: null, targetGoalId: null, targetStepId: null, allowance: Infinity, buildAllowance: Infinity, goalScore: 0, goalNote: '', goalOptions: [], urgent: true, threat: 0, hubCityId: null },
         null,
         mood,
       );
@@ -10057,7 +10162,18 @@ function aiNextActionCoreInner(
 
   // 本回合的计划：攒不攒钱、收不收缩。采购和走位都要看它，
   // 所以在这里算一次，整回合共用（和 traits 一样）。
-  const plan = buildPlan(view, me, unitsOf(view, me), foeUnits, mood);
+  /*
+   * 城画像只喂给"升级选城"。`aiHub` 关着时不传 —— 攒钱目标城仍是
+   * "时代最高的那座"（老口径），只有打分里多了产兵格/危险两项（P1-3 温和版）。
+   */
+  const plan = buildPlan(
+    view,
+    me,
+    unitsOf(view, me),
+    foeUnits,
+    mood,
+    view.config.aiHub === true ? { cityPlans, needCityId } : undefined,
+  );
   if (aiTrace.on && fields.flank.size > 0) aiTrace.flankUnits += fields.flank.size;
   /*
    * 把"在攒什么"搬回真状态。
@@ -10466,7 +10582,13 @@ function aiNextActionCoreInner(
       // 「升级时代」那一格也能指定城市：玩家常想"先升那座靠前的主城"。
       // 指定的是军营时不匹配任何城市，这一格就空转（营不会升级）。
       if (orderSite && city.id !== orderSite) continue;
-      const c = upgradeCandidate(view, city, mood, plan);
+      const c = upgradeCandidate(
+        view,
+        city,
+        mood,
+        plan,
+        view.config.aiHub === true ? fields.cityPlans.get(city.id) : undefined,
+      );
       if (c) candidates.push({ ...c,score:c.score+(commander && head===ORDER_UPGRADE ? 1000 : 0) });
     }
   }

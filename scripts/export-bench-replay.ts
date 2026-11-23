@@ -54,6 +54,12 @@ const aiNew = modNew.aiNextAction;
 const aiOld = modOld.aiNextAction;
 
 const aIsNew = NEW_SIDE === 'A';
+/*
+ * 开关必须和 `bench-queue.ts` 对齐：跑批带着 `--hub`/`--city-site` 跑的，
+ * 导出时漏掉就只能得到另一局棋（这个脚本存在的全部理由就是"同一局"）。
+ */
+const HUB = process.argv.includes('--hub');
+const CITY_SITE = process.argv.includes('--city-site');
 let s: GameState = createMatch(
   {
     ...DEFAULT_CONFIG,
@@ -61,6 +67,8 @@ let s: GameState = createMatch(
     aiLevel: 'tactic',
     size: queue.size,
     mapSymmetry: 'fair',
+    ...(HUB ? { aiHub: true } : {}),
+    ...(CITY_SITE ? { aiCitySite: true } : {}),
   },
   SEED,
 );
