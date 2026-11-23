@@ -46,8 +46,22 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     [originX + (x - y) * halfWidth, topPadding + (x + y) * halfHeight - lift];
 
   const boardFloor = -13;
+  /*
+   * 水面是**一个高度**（2026-11-23 用户指出）。
+   *
+   * 之前浅流 -4 / 水域 -9 / 深水 -10 —— 等于让水自己长成了台阶，河里凭空多出
+   * 两道堤。真实的水只有一张水面，深浅差在**河床**上。所以：
+   *   · 三种水面统一取 `WATER_SURFACE`，谁跟谁都齐平；
+   *   · 深浅改由 `bedDepth` 表达——岸边那堵墙往下扎多深、水色多暗。
+   * 这样水面上不会再有互相遮掩的立面，读数只看颜色和岸壁厚度。
+   */
+  const WATER_SURFACE = -9;
+  /** 河床比水面低多少（不是水面高度） */
+  const bedDepth: Partial<Record<Terrain, number>> = { shallow: 1, water: 4, deep: 9 };
+  const isWaterTerrain = (t: Terrain | undefined): boolean => t === 'water' || t === 'shallow' || t === 'deep';
   const heights: Partial<Record<Terrain, number>> = {
-    deep: -10, water: -9, shallow: -4, valley: -3, bridge: 2, hill: 8, plateau: 15, mountain: 25,
+    deep: WATER_SURFACE, water: WATER_SURFACE, shallow: WATER_SURFACE,
+    valley: -3, bridge: 2, hill: 8, plateau: 15, mountain: 25,
   };
   const colors: Partial<Record<Terrain, string>> = {
     plain: '#dce4c7', forest: '#b0c28f', hill: '#d5bf8f', mountain: '#a3adba',
@@ -87,6 +101,14 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     return elevation;
   }
 
+  /** 脚下"实体面"的高度：水面就是水面，别的格子是地面；水面之下的河床用它来算岸壁 */
+  function bedAt(state: GameState, x: number, y: number): number {
+    const terrain = at(state, x, y);
+    const depth = terrain ? bedDepth[terrain] : undefined;
+    if (depth === undefined) return heightAt(state, x, y);
+    return WATER_SURFACE - depth;
+  }
+
   function faceColors(terrain: Terrain, neighbor: Terrain | undefined): readonly [string, string, string] {
     if (!neighbor) return ['#695c4d', '#81745e', '#534638'];
     if (terrain === 'mountain') return ['#647282', '#768594', '#424d58'];
@@ -100,8 +122,17 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   function paintTerrain(ctx: CanvasRenderingContext2D, x: number, y: number, state: GameState, dark: boolean): void {
     const terrain = at(state, x, y) ?? 'plain';
     const elevation = heightAt(state, x, y);
-    const south = heightAt(state, x, y + 1);
-    const east = heightAt(state, x + 1, y);
+    /*
+     * 岸壁扎到**河床**，不是扎到水面（2026-11-23）。
+     *
+     * 水面抬高到同一层之后，"深浅"唯一的视觉出路就是岸边这堵墙：
+     * 深水的岸比浅流的岸高一截，因为它的河床更低。水里互相之间不画立面
+     * （水面齐平，画了就是凭空多一道堤）。
+     */
+    const shoreEast = !isWaterTerrain(terrain) && isWaterTerrain(at(state, x + 1, y));
+    const shoreSouth = !isWaterTerrain(terrain) && isWaterTerrain(at(state, x, y + 1));
+    const south = shoreSouth ? bedAt(state, x, y + 1) : heightAt(state, x, y + 1);
+    const east = shoreEast ? bedAt(state, x + 1, y) : heightAt(state, x + 1, y);
     if (elevation > east) {
       const [face, , edge] = faceColors(terrain, at(state, x + 1, y));
       const points = [project(x + 1, y, elevation), project(x + 1, y + 1, elevation),
@@ -146,6 +177,29 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       const [left, top] = project(x + 0.44, y + 0.54);
       polygon(ctx, [[left - 3, top], [left - 2, top - 3], [left, top], [left + 2, top - 4],
         [left + 1, top + 1]], '#84956a');
+    }
+    /*
+     * 深浅分界：水面既然齐平，就只剩颜色和这条线能读出河床的台阶。
+     * 只在两侧深度不同时画，不画在"水和浅水只是相邻"的普通格子上。
+     */
+    if (isWaterTerrain(terrain)) {
+      const myDepth = bedDepth[terrain] ?? 0;
+      const contour = (a: Point, b: Point): void => {
+        ctx.beginPath();
+        ctx.moveTo(...a);
+        ctx.lineTo(...b);
+        ctx.strokeStyle = '#3f6a8455';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      };
+      const eastNeighbor = at(state, x + 1, y);
+      if (isWaterTerrain(eastNeighbor) && (bedDepth[eastNeighbor!] ?? 0) !== myDepth) {
+        contour(project(x + 1, y, elevation), project(x + 1, y + 1, elevation));
+      }
+      const southNeighbor = at(state, x, y + 1);
+      if (isWaterTerrain(southNeighbor) && (bedDepth[southNeighbor!] ?? 0) !== myDepth) {
+        contour(project(x, y + 1, elevation), project(x + 1, y + 1, elevation));
+      }
     }
     if (dark) polygon(ctx, rhombus(x, y, 1, elevation), '#17232b47');
   }
