@@ -234,9 +234,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   }
 
   /**
-   * 平原建模（《陷阵之志》微缩沙盘风格）：
-   * 干净透气的主色调草甸底板 + 柔和浅草斑块 + 低矮立体三叶草簇与零星田间碎石。
-   * 严格控制草簇高度（3.5~4.5px），绝不喧宾夺主或遮挡棋子。
+   * 平原建模（《陷阵之志》微缩沙盘风格 · 多样化草甸细节）：
+   * 干净透气的主色调草甸底板 + 柔和浅草/三叶草斑块 + 6 种不同形态的低矮草甸图案
+   * （高低伴生双草簇、微风斜拂长草、野花草簇、趴地苔草丛、青苔卧石伴生草、双叶幼芽）。
+   * 严格控制草簇高度（2.8~4.6px），在丰富视觉细节的同时绝不遮挡棋子。
    */
   function paintPlainArt(ctx: CanvasRenderingContext2D, x: number, y: number, elevation: number, state: GameState): void {
     const h = tileHash(x, y, 11);
@@ -253,54 +254,199 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       strokeLine(ctx, pt(0, 0, 0), pt(1, 0, 0), '#e7efd3', 1.0);
     }
 
-    // 约 40% 的地块带一块贴地的浅色草甸微斑块，增加沙盘草皮呼吸感
-    if ((h % 5) < 2) {
-      const cu = 0.34 + ((h >>> 4) % 28) * 0.01;
-      const cv = 0.34 + ((h >>> 9) % 28) * 0.01;
-      const r = 0.17 + ((h >>> 14) % 7) * 0.01;
+    // 约 55% 的地块带贴地草皮微斑块（单菱斑或双叶草斑），增加草甸地表的肌理层次
+    if ((h % 9) < 5) {
+      const cu = 0.32 + ((h >>> 4) % 32) * 0.01;
+      const cv = 0.32 + ((h >>> 9) % 32) * 0.01;
+      const r = 0.16 + ((h >>> 14) % 8) * 0.01;
       polygon(ctx, [
         pt(cu - r, cv, 0),
         pt(cu, cv - r, 0),
         pt(cu + r, cv, 0),
         pt(cu, cv + r, 0),
-      ], (h & 4) ? '#d2ddb9' : '#e4ebd0');
+      ], (h & 4) ? '#d1dcb8' : '#e4ebd0');
+      if ((h % 9) === 1 || (h % 9) === 3) {
+        const cu2 = Math.min(0.76, cu + 0.16);
+        const cv2 = Math.min(0.76, cv + 0.12);
+        const r2 = r * 0.65;
+        polygon(ctx, [
+          pt(cu2 - r2, cv2, 0),
+          pt(cu2, cv2 - r2, 0),
+          pt(cu2 + r2, cv2, 0),
+          pt(cu2, cv2 + r2, 0),
+        ], '#c9d6ae');
+      }
     }
 
-    // 约 1/3 的地块点缀一簇立体三叶草丛（受光左瓣 + 迎光主叶 + 背光右瓣）
-    const tuftMod = h % 11;
-    if (tuftMod < 4) {
-      const u = 0.28 + ((h >>> 6) % 42) * 0.01;
-      const v = 0.30 + ((h >>> 11) % 40) * 0.01;
-      const [cx, cy] = pt(u, v, 0);
-      // 贴地微影
+    // 6 种不同形态的草甸地表图案（约占 2/3 地块，其余 1/3 留白保持战术棋盘透气感）
+    const tuftMod = h % 12;
+    const u = 0.28 + ((h >>> 6) % 40) * 0.01;
+    const v = 0.30 + ((h >>> 11) % 38) * 0.01;
+    const [cx, cy] = pt(u, v, 0);
+
+    if (tuftMod === 0 || tuftMod === 1) {
+      // 图案 A：高低双簇伴生草（主三叶草簇 + 侧旁小幼簇）
+      polygon(ctx, [
+        [cx - 3.8, cy + 0.6],
+        [cx + 0.4, cy - 0.8],
+        [cx + 5.8, cy + 1.2],
+        [cx + 1.2, cy + 2.2],
+      ], '#a6b78a88');
+      // 主簇
+      polygon(ctx, [[cx - 1.3, cy + 0.8], [cx - 0.4, cy - 4.5], [cx + 0.5, cy + 0.9]], '#90a86c');
+      polygon(ctx, [[cx - 0.4, cy - 4.5], [cx + 0.9, cy + 0.8], [cx + 0.1, cy + 0.9]], '#6d844e');
+      polygon(ctx, [[cx - 3.4, cy + 0.7], [cx - 2.4, cy - 3.0], [cx - 1.0, cy + 0.8]], '#a1b87c');
+      polygon(ctx, [[cx + 0.5, cy + 0.8], [cx + 2.6, cy - 3.3], [cx + 3.3, cy + 0.7]], '#677e49');
+      // 伴生副簇
+      const sx = cx + 4.2;
+      const sy = cy + 1.3;
+      polygon(ctx, [[sx - 1.4, sy + 0.4], [sx - 0.6, sy - 2.6], [sx + 0.3, sy + 0.5]], '#9cb477');
+      polygon(ctx, [[sx + 0.1, sy + 0.5], [sx + 1.5, sy - 2.2], [sx + 2.1, sy + 0.4]], '#728952');
+    } else if (tuftMod === 2 || tuftMod === 3) {
+      // 图案 B：微风斜拂长草簇（四叶顺风斜倾，富有动态韵律）
+      polygon(ctx, [
+        [cx - 3.6, cy + 0.7],
+        [cx + 1.0, cy - 0.7],
+        [cx + 5.2, cy + 0.8],
+        [cx + 0.6, cy + 1.9],
+      ], '#a4b58888');
+      polygon(ctx, [[cx - 3.2, cy + 0.7], [cx - 1.1, cy - 3.2], [cx - 1.4, cy + 0.8]], '#a3ba7e');
+      polygon(ctx, [[cx - 1.5, cy + 0.8], [cx + 1.1, cy - 4.4], [cx + 0.2, cy + 0.9]], '#8fa76b');
+      polygon(ctx, [[cx + 1.1, cy - 4.4], [cx + 1.6, cy - 3.8], [cx + 0.5, cy + 0.9]], '#6d844e');
+      polygon(ctx, [[cx + 0.3, cy + 0.8], [cx + 3.1, cy - 3.6], [cx + 2.1, cy + 0.8]], '#7b9358');
+      polygon(ctx, [[cx + 1.9, cy + 0.7], [cx + 4.6, cy - 2.5], [cx + 3.8, cy + 0.7]], '#647b46');
+    } else if (tuftMod === 4) {
+      // 图案 C：草甸野花簇（阔叶草座 + 两三朵奶油黄小雏菊点缀）
+      polygon(ctx, [
+        [cx - 3.8, cy + 0.6],
+        [cx + 0.2, cy - 0.9],
+        [cx + 4.2, cy + 0.7],
+        [cx + 0.2, cy + 1.9],
+      ], '#a3b48788');
+      polygon(ctx, [[cx - 3.4, cy + 0.7], [cx - 2.3, cy - 2.8], [cx - 0.8, cy + 0.8]], '#96ae72');
+      polygon(ctx, [[cx - 1.1, cy + 0.8], [cx - 0.1, cy - 4.0], [cx + 1.0, cy + 0.8]], '#829a5e');
+      polygon(ctx, [[cx + 0.7, cy + 0.8], [cx + 2.8, cy - 2.9], [cx + 3.5, cy + 0.7]], '#677e49');
+      // 野花花蕾（柔和暖白与鹅黄，不刺眼）
+      polygon(ctx, [[cx - 2.2, cy - 2.9], [cx - 1.4, cy - 3.7], [cx - 0.6, cy - 2.9], [cx - 1.4, cy - 2.1]], '#f6eed5');
+      polygon(ctx, [[cx + 1.4, cy - 2.4], [cx + 2.1, cy - 3.1], [cx + 2.8, cy - 2.4], [cx + 2.1, cy - 1.7]], '#ebd48e');
+    } else if (tuftMod === 5) {
+      // 图案 D：低矮趴地苔草团（饱满的多面体小草垫 + 侧叶）
+      polygon(ctx, [
+        [cx - 4.2, cy + 0.7],
+        [cx + 0.2, cy - 1.0],
+        [cx + 4.6, cy + 0.8],
+        [cx + 0.3, cy + 2.0],
+      ], '#a1b28588');
+      // 左侧迎光草团面
       polygon(ctx, [
         [cx - 3.6, cy + 0.6],
-        [cx + 0.4, cy - 0.8],
-        [cx + 4.2, cy + 0.7],
-        [cx + 0.2, cy + 1.8],
-      ], '#a8b88c88');
-      // 主草叶（中央偏左，向光面与背光面分明）
-      polygon(ctx, [[cx - 1.2, cy + 0.8], [cx - 0.3, cy - 4.4], [cx + 0.6, cy + 0.9]], '#90a86c');
-      polygon(ctx, [[cx - 0.3, cy - 4.4], [cx + 0.9, cy + 0.8], [cx + 0.1, cy + 0.9]], '#6d844e');
-      // 左侧矮叶（迎光亮绿）
-      polygon(ctx, [[cx - 3.3, cy + 0.7], [cx - 2.3, cy - 2.9], [cx - 1.0, cy + 0.8]], '#a1b87c');
-      // 右侧斜叶（背光深绿）
-      polygon(ctx, [[cx + 0.6, cy + 0.8], [cx + 2.7, cy - 3.2], [cx + 3.4, cy + 0.7]], '#677e49');
-    } else if (tuftMod === 4 || tuftMod === 5) {
-      // 零星田间小石子（低矮双面几何体，丰富平地细节层次）
-      const u = 0.32 + ((h >>> 7) % 36) * 0.01;
-      const v = 0.34 + ((h >>> 12) % 34) * 0.01;
+        [cx - 2.2, cy - 2.3],
+        [cx + 0.2, cy - 2.9],
+        [cx + 0.3, cy + 1.1],
+      ], '#9bb277');
+      // 右侧背光草团面
+      polygon(ctx, [
+        [cx + 0.2, cy - 2.9],
+        [cx + 2.6, cy - 2.0],
+        [cx + 3.8, cy + 0.6],
+        [cx + 0.3, cy + 1.1],
+      ], '#6c834d');
+      // 顶部抽出的细草尖
+      polygon(ctx, [[cx - 0.8, cy - 2.2], [cx - 0.1, cy - 4.3], [cx + 0.6, cy - 2.1]], '#88a064');
+    } else if (tuftMod === 6) {
+      // 图案 E：青苔卧石伴生草（三面立体田间石 + 石畔新芽）
       const [sx, sy] = pt(u, v, 0);
-      polygon(ctx, [[sx - 2.6, sy + 0.4], [sx - 0.8, sy - 1.5], [sx + 0.4, sy + 0.8]], '#cad1b6');
-      polygon(ctx, [[sx - 0.8, sy - 1.5], [sx + 2.2, sy - 0.2], [sx + 0.4, sy + 0.8]], '#9ba488');
+      polygon(ctx, [[sx - 3.2, sy + 0.5], [sx - 1.2, sy - 1.8], [sx + 0.8, sy - 1.4], [sx + 0.2, sy + 1.0]], '#cfd5bd');
+      polygon(ctx, [[sx + 0.8, sy - 1.4], [sx + 2.8, sy + 0.2], [sx + 0.2, sy + 1.0]], '#9aa387');
+      // 石旁伴生双叶草
+      polygon(ctx, [[sx + 1.2, sy + 0.8], [sx + 2.2, sy - 2.8], [sx + 2.9, sy + 0.8]], '#94ac70');
+      polygon(ctx, [[sx + 2.5, sy + 0.8], [sx + 4.1, sy - 2.1], [sx + 4.5, sy + 0.7]], '#6c834d');
+    } else if (tuftMod === 7) {
+      // 图案 F：疏朗对生双幼芽（相隔少许的两株V字嫩草，丰富轻盈层次）
+      polygon(ctx, [[cx - 2.8, cy + 0.5], [cx - 3.6, cy - 2.2], [cx - 1.8, cy + 0.6]], '#9cb378');
+      polygon(ctx, [[cx - 2.0, cy + 0.6], [cx - 0.8, cy - 2.5], [cx - 1.1, cy + 0.6]], '#728952');
+      const bx = cx + 3.4;
+      const by = cy - 1.1;
+      polygon(ctx, [[bx - 1.2, by + 0.5], [bx - 1.8, by - 2.0], [bx - 0.3, by + 0.6]], '#9eb57a');
+      polygon(ctx, [[bx - 0.5, by + 0.6], [bx + 0.7, by - 2.1], [bx + 0.3, by + 0.6]], '#738a53');
     }
   }
 
   /**
-   * 丘陵建模（《陷阵之志》连绵高地台原与缓坡脊线风格）：
-   * 3D 立面已经由 paintCliffFace 赋予了真实的砂岩断崖厚度，因此顶面不再画内缩方框倒角
-   * （内缩倒角会让单格宽的丘陵带变成一串"画框按钮"）。
-   * 顶面保持开阔连贯的暖金砂岩台原 + 迎光外沿亮脊线 + 舒展的立体缓坡短山脊与旱草簇。
+   * 丘陵高地灌木丛模型（《陷阵之志》式低多边形双球冠灌木）：
+   * 采用与暖金丘陵协调的橄榄绿/苔绿三色阶块面，包含落地暖影、主灌木冠与伴生副灌木球，
+   * 高度介于平原小草与森林乔木之间（约 5~6.5px），一眼可辨是丘陵矮灌木而非森林松树。
+   */
+  function drawHighlandShrub(ctx: CanvasRenderingContext2D, cx: number, cy: number, scale = 1, variant = 0): void {
+    const s = scale;
+    // 1. 贴地暖褐投影
+    ctx.fillStyle = '#7a5f3644';
+    ctx.beginPath();
+    ctx.ellipse(cx + 1.0 * s, cy + 0.8 * s, 5.2 * s, 2.3 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 2. 后侧或侧翼伴生小灌木球（先画后层）
+    const sideDir = (variant & 1) === 0 ? 1 : -1;
+    const sx = cx + sideDir * 3.1 * s;
+    const sy = cy + 0.4 * s;
+    polygon(ctx, [
+      [sx - 2.6 * s, sy + 0.4 * s],
+      [sx - 1.7 * s, sy - 2.6 * s],
+      [sx + 0.2 * s, sy - 3.3 * s],
+      [sx + 0.3 * s, sy + 0.9 * s],
+    ], '#8ea560');
+    polygon(ctx, [
+      [sx + 0.2 * s, sy - 3.3 * s],
+      [sx + 2.1 * s, sy - 2.3 * s],
+      [sx + 2.8 * s, sy + 0.4 * s],
+      [sx + 0.3 * s, sy + 0.9 * s],
+    ], '#5b7039');
+
+    // 3. 主灌木冠（五面体块面：西北亮冠 + 顶面亮オリーブ + 西南中调面 + 东南暗部 + 根部小枝干）
+    polygon(ctx, [
+      [cx - 0.7 * s, cy + 1.1 * s],
+      [cx - 0.4 * s, cy - 0.8 * s],
+      [cx + 0.6 * s, cy - 0.8 * s],
+      [cx + 0.7 * s, cy + 1.1 * s],
+    ], '#6e5233');
+    // 迎光左上冠面
+    polygon(ctx, [
+      [cx - 3.8 * s, cy + 0.3 * s],
+      [cx - 2.7 * s, cy - 3.5 * s],
+      [cx - 0.2 * s, cy - 4.9 * s],
+      [cx - 0.4 * s, cy - 1.2 * s],
+    ], '#9cb36c');
+    // 正前左中调受光面
+    polygon(ctx, [
+      [cx - 3.8 * s, cy + 0.3 * s],
+      [cx - 0.4 * s, cy - 1.2 * s],
+      [cx + 0.2 * s, cy + 1.0 * s],
+      [cx - 2.1 * s, cy + 0.9 * s],
+    ], '#7f9653');
+    // 顶部与右前过渡冠面
+    polygon(ctx, [
+      [cx - 0.2 * s, cy - 4.9 * s],
+      [cx + 2.2 * s, cy - 3.8 * s],
+      [cx + 1.1 * s, cy - 1.0 * s],
+      [cx - 0.4 * s, cy - 1.2 * s],
+    ], '#879f5a');
+    // 东南背光暗面
+    polygon(ctx, [
+      [cx + 2.2 * s, cy - 3.8 * s],
+      [cx + 3.7 * s, cy + 0.2 * s],
+      [cx + 2.1 * s, cy + 0.9 * s],
+      [cx + 0.2 * s, cy + 1.0 * s],
+      [cx + 1.1 * s, cy - 1.0 * s],
+    ], '#576b36');
+
+    // 冠顶微亮折棱
+    strokeLine(ctx, [cx - 2.7 * s, cy - 3.5 * s], [cx - 0.2 * s, cy - 4.9 * s], '#b3c98399', 0.75);
+  }
+
+  /**
+   * 丘陵建模（《陷阵之志》连绵高地台原、缓坡山脊与高地灌木点缀）：
+   * 顶面保持开阔连贯的暖金砂岩台原 + 迎光外沿亮脊线，
+   * 内腹自然交织布置低反差缓坡山脊、立体高地矮灌木丛与旱地草石，富有生机且不挡棋子。
    */
   function paintHillArt(ctx: CanvasRenderingContext2D, x: number, y: number, elevation: number, state: GameState): void {
     const h = tileHash(x, y, 23);
@@ -324,9 +470,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       return;
     }
 
-    // 3. 丘陵台面内腹：约 1/3 格布置舒展的低反差缓坡山脊，其余格点缀旱草或留白，开阔自然
-    const mode = h % 6;
+    // 3. 丘陵台面内腹：缓坡山脊、高地灌木丛、坡脚伴生灌木与旱草簇有机组合
+    const mode = h % 7;
     if (mode === 0 || mode === 1) {
+      // 舒展的低反差缓坡山脊
       const shiftU = mode === 0 ? -0.03 : 0.04;
       const shiftV = mode === 0 ? 0.02 : -0.03;
       const w = pt(0.14 + shiftU, 0.58 + shiftV, 0);
@@ -342,11 +489,30 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       polygon(ctx, [c1, c2, e, s], '#c2a775');
       polygon(ctx, [n, e, c2], '#bc9f6e');
       strokeLine(ctx, c1, c2, '#efe2bf', 0.9);
+
+      // 约一半的山脊坡脚点缀一丛伴生矮灌木
+      if (mode === 1) {
+        const [bx, by] = pt(0.68, 0.64, 0.4);
+        drawHighlandShrub(ctx, bx, by, 0.84, h >>> 4);
+      }
     } else if (mode === 2 || mode === 3) {
+      // 丘陵高地灌木丛（或双灌木错落组合）
+      const su = 0.34 + ((h >>> 4) % 30) * 0.01;
+      const sv = 0.36 + ((h >>> 9) % 28) * 0.01;
+      const [bx, by] = pt(su, sv, 0);
+      drawHighlandShrub(ctx, bx, by, mode === 2 ? 0.98 : 0.90, h >>> 3);
+      if (mode === 3 && (h & 8)) {
+        // 灌木旁伴生一小块砂岩或旱草芽
+        const rx = bx - 5.2;
+        const ry = by + 1.8;
+        polygon(ctx, [[rx - 2.2, ry + 0.4], [rx - 0.6, ry - 1.4], [rx + 0.6, ry + 0.7]], '#e5d4aa');
+        polygon(ctx, [[rx - 0.6, ry - 1.4], [rx + 2.0, ry - 0.1], [rx + 0.6, ry + 0.7]], '#b29664');
+      }
+    } else if (mode === 4) {
       // 稀疏的高地旱草簇与小砂石
       const [gx, gy] = pt(0.34 + (h % 29) * 0.01, 0.38 + ((h >>> 5) % 27) * 0.01, 0);
-      polygon(ctx, [[gx - 2.3, gy + 0.5], [gx - 1.1, gy - 2.6], [gx + 0.1, gy + 0.6]], '#9aa36c');
-      polygon(ctx, [[gx - 0.1, gy + 0.6], [gx + 1.4, gy - 2.2], [gx + 2.2, gy + 0.5]], '#7b8552');
+      polygon(ctx, [[gx - 2.5, gy + 0.5], [gx - 1.2, gy - 2.8], [gx + 0.1, gy + 0.6]], '#9aa36c');
+      polygon(ctx, [[gx - 0.1, gy + 0.6], [gx + 1.5, gy - 2.4], [gx + 2.3, gy + 0.5]], '#7b8552');
     }
   }
 
