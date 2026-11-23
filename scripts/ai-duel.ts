@@ -15,7 +15,9 @@
  *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --exp armor-era7 --size 28 --games 20
  *   node --experimental-strip-types scripts/ai-duel.ts --era 2 --games 40 --no-swap
  *   node --experimental-strip-types scripts/ai-duel.ts --era 3 --games 40 --old ./baselines/ai-6c3c992.ts
- * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z。
+ *   node --experimental-strip-types scripts/ai-duel.ts --era 7 --size 24 --symmetry mirror --games 20
+ * 输出：每个种子的胜负 + 汇总胜率（平局算半分）+ 二项检验的 z + 平局率。
+ * 平局的种子会额外打一行终局快照（城/兵/金），用来判断"谁其实占优"。
  *
  * `--old` 换对手：默认 ./baseline-ai.ts（冻结于 b36619a，几轮改动之前）。
  * 只想量"这一批改动本身值多少"时，用 `git show <当前 HEAD>:src/core/ai.ts` 抄一份
@@ -24,9 +26,14 @@
  */
 
 import { applyAction } from '../src/core/rules.ts';
+import { armySize } from '../src/core/rules.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
-import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey, aiNextAction as newAi } from '../src/core/ai.ts';
+import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
+import { buildMatchReport } from '../src/core/report.ts';
+import type { LoggedAction } from '../src/core/report.ts';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 const args = process.argv.slice(2);
 const argOf = (name: string, dflt: string): string => {
@@ -69,15 +76,99 @@ const scriptAi =
       : POLICY === 'greedy' || POLICY === 'script'
         ? ((await import('./script-ai.ts')).scriptNextAction as unknown as typeof newAi)
       : null;
-const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as (
-  ...args: Parameters<typeof import('../src/core/ai.ts').aiNextAction>
-) => ReturnType<typeof import('../src/core/ai.ts').aiNextAction>;
+const oldAi = (await import(OLD_AI_FILE)).aiNextAction as unknown as AiFn;
+
+/**
+ * "新版"那一侧用哪份内核。
+ *
+ * 以前写死 `../src/core/ai.ts`，于是这个台子只能测"老 AI 对老 AI 的冻结副本"。
+ * v3 独立成文件之后必须能指过去，否则所有 v3 的数字都是假的
+ * （测的一直是 v1，只是两边都是 v1 所以看不出错）。
+ *
+ *   --new ../src/core/ai-v3.ts        ← v3 的实验一律用这条
+ *   --new ../src/core/ai.ts           ← 默认，量 v1 自己
+ */
+const NEW_AI_FILE = argOf('new', '../src/core/ai.ts');
+const newAi = (await import(NEW_AI_FILE)).aiNextAction as unknown as AiFn;
 
 const ERA = Number(argOf('era', '1'));
 const GAMES = Number(argOf('games', '40'));
 const BASE_SEED = Number(argOf('seed', '900'));
 const CAP = Number(argOf('cap', '160'));
 const SIZE = Number(argOf('size', String(DEFAULT_CONFIG.size)));
+/**
+ * 地形对称方式：`fair`（默认，两侧配额相同分布不同）/ `mirror`（完全镜像）。
+ *
+ * 为什么要能选：v3 的验收口径分两种——镜像图上"两边条件完全一样"，
+ * 打平是合理结果；非镜像图上打平说明有一方推不动，要算问题。
+ * 见 `docs/PLAN-AI-V3-2026-11-21.md` 的验收配方。
+ */
+const SYMMETRY = argOf('symmetry', 'fair') as 'fair' | 'mirror';
+/**
+ * 编制上限：`--unit-cap none` 或一个数字。不写 = 24（现状）。
+ *
+ * **只对 v3 生效**——v1 里这条是写死的（v1 冻结，不改）。所以想验它必须同时给
+ * `--new ../src/core/ai-v3.ts`，否则这个参数是空的。
+ * 见 `docs/PLAN-AI-V3-2026-11-21.md` 第二节。
+ */
+const UNIT_CAP_ARG = argOf('unit-cap', '');
+const UNIT_CAP: number | 'none' | undefined =
+  UNIT_CAP_ARG === '' ? undefined : UNIT_CAP_ARG === 'none' ? 'none' : Number(UNIT_CAP_ARG);
+
+/**
+ * 导出一局回放：`--replay <文件路径>`。
+ *
+ * 复盘文件就是一份普通的对局报告（种子 + 完整 config + 动作序列），
+ * 界面里拖进去就能逐帧看——同一个 `buildReplayFromText`，不另写一套。
+ *
+ * 为什么要有它：有些问题（"它为什么把兵堆在这儿""为什么整局没往对面走"）
+ * 人看一眼就知道，机器得写一堆探针才摸到边。所以每个结论都该能**看一眼**。
+ *
+ * 挑哪一局：
+ *   --replay x.json                 → 默认第一颗种子的第一局（新先手）
+ *   --replay x.json --replay-seed 906
+ *   --replay x.json --replay-seed 906 --replay-first old   → 新后手那一局
+ */
+/**
+ * 战略层用哪一档"决战时代"模型（`const` / `foe`）。
+ *
+ * **只对 v3 生效**，而且两档现在都只算不用：算出来写进 `aiDecisions`，
+ * 没有任何消费方。所以开了也只是多一份日志，棋还是同一盘。
+ */
+const ERA_MODEL_ARG = argOf('era-model', '');
+const ERA_MODEL: 'const' | 'foe' | undefined =
+  ERA_MODEL_ARG === 'const' || ERA_MODEL_ARG === 'foe' ? ERA_MODEL_ARG : undefined;
+
+/** `--no-crossing`：关掉 v3 的过河投送计划（做 A/B 用） */
+const NO_CROSSING = has('no-crossing');
+/** `--posture`：打开 v3 的战略姿态（2 维权重，默认关） */
+const POSTURE = has('posture');
+/** `--no-decisive`：关掉决战时机的闸门（做 A/B 用） */
+const NO_DECISIVE = has('no-decisive');
+/** `--no-mass`：关掉屯兵计划（做 A/B 用） */
+const NO_MASS = has('no-mass');
+/** `--no-breakthrough`：关掉集中突破/绕路（做 A/B 用） */
+const NO_BREAKTHROUGH = has('no-breakthrough');
+/** `--no-squad`：关掉编队（做 A/B 用） */
+const NO_SQUAD = has('no-squad');
+/** `--need-squad`：打开"计划层申报编队规模"（默认关，实测会变差） */
+const NEED_SQUAD = has('need-squad');
+/** `--quality-scale N`：采购质量信号的放大倍数（默认 2.5，1 = 老行为） */
+const QUALITY_SCALE = argOf('quality-scale', '');
+/** `--recruit-cap auto|N`：放开每回合产兵名额（默认仍是 2） */
+const RECRUIT_CAP_ARG = argOf('recruit-cap', '');
+/** `--econ-cap`：打开"经济上限按地块容量"（`aiEconCap`），验经济铺满时的行为 */
+const ECON_CAP = has('econ-cap');
+/** `--econ-plan`：经济投入交给求解器（`aiEconPlan`） */
+const ECON_PLAN = has('econ-plan');
+/** `--threat`：威胁感知采购（`aiThreatScale`） */
+const THREAT = has('threat');
+const RECRUIT_CAP: number | 'auto' | undefined =
+  RECRUIT_CAP_ARG === 'auto' ? 'auto' : RECRUIT_CAP_ARG === '' ? undefined : Number(RECRUIT_CAP_ARG);
+
+const REPLAY_PATH = argOf('replay', '');
+const REPLAY_SEED = argOf('replay-seed', '');
+const REPLAY_FIRST = argOf('replay-first', 'new') === 'old' ? 'old' : 'new';
 /**
  * 台子上测哪一档。
  *
@@ -100,9 +191,13 @@ const EXP = has('bare')
       .concat([...DEFAULT_CONFIG.expansionIds])
       .filter((id, i, a) => a.indexOf(id) === i);
 
-type Ai = typeof newAi;
+type AiFn = (typeof import('../src/core/ai.ts'))['aiNextAction'];
+type Ai = AiFn;
 
-function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turns: number } {
+function playOne(
+  seed: number,
+  aIsNew: boolean,
+): { winner: PlayerId | null; turns: number; final: GameState; actions: LoggedAction[] } {
   let s: GameState = createMatch(
     {
       ...DEFAULT_CONFIG,
@@ -116,12 +211,30 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
        * 验 5 代以上的内容请显式给 --size 24 或 28。
        */
       size: SIZE,
+      mapSymmetry: SYMMETRY,
+      ...(UNIT_CAP === undefined ? {} : { unitCap: UNIT_CAP }),
+      ...(ERA_MODEL === undefined ? {} : { aiEraModel: ERA_MODEL }),
+      ...(NO_CROSSING ? { aiCrossing: false } : {}),
+      ...(QUALITY_SCALE === '' ? {} : { aiQualityScale: Number(QUALITY_SCALE) }),
+      ...(POSTURE ? { aiPosture: true } : {}),
+      ...(ECON_CAP ? { aiEconCap: true } : {}),
+      ...(ECON_PLAN ? { aiEconPlan: true } : {}),
+      ...(THREAT ? { aiThreatScale: true } : {}),
+      ...(RECRUIT_CAP === undefined ? {} : { aiRecruitCap: RECRUIT_CAP }),
+      ...(NO_DECISIVE ? { aiDecisive: false } : {}),
+      ...(NO_MASS ? { aiMass: false } : {}),
+      ...(NO_BREAKTHROUGH ? { aiBreakthrough: false } : {}),
+      ...(NO_SQUAD ? { aiSquad: false } : {}),
+      ...(NEED_SQUAD ? { aiNeedSquad: true } : {}),
     },
     seed,
   );
 
   const aiFor = (p: PlayerId): Ai =>
     (p === 'A') === aIsNew ? (scriptAi ?? newAi) : VS_NEW ? newAi : oldAi;
+
+  /** 只记**被接受**的动作：被拒的那几步重放时也走不通，记进去只会让复盘提前分叉 */
+  const actions: LoggedAction[] = [];
 
   while (!s.winner && s.turn <= CAP) {
     const ai = aiFor(s.current);
@@ -136,27 +249,109 @@ function playOne(seed: number, aIsNew: boolean): { winner: PlayerId | null; turn
      * 拿这种数去比胜率，比的是"谁更倒霉撞上这个 bug"。
      */
     const rejected = new Set<string>();
+    const moveTries = new Map<string, number>();
     for (let i = 0; i < AI_MAX_STEPS && !s.winner; i++) {
       const a = ai(s, budget, rejected);
       if (!a) break;
       const r = applyAction(s, a);
       if (!r.ok) {
+        /*
+         * MOVE 的失败大多不是"这个动作非法"，而是"目标格被友军占着"——
+         * 下一步那个人走开就合法了。把它记进 rejected 会让链式让位永远停在第一个人。
+         * 同一单位试 2 次还不行（地形/桥塌之类）再记，防止死循环。
+         */
+        if (a.type === 'MOVE' && 'unitId' in a) {
+          const uid = String((a as { unitId?: string }).unitId ?? '');
+          const n = (moveTries.get(uid) ?? 0) + 1;
+          moveTries.set(uid, n);
+          if (n < 2) continue;
+        }
         rejected.add(aiActionKey(a));
         continue;
       }
       rejected.clear();
+      actions.push({ ...a, by: s.current });
       s = r.state;
       if (a.type === 'RECRUIT') budget.recruited += 1;
       if (a.type === 'UPGRADE') budget.upgraded += 1;
     }
     if (s.winner) break;
-    const r = applyAction(s, { type: 'END_TURN' });
+    const endTurn = { type: 'END_TURN' as const };
+    const r = applyAction(s, endTurn);
     if (!r.ok) break;
+    // END_TURN 也要记：复盘是一步步 applyAction 重放，少了它回合永远不换手
+    actions.push({ ...endTurn, by: s.current });
     s = r.state;
   }
 
-  return { winner: s.winner ?? null, turns: s.turn };
+  return { winner: s.winner ?? null, turns: s.turn, final: s, actions };
 }
+
+/**
+ * 终局快照：撞回合上限时，"谁其实占优"。
+ *
+ * 只数不判：城数、兵力、金币、编制是否顶满。平局的成因分几种，光看"平"这个字
+ * 分不出来——是两边都推不动（城多兵多但打不进去），还是钱花不出去（编制满），
+ * 还是一方早就该赢只是收不了尾。这份快照是为了让 S1 的诊断有据可依，
+ * 不参与胜负判定（不要用它把平局改判成胜）。
+ */
+/**
+ * 计划使用摘要："无→reclaim@48→无@52"。
+ *
+ * 这是"计划有没有被真的用上"的唯一证据：value 写错了、注册漏了、
+ * 或者被冷却挡在外面，表现都是"AI 一点反应都没有"，和没装一模一样。
+ * 所以每一局都打一行，别只在出问题时去找。
+ */
+/** 桥的数量（按兵种的 bridges 标记数，不看地形，避免升级/替换重复计数） */
+function bridgeCountOf(s: GameState, p: PlayerId): number {
+  return s.units.filter((u) => u.owner === p && s.unitTypes[u.type]?.bridges === true).length;
+}
+
+/** 计划换手次数：一局里换了多少次当值计划（含变空），衡量判据稳不稳 */
+function planFlipsOf(s: GameState, p: PlayerId): number {
+  return (s.aiPlanTrace ?? []).filter((t) => t.me === p).length;
+}
+
+/**
+ * 编队摘要：`2支[atk-1走6人/atk-2组3人]`。
+ * 组 = 还在收拢（缺口就是报给生产端的那个数），走 = 已出发。
+ */
+function squadSummaryOf(s: GameState, p: PlayerId): string {
+  /*
+   * 读**当前编队**（`aiFocus.squads`），不读日志。
+   *
+   * 日志只在"结论变化"时记一条，所以最后一条可能是几十回合前的：
+   * 编队解散之后日志还留着旧的，摘要会一直显示"31 人"（实测踩过）。
+   */
+  const live = s.aiFocus?.[p]?.squads ?? [];
+  if (live.length === 0) return '无';
+  const body = live
+    .map((x) => `${x.id.replace(/-\d+$/, '')}${x.state === 'forming' ? '组' : '走'}${x.memberIds.length}人`)
+    .join('/');
+  return `${live.length}支[${body}]`;
+}
+
+function planSummaryOf(s: GameState, p: PlayerId): string {
+  const list = (s.aiPlanTrace ?? []).filter((t) => t.me === p);
+  if (list.length === 0) return '无';
+  return list.map((t) => `${t.plan ?? '无'}@${t.turn}`).join('→');
+}
+
+function snapshotOf(s: GameState): string {
+  const side = (p: PlayerId): string => {
+    const cities = s.cities.filter((c) => c.owner === p).length;
+    const units = s.units.filter((u) => u.owner === p).length;
+    // 战斗单位单独数：编制上限只卡这一档，全数会把工人算进去，看不出"顶满"
+    const combat = armySize(s, p);
+    const gold = Math.round(s.players[p].gold);
+    return `${cities}城/${combat}战+${units - combat}工/${gold}金`;
+  };
+  return `A ${side('A')} · B ${side('B')}`;
+}
+
+/** 复盘只导一局：第一颗匹配到的那局，别把二十局都写出去 */
+const wantReplaySeed = REPLAY_SEED === '' ? BASE_SEED : Number(REPLAY_SEED);
+let replayWritten = false;
 
 let newWins = 0;
 let oldWins = 0;
@@ -170,9 +365,38 @@ for (let i = 0; i < GAMES; i++) {
   const layouts = SWAP ? [true, false] : [i % 2 === 0];
 
   for (const aIsNew of layouts) {
-    const { winner, turns } = playOne(seed, aIsNew);
+    const { winner, turns, final, actions } = playOne(seed, aIsNew);
     turnsSum += turns;
     played += 1;
+
+    /*
+     * 导出这一局（见 `--replay`）：默认取第一颗种子的"新先手"那局。
+     * 报告格式和界面里"结束后上传"的完全一样，所以拖进游戏就能看。
+     */
+    if (REPLAY_PATH && !replayWritten && seed === wantReplaySeed && aIsNew === (REPLAY_FIRST === 'new')) {
+      const report = buildMatchReport(final, new Date(), null, actions);
+      mkdirSync(dirname(REPLAY_PATH), { recursive: true });
+      writeFileSync(REPLAY_PATH, JSON.stringify(report));
+      replayWritten = true;
+      // 打**绝对路径**：相对路径跑完就找不到了，`/tmp` 在访达里还进不去
+      process.stderr.write(`  已导出复盘：${resolve(REPLAY_PATH)}（${actions.length} 步）\n`);
+      /*
+       * 判决日志跟着回放一起写：回放只能看"做了什么"，这一列补"为什么"。
+       * 没有开 `--era-model` 就是空文件，干脆不写。
+       */
+      const decisions = final.aiDecisions ?? [];
+      if (decisions.length > 0) {
+        const sidecar = REPLAY_PATH.replace(/\.json$/i, '.decisions.jsonl');
+        writeFileSync(sidecar, decisions.map((d) => JSON.stringify(d)).join('\n') + '\n');
+        process.stderr.write(`  判决日志：${sidecar}（${decisions.length} 条）\n`);
+      }
+      const planTrace = final.aiPlanTrace ?? [];
+      if (planTrace.length > 0) {
+        const sidecar = REPLAY_PATH.replace(/\.json$/i, '.plans.jsonl');
+        writeFileSync(sidecar, planTrace.map((d) => JSON.stringify(d)).join('\n') + '\n');
+        process.stderr.write(`  计划日志：${sidecar}（${planTrace.length} 条）\n`);
+      }
+    }
 
     let tag: string;
     if (winner === null) {
@@ -185,7 +409,13 @@ for (let i = 0; i < GAMES; i++) {
       tag = winnerIsNew ? 'NEW' : 'old';
     }
     process.stderr.write(
-      `era${ERA} seed=${seed} ${aIsNew ? '新先手' : '新后手'} → ${tag} (${turns} 回合)\n`,
+      `era${ERA} seed=${seed} ${aIsNew ? '新先手' : '新后手'} → ${tag} (${turns} 回合)` +
+        (winner === null ? `  [终端快照 ${snapshotOf(final)}]` : '') +
+        `  桥 A=${bridgeCountOf(final, 'A')} B=${bridgeCountOf(final, 'B')}` +
+        ` 换手 A=${planFlipsOf(final, 'A')} B=${planFlipsOf(final, 'B')}` +
+        `  编队 A=${squadSummaryOf(final, 'A')} B=${squadSummaryOf(final, 'B')}` +
+        `  计划 A=${planSummaryOf(final, 'A')} B=${planSummaryOf(final, 'B')}` +
+        '\n',
     );
   }
 }
@@ -201,5 +431,7 @@ console.log(
   `era${ERA} ${played} 局：新 AI ${newWins} 胜 / 旧 AI ${oldWins} 胜 / 平 ${draws}` +
     ` → 新胜率 ${(rate * 100).toFixed(1)}% (z=${zDecided.toFixed(2)})` +
     ` 计分 ${(score * 100).toFixed(1)}% (z=${zScore.toFixed(2)})` +
-    ` 均 ${(turnsSum / Math.max(1, played)).toFixed(0)} 回合  exp=[${EXP.join(',')}]`,
+    ` 平局率 ${((draws / Math.max(1, played)) * 100).toFixed(0)}%` +
+    ` 均 ${(turnsSum / Math.max(1, played)).toFixed(0)} 回合` +
+    ` ${SIZE}×${SIZE}/${SYMMETRY} cap=${CAP} exp=[${EXP.join(',')}]`,
 );

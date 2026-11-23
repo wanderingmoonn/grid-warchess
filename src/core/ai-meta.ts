@@ -166,6 +166,22 @@ export function aiStallGuard(limit = 2): AiStallGuard {
   };
 }
 
+/**
+ * 这一档该用哪份手写引擎（2026-11-22 用户定：**v3 转正，接替「高级」**）。
+ *
+ * 为什么把映射放进 core 而不是写死在 `main.ts` 的判断里：
+ * "哪个档位走哪个内核"是个可以写错的规则（改档位名、加档位时最容易被漏掉），
+ * 放在这里能被 `test:rules` 钉住；UI 只负责按结果去 `import()`。
+ *
+ * `brain` 是老的"换内核"入口（`aiBrain: 'goal'`），存档里可能还留着，
+ * 所以照样认；`'net'` 是网络内核走的另一条路，这里只回答"手写引擎用哪份"。
+ */
+export function engineForAi(opts: { level?: string | null; brain?: string | null }): 'v1' | 'v3' {
+  if (opts.brain === 'net') return 'v1';
+  if (opts.brain === 'goal') return 'v3';
+  return opts.level === 'advanced' ? 'v3' : 'v1';
+}
+
 export function aiLevelOf(s: GameState): AiLevel {
   const lv = s.config.aiLevel;
   return lv === 'basic' ? 'basic' : lv === 'tactic' ? 'tactic' : 'advanced';
@@ -191,7 +207,7 @@ export function aiBrainOf(s: GameState): 'script' | 'net' | 'goal' {
 export function aiNameOf(s: GameState): string {
   const brain = aiBrainOf(s);
   if (brain === 'net') return '测试 AI';
-  if (brain === 'goal') return '测试 AI 二代';
+  if (brain === 'goal') return '实验 AI v3';
   return `${aiLevelLabel(aiLevelOf(s))} AI`;
 }
 

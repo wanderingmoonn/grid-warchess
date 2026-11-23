@@ -157,3 +157,12 @@ async function untilText(pred, what) {
 assert.deepEqual(errors.map((e) => String(e?.message ?? e)), [], '点击过程中有新报错');
 
 console.log('\n通过：启动与事件接线正常\n');
+
+/*
+ * 显式退出。
+ *
+ * jsdom 的窗口会留下定时器/句柄，Node 22 下进程跑完断言也不会自己结束——
+ * `npm test` 于是卡在这一步（2026-11-22 定位：HEAD 上同样复现，与业务代码无关）。
+ * 断言已经全部执行完，这里直接退，别让跑批等一个永远不会到来的自然退出。
+ */
+process.exit(0);

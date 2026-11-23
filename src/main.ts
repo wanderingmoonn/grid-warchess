@@ -20,7 +20,7 @@ import { activeExpansions, expansionById } from './core/expansions.ts';
 import type { BoardView } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
-import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import { DEFAULT_BUDGET, aiLevelOf, aiNameOf, anyAiSide, engineForAi, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, validateLevel } from './core/level.ts';
@@ -1475,7 +1475,6 @@ function panelInput(known?: PlayerView): PanelInput {
     planReady: state.orderReady?.[me()] === true,
     forceMode,
     combatInspectMode,
-    combatDirectPreview: currentUiLayout(document.documentElement) === 'refined',
     combatTargetCount: targets.length + siege.length,
     report: reportPanel(),
     /*
@@ -1893,6 +1892,78 @@ function renderPaintedCells(cells: number[]): void {
   renderBoard(boardEl, viewOnBoard(view, activeBoardId), boardUiFor(lastBoardUi, activeBoardId), ids);
 }
 
+/**
+ * 「AI 在想什么」小窗口（回放时默认开，对局里 `?aihud` 打开）。
+ *
+ * 数据全是 AI 自己写进局面的：
+ *   · `aiPlanTrace` —— 计划排序层当值的是哪条、净权重多少；
+ *   · `aiCalls`     —— 决战时机判"打"还是"发展"、投影比、行军回合；
+ *   · `aiSquads`    —— 编队（几支、几人、队形散布、上报结论）。
+ *
+ * 回放时按**当前帧的回合**往回找最近一条，所以拖动进度条时它会跟着变。
+ */
+function renderAiHud(): void {
+  const on = replay !== null || new URLSearchParams(location.search).has('aihud');
+  const old = document.getElementById('ai-hud');
+  if (!on) {
+    old?.remove();
+    return;
+  }
+  const el =
+    old ??
+    (() => {
+      const d = document.createElement('div');
+      d.id = 'ai-hud';
+      d.style.cssText =
+        'position:fixed;right:10px;bottom:10px;z-index:99998;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;' +
+        'background:rgba(16,18,22,.9);color:#dbe4ee;padding:10px 12px;border-radius:8px;white-space:pre;' +
+        'pointer-events:none;max-width:48ch;box-shadow:0 6px 22px rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.08)';
+      document.body.appendChild(d);
+      return d;
+    })();
+
+  const t = state.turn;
+  /*
+   * 回放里这些日志**不在 state 上**：重放只跑 applyAction，不跑 AI。
+   * 所以优先读报告里带过来的那一份（`buildMatchReport` 存的 `aiTrace`）。
+   */
+  const tracePlans = replay?.aiTrace?.plans ?? state.aiPlanTrace;
+  const traceCalls = replay?.aiTrace?.calls ?? state.aiCalls;
+  const traceSquads = replay?.aiTrace?.squads ?? state.aiSquads;
+  const lastOf = <T extends { turn: number; me: PlayerId }>(list: T[] | undefined, p: PlayerId): T | undefined =>
+    [...(list ?? [])].reverse().find((x) => x.me === p && x.turn <= t);
+
+  const lines: string[] = [`AI 想法 · t=${t}${replay ? ' · 回放' : ''}`];
+  for (const p of ['A', 'B'] as PlayerId[]) {
+    const plan = lastOf(tracePlans, p);
+    const call = lastOf(traceCalls, p);
+    const squad = lastOf(traceSquads, p);
+    if (!plan && !call && !squad) continue;
+    lines.push(`── ${p} ──`);
+    if (plan) {
+      const net = plan.net;
+      const w = net
+        ? ` ÷攻${net.attack.toFixed(2)} 经${net.econ.toFixed(2)}${net.advance !== undefined ? ` 推${net.advance.toFixed(2)}` : ''}`
+        : '';
+      lines.push(`计划 ${plan.plan ?? '无'}${w}`);
+    }
+    if (call) {
+      const ratio = call.myPower / Math.max(1, call.foePower);
+      lines.push(`决战 ${call.call === 'attack' ? '打' : '发展'} · 投影比 ${ratio.toFixed(2)} · 行军 ${call.marchTurns}`);
+    }
+    for (const sq of squad?.squads ?? []) {
+      const stateName = sq.state === 'forming' ? '组' : '走';
+      /*
+       * 标出编队类型：之前只显示 id（`atk-3`），建造编队 `build-120` 会被当成
+       * 另一种 atk；用户 2026-11-22 要求"不同种类的编队都要能看到"。
+       */
+      const kind = sq.role === 'build' ? '建造' : sq.role === 'defend' ? '防守' : '进攻';
+      lines.push(`编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}`);
+    }
+  }
+  el.textContent = lines.length > 1 ? lines.join('\n') : `AI 想法 · t=${t}\n（这一帧没有 AI 记录）`;
+}
+
 function render(): void {
   if (combatAim && (combatAim.source !== state || combatAim.sourceFog !== state.fog || combatAim.sourceBoard !== activeBoardId ||
     combatAim.forecast.action.unitId !== selectedId || state.config.commanderMode || godMode() || forceMode === 'move' ||
@@ -1901,6 +1972,7 @@ function render(): void {
   }
   ensureArtIndex();
   renderDebugHud();
+  renderAiHud();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
   // 全图选点模式（传送阵）：整张图都是落点，用十字光标说明"这里能点"。
@@ -3943,7 +4015,14 @@ combatPreviewEl.addEventListener('click', (event) => {
   }
 });
 
-function dispatch(action: Action, quickAttack = false): boolean {
+/**
+ * 执行一个动作。
+ *
+ * 2026-11-22 用户要求**回撤「攻击确认键」那次改动**：以前 refined UI 里
+ * 点敌人就直接开火（传 `quickAttack = true` 绕过确认），现在一律先出预览、
+ * 由「攻击预览 / 确认」那颗按钮收口——误触一下就是送一个兵，不值得省这一步。
+ */
+function dispatch(action: Action): boolean {
   /*
    * 肉鸽撤离阶段：**每个动作入口都要先把胜负按下**（2026-11-19）。
    *
@@ -4000,7 +4079,7 @@ function dispatch(action: Action, quickAttack = false): boolean {
   }
 
   if ((action.type === 'ATTACK' || action.type === 'SIEGE') && !confirmingCombat &&
-    (touchCombatInput || combatInspectMode || (currentUiLayout(document.documentElement) === 'refined' && !quickAttack)) && !godMode()) {
+    (touchCombatInput || combatInspectMode) && !godMode()) {
     if (!showCombatPreview(action, true)) toast('当前无法预览这次攻击，请重新选择单位和目标');
     return false;
   }
@@ -4672,7 +4751,7 @@ function onBoardClick(e: Event): void {
         targetId: hit.id,
         x: coords.x,
         y: coords.y,
-      }, true);
+      });
       return;
     }
     toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
@@ -4837,7 +4916,7 @@ function onBoardClick(e: Event): void {
         targetId: stacked.id,
         x: coords.x,
         y: coords.y,
-      }, wantAttack);
+      });
       return;
     }
   }
@@ -4850,7 +4929,7 @@ function onBoardClick(e: Event): void {
       targetId: clickedUnitId,
       x: coords?.x,
       y: coords?.y,
-    }, wantAttack);
+    });
     return;
   }
 
@@ -4945,7 +5024,7 @@ function onBoardClick(e: Event): void {
       cityId: city.id,
       x: coords.x,
       y: coords.y,
-    }, wantAttack);
+    });
     return;
   }
 
@@ -6229,14 +6308,14 @@ async function runAiLoop(): Promise<void> {
 let aiEnginePromise: Promise<typeof import('./core/ai.ts')> | null = null;
 let aiEngineV2Promise: Promise<typeof import('./core/ai.ts')> | null = null;
 /**
- * 手写引擎：老 AI（`core/ai.ts`）或测试 AI 二代（`core/ai-v2.ts`）。
+ * 手写引擎：老 AI（`core/ai.ts`，v1）或实验 AI（`core/ai-v3.ts`）。
  *
  * 两份文件导出同名同签名的 `aiNextAction`，所以调用方一行不用改——
  * 这就是"复制出去单独一个模型"的意义：切内核不改主循环。
  */
 function aiEngine(brain: 'script' | 'net' | 'goal' = 'script'): Promise<typeof import('./core/ai.ts')> {
   if (brain === 'goal') {
-    aiEngineV2Promise ??= import('./core/ai-v2.ts') as Promise<typeof import('./core/ai.ts')>;
+    aiEngineV2Promise ??= import('./core/ai-v3.ts') as Promise<typeof import('./core/ai.ts')>;
     return aiEngineV2Promise;
   }
   aiEnginePromise ??= import('./core/ai.ts');
@@ -6297,7 +6376,13 @@ async function runAiTurn(
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
   const rejected = new Set<string>();
-  const engine = await aiEngine(state.config.aiBrain === 'goal' ? 'goal' : 'script');
+  /*
+   * 内核选择走 core 的 `engineForAi`（2026-11-22）：
+   * **「高级」这一档现在就是 v3**，不再需要单独勾一颗"实验 AI"。
+   * 网络内核（`aiBrain === 'net'`）在下面另走一条路，这里不加载手写引擎。
+   */
+  const engineId = engineForAi({ level: aiLevelOf(state), brain: state.config.aiBrain ?? null });
+  const engine = await aiEngine(engineId === 'v3' ? 'goal' : 'script');
 
   /*
    * 网络内核：只在 `config.aiBrain === 'net'` 时加载。

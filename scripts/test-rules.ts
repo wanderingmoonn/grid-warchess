@@ -17,6 +17,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildListOf } from '../src/core/build-list.ts';
+import { engineForAi } from '../src/core/ai-meta.ts';
 import { describeUnit, unitStatLine } from '../src/core/info.ts';
 import { pruneUnknownUnits } from '../src/storage/save.ts';
 
@@ -2717,11 +2718,11 @@ test('每个奇想兵种都带至少一条机制，不是纯数值兵', () => {
   }
 });
 
-test('英雄包装十一个英雄，外加跟班的召唤物', () => {
+test('英雄包装十二个英雄，外加跟班的召唤物', () => {
   const pack = EXPANSIONS.find((e) => e.id === 'fantasy')!;
   const units = pack.units ?? [];
   const heroes = units.filter((u) => u.hero === true);
-  assert.equal(heroes.length, 11);
+  assert.equal(heroes.length, 12);
   for (const u of heroes) {
     assert.ok((u.unlockCost ?? 0) > 0, `${u.name} 应该有解锁费`);
     assert.ok((u.skills ?? []).length > 0, `${u.name} 是英雄，得有一个主动技能`);
@@ -2755,11 +2756,16 @@ test('英雄血量整体上调一档，造价只跟着挪一点点', () => {
     // 它同时吃到"信息化射程 4→5"和"陨卵自己选落点"，640 已经压不住）。
     // 把上限整体抬到 700 会让别的英雄跟着水涨船高，那是另一件事。
     const cap = u.id === 'evil-dragon-king' ? 700 : 650;
-    assert.ok(u.cost >= 300 && u.cost <= cap, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
+    // 兽人酋长（2026-11-22）：**二代**英雄，260 金——它就是来填"早期没有英雄"的
+    // 那个洞，不该被按三代以上写的 300 下限卡住。
+    const floor = u.id === 'orc-chieftain' ? 240 : 300;
+    assert.ok(u.cost >= floor && u.cost <= cap, `${u.name} 造价 ${u.cost}，涨过头或没涨`);
     // 血涨了价就得涨，否则英雄在性价比上直接压死同费普通兵。
     // 暗夜死灵法师是例外：2026-10-31 它整体下调、降到火器时代（320 金），
     // 这一条"涨"的规则对它不成立。
-    if (u.id === 'night-necromancer') continue;
+    // 兽人酋长同理：它是**二代**英雄（300 金），340 这条下限是按三代以上写的，
+    // 拿它去卡二代英雄，等于逼着"早期英雄"卖成三代价。
+    if (u.id === 'night-necromancer' || u.id === 'orc-chieftain') continue;
     assert.ok(u.cost > 340, `${u.name} 血涨了价没动`);
   }
 });
@@ -3359,13 +3365,14 @@ test('招魂：付生产价格把倒下的友军拉回来，且同一具只能�
   for (const [x, y] of [[5, 5], [6, 5], [7, 5]]) s.tiles[idx(s, x, y)].terrain = 'plain';
   const necro = place2(s, 'A', 'night-necromancer', 5, 5);
   const doomed = place2(s, 'A', 'militia', 6, 5);
-  const hydra = place2(s, 'B', 'hydra', 7, 5);
+  // 靶子必须是一只**英雄**：招魂不收英雄，2026-11-22 九头蛇不再是英雄，改用矮人王
+  const foeHero = place2(s, 'B', 'dwarf-king', 7, 5);
   doomed.hp = 1; // 让它必然死于反击
 
   const goldBefore = s.players.A.gold;
   // 开局本来就有民兵，所以数"多出来几个"，而不是数总数
   const militiaBefore = s.units.filter((u) => u.owner === 'A' && u.type === 'militia').length;
-  const atk = applyAction(s, { type: 'ATTACK', unitId: doomed.id, targetId: hydra.id });
+  const atk = applyAction(s, { type: 'ATTACK', unitId: doomed.id, targetId: foeHero.id });
   assert.ok(atk.ok, atk.ok ? '' : atk.reason);
   assert.ok(
     !atk.state.units.some((u) => u.id === doomed.id),
@@ -3398,7 +3405,7 @@ test('招魂：付生产价格把倒下的友军拉回来，且同一具只能�
   again.skillTurn = undefined;
   r.state.fallen = [
     ...(r.state.fallen ?? []),
-    { owner: 'A', type: 'hydra', x: 6, y: 6, turn: r.state.turn },
+    { owner: 'A', type: 'foeHero', x: 6, y: 6, turn: r.state.turn },
   ];
   const r2 = applyAction(r.state, { type: 'HERO_SKILL', unitId: necro.id, skillId: 'raise-dead' });
   assert.equal(r2.ok, false, '同一具不能被反复招起来');
@@ -4168,22 +4175,69 @@ test('投斧：默认只能近身，开了技能才够得着三格', () => {
   assert.equal(far, Math.round(melee * 0.6), `远程 ${far} 应该等于近身 ${melee} 的六成`);
 });
 
-test('再生：立刻回四成，冷却两回合', () => {
+test('精灵女王：林海把五格内地表变森林、五回合后还原，友军限时获得林地之力', () => {
+  /*
+   * 2026-11-22 新增。它验证的是引擎新加的两件事：
+   *   · `patchTerrain`：改完记原样、到期还原（而不是永久改掉地形）；
+   *   · `grantTempAbility`：限时能力到期会被摘掉（而不是永久多一条）。
+   */
   const s = fresh({ expansionIds: FANTASY });
-  s.tiles[idx(s, 5, 5)].terrain = 'plain';
-  const hydra = place2(s, 'A', 'hydra', 5, 5);
-  const maxHp = s.unitTypes.hydra!.maxHp;
-  hydra.hp = 20;
+  for (let y = 2; y <= 12; y += 1) {
+    for (let x = 2; x <= 12; x += 1) {
+      const t = s.tiles[idx(s, x, y)];
+      if (t && t.terrain !== 'city') t.terrain = 'plain';
+    }
+  }
+  const queen = place2(s, 'A', 'elf-queen', 7, 7);
+  const ally = place2(s, 'A', 'militia', 7, 8);
   s.current = 'A';
-  const r = applyAction(s, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
-  assert.ok(r.ok, r.ok ? '' : r.reason);
-  const h = r.state.units.find((u) => u.id === hydra.id)!;
-  assert.equal(h.hp, 20 + Math.round(maxHp * 0.4), '回 40%');
-  assert.equal(h.skillCd?.regrow, 2, '冷却两回合');
-  const again = applyAction(r.state, { type: 'HERO_SKILL', unitId: hydra.id, skillId: 'regrow' });
-  assert.equal(again.ok, false, '冷却中不能再开');
+
+  const cast = applyAction(s, { type: 'HERO_SKILL', unitId: queen.id, skillId: 'forest-tide' });
+  assert.ok(cast.ok, cast.ok ? '' : cast.reason);
+  assert.equal(cast.state.tiles[idx(cast.state, 7, 7)].terrain, 'forest', '脚下的地变成森林');
+  assert.equal(cast.state.tiles[idx(cast.state, 4, 7)].terrain, 'forest', '五格内直着走三格的地方也变');
+  const buffed = cast.state.units.find((u) => u.id === ally.id)!;
+  assert.ok((buffed.tempAbilities ?? []).length > 0, '友军拿到限时能力');
+
+  // 走满五回合：地形还原、能力摘掉
+  let st = cast.state;
+  for (let i = 0; i < 6; i += 1) {
+    const e = applyAction(st, { type: 'END_TURN' });
+    assert.ok(e.ok, e.ok ? '' : e.reason);
+    st = e.state;
+    st.current = 'A';
+  }
+  assert.equal(st.tiles[idx(st, 7, 7)].terrain, 'plain', '到期该还原成平地');
+  assert.equal((st.units.find((u) => u.id === ally.id)?.tempAbilities ?? []).length, 0, '限时能力到期要摘掉');
 });
 
+test('AI 内核选择：高级 = v3，其余走 v1（网络内核另走一条路）', () => {
+  /*
+   * 2026-11-22 用户定：v3 转正、接替「高级」。
+   * 这条钉的是"哪个档位走哪个引擎"——改档位名或加档位时最容易漏的就是它。
+   */
+  assert.equal(engineForAi({ level: 'advanced' }), 'v3', '高级就是 v3');
+  assert.equal(engineForAi({ level: 'tactic' }), 'v1', '中级仍是老引擎');
+  assert.equal(engineForAi({ level: 'basic' }), 'v1', '初级仍是老引擎');
+  assert.equal(engineForAi({ level: null }), 'v1', '没写档位按老引擎');
+  // 老存档/旧入口里的 brain=goal 照样认
+  assert.equal(engineForAi({ level: 'basic', brain: 'goal' }), 'v3', 'brain=goal 仍走 v3');
+  // 网络内核不归这条管
+  assert.equal(engineForAi({ level: 'advanced', brain: 'net' }), 'v1', 'net 不在这里选');
+});
+
+test('九头蛇：不再是英雄，强再生是被动', () => {
+  /*
+   * 2026-11-22 用户定：九头蛇摘掉英雄身份。
+   * 原来它靠主动技「再生」回 40%，而"强再生"本来就是被动（把每回合 10% 翻成 20%），
+   * 主动那一下只是把同一件事又做了一遍。现在它是一只普通的高价肉盾。
+   */
+  const s = fresh({ expansionIds: FANTASY });
+  const def = s.unitTypes.hydra!;
+  assert.equal(def.hero ?? false, false, '不再占英雄位');
+  assert.equal(def.skills ?? undefined, undefined, '没有主动技');
+  assert.ok((def.abilities ?? []).includes('regenerate-plus'), '强再生还是被动');
+});
 test('烈焰俯冲：移动 +2，攻击额外点燃两层', () => {
   const s = fresh({ expansionIds: FANTASY });
   for (const [x, y] of [[5, 5], [5, 4], [5, 3]]) s.tiles[idx(s, x, y)].terrain = 'plain';
@@ -6032,7 +6086,7 @@ test('指挥光环：2 格内友军攻击 +4', () => {
   assert.ok(plain > 0, '远处那一下照样打得出伤害');
 });
 
-test('破城：攻城伤害 ×1.5', () => {
+test('破城：攻城伤害 ×2', () => {
   const s = fresh();
   const cav = findUnit(s, 'A', 'scout');
   const city = citiesOf(s, 'B')[0];
@@ -6040,8 +6094,9 @@ test('破城：攻城伤害 ×1.5', () => {
   const normal = damageToCity(cav, city, s);
   grantAbility(s, 'scout', 'siege-master');
   const boosted = damageToCity(cav, city, s);
-  // 破城现在作用于攻击力，而不是最终伤害
-  const expected = Math.max(0, Math.round((normal + city.armor) * 1.5 - city.armor));
+  // 破城作用于攻击力，而不是最终伤害；2026-11-22 倍率 1.5 → 2
+  // （同批城血整体 ×1.5，攻城器械要保住"比普通兵快"的优势）
+  const expected = Math.max(0, Math.round((normal + city.armor) * 2 - city.armor));
   assert.equal(boosted, expected);
 });
 
@@ -18582,13 +18637,14 @@ test('攒钱额度三条边界：够得着不冻结、贴身攒、弃城期纯�
   assert.equal(savingAllowance(200, 220, 900, 2, false, 0), 0, '弃城期不出兵');
 });
 
-test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 30 血 / 女巫换特性', () => {
+test('奇想平衡（2026-11-03）：狂战士连击 2 段 / 蛇人 8 甲 / 女巫换特性', () => {
   const s = fresh({ startEra: 3, expansionIds: FANTASY });
   assert.equal(s.unitTypes['berserker']!.atk, 15, '狂战士每段 15（原 24 单发）');
   assert.equal(s.unitTypes['berserker']!.burst, 2, '狂战士改成连击 2 段');
   const serpent = s.unitTypes['serpent-man']!;
   assert.equal(serpent.armor, 8, '蛇人护甲 6 → 8');
-  assert.equal(serpent.maxHp, 26, '蛇人生命 26（2026-11-04 下放到一代时压下来的）');
+  // 2026-11-22 再削 10%：26 → 23（8 甲配 26 血在同价位太耐打）
+  assert.equal(serpent.maxHp, 23, '蛇人生命 23（2026-11-22 从 26 削 10%）');
   assert.equal(serpent.era, 1, '蛇人已经下放到第 1 代');
   const witch = s.unitTypes['witch']!;
   // 2026-11-07：掠空删掉了（它在时代 1 让她"近战打不到"，胜率 87%），只剩虚咒
@@ -18654,7 +18710,8 @@ test('奇想调整（2026-11-04）：蛇人与僵尸下放第 1 代，地狱犬�
   assert.equal(serpent.era, 1, '蛇人下放到第 1 代');
   assert.equal(serpent.cost, 72, '蛇人造价 95 → 72');
   assert.equal(serpent.atk, 12, '蛇人攻击 15 → 12');
-  assert.equal(serpent.maxHp, 26, '蛇人生命 34 → 26');
+  // 26 是 2026-11-04 的值；2026-11-22 再削 10% 到 23，这里断言当前值
+  assert.equal(serpent.maxHp, 23, '蛇人生命 23（11-04 下放时 26，11-22 再削 10%）');
   assert.equal(serpent.armor, 8, '蛇人护甲保持 8');
   assert.deepEqual(serpent.abilities, ['poison-hit'], '蛇人的淬毒不变');
 
@@ -20764,14 +20821,14 @@ test('战报折叠：只有带 say 的事件才展开', () => {
   assert.equal(logEventSays(new Set(['omen']), ['omen', 'omen'], hasSay), false, 'repeat 事件重复触发：不再展开');
 });
 
-test('AI 内核：测试 AI 二代能活进 config，网络内核仍只认两席局', () => {
+test('AI 内核：实验 AI v3 能活进 config，网络内核仍只认两席局', () => {
   /*
    * 2026-11-21 接按钮时发现的白名单漏洞：`setup.ts` 只放行 `net`，
-   * `aiBrain: 'goal'`（测试 AI 二代 / core/ai-v2.ts）会被静默写成 `script`。
+   * `aiBrain: 'goal'`（实验 AI v3 / core/ai-v3.ts）会被静默写成 `script`。
    * 面板上那颗按钮点得亮、开局还是老引擎——"看着生效、其实没生效"。
    */
   const goal2 = createMatch({ ...BASE, aiBrain: 'goal' }, 7);
-  assert.equal(goal2.config.aiBrain, 'goal', '选了二代内核，config 里必须还是 goal');
+  assert.equal(goal2.config.aiBrain, 'goal', '选了 v3 内核，config 里必须还是 goal');
 
   const net2 = createMatch({ ...BASE, aiBrain: 'net' }, 7);
   assert.equal(net2.config.aiBrain, 'net', '两席局认策略网络');
@@ -20779,9 +20836,9 @@ test('AI 内核：测试 AI 二代能活进 config，网络内核仍只认两席
   const net4 = createMatch({ ...BASE, aiBrain: 'net', playerCount: 4 }, 7);
   assert.equal(net4.config.aiBrain, 'script', '策略网络没见过三/四人局，退回手写引擎');
 
-  // 二代是按"所有敌人"写的，不设两席限制（多人局弱一点，但能打）
+  // v3 是按"所有敌人"写的，不设两席限制（多人局弱一点，但能打）
   const goal3 = createMatch({ ...BASE, aiBrain: 'goal', playerCount: 3 }, 7);
-  assert.equal(goal3.config.aiBrain, 'goal', '二代内核不挑人数');
+  assert.equal(goal3.config.aiBrain, 'goal', 'v3 内核不挑人数');
 });
 
 // 太空扩展的用例在 `tests/packs/space.test.ts`：改那一包时单独跑

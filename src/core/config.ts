@@ -283,6 +283,15 @@ export interface EraDef {
 }
 
 /** 时代：从冷兵器推到机械化。城市各自的属性，攻陷会连时代一起接收。 */
+/*
+ * 城市的耐久上限（`cityMaxHp`）在 2026-11-22 整体 ×1.5：
+ * 青铜 30 → 45、铁器 42 → 63 …… 聚变 132 → 198。
+ *
+ * 理由与同批的「破城 ×1.5 → ×2」是一对：普通兵砸城太容易（一轮齐射就能把
+ * 一代城的血打穿一半），围城没有"时间"可言；把城的耐久抬高 50%、同时让专精
+ * 攻城的兵（破城）把加成从 ×1.5 提到 ×2，结果是"没带攻城器的队伍拆墙变慢、
+ * 带了攻城器的队伍反而更快"，攻城器械终于有了存在理由。
+ */
 export const ERAS: EraDef[] = [
   {
     level: 1,
@@ -290,7 +299,7 @@ export const ERAS: EraDef[] = [
     short: '青铜',
     hint: '短兵相接',
     upgradeCost: 0,
-    cityMaxHp: 30,
+    cityMaxHp: 45,
     cityArmor: 4,
     cityIncome: 50,
   },
@@ -300,7 +309,7 @@ export const ERAS: EraDef[] = [
     short: '铁器',
     hint: '甲胄与长弓',
     upgradeCost: 220,
-    cityMaxHp: 42,
+    cityMaxHp: 63,
     cityArmor: 6,
     cityIncome: 55,
   },
@@ -310,7 +319,7 @@ export const ERAS: EraDef[] = [
     short: '火器',
     hint: '排队枪毙',
     upgradeCost: 360,
-    cityMaxHp: 54,
+    cityMaxHp: 81,
     cityArmor: 8,
     cityIncome: 61,
   },
@@ -320,7 +329,7 @@ export const ERAS: EraDef[] = [
     short: '蒸汽',
     hint: '钢铁与堑壕',
     upgradeCost: 540,
-    cityMaxHp: 66,
+    cityMaxHp: 99,
     cityArmor: 10,
     cityIncome: 68,
   },
@@ -330,7 +339,7 @@ export const ERAS: EraDef[] = [
     short: '机械化',
     hint: '内燃机与总动员',
     upgradeCost: 780,
-    cityMaxHp: 80,
+    cityMaxHp: 120,
     cityArmor: 12,
     cityIncome: 76,
   },
@@ -340,7 +349,7 @@ export const ERAS: EraDef[] = [
     short: '信息化',
     hint: '信息化与精确打击',
     upgradeCost: 1080,
-    cityMaxHp: 96,
+    cityMaxHp: 144,
     cityArmor: 14,
     cityIncome: 82,
   },
@@ -350,7 +359,7 @@ export const ERAS: EraDef[] = [
     short: '装甲',
     hint: '平台、模块与供电',
     upgradeCost: 1440,
-    cityMaxHp: 112,
+    cityMaxHp: 168,
     cityArmor: 16,
     cityIncome: 88,
   },
@@ -360,7 +369,7 @@ export const ERAS: EraDef[] = [
     short: '聚变',
     hint: '超载、光环与重型平台',
     upgradeCost: 1980,
-    cityMaxHp: 132,
+    cityMaxHp: 198,
     cityArmor: 19,
     cityIncome: 98,
   },

@@ -3209,44 +3209,26 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
   assert.equal(net(), null, '切回热座应该收起来');
 });
 
-check('测试 AI 二代：单独一颗按钮，点了换内核，不和档位/策略网络同时亮', () => {
+check('AI 内核：高级档位就是 v3，不再有单独的「实验 AI」按钮', () => {
   /*
-   * 2026-11-21：修仙分支的「实验 AI」并进主线，改叫「测试 AI 二代」。
+   * 2026-11-21 修仙分支的「实验 AI」并进主线；2026-11-22 接着写成 v3；
+   * 同一天用户定：**v3 转正，直接接替「高级」**——所以那颗独立开关就撤了。
    *
-   * 它是**第二个换内核的按钮**，不是第四档难度：`config.aiBrain` 从
-   * `script` 换成 `goal`，加载的是 `core/ai-v2.ts`。所以这里钉三件事：
-   *   1. 它和档位同一行（玩家是在"给对面挑对手"时看见它的）；
-   *   2. 和档位、和策略网络三选一，不许同时亮两颗；
-   *   3. 说明里写清它是"二代内核"，别让玩家以为它是策略网络的升级版。
+   * 这里钉两件事：
+   *   1. 人机对战时档位行里没有 `[data-aibrain="goal"]`（避免两个入口说同一件事）；
+   *   2. 「高级」那颗的说明里写着 v3，玩家能看见自己面对的是哪个内核。
    */
   click('[data-ai="1"]');
-  const v2 = () => doc.querySelector<HTMLElement>('[data-aibrain="goal"]');
-  assert.ok(v2(), '人机对战时应该能选到测试 AI 二代');
-  assert.ok((v2()!.textContent ?? '').includes('二代'), '按钮上要写着"二代"');
   assert.equal(
-    v2()!.closest('.ai-level-row'),
-    doc.querySelector('.ai-level-row'),
-    '它和三个档位是同一行',
-  );
-
-  click('[data-aibrain="goal"]');
-  assert.ok(v2()!.classList.contains('active'), '点它应该亮起来');
-  assert.equal(doc.querySelector('[data-ailevel].active'), null, '选了二代就不该同时亮着档位');
-  assert.equal(
-    doc.querySelector('[data-aibrain="net"].active'),
+    doc.querySelector('[data-aibrain="goal"]'),
     null,
-    '也不该同时亮着策略网络（两颗是不同内核）',
+    '不再有单独的「实验 AI v3」按钮',
   );
-  assert.ok(
-    (v2()!.closest('section')!.textContent ?? '').includes('二代内核'),
-    '这一栏要说明它是二代内核，不是"第四档"',
-  );
-
+  const adv = doc.querySelector<HTMLElement>('[data-ailevel="advanced"]');
+  assert.ok(adv, '高级档位还在');
+  assert.ok((adv!.getAttribute('title') ?? '').includes('v3'), '高级的说明里要写明是 v3 内核');
   click('[data-ailevel="advanced"]');
-  assert.equal(v2()!.classList.contains('active'), false, '点档位应该切回手写引擎');
-
-  click('[data-ai="0"]');
-  assert.equal(v2(), null, '切回热座应该收起来');
+  assert.ok(adv!.classList.contains('active'), '点高级应该亮起来');
 });
 
 check('选起始时代会顺手换成配套的棋盘尺寸', () => {
@@ -6634,7 +6616,7 @@ console.log('\n点敌人就是开火');
  * 属性卡不能被攻击抢走，反过来也不行：打不到的目标仍然只弹卡，
  * 所以这里同时验"能打到就开火"和"打不到就只看"。
  */
-check('手操选中部队后点相邻敌人，打开确认并能正常攻击', () => {
+check('手操选中部队后点相邻敌人，直接开火（2026-11-22 回撤确认键）', () => {
   const st = createMatch({ ...DEFAULT_CONFIG }, 20261026, {});
   st.fog = false;
   st.current = 'A';
@@ -6680,9 +6662,12 @@ check('手操选中部队后点相邻敌人，打开确认并能正常攻击', (
   const foeEl = d.querySelector<HTMLElement>(`.unit[data-id="${foe.id}"]`);
   assert.ok(foeEl, '敌人的兵没渲染出来——迷雾没关干净？');
   foeEl.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-  const confirm = d.querySelector<HTMLButtonElement>('#combat-preview:not([hidden]) [data-combat="confirm"]');
-  assert.ok(confirm, '点可攻击的敌人应该打开确认');
-  confirm.click();
+  // 2026-11-22 用户要求回撤「攻击确认键」：点目标就开火，不再多一道确认
+  assert.equal(
+    d.querySelector('#combat-preview:not([hidden]) [data-combat="confirm"]'),
+    null,
+    '不该再弹确认',
+  );
 
   // 以落盘的存档为准：图被重绘过，捏着旧节点看不出有没有真打
   const after = JSON.parse(w.localStorage.getItem('warchess:match:v1') ?? '{}') as {
@@ -6692,7 +6677,7 @@ check('手操选中部队后点相邻敌人，打开确认并能正常攻击', (
   assert.ok(afterFoe, '敌人从盘上消失了');
   assert.ok(
     afterFoe.hp < hpBefore,
-    `确认攻击后敌人应该掉血：${hpBefore} → ${afterFoe.hp}`,
+    `点一下就该掉血：${hpBefore} → ${afterFoe.hp}`,
   );
 });
 
@@ -11239,30 +11224,35 @@ check('经典 UI 鼠标交锋：悬停预览，直接点击目标执行攻击', 
   }
 });
 
-check('新版 UI 鼠标交锋：点目标进入确认，取消不出手，移动后旧预览失效', () => {
+check('新版 UI 鼠标交锋：点目标直接开火（2026-11-22 回撤确认键）', () => {
+  /*
+   * 回撤确认键之后，refined UI 的鼠标交锋和老 UI 一致：
+   * 选自己的兵 → 点敌方单位 → 立刻结算，不再有"预览 → 确认"那一步。
+   */
   const fresh = bootWith(combatFixture());
   try {
-    const tap = (selector: string) => fresh.document.querySelector<HTMLElement>(selector)!
-      .dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
+    const tap = (selector: string) =>
+      fresh.document.querySelector<HTMLElement>(selector)!.dispatchEvent(
+        new fresh.MouseEvent('click', { bubbles: true }),
+      );
     tap('.unit[data-id="forecast-own"]');
-    const before = fresh.localStorage.getItem('warchess:match:v1');
+    const hpBefore = (JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!) as { units: Unit[] })
+      .units.find((unit) => unit.id === 'forecast-foe')!.hp;
     tap('.unit[data-id="forecast-foe"]');
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
-    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
-    tap('[data-combat="cancel"]');
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
-    assert.equal(fresh.document.querySelector('.combat-cues[data-phase="preview"]'), null);
-    tap('.unit[data-id="forecast-foe"]');
-    tap('.tile[data-x="4"][data-y="6"]');
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
-    tap('[data-combat="confirm"]');
     const saved = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
-    assert.equal(saved.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 28);
+    assert.ok(
+      saved.units.find((unit: Unit) => unit.id === 'forecast-foe').hp < hpBefore,
+      '点一下就该打上（不再要求确认）',
+    );
+    assert.equal(
+      fresh.document.querySelector('#combat-preview [data-combat="confirm"]'),
+      null,
+      '不该再出现确认按钮',
+    );
   } finally {
     fresh.close();
   }
 });
-
 check('兵种标识：兼容旧飞行字段，保留经济、建造与海军定位', () => {
   const def = UNIT_TYPES.militia!;
   assert.equal(unitRole({ ...def, layer: 'air' }), 'air');

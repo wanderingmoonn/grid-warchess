@@ -266,20 +266,99 @@ export function adjacentRequirementText(
 // 只在这些地方调用：手里**已经有 Unit 对象**时。手里只有 def 的场合
 // （canStandAt / recruitSpawnCells / eggSpots 等"还没生成单位"的判定）
 // 继续走原函数——那些地方的 extra 必然为空，合并也没意义。
+/**
+ * 这个单位**此刻**拥有的全部能力 id：永久附加 + 还没到期的临时能力。
+ *
+ * 2026-11-22 加：精灵女王的「林海」要给友军 5 回合的穿林 + 林地之主，
+ * 而临时能力必须和永久能力走**同一条查询路径**——否则 AI 的估值、面板的
+ * 显示、结算的判定会各自读一份，迟早出现"面板写着有、打起来没有"。
+ */
+function abilitiesOf(s: GameState, u: Unit): string[] | undefined {
+  const temps = (u.tempAbilities ?? []).filter((t) => t.until > s.turn).flatMap((t) => t.ids);
+  if (temps.length === 0) return u.extraAbilities;
+  return [...(u.extraAbilities ?? []), ...temps];
+}
+
+/** 给单位一组限时能力（`turns` 个全局回合后自动失效） */
+export function grantTempAbility(s: GameState, u: Unit, ids: string[], turns: number): void {
+  if (ids.length === 0) return;
+  const until = s.turn + Math.max(1, Math.round(turns));
+  u.tempAbilities = [...(u.tempAbilities ?? []), { ids, until }];
+}
+
+/**
+ * 把一片格子临时改成某种地形（`turns` 个回合后还原）。
+ *
+ * 只接受**同一张图**上的格子：调用方从 `c.view` 取坐标，这里也按那份 state 改，
+ * 不会出现"在月面改地形、改的是地球那一格"。
+ */
+export function patchTerrain(
+  s: GameState,
+  cells: Array<{ x: number; y: number }>,
+  terrain: Terrain,
+  turns: number,
+): number {
+  const until = s.turn + Math.max(1, Math.round(turns));
+  const patch = (s.terrainPatches ??= []);
+  let changed = 0;
+  for (const { x, y } of cells) {
+    const t = s.tiles[y * s.w + x];
+    if (!t) continue;
+    if (t.terrain === terrain) continue;
+    /*
+     * **结构不是地形**：城格和桥面一律不动（2026-11-22 修正）。
+     *
+     * 它们不是"一片地长什么样"，而是"这里有一座城/一座桥"：
+     *   · 城格被改成森林、`cityId` 被清掉之后，还原时那个 id 是补不回来的——
+     *     等于这座城永久少一格（`cityTiles`、兵额、驻军全跟着错）；
+     *   · 桥面改成森林，那 5 回合里桥就不是桥了；更糟的是这期间桥被打掉，
+     *     到期会把 `'bridge'` 又写回去，凭空长出一段没有桥的桥面。
+     * 所以判据放在这里，而不是让每个扩展各自记得避开。
+     */
+    if (t.terrain === 'city' || t.terrain === 'bridge') continue;
+    patch.push({ x, y, from: t.terrain, until });
+    t.terrain = terrain;
+    changed += 1;
+  }
+  return changed;
+}
+
+/** 回收到期的临时地形与临时能力（每回合开始时跑一次） */
+function expireTemps(s: GameState): void {
+  if (s.terrainPatches?.length) {
+    const keep = [];
+    for (const p of s.terrainPatches) {
+      if (p.until > s.turn) {
+        keep.push(p);
+        continue;
+      }
+      const t = s.tiles[p.y * s.w + p.x];
+      if (t) t.terrain = p.from;
+    }
+    s.terrainPatches = keep;
+  }
+  for (const u of s.units) {
+    if (!u.tempAbilities?.length) continue;
+    const live = u.tempAbilities.filter((t) => t.until > s.turn);
+    if (live.length === 0) delete u.tempAbilities;
+    else u.tempAbilities = live;
+  }
+}
+
 function hooksOfUnit(s: GameState, u: Unit): AbilityHooks[] {
-  return hooksFor(utype(s, u.type), u.extraAbilities);
+  return hooksFor(utype(s, u.type), abilitiesOf(s, u));
 }
 function stagedOfUnit<C>(s: GameState, u: Unit, key: StagedKey): Staged<C>[] {
-  return stagedFor<C>(utype(s, u.type), key, u.extraAbilities);
+  return stagedFor<C>(utype(s, u.type), key, abilitiesOf(s, u));
 }
 function hasAbilityOn(s: GameState, u: Unit, id: string): boolean {
-  return hasAbilityIn(utype(s, u.type), id, u.extraAbilities);
+  return hasAbilityIn(utype(s, u.type), id, abilitiesOf(s, u));
 }
 function hasFlagOn(s: GameState, u: Unit, flag: 'passThrough' | 'crossesWater' | 'airLayer' | 'immuneSplash' | 'noCounter'): boolean {
-  return hasFlag(utype(s, u.type), flag, u.extraAbilities);
+  return hasFlag(utype(s, u.type), flag, abilitiesOf(s, u));
 }
 function canBeHealedOn(s: GameState, u: Unit): boolean {
-  return canBeHealed(utype(s, u.type), u.extraAbilities);
+  return canBeHealed(utype(s, u.type), abilitiesOf(s, u));
 }
 
 /**
@@ -328,6 +407,12 @@ export const abilityApi: AbilityApi = {
     s.units.push(u);
     return u;
   },
+  drown: (s, u) => {
+    drownUnit(s, u, false);
+    return u.hp > 0;
+  },
+  grantTempAbility: (s, u, ids, turns) => grantTempAbility(s, u, ids, turns),
+  patchTerrain: (s, cells, terrain, turns) => patchTerrain(s, cells, terrain, turns),
   pushLog,
   citiesOf,
   distToCity,
@@ -8395,7 +8480,9 @@ function decayUnits(s: GameState, p: PlayerId): void {
  * 英雄强不强只取决于数值，什么时候开、开在谁身上都没得选。
  */
 function turnStartSkills(s: GameState, p: PlayerId): void {
-  // 0）新回合：清掉上回合的临时状态，技能冷却 −1，充能型技能攒一发
+  // 0）到期回收：临时地形还原、限时能力摘掉
+  expireTemps(s);
+  // 0.5）新回合：清掉上回合的临时状态，技能冷却 −1，充能型技能攒一发
   for (const u of s.units) {
     if (u.owner !== p) continue;
     delete u.heroBuff;
