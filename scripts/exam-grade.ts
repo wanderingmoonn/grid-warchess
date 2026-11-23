@@ -137,7 +137,8 @@ async function loadAi(kind: string, who: string): Promise<AiFn | null> {
   if (kind === 'v3') return ((await import('../src/core/ai-v3.ts')) as { aiNextAction: AiFn }).aiNextAction;
   if (kind === 'v1') return ((await import('./baselines/ai-9efb961.ts')) as { aiNextAction: AiFn }).aiNextAction;
   if (kind === 'auto') return ((await import('../src/core/ai.ts')) as { aiNextAction: AiFn }).aiNextAction;
-  throw new Error(`${who} 不认识这个答题者：${kind}（只有 v3/v1/auto/none）`);
+  if (kind === 'v4') return ((await import('../src/core/v4/ai-v4.ts')) as { aiNextAction: AiFn }).aiNextAction;
+  throw new Error(`${who} 不认识这个答题者：${kind}（只有 v4/v3/v1/auto/none）`);
 }
 
 /** 人手答案：按回合分组，`{ "turns": [[{...}, {...}], [{...}]] }` */
