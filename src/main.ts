@@ -20,7 +20,7 @@ import { activeExpansions, expansionById } from './core/expansions.ts';
 import type { BoardView } from './core/expansions.ts';
 // 只取"这一方是不是 AI / 难度叫什么"这几个判断——它们要用来画首屏。
 // 真正的引擎（走子推演，35KB）见下面的 aiEngine()，等到 AI 真的要走才拉。
-import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
+import { DEFAULT_BUDGET, aiLevelOf, aiNameOf, anyAiSide, engineForAi, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, levelById, validateLevel } from './core/level.ts';
@@ -1545,7 +1545,6 @@ function panelInput(known?: PlayerView): PanelInput {
     planReady: state.orderReady?.[me()] === true,
     forceMode,
     combatInspectMode,
-    combatDirectPreview: currentUiLayout(document.documentElement) === 'refined',
     combatTargetCount: targets.length + siege.length,
     report: reportPanel(),
     /*
@@ -4031,7 +4030,14 @@ combatPreviewEl.addEventListener('click', (event) => {
   }
 });
 
-function dispatch(action: Action, quickAttack = false): boolean {
+/**
+ * 执行一个动作。
+ *
+ * 2026-11-22 用户要求**回撤「攻击确认键」那次改动**：以前 refined UI 里
+ * 点敌人就直接开火（传 `quickAttack = true` 绕过确认），现在一律先出预览、
+ * 由「攻击预览 / 确认」那颗按钮收口——误触一下就是送一个兵，不值得省这一步。
+ */
+function dispatch(action: Action): boolean {
   /*
    * 肉鸽撤离阶段：**每个动作入口都要先把胜负按下**（2026-11-19）。
    *
@@ -4088,7 +4094,7 @@ function dispatch(action: Action, quickAttack = false): boolean {
   }
 
   if ((action.type === 'ATTACK' || action.type === 'SIEGE') && !confirmingCombat &&
-    (touchCombatInput || combatInspectMode || (currentUiLayout(document.documentElement) === 'refined' && !quickAttack)) && !godMode()) {
+    (touchCombatInput || combatInspectMode) && !godMode()) {
     if (!showCombatPreview(action, true)) toast('当前无法预览这次攻击，请重新选择单位和目标');
     return false;
   }
@@ -4760,7 +4766,7 @@ function onBoardClick(e: Event): void {
         targetId: hit.id,
         x: coords.x,
         y: coords.y,
-      }, true);
+      });
       return;
     }
     toast('这一格没有能打的目标（再点一次按钮可以退出强制模式）');
@@ -4925,7 +4931,7 @@ function onBoardClick(e: Event): void {
         targetId: stacked.id,
         x: coords.x,
         y: coords.y,
-      }, wantAttack);
+      });
       return;
     }
   }
@@ -4938,7 +4944,7 @@ function onBoardClick(e: Event): void {
       targetId: clickedUnitId,
       x: coords?.x,
       y: coords?.y,
-    }, wantAttack);
+    });
     return;
   }
 
@@ -5033,7 +5039,7 @@ function onBoardClick(e: Event): void {
       cityId: city.id,
       x: coords.x,
       y: coords.y,
-    }, wantAttack);
+    });
     return;
   }
 
@@ -6412,7 +6418,13 @@ async function runAiTurn(
   const alive = () =>
     token === aiToken && !aiPaused && !state.winner && state.current === player;
   const rejected = new Set<string>();
-  const engine = await aiEngine(state.config.aiBrain === 'goal' ? 'goal' : 'script');
+  /*
+   * 内核选择走 core 的 `engineForAi`（2026-11-22）：
+   * **「高级」这一档现在就是 v3**，不再需要单独勾一颗"实验 AI"。
+   * 网络内核（`aiBrain === 'net'`）在下面另走一条路，这里不加载手写引擎。
+   */
+  const engineId = engineForAi({ level: aiLevelOf(state), brain: state.config.aiBrain ?? null });
+  const engine = await aiEngine(engineId === 'v3' ? 'goal' : 'script');
 
   /*
    * 网络内核：只在 `config.aiBrain === 'net'` 时加载。

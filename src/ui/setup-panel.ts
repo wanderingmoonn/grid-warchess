@@ -649,21 +649,21 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
        * 以前只写了 `!netOn`：选了实验 AI v3 之后，`aiLevel` 还停在上一次的档位，
        * 那一颗就一直亮着——看上去像"两档同时生效"。
        */
-      const aiLevelOn = !netOn && !goalOn;
+      // 只剩「测试 AI · 全视野」一颗换内核的按钮了（v3 已并进「高级」档位）
+      const aiLevelOn = !netOn;
       const aiHint = netOn
         ? '全视野；适合青铜 10×10 / 12×12，<b>其它配置较弱</b>。'
         : goalOn
-          ? 'v3 内核：会认领长期目标（补产业链、补资源缺口），战术层沿用高级的判断。'
+          ? '这一局用的是 v3 内核（旧存档里的「实验 AI」开关，现在就是「高级」）。'
           : netAllowed
-            ? '初级熟悉规则 · 中级战术变化 · 高级精细决策'
+            ? '初级熟悉规则 · 中级战术变化 · 高级 = v3 内核（目标规划 + 产能放开）'
             : 'AI 按你的队列生产。';
       const compact = !classic && !config.level;
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
             <button class="chip ${aiLevelOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
             <button class="chip ${aiLevelOn && config.aiLevel === 'tactic' ? 'active' : ''}" data-ailevel="tactic" title="在高级的评估之上再挂三套战术：速攻压制、骚扰消耗、弃城爆发——打法会随局面换档">中级 AI</button>
-            <button class="chip ${aiLevelOn && config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="威胁范围、换子价值、有效战力、现金预算、英雄技优先级都算，走位与采购按局势定">高级 AI</button>
-            <button class="chip is-brain ${goalOn ? 'active' : ''}" data-aibrain="goal" title="实验内核（core/ai-v3.ts，v3）：远期规划走目标状态机，局部战术仍是老的启发式。和老 AI 是两个独立模型，改动互不影响">实验 AI v3</button>
+            <button class="chip ${aiLevelOn && config.aiLevel === 'advanced' ? 'active' : ''}" data-ailevel="advanced" title="v3 内核（core/ai-v3.ts，2026-11-22 起接替原高级 AI）：远期目标规划 + 威胁范围、换子价值、现金预算、英雄技优先级，产兵按产能放开">高级 AI</button>
             ${
               netAllowed
                 ? `<button class="chip is-brain ${netOn ? 'active' : ''}" data-aibrain="net" title="自博弈训练出来的策略网络。自带全视野：开雾也看得见你的全部部队；只会一种打法节奏，没有档位">测试 AI · 全视野</button>`

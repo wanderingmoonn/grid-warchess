@@ -17,6 +17,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildListOf } from '../src/core/build-list.ts';
+import { engineForAi } from '../src/core/ai-meta.ts';
 import { describeUnit, unitStatLine } from '../src/core/info.ts';
 import { pruneUnknownUnits } from '../src/storage/save.ts';
 
@@ -4208,6 +4209,21 @@ test('精灵女王：林海把五格内地表变森林、五回合后还原，�
   }
   assert.equal(st.tiles[idx(st, 7, 7)].terrain, 'plain', '到期该还原成平地');
   assert.equal((st.units.find((u) => u.id === ally.id)?.tempAbilities ?? []).length, 0, '限时能力到期要摘掉');
+});
+
+test('AI 内核选择：高级 = v3，其余走 v1（网络内核另走一条路）', () => {
+  /*
+   * 2026-11-22 用户定：v3 转正、接替「高级」。
+   * 这条钉的是"哪个档位走哪个引擎"——改档位名或加档位时最容易漏的就是它。
+   */
+  assert.equal(engineForAi({ level: 'advanced' }), 'v3', '高级就是 v3');
+  assert.equal(engineForAi({ level: 'tactic' }), 'v1', '中级仍是老引擎');
+  assert.equal(engineForAi({ level: 'basic' }), 'v1', '初级仍是老引擎');
+  assert.equal(engineForAi({ level: null }), 'v1', '没写档位按老引擎');
+  // 老存档/旧入口里的 brain=goal 照样认
+  assert.equal(engineForAi({ level: 'basic', brain: 'goal' }), 'v3', 'brain=goal 仍走 v3');
+  // 网络内核不归这条管
+  assert.equal(engineForAi({ level: 'advanced', brain: 'net' }), 'v1', 'net 不在这里选');
 });
 
 test('九头蛇：不再是英雄，强再生是被动', () => {

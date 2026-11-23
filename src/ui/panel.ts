@@ -159,7 +159,6 @@ export interface PanelInput {
    */
   forceMode?: 'move' | 'attack' | null;
   combatInspectMode?: boolean;
-  combatDirectPreview?: boolean;
   combatTargetCount?: number;
   battleStatusInHeader?: boolean;
   /**
@@ -1488,7 +1487,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
       </div>
       <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
       ${mine && myTurn && input.combatInspectMode ? '<p class="unit-next-action">选择红框目标</p>' : ''}
-      ${!input.combatDirectPreview && mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
+      ${mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
         aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
         ${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</button>` : ''}
       ${
