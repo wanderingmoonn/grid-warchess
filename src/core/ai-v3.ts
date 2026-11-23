@@ -3543,7 +3543,17 @@ const CROSSING_PLAN: RankedPlan = {
       if (Number(c.keep.jamTurn ?? -1) !== c.view.turn) {
         c.keep.jamTurn = c.view.turn;
         c.keep.bridgeJam = jam ? Number(c.keep.bridgeJam ?? 0) + 1 : 0;
-        c.keep.noLink = c.canReach ? 0 : Number(c.keep.noLink ?? 0) + 1;
+        /*
+         * `noLink` 管"一直修不通"，`cut` 管"通了又被拆"——两件不同的事。
+         *
+         * `cut` 只在**上一回合还是通的**（`noLink` 被清成 0）而这一回合不通时 +1。
+         * 一开始就不通的局不会被误记（那时 `noLink` 还是 undefined）。
+         * 原来是数"桥单位总数减少"（`lost`），填湖的桥也算——8 座里 0 座联通时
+         * 它照样涨，抓的不是"关键桥被拆"。
+         */
+        const before = c.keep.noLink;
+        c.keep.noLink = c.canReach ? 0 : Number(before ?? 0) + 1;
+        if (!c.canReach && before === 0) c.keep.cut = Number(c.keep.cut ?? 0) + 1;
       }
     }
     /*
@@ -3638,8 +3648,18 @@ const CROSSING_PLAN: RankedPlan = {
       const alt = crossingPointOf(c.view, c.me, prev);
       if (alt) return alt;
     }
-    // 拆够两次就别修了：实测一局桥被拆 10 次、造了 12 座，钱全填河
-    if (Number(c.keep.lost ?? 0) >= 2) return null;
+    /*
+     * 通了又被拆 ≥2 次 → **也换渡口**（2026-11-23）。
+     *
+     * 原来是 `return null`（放弃）。但 `focus` 给 null 只让工人失去走位目标，
+     * `orders.buildPoint` 照样读 `keep.crossingSite` 派活——"计划说放弃、工人还在修"，
+     * 而那正是"桥被拆 10 次、造了 12 座"那局的形状。
+     * 现在和 `stuck` 走同一个出口：换个地方修，而不是停在一个修不住的点上。
+     */
+    if (Number(c.keep.cut ?? 0) >= 2 && prev) {
+      const alt = crossingPointOf(c.view, c.me, prev);
+      if (alt) return alt;
+    }
     // 选定不换：旧渡口还是水面/自己铺的桥面，就接着用
     if (prev) {
       const tile = c.view.tiles[prev.y * c.view.w + prev.x];
