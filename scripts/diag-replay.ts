@@ -53,7 +53,8 @@ function reachInfo(): { minSteps: number | null; blockedByCap: boolean } {
   return { minSteps: best, blockedByCap: best !== null && best > Math.min(s.w,s.h) };
 }
 
-const bridgesOf = () => s.units.filter((u:any)=> String(u.type).startsWith('bridge'));
+/* 只数**我方**的桥：敌方也修桥，混在一起会把数字放大一倍 */
+const bridgesOf = () => s.units.filter((u:any)=> u.owner === ME && String(u.type).startsWith('bridge'));
 const combatOf = (p:string) => s.units.filter((u:any)=>u.owner===p && s.unitTypes[u.type]?.category==='combat');
 
 let nextSnap = 1;
