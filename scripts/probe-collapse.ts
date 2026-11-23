@@ -53,7 +53,17 @@ const fight = (s: GameState, me: PlayerId): { n: number; v: number } => {
 const runOne = (QID: string, SEED: number, SIDE: PlayerId): void => {
   const q = QUEUES[QID]!;
   let s: GameState = createMatch(
-    { ...DEFAULT_CONFIG, startEra: q.era, aiLevel: 'tactic', size: q.size, mapSymmetry: 'fair' },
+    {
+      ...DEFAULT_CONFIG,
+      startEra: q.era,
+      aiLevel: 'tactic',
+      size: q.size,
+      mapSymmetry: 'fair',
+      // 和跑批对齐：不传就是全关（默认行为）
+      ...(process.argv.includes('--hub') ? { aiHub: true } : {}),
+      ...(process.argv.includes('--city-site') ? { aiCitySite: true } : {}),
+      ...(process.argv.includes('--garrison') ? { aiGarrison: true } : {}),
+    },
     SEED,
   );
   const aiFor = (p: PlayerId): Ai => (p === SIDE ? modNew.aiNextAction : modOld.aiNextAction);

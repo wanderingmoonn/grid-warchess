@@ -64,6 +64,8 @@ const ECON_PLAN = process.argv.includes('--econ-plan');
 const CITY_SITE = process.argv.includes('--city-site');
 /** `--hub`：升级目标改成"产兵枢纽"（`aiHub`，默认关，见 types.ts 的标定） */
 const HUB = process.argv.includes('--hub');
+/** `--garrison`：守军给产兵格让位（`aiGarrison`，默认关） */
+const GARRISON = process.argv.includes('--garrison');
 const WANT = pickArg ? new Set(pickArg.split(',').map((x) => x.trim().toUpperCase())) : null;
 /** 路径都相对 `scripts/` 解析（和 ai-duel 的写法一致：`--new ../src/core/ai-v3.ts`） */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -102,6 +104,7 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
       ...(ECON_PLAN ? { aiEconPlan: true } : {}),
       ...(CITY_SITE ? { aiCitySite: true } : {}),
       ...(HUB ? { aiHub: true } : {}),
+      ...(GARRISON ? { aiGarrison: true } : {}),
     },
     seed,
   );

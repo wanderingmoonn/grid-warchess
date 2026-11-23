@@ -60,6 +60,7 @@ const aIsNew = NEW_SIDE === 'A';
  */
 const HUB = process.argv.includes('--hub');
 const CITY_SITE = process.argv.includes('--city-site');
+const GARRISON = process.argv.includes('--garrison');
 let s: GameState = createMatch(
   {
     ...DEFAULT_CONFIG,
@@ -69,6 +70,7 @@ let s: GameState = createMatch(
     mapSymmetry: 'fair',
     ...(HUB ? { aiHub: true } : {}),
     ...(CITY_SITE ? { aiCitySite: true } : {}),
+    ...(GARRISON ? { aiGarrison: true } : {}),
   },
   SEED,
 );
