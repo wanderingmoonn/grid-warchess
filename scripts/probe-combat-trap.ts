@@ -313,6 +313,8 @@ function playRound(): { moves: number; combat: number; econ: number; acts: strin
 const rows: string[] = [];
 let firstOut = 0;
 let idleTurns = 0;
+/** 每回合"最远的那个人离城几格"。判"稳定在外"要看它，不能只看某回合到过 2 */
+const dists: number[] = [];
 for (let round = 1; round <= ROUNDS; round++) {
   const before = trapper();
   const r = playRound();
@@ -321,7 +323,9 @@ for (let round = 1; round <= ROUNDS; round++) {
     `回合 ${round}：动作 ${r.acts.length} · MOVE ${r.moves}（战斗 ${r.combat} / 经济 ${r.econ}）· 最远战斗单位 ${before ? `${before.x},${before.y}` : '无'} → ${now ? `${now.x},${now.y}` : '无'} · 离城 ${distToCity()} · 出城邻格空 ${freeAround()} · 产兵格 ${spawnCells()}`,
   );
   if (r.acts.length === 0) idleTurns += 1;
-  if (!firstOut && distToCity() >= 3) firstOut = round;
+  // 离城格 ≥2 = 已经离开城格和它的 8 邻格，不再堵产兵、也不再挡出城邻格
+  dists.push(distToCity());
+  if (!firstOut && distToCity() >= 2) firstOut = round;
   if (s.winner) {
     rows.push(`  ↑ 对局结束：${s.winner} 胜（探针被提前打断）`);
     break;
@@ -330,19 +334,21 @@ for (let round = 1; round <= ROUNDS; round++) {
 for (const r of rows) console.log(r);
 
 // ── 结论 ──
-const d = distToCity();
+/*
+ * "稳定在外"必须是**连续**的，不能只看某一回合到过 2 格。
+ * 探针第一版只看 firstOut，于是"出去一步又回来"也判成解开——实测正是这样：
+ * 5,4 ↔ 2,4 来回，firstOut=1 但根本没脱身。
+ */
+const last3 = dists.slice(-3);
+const stable = last3.length === 3 && last3.every((v) => v >= 2);
 console.log('—— 判定 ——');
 console.log(`完全停摆的回合数 ${idleTurns}（这一回合我方一个动作都提不出来）`);
+console.log(`离城距离序列 ${dists.join(' → ')}`);
 console.log(
-  firstOut > 0
-    ? `首次出城（离城 ≥3）第 ${firstOut} 回合`
-    : `**${ROUNDS} 回合内一次都没出城**（最终离城 ${d} 格）`,
+  stable
+    ? `→ **能自己解开**：第 ${firstOut} 回合离开城格，最后 3 回合都稳定在外`
+    : firstOut > 0
+      ? `→ **震荡**：第 ${firstOut} 回合到过城格以外，但最后 3 回合是 ${last3.join('/')}——出去了又被拽回来`
+      : '→ **出不来确认**：城格被占满、出城邻格全被占，没有任何机制会主动腾位',
 );
 console.log(`产兵格 ${spawnCells()}（0 = 城格仍被自己人占着）· 我方战斗单位 ${combatCount()} 个（起始 ${traps.length}）`);
-if (firstOut > 0) {
-  console.log(
-    `→ 能自己解开，但要 ${firstOut} 回合：前 ${idleTurns} 个回合完全停摆，之后靠经济单位自己散开让出通路`,
-  );
-} else {
-  console.log('→ **出不来确认**：城格被占满、出城邻格全被占，没有任何机制会主动腾位');
-}
