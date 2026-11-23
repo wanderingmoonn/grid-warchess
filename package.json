@@ -90,6 +90,8 @@
     "probe:yield5": "node --experimental-strip-types scripts/probe-yield5.ts",
     "probe:bridge-block": "node --experimental-strip-types scripts/probe-bridge-block.ts",
     "probe:combat-trap": "node --experimental-strip-types scripts/probe-combat-trap.ts",
+    "probe:city-role": "node --experimental-strip-types scripts/probe-city-role.ts",
+    "probe:collapse": "node --experimental-strip-types scripts/probe-collapse.ts",
     "diag:strength": "node --experimental-strip-types scripts/diag-strength.ts",
     "probe:economy": "node --experimental-strip-types scripts/probe-economy.ts",
     "replay": "node --experimental-strip-types scripts/replay-report.ts",
