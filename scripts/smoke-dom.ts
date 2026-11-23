@@ -11611,6 +11611,25 @@ check('考卷：?exam=user:xxx 能打开玩家自己存的关卡', () => {
   assert.equal(d.querySelector('.title-screen'), null, '不该停在首页');
 });
 
+check('考卷：关卡里没写 AI 席位，考卷模式下对手也必须交给电脑', () => {
+  /*
+   * 用户 2026-11-23 实机报"两方都是人类在操作"。
+   * 根因是那份从编辑器存的关卡把 `seats.ai` 弄丢了 —— 于是两个席位都归人，
+   * 看着像"对手不动"。考卷的对手本来就该由 AI 扮演，所以在开机处兜底。
+   */
+  const src = LEVELS.find((l) => l.id === 'level:lone-city');
+  assert.ok(src, '内置关卡「孤城」应该在');
+  const mine = { ...src, id: 'user:exam-noai', dev: true, seats: { count: 2 as const, ai: [] as never[] } };
+  const w = bootWith(undefined, '?exam=user:exam-noai&debug', (win) => {
+    win.localStorage.setItem(
+      'warchess:user-levels:v1',
+      JSON.stringify({ v: 1, items: [{ level: mine, updatedAt: 2 }] }),
+    );
+  });
+  const hud = w.document.getElementById('debug-hud')?.textContent ?? '';
+  assert.ok(hud.includes('aiSeats=["B"]'), `对手要交给电脑，实际 HUD：${hud.split('\n')[1] ?? '(空)'}`);
+});
+
 check('考卷：?exam= 仍然被 ?home=1 压过', () => {
   const w = bootWith(undefined, '?exam=lone-city&home=1');
   assert.ok(w.document.querySelector('.title-screen'), '想回门面时 ?home=1 要生效');

@@ -530,7 +530,22 @@ let state: GameState = examLevel
     )
   : (bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits()));
 if (examLevel) {
-  console.info(`[考卷] 已按 ?exam=${examParam} 开局：${examLevel.id}`);
+  /*
+   * 考卷 = **人和电脑打**：除了"我"那一席，其余一律交给电脑。
+   *
+   * 为什么不信任关卡里写的 `seats.ai`：玩家从「编辑器」存的关卡可能把这条弄丢
+   * （2026-11-23 用户实机报"两方都是人类在操作"）。丢了的后果不是报错，是
+   * 两个席位都归人——看起来像"对手不动"，其实是在等人去操作它。
+   * 考卷的对手本来就应该由 AI 扮演，所以这条在这里兜底。
+   *
+   * 人坐哪一席：取关卡声明的先手（没写就是 A）。题卡上的"我方"就是它。
+   */
+  const meSeat: PlayerId = examLevel.setup?.firstSide === 'B' ? 'B' : 'A';
+  const foes = seatsOf(state).filter((p) => p !== meSeat);
+  state.config.aiSeats = foes;
+  state.config.aiOpponent = foes.includes('B');
+  state.aiControl = undefined;
+  console.info(`[考卷] 已按 ?exam=${examParam} 开局：${examLevel.id}，人坐 ${meSeat}，对手 ${foes.join('/') || '无'}`);
 } else if (examParam) {
   console.warn(`[考卷] 找不到题号「${examParam}」，按普通开局走了`);
 }
