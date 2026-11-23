@@ -1,0 +1,297 @@
+{
+  "id": "S-002",
+  "ask": "30 手之内打掉东北那座城。这一回合你会怎么做？（最多 3 步）",
+  "size": 14,
+  "startEra": 3,
+  "fog": false,
+  "me": "A",
+  "seed": 11,
+  "gold": {
+    "A": 0,
+    "B": 0
+  },
+  "map": [
+    "..............",
+    "..............",
+    "..............",
+    "....ff........",
+    "..............",
+    "..............",
+    "..........ff..",
+    "..............",
+    "..............",
+    "....ff........",
+    "..............",
+    "..............",
+    "..............",
+    ".............."
+  ],
+  "cities": [
+    {
+      "owner": "A",
+      "x": 1,
+      "y": 11,
+      "era": 3
+    },
+    {
+      "owner": "B",
+      "x": 10,
+      "y": 1,
+      "era": 4
+    }
+  ],
+  "units": [
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 1,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 2,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 5,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 7,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 8,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 1,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 2,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 3,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 5,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 6,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 7,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 1,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 2,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 4,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 5,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 6,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 7,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 8,
+      "y": 10
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 11
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 4,
+      "y": 11
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 5,
+      "y": 11
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 6,
+      "y": 11
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 12
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 4,
+      "y": 12
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 5,
+      "y": 12
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 9,
+      "y": 1
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 12,
+      "y": 1
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 9,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 12,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 9,
+      "y": 3
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 10,
+      "y": 3
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 11,
+      "y": 3
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 12,
+      "y": 3
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 8,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 13,
+      "y": 2
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "owner": "B",
+      "type": "rifleman",
+      "x": 12,
+      "y": 4
+    }
+  ]
+}

@@ -110,6 +110,15 @@ const window = Number(argOf('window', '0')) || criteria.window || Math.max(0, ..
 const raw = JSON.parse(readFileSync(snapPath, 'utf8')) as { state: GameState };
 let s0 = structuredClone(raw.state);
 s0.aiControl = { [ME]: false, [FOE]: false } as Record<PlayerId, boolean>;
+/*
+ * `--seed N`：换掉 AI 的决胜随机数（只影响种子，不动局面）。
+ *
+ * 为什么需要它：AI 的并列取舍是 `rngFrom(s.seed)` 抽的。同一局面换一颗种子，
+ * 它的走法就会分叉——一道题如果在种子 A 上红、种子 B 上绿，那它考的是运气。
+ * 所以一道题必须**在这颗种子附近结论一致**，才配当判据。
+ */
+const SEED_ARG = Number(argOf('seed', '0'));
+if (SEED_ARG) s0.seed = SEED_ARG;
 const START = s0.turn;
 const ME_CITIES0 = s0.cities.filter((c) => c.owner === ME && !c.ruined).length;
 
@@ -278,7 +287,7 @@ while (!s.winner && s.turn < cap) {
 }
 
 /* ── 判 ─────────────────────────────────────────────────────── */
-function evalOne(c: Criterion, st: Stat | undefined): { ok: boolean | null; got: string } {
+function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: boolean | null; got: string } {
   if (!st) return { ok: null, got: '没有这一手的记录（判据写在了窗口外？）' };
   const cityOf = (id?: string) => (id ? st.city[id] : undefined);
   switch (c.kind) {
@@ -336,6 +345,17 @@ function evalOne(c: Criterion, st: Stat | undefined): { ok: boolean | null; got:
       return { ok: st.meCities >= ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
     case 'capturedCity':
       return { ok: st.meCities > ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
+    case 'win': {
+      /*
+       * 判胜负，不判"城还在不在"。
+       *
+       * 为什么必须分开：废墟**仍挂在原主名下**（引擎的口径），所以"把城打塌"
+       * 不等于消灭那一方。`foeCities` 只数活城，于是"打塌但没打死"会被判成绿——
+       * 2026-11-23 的 S-002 就是这么把 v1 的一个未完成局判成通过的。
+       */
+      const w = fin.winner;
+      return { ok: w === ME, got: w === null ? '未分胜负' : w === ME ? '我胜' : '我负' };
+    }
     case 'foeCities': {
       // 「拿下」和「打塌」都算收尾：编成一条，免得"赢了却判红"（S-001 第一版就是这么翻的）
       const lowOk = c.min === undefined || st.foeCities >= c.min;
@@ -358,10 +378,10 @@ const statAt = (turn: number): Stat | undefined => {
 };
 
 const rows: Array<{ c: Criterion; mustNot: boolean; ok: boolean | null; got: string }> = [];
-for (const c of must) rows.push({ c, mustNot: false, ...evalOne(c, statAt(START + c.in)) });
-for (const c of mustNot) rows.push({ c, mustNot: true, ...evalOne(c, statAt(START + c.in)) });
+for (const c of must) rows.push({ c, mustNot: false, ...evalOne(c, statAt(START + c.in), s) });
+for (const c of mustNot) rows.push({ c, mustNot: true, ...evalOne(c, statAt(START + c.in), s) });
 /* soft 只进报表，不进结论——见 README「判据不许写成必须走这一步」 */
-const softRows = soft.map((c) => ({ c, ...evalOne(c, statAt(START + c.in)) }));
+const softRows = soft.map((c) => ({ c, ...evalOne(c, statAt(START + c.in), s) }));
 
 /* `ok` 在两种判据里语义一致：true = 这条要求满足了（must 是"做到"，mustNot 是"没犯"） */
 const pass = rows.every((r) => r.ok === true);
@@ -369,7 +389,7 @@ const pass = rows.every((r) => r.ok === true);
 const who = book ? `人手答案` : ME_AI;
 console.log(`\n=== ${EXAM} · 答题者 ${who}（对手 ${FOE_AI}）· 跑 ${window} 手 ===`);
 console.log(`出题局面：第 ${START} 手 · 我城 ${ME_CITIES0} 座 · 兵 ${s0.units.filter((u) => u.owner === ME).length} 个`);
-console.log(`跑完：${s.winner ? `${s.winner === ME ? '我胜' : '我负'}` : '未分胜负'}（第 ${s.turn} 手）`);
+console.log(`跑完：${s.winner ? `${s.winner === ME ? '我胜' : '我负'}` : '未分胜负'}（第 ${s.turn} 手）· 种子 ${s0.seed}`);
 console.log('');
 for (const r of rows) {
   const mark = r.ok === null ? '？' : r.ok ? '✅' : '❌';
