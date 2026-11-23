@@ -1,0 +1,116 @@
+{
+  "id": "level:s-006",
+  "version": 1,
+  "dev": true,
+  "name": "S-006（考卷）",
+  "brief": "6 个经济兵全都站错了地方（伐木工在平原、牧民在森林）。8 手之内把经济总产提到 48 以上。这一回合你会怎么做？（最多 3 步）",
+  "map": {
+    "id": "levelmap:s-006",
+    "name": "S-006",
+    "w": 12,
+    "h": 12,
+    "rows": [
+      "............",
+      "............",
+      ".....fff....",
+      ".....fff....",
+      ".....fff....",
+      "........hh..",
+      "........hh..",
+      "............",
+      "............",
+      "............",
+      "............",
+      "............"
+    ],
+    "citiesA": [
+      {
+        "x": 1,
+        "y": 9
+      }
+    ],
+    "citiesB": [
+      {
+        "x": 10,
+        "y": 1
+      }
+    ],
+    "source": "builtin"
+  },
+  "seats": {
+    "count": 2,
+    "ai": [
+      "B"
+    ],
+    "cityEra": {
+      "A": 3,
+      "B": 3
+    }
+  },
+  "setup": {
+    "startEra": 3,
+    "firstSide": "A"
+  },
+  "events": [
+    {
+      "id": "exam-setup",
+      "when": {
+        "kind": "turn",
+        "at": 1
+      },
+      "do": [
+        {
+          "kind": "gold",
+          "seat": "A",
+          "amount": -9999
+        },
+        {
+          "kind": "gold",
+          "seat": "B",
+          "amount": -9999
+        }
+      ]
+    }
+  ],
+  "deploy": {
+    "A": [
+      {
+        "type": "lumberjack",
+        "x": 2,
+        "y": 2
+      },
+      {
+        "type": "lumberjack",
+        "x": 3,
+        "y": 2
+      },
+      {
+        "type": "lumberjack",
+        "x": 4,
+        "y": 2
+      },
+      {
+        "type": "herder",
+        "x": 6,
+        "y": 3
+      },
+      {
+        "type": "herder",
+        "x": 7,
+        "y": 3
+      },
+      {
+        "type": "herder",
+        "x": 6,
+        "y": 4
+      }
+    ],
+    "B": [
+      {
+        "type": "halberdier",
+        "x": 10,
+        "y": 10
+      }
+    ]
+  }
+}

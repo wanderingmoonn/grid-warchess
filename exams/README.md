@@ -6,6 +6,25 @@
 
 ---
 
+## 〇、三种文件格式，别混用（2026-11-23 用户踩过）
+
+| 文件 | 长什么样 | 谁认它 | 用来干什么 |
+|---|---|---|---|
+| `scenes/*.json` | `{size, map: ["....", ...], cities: [...], units: [...]}` | **只有 `scripts/make-scene.ts`** | 造局面（脚本用） |
+| `levels-out/*.level.json` | `{id: "level:...", name, map: {rows: [...]}, seats, deploy}` | **游戏「编辑器」/ `?exam=`** | 在画布上看、改、试打 |
+| `exams/*/snap.json` | 整个 `GameState` | **游戏「导入对局」/ 判分器** | 判分、录动作 |
+
+把 `scenes/*.json` 粘进编辑器会报 **"缺少关卡名 / 缺少地形（rows 应该是一行一个字符串的数组）"**
+——因为那份是场记格式，不是关卡格式。要进编辑器就先跑：
+
+```bash
+node --experimental-strip-types scripts/scene-to-level.ts --scene scenes/S-005.json --out levels-out/S-005.level.json
+```
+
+⚠️ 两个版本**不是同一局**：关卡开局金是 `startGoldFor(时代)` 再被 gold 事件抹平，
+实测还会多出 61 金；而 `snap.json` 里的金是你写死的那个数。
+**所以：判分只认 `snap.json`；关卡只用来"看和改"。**
+
 ## 一、一道题 = 五个文件
 
 | 文件 | 给谁 | 里面有什么 | 能不能外发 |
