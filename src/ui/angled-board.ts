@@ -55,8 +55,15 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    *   · 深浅改由 `bedDepth` 表达——岸边那堵墙往下扎多深、水色多暗。
    * 这样水面上不会再有互相遮掩的立面，读数只看颜色和岸壁厚度。
    */
-  const WATER_SURFACE = -9;
-  /** 河床比水面低多少（不是水面高度） */
+  /*
+   * 2026-11-23 第二次调：水面**抬回来**。
+   *
+   * 第一次把三种水都压到 -9（原来是浅 -4 / 水 -9 / 深 -10），河是平了，
+   * 但水岸对平原的落差从 4 格变成 9 格，看着像一条深沟。取 -3.5——
+   * 比原来的浅流略低半格（避免"水比岸高"），和深水之间不再有台阶。
+   */
+  const WATER_SURFACE = -3.5;
+  /** 深度分档：现在只用来决定「深浅分界线」画在哪，不再参与几何高度 */
   const bedDepth: Partial<Record<Terrain, number>> = { shallow: 1, water: 4, deep: 9 };
   const isWaterTerrain = (t: Terrain | undefined): boolean => t === 'water' || t === 'shallow' || t === 'deep';
   const heights: Partial<Record<Terrain, number>> = {
@@ -101,14 +108,6 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     return elevation;
   }
 
-  /** 脚下"实体面"的高度：水面就是水面，别的格子是地面；水面之下的河床用它来算岸壁 */
-  function bedAt(state: GameState, x: number, y: number): number {
-    const terrain = at(state, x, y);
-    const depth = terrain ? bedDepth[terrain] : undefined;
-    if (depth === undefined) return heightAt(state, x, y);
-    return WATER_SURFACE - depth;
-  }
-
   function faceColors(terrain: Terrain, neighbor: Terrain | undefined): readonly [string, string, string] {
     if (!neighbor) return ['#695c4d', '#81745e', '#534638'];
     if (terrain === 'mountain') return ['#647282', '#768594', '#424d58'];
@@ -123,16 +122,14 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const terrain = at(state, x, y) ?? 'plain';
     const elevation = heightAt(state, x, y);
     /*
-     * 岸壁扎到**河床**，不是扎到水面（2026-11-23）。
+     * 岸壁只到**水面**，不扎到河床（2026-11-23 撤回上一版）。
      *
-     * 水面抬高到同一层之后，"深浅"唯一的视觉出路就是岸边这堵墙：
-     * 深水的岸比浅流的岸高一截，因为它的河床更低。水里互相之间不画立面
-     * （水面齐平，画了就是凭空多一道堤）。
+     * 上一版让岸壁扎到河床，深水的岸一下变成十几格高的陡墙——那是把
+     * "河床有高差"错误地画成了"河岸有高差"。水面齐平之后，深浅只由
+     * 水色和分界线表达，岸就是水岸。
      */
-    const shoreEast = !isWaterTerrain(terrain) && isWaterTerrain(at(state, x + 1, y));
-    const shoreSouth = !isWaterTerrain(terrain) && isWaterTerrain(at(state, x, y + 1));
-    const south = shoreSouth ? bedAt(state, x, y + 1) : heightAt(state, x, y + 1);
-    const east = shoreEast ? bedAt(state, x + 1, y) : heightAt(state, x + 1, y);
+    const south = heightAt(state, x, y + 1);
+    const east = heightAt(state, x + 1, y);
     if (elevation > east) {
       const [face, , edge] = faceColors(terrain, at(state, x + 1, y));
       const points = [project(x + 1, y, elevation), project(x + 1, y + 1, elevation),
