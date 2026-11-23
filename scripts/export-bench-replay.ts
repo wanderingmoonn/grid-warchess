@@ -38,9 +38,21 @@ const SEED = Number(argOf('seed', '30'));
 const NEW_SIDE = (argOf('new-side', 'A').toUpperCase() === 'B' ? 'B' : 'A') as PlayerId;
 const OUT = argOf('out', `results/replays/q-${QUEUE_ID}-${SEED}-${NEW_SIDE}.json`);
 
+/*
+ * `--allow-any-seed`：允许导出不在默认列表里的种子。
+ *
+ * 默认列表只有跑批用的 30/31/32；但换种子验收（40~49）和 v4 题库出题
+ * （50~69）都要能复现任意一局。不加这个开关时仍然只认 30/31/32，
+ * 免得手滑写错种子、导出来一局"不是跑批那一局"的回放还当成它。
+ * 队列的尺寸/时代/回合上限仍按 QUEUES 走——那是这一局的规则，不是种子。
+ */
+const ALLOW_ANY_SEED = process.argv.includes('--allow-any-seed');
+
 const queue = QUEUES.find((q) => q.id === QUEUE_ID);
 if (!queue) throw new Error(`没有这条队列：${QUEUE_ID}（只有 ${QUEUES.map((q) => q.id).join('/')}）`);
-if (!queue.seeds.includes(SEED)) throw new Error(`${QUEUE_ID} 没有种子 ${SEED}（有 ${queue.seeds.join('/')}）`);
+if (!queue.seeds.includes(SEED) && !ALLOW_ANY_SEED) {
+  throw new Error(`${QUEUE_ID} 没有种子 ${SEED}（有 ${queue.seeds.join('/')}；要别的种子加 --allow-any-seed）`);
+}
 
 type Ai = (
   s: GameState,
