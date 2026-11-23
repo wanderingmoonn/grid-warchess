@@ -204,6 +204,14 @@ export function writeExam(opts: ExamWriteOpts): { panelFull: string; panelSafe: 
    * 但"本来就对"不能当依赖——手摆的局面里这条更容易漏。 */
   const snapState = structuredClone(at);
   snapState.aiControl = { A: false, B: false } as Record<PlayerId, boolean>;
+  /*
+   * 在局面里打上考卷标记。
+   *
+   * 两条作用：① 游戏看到它就知道该露出「导出动作」——就算测试员是用
+   * 「导入对局」粘进来的（那种情况 URL 上没有 `?exam=`，靠参数判断会漏）；
+   * ② 强制打开 `recordDetail`，否则动作根本不会被记录，导出来是空的。
+   */
+  snapState.config = { ...snapState.config, examId: opts.id, recordDetail: true };
   const snap = buildSnapshot(snapState, {
     note: opts.note || `${opts.id} 出题局面（${ME} 方第 ${at.turn} 手）`,
     now: new Date(0),

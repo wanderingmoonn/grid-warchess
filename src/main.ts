@@ -509,6 +509,8 @@ if (examParam) loadUserLevels();
  */
 function examActionsWanted(): boolean {
   if (new URLSearchParams(location.search).has('debug')) return true;
+  /* 局面自己带的考卷标记：覆盖「导入对局」那条路（URL 上看不出来） */
+  if (state.config.examId) return true;
   /* 关卡里试玩（从「编辑器」进来）：勾了「记录详细数据」就能导出，
    * 那样作者不必特意去记 ?exam= 的链接。玩家正常打关卡不会勾这个。 */
   return !!state.config.level && state.config.recordDetail === true;
@@ -524,7 +526,20 @@ const examLevel = examParam
   : null;
 let state: GameState = examLevel
   ? createMatch(
-      { ...DEFAULT_CONFIG, level: examLevel, recordDetail: true },
+      {
+        ...DEFAULT_CONFIG,
+        level: examLevel,
+        recordDetail: true,
+        /*
+         * **考卷的对手固定用 v1（战术档）**，不跟"高级 = v3"走（2026-11-23）。
+         *
+         * 两个理由：
+         *   ① 可复现——判分器复现的是同一份 `core/ai.ts`，档位一变，同一份答案就打出不同的局面；
+         *   ② 难度基准——题库的判据线是按 v1 对手量的，换成 v3 会全线偏移。
+         * v4 自己要跟谁比是另一件事，不该塞进考卷里。
+         */
+        aiLevel: 'tactic',
+      },
       randomSeed(),
       loadCustomUnits(),
     )

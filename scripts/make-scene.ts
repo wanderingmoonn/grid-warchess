@@ -67,7 +67,7 @@ interface Scene {
   seed?: number;
   gold?: Partial<Record<PlayerId, number>>;
   map?: string[];
-  cities?: Array<{ owner: PlayerId; x: number; y: number; era?: number; hp?: number }>;
+  cities?: Array<{ owner: PlayerId; x: number; y: number; era?: number; hp?: number; ruined?: boolean }>;
   units?: Array<{ owner: PlayerId; type: string; x: number; y: number; hp?: number }>;
 }
 
@@ -171,11 +171,22 @@ for (const p of ['A', 'B'] as PlayerId[]) {
     process.exit(1);
   }
 }
-// 城血：默认满血，写了就按写的来
+/*
+ * 城血与废墟：默认满血。
+ *
+ * `ruined: true` 用来摆"已经被打塌、还没被接管"的局面——这是 S-003 那种
+ * 「打塌之后要不要派人进去」的题的唯一可行做法。**关卡格式表达不了废墟**
+ * （只能摆一座满血城），所以这类局面只能走快照 + 「导入对局」。
+ */
 for (const c of scene.cities ?? []) {
-  if (c.hp === undefined) continue;
   const target = s.cities.find((x) => x.x === c.x && x.y === c.y && x.owner === c.owner);
   if (!target) continue;
+  if (c.ruined) {
+    target.ruined = true;
+    target.hp = 0;
+    continue;
+  }
+  if (c.hp === undefined) continue;
   target.hp = Math.max(1, Math.min(c.hp, target.maxHp));
 }
 
