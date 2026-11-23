@@ -72,7 +72,7 @@ if (scene.fog) {
 }
 
 /*
- * 关卡能补的：逐席时代（`seats.cityEra`）、起始金（第 1 手用 gold 事件抹平）。
+ * 关卡能补的：逐席时代（`seats.cityEra`）、起始金（`setup.gold`，2026-11-24 起是正经字段）。
  * 关卡补不了的：**城的血、兵的血**——`deploy` 只有 type/x/y，没有 hp 字段。
  * 所以残血局面过不了这条路，只能走 make-scene 直接产快照。
  */
@@ -101,31 +101,6 @@ const eraOf = (owner: PlayerId): number => {
 const eraA = eraOf('A');
 const eraB = eraOf('B');
 
-/*
- * 起始金：关卡开局金是 `startGoldFor(startEra)`（随时代涨），没有"直接指定"的入口。
- * 第 1 手用一条 gold 事件把差额扣掉/补上，就等于指定了。
- * `rules.ts` 那句是 `Math.max(0, p.gold + amount)`，所以负数是合法的。
- */
-const goldEvents = (['A', 'B'] as PlayerId[])
-  .filter((p) => scene.gold?.[p] !== undefined)
-  .flatMap((p) => {
-    const g = scene.gold?.[p] ?? 0;
-    /*
-     * 先清零再补上。不能用"实际值 - startGoldFor"：扩展开局还会加钱
-     * （先后手补偿、血战……实测差 61 金），算不准。
-     * `rules.ts` 是 `Math.max(0, gold + amount)`，所以 -9999 就是把钱清干净。
-     * 两个限制来自校验器：单笔要在 ±9999 内、且不能是 0 —— 所以目标金为 0 时
-     * 只发清零那一笔。金超过 9999 的局面走 snap 路线，别指望关卡。
-     */
-    const acts = [{ kind: 'gold' as const, seat: p, amount: -9999 }];
-    if (g !== 0) acts.push({ kind: 'gold' as const, seat: p, amount: g });
-    return acts;
-  });
-const events =
-  goldEvents.length > 0
-    ? [{ id: 'exam-setup', when: { kind: 'turn' as const, at: 1 }, do: goldEvents }]
-    : undefined;
-
 const level: LevelDef = {
   id: `level:${ID.toLowerCase()}`,
   version: LEVEL_VERSION,
@@ -144,8 +119,13 @@ const level: LevelDef = {
     source: 'builtin',
   },
   seats: { count: 2, ai: ['B'], cityEra: { A: eraA, B: eraB } },
-  setup: { startEra: scene.startEra ?? 2, firstSide: scene.me === 'B' ? 'B' : 'A' },
-  ...(events ? { events } : {}),
+  setup: {
+    startEra: scene.startEra ?? 2,
+    firstSide: scene.me === 'B' ? 'B' : 'A',
+    /* 开局金直接写字段（2026-11-24 关卡支持了）。
+     * 以前是发一条第 1 手的 gold 事件去扣，扣不准——先手还会白拿一回合收入（+62）。 */
+    ...(scene.gold ? { gold: { ...scene.gold } } : {}),
+  },
   deploy: {
     A: (scene.units ?? []).filter((u) => u.owner === 'A').map((u) => ({ type: u.type, x: u.x, y: u.y })),
     B: (scene.units ?? []).filter((u) => u.owner === 'B').map((u) => ({ type: u.type, x: u.x, y: u.y })),

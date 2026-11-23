@@ -77,6 +77,15 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
           <select data-start-era></select>
         </label>
         <div class="field-hint" data-start-hint></div>
+        <label class="editor-field">
+          <span>开局金币（留空＝按时代自动给；写 0 就是一分钱都不给）</span>
+          <span class="level-gold-row">
+            <input class="editor-input" type="number" min="0" max="9999" step="10"
+              placeholder="红方 自动" data-gold="A" />
+            <input class="editor-input" type="number" min="0" max="9999" step="10"
+              placeholder="蓝方 自动" data-gold="B" />
+          </span>
+        </label>
         <div class="level-seat-count" data-count></div>
         <div class="level-seat-allies">
           <label class="editor-check"><input type="checkbox" data-allies> 同盟（同一队的互为友军）</label>
@@ -104,6 +113,11 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
     `<option value="">跟面板走（玩家自己选）</option>` +
     ERAS.map((e) => `<option value="${e.level}">${esc(e.name)}（第 ${e.level} 级）</option>`).join('');
   startSel.value = startEra === undefined ? '' : String(startEra);
+  for (const seat of ['A', 'B'] as PlayerId[]) {
+    const box = mask.querySelector<HTMLInputElement>(`[data-gold="${seat}"]`);
+    const v = level.setup?.gold?.[seat];
+    if (box && v !== undefined) box.value = String(v);
+  }
 
   const seated = (): PlayerId[] => SEAT_ORDER.slice(0, count);
 
@@ -407,6 +421,25 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
       const setup = { ...(level.setup ?? {}) };
       if (startEra === undefined) delete (setup as { startEra?: number }).startEra;
       else setup.startEra = startEra;
+
+      /*
+       * 开局金：输入框留空 = 不写（保持"按时代给"）。
+       * 写 0 是**有含义**的（一分钱都不给），所以判的是空串而不是 falsy。
+       */
+      const gold: Partial<Record<PlayerId, number>> = {};
+      for (const seat of ['A', 'B'] as PlayerId[]) {
+        const box = mask.querySelector<HTMLInputElement>(`[data-gold="${seat}"]`);
+        const raw = box?.value.trim() ?? '';
+        if (raw === '') continue;
+        const n = Math.round(Number(raw));
+        if (!Number.isFinite(n) || n < 0 || n > 9999) {
+          footEl.textContent = `第 ${seat} 家的开局金要落在 0~9999 之间（现在 ${raw}）`;
+          return;
+        }
+        gold[seat] = n;
+      }
+      if (Object.keys(gold).length > 0) setup.gold = gold;
+      else delete (setup as { gold?: unknown }).gold;
       if (Object.keys(setup).length > 0) next.setup = setup;
       else delete (next as { setup?: unknown }).setup;
 

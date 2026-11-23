@@ -577,6 +577,16 @@ export function createMatch(
   const seats = seatList;
 
   /*
+   * 开局金：关卡写了 `setup.gold` 就按它，没写才按时代算。
+   *
+   * 没坐人的席位一律 0——不是"留点钱"，是它们根本不该有钱（所有遍历都走 `seatsOf`，
+   * 读到它们的金币就是 bug 的前兆）。
+   */
+  const goldOverride = level?.setup?.gold;
+  const goldOf = (p: PlayerId): number =>
+    goldOverride?.[p] ?? (seats.includes(p) ? startGoldFor(startEra) : 0);
+
+  /*
    * 谁先动。
    *
    * 两人局才认（见 MatchConfig.firstSide）：三四人局的席位顺序还牵着出生点和城位，
@@ -893,10 +903,10 @@ export function createMatch(
     // 四个席位都建出来（这一局没坐人的席位名字和金币留着也没人读：
     // 所有遍历都走 seatsOf，不会碰它们）。这样 `players[p]` 永远是定义好的。
     players: {
-      A: { id: 'A', name: DEFAULT_PLAYER_NAMES.A, gold: startGoldFor(startEra) },
-      B: { id: 'B', name: DEFAULT_PLAYER_NAMES.B, gold: seats.includes('B') ? startGoldFor(startEra) : 0 },
-      C: { id: 'C', name: DEFAULT_PLAYER_NAMES.C, gold: seats.includes('C') ? startGoldFor(startEra) : 0 },
-      D: { id: 'D', name: DEFAULT_PLAYER_NAMES.D, gold: seats.includes('D') ? startGoldFor(startEra) : 0 },
+      A: { id: 'A', name: DEFAULT_PLAYER_NAMES.A, gold: goldOf('A') },
+      B: { id: 'B', name: DEFAULT_PLAYER_NAMES.B, gold: goldOf('B') },
+      C: { id: 'C', name: DEFAULT_PLAYER_NAMES.C, gold: goldOf('C') },
+      D: { id: 'D', name: DEFAULT_PLAYER_NAMES.D, gold: goldOf('D') },
     },
     nextUnitSeq: unitSeq,
     // 上帝模式一律关雾。
@@ -1077,6 +1087,21 @@ export function createMatch(
   // 想试"先手不领这第一笔"的配平方案时把这个开关打开：
   // 先手就只剩"先动一步"，钱要等自己第一个回合开始才到账。
   if (!config.noFirstIncome) grantOpeningIncome(state, firstSeat);
+
+  /*
+   * 关卡写了开局金，就以它为准：**放在所有钩子和"先手第一回合收入"之后强制覆盖**。
+   *
+   * 为什么不能只在前面给 `players[p].gold` 赋一次：扩展的 `onMatchStart`
+   * 和 `grantOpeningIncome` 都会往上加钱（先手实测 +62），前面写的数会被改掉。
+   * 作者填的是"这一局开局就该有这么多钱"，那就得是最终值。
+   */
+  const wantGold = level?.setup?.gold;
+  if (wantGold) {
+    for (const p of seats) {
+      const want = wantGold[p];
+      if (want !== undefined) state.players[p].gold = want;
+    }
+  }
 
   refreshMemory(state);
   return state;
