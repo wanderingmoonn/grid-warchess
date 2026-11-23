@@ -178,6 +178,24 @@ export function buildWorld(s: GameState, me: PlayerId): World {
 
   /* 产兵格：造兵会落在这儿，所以它们必须空着——约束层的"必须"从这里来 */
   const keepClear: number[] = [];
+  /*
+   * 桥头：两侧是水的桥面格 = 过河的唯一通道，停在那儿就是把全军的门堵死（S-005）。
+   *
+   * 判据用"邻格里有几片水"：一格桥夹在水中间，上下（或左右）都是水；
+   * 桥面连成一条时，中间那几格的邻格是别的桥面，不会被标——那是对的，
+   * 真正卡人的就是"进出水岸的那一格"。
+   */
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if (s.tiles[y * s.w + x]?.terrain !== 'bridge') continue;
+      let water = 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const t = s.tiles[(y + dy) * s.w + (x + dx)]?.terrain;
+        if (t === 'water' || t === 'deep') water += 1;
+      }
+      if (water >= 2) keepClear.push(y * s.w + x);
+    }
+  }
   for (const city of myCities) {
     for (const def of Object.values(s.unitTypes)) {
       if (def.category !== 'combat' || (def.era ?? 1) > (city.era ?? 1)) continue;

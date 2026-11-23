@@ -58,10 +58,34 @@ export function actFor(
 ): Action | null {
   const keep = new Set(con.keepClear);
 
-  /* ① 让开：站在"必须空"的格子上 */
-  if (keep.has(u.y * s.w + u.x)) {
+  /*
+   * ① 让开：站在"必须空"的格子上。
+   *
+   * **只约束没有理由待在那儿的单位**（经济兵、驻守兵）。正在推进的战斗单位要过桥，
+   * 让它"让开"就等于不许过河——桥面那一格本来就是临时占用。
+   */
+  const squadNow = squadOf(con, u);
+  const mustClearOnBridge = utype(s, u.type).category === 'economy' || squadNow?.order === 'hold';
+  if (keep.has(u.y * s.w + u.x) && mustClearOnBridge) {
     const spot = stepToward(s, u, awayPoint(s, u, keep), keep);
     if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+  }
+
+  /*
+   * ①.5 召回：`hold` 队离城还远，就先走回去——**这一步排在打人之前**。
+   *
+   * S-004 上实测：撤退的兵只要射程内出现敌人就会停下来打（v3 同一个病），
+   * 结果 12 个兵只有 4 个回到城下、还丢了 12 个。
+   * 约束说"回城"，那就先回城；路上能顺手打的，等站好位再说。
+   */
+  const sqNow = squadOf(con, u);
+  if (sqNow?.order === 'hold' && sqNow.cityId) {
+    const home = s.cities.find((c) => c.id === sqNow.cityId);
+    if (home && cheb(u, home) > 2) {
+      const to = { x: home.x, y: home.y };
+      const spot = stepToward(s, u, to, keep);
+      if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+    }
   }
 
   /*
@@ -93,9 +117,10 @@ export function actFor(
   }
 
 
-  /* ④ 走：朝任务目标 */
-  if (!sq || sq.order === 'hold') return null;
+  /* ④ 走：朝任务目标。`hold` 也不是"钉在原地"——离城还远就先走回去 */
+  if (!sq) return null;
   const to = targetOf(s, sq);
+  if (sq.order === 'hold' && to && cheb(u, to) <= 2) return null;
   if (!to) return null;
   const spot = stepToward(s, u, to, keep);
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
