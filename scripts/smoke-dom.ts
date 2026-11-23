@@ -11619,6 +11619,20 @@ check('考卷：关卡里没写 AI 席位，考卷模式下对手也必须交给
   assert.ok(hud.includes('aiSeats=["B"]'), `对手要交给电脑，实际 HUD：${hud.split('\n')[1] ?? '(空)'}`);
 });
 
+check('v4 面板：?debug=v4 时右下角出现三层输出', () => {
+  /*
+   * 这个面板是调试工具，它出错的代价是"看不见 AI 在想什么"，不是"对局坏了"。
+   * 所以只断言它真的出来了、里面有决定和队伍，不断言具体文案。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261124, {});
+  const w = bootWith(st, '?loadSave=1&debug=v4');
+  const el = w.document.getElementById('v4-hud');
+  assert.ok(el, '右下角应该有 #v4-hud');
+  const text = el.textContent ?? '';
+  assert.ok(/v4 · 第 \d+ 手/.test(text), `面板要有回合号：${text}`);
+  assert.ok(/推|守|发展/.test(text), `面板要有决定：${text}`);
+});
+
 check('考卷：?exam= 仍然被 ?home=1 压过', () => {
   const w = bootWith(undefined, '?exam=lone-city&home=1');
   assert.ok(w.document.querySelector('.title-screen'), '想回门面时 ?home=1 要生效');

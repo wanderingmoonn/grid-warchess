@@ -122,6 +122,9 @@ const level: LevelDef = {
   setup: {
     startEra: scene.startEra ?? 2,
     firstSide: scene.me === 'B' ? 'B' : 'A',
+    /* 雾：场景说关就关。不写这一条的话，关卡版一律开雾，
+     * 和手摆快照不是同一局（S-001 因此 v3 从绿变红）。 */
+    ...(scene.fog === false ? { fog: false } : {}),
     /* 开局金直接写字段（2026-11-24 关卡支持了）。
      * 以前是发一条第 1 手的 gold 事件去扣，扣不准——先手还会白拿一回合收入（+62）。 */
     ...(scene.gold ? { gold: { ...scene.gold } } : {}),

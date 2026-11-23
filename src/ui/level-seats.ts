@@ -78,6 +78,13 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
         </label>
         <div class="field-hint" data-start-hint></div>
         <label class="editor-field">
+          <span>开局雾气</span>
+          <select class="editor-input" data-fog>
+            <option value="">跟默认（开雾）</option>
+            <option value="off">关雾（单机制题用这个）</option>
+          </select>
+        </label>
+        <label class="editor-field">
           <span>开局金币（留空＝按时代自动给；写 0 就是一分钱都不给）</span>
           <span class="level-gold-row">
             <input class="editor-input" type="number" min="0" max="9999" step="10"
@@ -113,6 +120,8 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
     `<option value="">跟面板走（玩家自己选）</option>` +
     ERAS.map((e) => `<option value="${e.level}">${esc(e.name)}（第 ${e.level} 级）</option>`).join('');
   startSel.value = startEra === undefined ? '' : String(startEra);
+  const fogSel = mask.querySelector<HTMLSelectElement>('[data-fog]');
+  if (fogSel) fogSel.value = level.setup?.fog === false ? 'off' : '';
   for (const seat of ['A', 'B'] as PlayerId[]) {
     const box = mask.querySelector<HTMLInputElement>(`[data-gold="${seat}"]`);
     const v = level.setup?.gold?.[seat];
@@ -426,6 +435,11 @@ export function openLevelSeats(opts: LevelSeatsOptions): void {
        * 开局金：输入框留空 = 不写（保持"按时代给"）。
        * 写 0 是**有含义**的（一分钱都不给），所以判的是空串而不是 falsy。
        */
+      /* 雾：只表达"关"；"跟默认"就不写字段 */
+      const fogBox = mask.querySelector<HTMLSelectElement>('[data-fog]');
+      if (fogBox?.value === 'off') setup.fog = false;
+      else delete (setup as { fog?: boolean }).fog;
+
       const gold: Partial<Record<PlayerId, number>> = {};
       for (const seat of ['A', 'B'] as PlayerId[]) {
         const box = mask.querySelector<HTMLInputElement>(`[data-gold="${seat}"]`);

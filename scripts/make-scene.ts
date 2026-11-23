@@ -230,6 +230,20 @@ for (const p of ['A', 'B'] as PlayerId[]) {
   }
 }
 
+/*
+ * ── 单位编号对齐（2026-11-24）
+ *
+ * 手摆出来的局面，单位 id 是接着 `createMatch` 的计数器往下发的（实测从 u15 起）；
+ * 而玩家在游戏里打开的是**同一张图的关卡版**，那边的 id 从 u1 开始。
+ * 于是"人打的动作"拿到快照上重放时全部报"单位不存在"——题面和判分不是同一份。
+ *
+ * 这里按**摆放顺序**把它们重排成 u1..uN。和关卡版对齐，两边就能互放。
+ */
+s.units.forEach((u, i) => {
+  u.id = `u${i + 1}`;
+});
+s.nextUnitSeq = s.units.length + 1;
+
 const meUnits = s.units.filter((u) => u.owner === ME).length;
 const foeUnits = s.units.filter((u) => u.owner !== ME).length;
 const { panelFull } = writeExam({

@@ -141,13 +141,14 @@ export const aiNextAction = aiNextActionV4;
 export function v4Snapshot(s: GameState, me: PlayerId): {
   decision: Decision;
   squads: Array<{ id: string; order: string; n: number }>;
-  keepClear: number;
+  /** 必须空的格子（下标）。面板要画它们，所以给原值不是数量 */
+  keepClearList: number[];
 } {
   const v = currentView(s, me);
   return {
     decision: v.decision,
     squads: v.con.squads.map((q) => ({ id: q.id, order: q.order, n: q.unitIds.length })),
-    keepClear: v.con.keepClear.length,
+    keepClearList: v.con.keepClear,
   };
 }
 

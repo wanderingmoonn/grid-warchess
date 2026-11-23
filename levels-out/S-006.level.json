@@ -50,6 +50,7 @@
   "setup": {
     "startEra": 3,
     "firstSide": "A",
+    "fog": false,
     "gold": {
       "A": 0,
       "B": 0

@@ -1095,6 +1095,9 @@ export function createMatch(
    * 和 `grantOpeningIncome` 都会往上加钱（先手实测 +62），前面写的数会被改掉。
    * 作者填的是"这一局开局就该有这么多钱"，那就得是最终值。
    */
+  /* 关卡的雾气设定（不写就不动，保持面板/默认） */
+  if (level?.setup?.fog !== undefined) state.fog = level.setup.fog;
+
   const wantGold = level?.setup?.gold;
   if (wantGold) {
     for (const p of seats) {

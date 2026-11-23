@@ -337,6 +337,14 @@ export interface LevelSetup {
    * 缺省不写＝保持老行为（按时代给），所以老关卡一个字段都不用改。
    */
   gold?: Partial<Record<PlayerId, number>>;
+  /**
+   * 开局雾气（2026-11-24）。`true` = 开雾、`false` = 关雾，不写 = 跟面板/默认（开）。
+   *
+   * 为什么需要：单机制题（考"这一格该不该站"）必须关雾，否则出题人和答题人看的不是
+   * 同一张图；而关卡原来没有这个字段，于是"关卡版"和"手摆快照版"永远是两局
+   * （实测同一个 S-001，关雾时 v3 绿、开雾时红）。
+   */
+  fog?: boolean;
 }
 
 /**
@@ -3584,6 +3592,7 @@ function normalizeSetup(
   }
 
   if (o.twoCities !== undefined) out.twoCities = o.twoCities === true;
+  if (o.fog !== undefined) out.fog = o.fog === true;
 
   /* 逐席开局金：0 是合法值（"一分钱都不给"），所以要判 undefined 而不是 falsy */
   if (o.gold !== undefined) {
