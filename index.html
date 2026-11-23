@@ -55,5 +55,7 @@
       <div class="boot"><i></i><p>正在布置战场…</p></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
+    <!-- 肉鸽试玩版入口：只在地址带 ?rogue 时接管页面，平时不加载任何模块（见 src/roguelike/entry.ts） -->
+    <script type="module" src="/src/roguelike/entry.ts"></script>
   </body>
 </html>
