@@ -115,6 +115,8 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
 
       <div class="title-links">
         <button data-title="rogue">肉鸽</button>
+        <!-- 肉鸽 2.0：另一套（if 线）。与原版肉鸽并存、互不影响，实现全在 src/roguelike/ -->
+        <button data-title="rogue2" title="if 线：房间图 / 事件 / 商店，与左边那套互相独立">肉鸽 2.0</button>
         <button data-title="online">联机对战</button>
         <button data-title="manual">规则手册</button>
         <details class="title-tools">
@@ -192,6 +194,17 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       case 'rogue':
         close();
         opts.onRogue();
+        break;
+      /*
+       * 肉鸽 2.0（if 线）。
+       *
+       * 不放进 TitleOptions：那条接口是原版肉鸽的，动了就得改 main.ts。
+       * 这里直接懒加载自己那一层（`src/roguelike/mount.ts`），
+       * 不进这个模式就一个字节都不加载，也不与原来的肉鸽共用任何状态。
+       */
+      case 'rogue2':
+        close();
+        void import('../roguelike/mount.ts').then((m) => m.openRogue2());
         break;
       case 'online':
         close();
