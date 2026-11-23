@@ -70,6 +70,11 @@ type Criterion = {
   x?: number;
   y?: number;
   r?: number;
+  /** `unitsInZone` 用：矩形（含四边），(x0,y0) 左上、(x1,y1) 右下 */
+  x0?: number;
+  y0?: number;
+  x1?: number;
+  y1?: number;
   min?: number;
   max?: number;
   /** 为什么有这一条（写给人看，判分时会一起打印） */
@@ -330,6 +335,18 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
           (!c.category || u.category === c.category),
       ).length;
       return { ok: c.min === undefined || n >= c.min, got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个` };
+    }
+    case 'unitsInZone': {
+      /* 区域推进类判据："过河了没有""压到哪条线了"。比 unitsNear 好用，
+       * 因为河/关隘是矩形，不是圆。 */
+      const n = st.mine.filter(
+        (u) =>
+          u.x >= (c.x0 ?? 0) && u.x <= (c.x1 ?? 0) && u.y >= (c.y0 ?? 0) && u.y <= (c.y1 ?? 0) &&
+          (!c.category || u.category === c.category),
+      ).length;
+      const lowOk = c.min === undefined || n >= c.min;
+      const highOk = c.max === undefined || n <= c.max;
+      return { ok: lowOk && highOk, got: `区域内 ${n} 个` };
     }
     case 'gold': {
       const g = st.gold[ME] ?? 0;
