@@ -3209,6 +3209,33 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
   assert.equal(net(), null, '切回热座应该收起来');
 });
 
+check('斜俯视棋盘：没有 canvas 的环境里安静退化，不炸也不留半个画布', () => {
+  /*
+   * 2026-11-23。斜俯视是 canvas 渲染，而 jsdom 没有 CanvasRenderingContext2D。
+   * 这条守的是**降级**，不是渲染：
+   *   · 页面照常起来，DOM 棋盘还在（`.tile` 有货）；
+   *   · 不生成 `.angled-board` 画布，也不把 `has-angled-view` 挂到 .board 上；
+   *   · 视角按钮不出现（canUseAngledBoard 为假）。
+   * 真渲染由 `scripts/ui-shot.ts angled` 拍图验证——jsdom 里验不了"看得见"。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261123, {});
+  const w = bootWith(st, '?loadSave=1&view=angled');
+  const d = w.document;
+  try {
+    assert.ok(d.querySelectorAll('.tile').length > 0, 'DOM 棋盘照常渲染');
+    assert.equal(d.querySelector('.angled-board'), null, '没有 canvas 就不该造画布');
+    assert.equal(
+      d.querySelector('.board')?.classList.contains('has-angled-view'),
+      false,
+      '不该挂 has-angled-view',
+    );
+    const toggle = d.querySelector<HTMLElement>('[data-act="board-angle"]');
+    assert.ok(!toggle || toggle.hidden, '没有 canvas 时视角按钮要么不存在、要么是隐藏的');
+  } finally {
+    w.close();
+  }
+});
+
 check('AI 内核：高级档位就是 v3，不再有单独的「实验 AI」按钮', () => {
   /*
    * 2026-11-21 修仙分支的「实验 AI」并进主线；2026-11-22 接着写成 v3；
