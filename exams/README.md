@@ -117,6 +117,18 @@ v1 在 40 手里 0 损失 0 战果——**它根本没渡过那条一格宽的�
 | `scripts/make-scene.ts` | 手摆一格（单机制题；`scenes/*.json`） |
 | `scripts/scene-to-level.ts` | 把手摆局面转成**关卡**，好在游戏编辑器里画布打开、继续改 |
 | `scripts/exam-grade.ts` | 判分：`--me-ai v3/v1/none` 或 `--answers`，跑 N 手看判据红绿 |
+| `scripts/actions-to-answers.ts` | 把游戏导出的动作转成 `--answers`（人工答案要用它） |
+
+### 让测试员坐到这道题前面
+
+1. `scene-to-level.ts` 产出关卡 JSON → 游戏「编辑器」里粘贴并保存（拿到 id，形如 `user:xxxx`）
+2. 地址栏 `?exam=user:xxxx` 直达那一局（**这条会强制打开"记录详细数据"**）
+3. 打完 → 设置 → 「导出动作」→ 存成 `a.json`
+4. `actions-to-answers.ts --in a.json --me A --out answers/xxx.json`
+5. `exam-grade.ts --exam exams/xxx --answers answers/xxx.json`
+
+用户关卡存在本机浏览器里，**换台机器就没有**；题目正本始终是 `scenes/*.json` 和
+`exams/*/snap.json`。细节见 `docs/DESIGN-EXAM-WORKBENCH-2026-11-23.md`。
 
 出题的三条路、以及"怎么不把开发者功能暴露给玩家"，见
 `docs/DESIGN-EXAM-WORKBENCH-2026-11-23.md`。**一句话：考卷是 `dev: true` 的关卡，

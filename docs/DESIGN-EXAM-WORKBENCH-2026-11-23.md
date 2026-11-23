@@ -107,16 +107,43 @@
 
 ## 五、落地顺序（三步，每步都能单独停）
 
-| 步 | 做什么 | 代价 | 停了会怎样 |
-|---|---|---|---|
-| 1 | 用现成编辑器画第一张题（不改代码） | 0 | 能出题，但测试员要从「编辑器」栏找 |
-| 2 | `?exam=<id>` 直达 | 小（`main.ts` 一个函数） | 测试员要手动找关，容易点错 |
-| 3 | `?debug` 下「导出动作」 | 小 | "人的答案"永远录不下来，判据可行性只能靠 AI 背书 |
+| 步 | 做什么 | 状态 |
+|---|---|---|
+| 1 | 用现成编辑器画第一张题（不改代码） | ✅ 已验（S-001 粘进去能改） |
+| 2 | `?exam=<id>` 直达 | ✅ 已做 |
+| 3 | 「导出动作」（`?exam` 局才出现这颗按钮） | ✅ 已做 |
 
-第 1 步现在就能做：`levels-out/S-001.level.json` 已经生成并通过关卡校验，
-把它粘进编辑器的 JSON 输入框就能在画布上看到。
-建议**先做第 1 步**，你自己摆两张题，确认"这样出题顺手"之后再做 2、3——
-如果摆起来别扭，说明该改的是编辑器，而不是加钩子。
+### 已经能跑的一整条路
+
+```bash
+# 1. 造局面 → 转关卡
+node --experimental-strip-types scripts/make-scene.ts --scene scenes/S-001.json
+node --experimental-strip-types scripts/scene-to-level.ts --scene scenes/S-001.json --out levels-out/S-001.level.json
+
+# 2. 游戏里：「编辑器」→ 新建 → 把上面那份 JSON 粘进左边文本框 → 保存
+#    （必要时在画布上改）→ 记住它给你分配的 id（形如 user:xxxx）
+
+# 3. 按 id 直达这一局（换了浏览器/没保存过就找不到，用户关卡存在本机）
+#    地址栏： localhost:5173?exam=user:xxxx
+#    内置关卡也行：?exam=lone-city（会被补成 level:lone-city）
+
+# 4. 在游戏里把这一局打完，然后「设置 → 导出动作」→ 复制到剪贴板 → 存成 a.json
+
+# 5. 转成判分器的答案格式
+node --experimental-strip-types scripts/actions-to-answers.ts --in a.json --me A --out answers/S-001.json
+
+# 6. 判分
+node --experimental-strip-types scripts/exam-grade.ts --exam exams/S-001 --answers answers/S-001.json
+```
+
+`?exam=` 三条行为都是刻意的：
+
+- **强制打开 `recordDetail`**（否则动作不被记录，第 4 步会拿到空）；
+- 找不到题号就**退回普通开局**并打一行警告，不许把页面搞死；
+- 用户关卡存 localStorage，所以**换台机器就没有了**——题目正本仍是
+  `scenes/*.json` 与 `exams/*/snap.json`，关卡只是"拿来看和改"的那一层。
+
+冒烟覆盖在 `scripts/smoke-dom.ts` 末尾两条（能开起来 / 题号写错不抛错）。
 
 ---
 

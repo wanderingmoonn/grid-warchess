@@ -23,7 +23,7 @@ import type { BoardView } from './core/expansions.ts';
 import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts';
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
-import { goalText, validateLevel } from './core/level.ts';
+import { goalText, levelById, validateLevel } from './core/level.ts';
 import {
   RUN_KEY,
   canRestart,
@@ -476,8 +476,34 @@ let hasRealSave = bootSave !== null;
  * 只在显式带参数时生效，线上行为不变。
  */
 const forceLoadSave = new URLSearchParams(location.search).get('loadSave') === '1';
-let state: GameState = bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
-if (hasRealSave && !forceLoadSave) {
+
+/*
+ * `?exam=<题号>`：**按题号直达一个出题局面**（2026-11-23）。
+ *
+ * 考卷是一个 `dev: true` 的关卡——那种关卡不进选关菜单（见 core/level.ts 的三处过滤），
+ * 所以测试员没法在菜单里找到它，只能靠这个参数一步到位。
+ *
+ * 和「导入对局」是同一类操作：换掉当前局、照常落盘。所以不挂起自动存档
+ * （挂起了测试员一刷新就丢进度，比"覆盖存档"更烦人）。
+ *
+ * **强制打开 `recordDetail`**：答案要能被录下来，判分器才有 `--answers` 可吃。
+ * 这一条不能指望测试员自己去设置里勾——他不会知道有这回事。
+ */
+const examParam = new URLSearchParams(location.search).get('exam');
+const examLevel = examParam ? levelById(examParam.startsWith('level:') ? examParam : `level:${examParam}`) : null;
+let state: GameState = examLevel
+  ? createMatch(
+      { ...DEFAULT_CONFIG, level: examLevel, recordDetail: true },
+      randomSeed(),
+      loadCustomUnits(),
+    )
+  : (bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits()));
+if (examLevel) {
+  console.info(`[考卷] 已按 ?exam=${examParam} 开局：${examLevel.id}`);
+} else if (examParam) {
+  console.warn(`[考卷] 找不到题号「${examParam}」，按普通开局走了`);
+}
+if (!examLevel && hasRealSave && !forceLoadSave) {
   // 占位局：别让它覆盖真正的存档
   state = createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits());
   suspendSaves(true);
@@ -5711,6 +5737,37 @@ function handleAction(act: string, el: HTMLElement): void {
           return state;
         },
       });
+      return;
+    }
+
+    /*
+     * 「导出动作」：把这一局人走过的每一步抄出来（`?exam=` 局才有这颗按钮）。
+     *
+     * 判分器要的是"人工答案"——测试员在游戏里怎么解的，就得有东西记下来。
+     * `actionLog` 本来就一步步记着（AI 和人都记，带 `by`），这里只是给它一个出口。
+     * 导出的是一段纯文本，粘到文件里存成 `xxx.actions.json`，
+     * 再用 `scripts/actions-to-answers.ts` 转成判分器的 `--answers` 格式。
+     */
+    case 'export-actions': {
+      if (!actionLog) {
+        toast('这一局没开「记录详细数据」，动作没被记下来——用 ?exam= 开局才会自动打开');
+        return;
+      }
+      /* 存成局部量：`actionLog` 是模块级 `let`，进了回调就不再被收窄了 */
+      const steps = actionLog;
+      const payload = {
+        kind: 'exam-actions',
+        exam: examLevel?.id ?? null,
+        seed: state.seed,
+        at: new Date().toISOString(),
+        dropped: actionDropped,
+        actions: steps,
+      };
+      const text = JSON.stringify(payload, null, 2);
+      void navigator.clipboard
+        ?.writeText(text)
+        .then(() => toast(`已复制 ${steps.length} 步动作到剪贴板`))
+        .catch(() => window.prompt('复制下面的内容存成文件：', text));
       return;
     }
 
@@ -10961,6 +11018,7 @@ function openSettings(): void {
       unitArt: uiArtOn(),
       terrainArt: uiTerrainOn(),
       replay: replay !== null,
+      exam: examLevel !== null,
       showAll: state.showAll === true,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。

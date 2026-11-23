@@ -43,6 +43,13 @@ export interface SettingsOptions {
    */
   replay?: boolean;
   /**
+   * 这一局是从「考卷」开的（`?exam=`）。
+   *
+   * 只在为真时多出一颗「导出动作」——它导出的是**这一局人走过的每一步**，
+   * 用来给判分器当"人工答案"。玩家平时不需要它，所以默认不显示。
+   */
+  exam?: boolean;
+  /**
    * 窄屏专用：把顶栏那两颗「联机」「迷雾」也收进来。
    *
    * 360px 宽的顶栏放不下整套按钮（回合胶囊 + 交给 AI + 联机 + 迷雾 + 设置），
@@ -131,6 +138,7 @@ export function settingsHtml(o: SettingsOptions): string {
               ? '<span class="set-hint">退出复盘后可导出对局。</span>'
               : '<button class="btn btn-sm" data-act="export">导出对局</button>'
           }
+          ${o.exam && !o.replay ? '<button class="btn btn-sm" data-act="export-actions">导出动作</button>' : ''}
           <button class="btn btn-sm" data-act="new-match">新对局</button>
           <button class="btn btn-sm" data-act="new-game">回首页</button>
         </div>

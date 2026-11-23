@@ -11572,3 +11572,24 @@ console.log(`\n通过 ${passed} 项，失败 ${failed} 项\n`);
  */
 const exitCode = failed > 0 ? 1 : 0;
 process.stdout.write('', () => process.exit(exitCode));
+
+console.log('\n考卷');
+
+/*
+ * `?exam=<题号>`：按题号直达一个局面。
+ *
+ * 这条入口是给测试员用的——考卷是 `dev: true` 的关卡，不进选关菜单，
+ * 没有这个参数就只能靠手动找。测两件事：能开起来、题号写错不能把页面搞死。
+ */
+check('考卷：?exam= 按题号直达一局', () => {
+  const w = bootWith(undefined, '?exam=lone-city');
+  const d = w.document;
+  // 「孤城」是 14×14，随机开局是 12×12 —— 格子数是"确实换成了这一关"的直接证据
+  assert.equal(d.querySelectorAll('.tile').length, 196, '应该载入关卡那张 14×14 的图');
+});
+
+check('考卷：题号写错时退回普通开局，不抛错', () => {
+  const w = bootWith(undefined, '?exam=no-such-exam');
+  const d = w.document;
+  assert.equal(d.querySelectorAll('.tile').length, 144, '找不到题号就按默认 12×12 开局');
+});
