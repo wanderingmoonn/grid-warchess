@@ -66,6 +66,8 @@ const CITY_SITE = process.argv.includes('--city-site');
 const HUB = process.argv.includes('--hub');
 /** `--garrison`：守军给产兵格让位（`aiGarrison`，默认关） */
 const GARRISON = process.argv.includes('--garrison');
+/** `--ruin-safe`：废墟安全闸（`aiRuinSafe`，默认关） */
+const RUIN_SAFE = process.argv.includes('--ruin-safe');
 const WANT = pickArg ? new Set(pickArg.split(',').map((x) => x.trim().toUpperCase())) : null;
 /** 路径都相对 `scripts/` 解析（和 ai-duel 的写法一致：`--new ../src/core/ai-v3.ts`） */
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -105,6 +107,7 @@ function playOne(aiNew: Ai, aiOld: Ai, q: Queue, seed: number, aIsNew: boolean):
       ...(CITY_SITE ? { aiCitySite: true } : {}),
       ...(HUB ? { aiHub: true } : {}),
       ...(GARRISON ? { aiGarrison: true } : {}),
+      ...(RUIN_SAFE ? { aiRuinSafe: true } : {}),
     },
     seed,
   );

@@ -779,6 +779,7 @@ export function createMatch(
       ...(config.aiCitySite === true ? { aiCitySite: true } : {}),
       ...(config.aiHub === true ? { aiHub: true } : {}),
       ...(config.aiGarrison === true ? { aiGarrison: true } : {}),
+      ...(config.aiRuinSafe === true ? { aiRuinSafe: true } : {}),
       ...(config.aiMass === false ? { aiMass: false } : {}),
       ...(config.aiBreakthrough === false ? { aiBreakthrough: false } : {}),
       ...(config.aiSquad === false ? { aiSquad: false } : {}),

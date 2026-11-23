@@ -2079,6 +2079,15 @@ interface Fields {
    */
   needCityId: string | null;
   /**
+   * 废墟 → 这一回合抢下来守不守得住（视野里没有敌兵**下回合就能打到这座废墟**）。
+   *
+   * 判据直接用 `enemyThreatAt`（敌人移动力 + 射程），和"城下有人"是同一把尺子，
+   * 不另拍一个数字。没有记录的废墟当作安全（营地/推演分支不查这张表）。
+   */
+  ruinSafe: Map<string, boolean>;
+  /** 城 → 观察到的易手次数（跨回合记忆，见 `AiFocus.ruinFlips`）。反复易手 → 权重按 1/(1+n) 降 */
+  cityFlips: Map<string, number>;
+  /**
    * 产兵枢纽（见 `hubCityOf`）：升级、出兵点、守军让位三处共用同一个答案。
    * 三处各算一遍迟早互相打架——"前线升了时代、后方还在造兵"就是这么来的。
    */
@@ -3334,7 +3343,7 @@ function squadShortfallOf(s: GameState, me: PlayerId): number {
  * 每回合只更新一次（`keep.stallTurn` 去重）——`value` 每步决策都会被调，
  * 不去重会把同一回合算十几次，计数直接失真。
  */
-/* ---------------- 编队：编制 + 上报（2026-11-21） ---------------- */
+/* ---------------- 编队：阵容 + 上报（2026-11-21） ---------------- */
 
 function stallOf(c: PlanCtx): { turns: number; median: number } {
   const turn = c.view.turn;
@@ -4939,7 +4948,17 @@ function scoreMoveInner(
     // 重建它等于把这几个回合攒的东西又埋回去。
     if (rc.id === all.mood.abandonedCityId) continue;
     const affordable = s.players[unit.owner].gold >= rebuildCost(rc);
-    const perTile = affordable ? 35 : rc.owner === unit.owner ? 8 : 10;
+    /*
+     * 安全 + 易手次数的折价。
+     *
+     * 不安全（有敌兵下回合能打到这座废墟）时按"掏不起钱"那一档给坡度——
+     * 也就是别往那儿集结，省得整支部队被一座抢不住的废墟拴住。
+     * 反复易手的废墟再按 1/(1+n) 折：抢一次被人打空一次的地方，抢第 N 次只会更亏。
+     */
+    const gate = s.config.aiRuinSafe === true;
+    const safe = !gate || all.ruinSafe.get(rc.id) !== false;
+    const decay = gate ? 1 / (1 + (all.cityFlips.get(rc.id) ?? 0)) : 1;
+    const perTile = (affordable && safe ? 35 : rc.owner === unit.owner ? 8 : 10) * decay;
     const before = distToCity(unit, rc);
     const after = distToCity({ x, y }, rc);
     if (before > 0) score += (before - after) * perTile;
@@ -4956,9 +4975,17 @@ function scoreMoveInner(
   const destCity = cityAt(s, x, y);
   if (destCity?.ruined) {
     const price = rebuildCost(destCity);
-    if (s.players[unit.owner].gold >= price) score += destCity.owner === unit.owner ? 150 : 220;
-    // 钱不够就**别走进去**：doMove 会拒绝，AI 这一回合就卡死在这一步上
-    else score -= 90;
+    const gate = s.config.aiRuinSafe === true;
+    const safe = !gate || all.ruinSafe.get(destCity.id) !== false;
+    const decay = gate ? 1 / (1 + (all.cityFlips.get(destCity.id) ?? 0)) : 1;
+    /*
+     * 只有"掏得起 + 这一回合没人能打到它"才给接管分。
+     * 不安全就别进去：钱照付，城照丢，兵还可能留在那儿。
+     * 反复易手的废墟按 1/(1+n) 折——一次比一次不值。
+     */
+    if (s.players[unit.owner].gold >= price && safe) {
+      score += (destCity.owner === unit.owner ? 150 : 220) * decay;
+    } else score -= 90;
   }
 
   // 残血别往枪口上撞
@@ -5178,7 +5205,7 @@ export type RosterRole = 'tank' | 'melee' | 'ranged' | 'support' | 'siege';
  * 这几个数字是照着"能推进、能顶住、能持久"三条给的，不是理论最优解：
  * 前排不够，远程一被贴脸就散；远程不够，压到城下只能拿人命填；
  * 支援为 0，一条线打完就没有第二条线。
- * 攻城器不占常备编制——它是"到了墙下才买"的一次性工具。
+ * 攻城器不进常备阵容——它是"到了墙下才买"的一次性工具。
  */
 const ROLE_TARGET: Record<RosterRole, number> = {
   tank: 0.3,
@@ -5194,11 +5221,11 @@ const ROLE_TARGET: Record<RosterRole, number> = {
  */
 const TEMPLATE_ROLES: RosterRole[] = ['tank', 'melee', 'ranged', 'support'];
 
-/** 这个兵在编制里顶哪一档 */
+/** 这个兵在阵容里顶哪一档 */
 export function rosterRoleOf(def: UnitTypeDef): RosterRole {
   const ab = def.abilities ?? [];
   // 英雄不算攻城器：九头蛇带 siege-master 是因为它砸墙也疼，
-  // 但它进编制是去当主力的，编制里不给它记"攻城"这一档。
+  // 但它进阵容是去当主力的，阵容里不给它记"攻城"这一档。
   if (!def.hero && ab.includes('siege-master')) return 'siege';
   // 能打的支援兵（天使 42 攻、矮人王 34 攻）算前排：它们本职是站在线上，
   // 光环只是顺带。自己打不动的（牧师、巫医、召唤师）才算支援。
@@ -6184,7 +6211,7 @@ function rawBuildScore(
     // 经济建筑 2 点护甲，对面一个民兵两下就拆了，还顺手带走建造者。
     if (risky) return -999;
     // 每座城两座经济建筑封顶。
-    // 以前"建筑不占编制"之后，钱一多就变成满地的磨坊：模拟里青铜局 60 场盖了 682 座，
+    // 不加这条，钱一多就变成满地的磨坊：模拟里青铜局 60 场盖了 682 座，
     // 场面像集市不像战场。经济建筑本身也会继续生钱，越盖越多，最后全在滚利息。
     const sameKind = unitsOf(s, unit.owner).filter((u) => u.type === def.id).length;
     if (sameKind >= Math.max(2, citiesOf(s, unit.owner).length * 2)) return -999;
@@ -7991,6 +8018,11 @@ function buildPlan(
     .filter((c) =>
       my.some((u) => !u.moved && distToCity(u, c) <= Math.max(2, utype(s, u.type).move + 1)),
     )
+    /*
+     * 只给"这一回合抢得下来"的废墟攒钱：有敌兵下回合就能打到它，攒的这笔钱
+     * 会连人一起送出去（冻结采购的代价还不止这笔钱）。关掉开关时不过滤。
+     */
+    .filter((c) => s.config.aiRuinSafe !== true || enemyThreatAt(s, me, c.x, c.y).n === 0)
     .sort((a, b) => rebuildCost(a) - rebuildCost(b))[0];
 
   /*
@@ -8313,15 +8345,10 @@ function buildPlan(
   );
   const trade = doomedNow && myVal > 0 && foeVal > myVal * TRADE_AT && army >= 4 && reachFoe;
   /*
-   * 精兵姿态：**留着，但砍掉那条"编制快满就精兵"的触发**（2026-11-21）。
+   * 精兵姿态：手头宽裕时买更好的兵，而不是把同一袋钱摊成五个便宜兵
+   * （同样一袋钱，"坦克"和"五个民兵"的战斗力不一样）。
    *
-   * 先试过整条删掉，对 v1 的胜率从 75% 掉到 33%——说明"手头宽裕时买好的"
-   * 这件事和帽子无关：同样一袋钱，买 5 个民兵和 1 个坦克的战斗力不一样，
-   * 便宜兵再多也顶不住质量。帽子只该背它自己的那一份：
-   * （v3 没有编制上限，那条"编制快满就精兵"的触发早就删了。）
-   *
-   * 所以 `quality` 现在只剩三条与帽子无关的来源：在攒钱、手头比一个兵宽裕、
-   * 或者这一局性格偏发展。
+   * 触发只有三条：在攒钱、金 ≥ 1.2 回合收入、这一局性格偏发展。
    */
   const quality = savingFor !== null || gold >= inc * 1.2 || mood.weight.boom > 0.5;
   const elite = quality || trade;
@@ -10047,8 +10074,8 @@ function aiNextActionCoreInner(
     typeof s.config.aiRecruitCap === 'number'
       ? Math.max(0, s.config.aiRecruitCap)
       : // 默认（未写 / 'auto'）按空格子数放开：规则层本来就不限每回合造几个，
-        // 限制只有钱和格子。帽子留成"低难度开关"（`--recruit-cap 2`）
-        Math.max(budget.maxRecruit, productionCapacity(view, me));
+      // 真正的限制只有钱和格子。
+      Math.max(budget.maxRecruit, productionCapacity(view, me));
   const mayRecruit = commander
     ? !idleHead && head !== '' && head !== ORDER_UPGRADE && budget.recruited < 1
     : budget.recruited < recruitCap;
@@ -10183,6 +10210,47 @@ function aiNextActionCoreInner(
   const hubCity = hubCityOf(view, me, mood, citiesOf(view, me), { cityPlans, needCityId });
 
   /*
+   * 废墟安全表 + 易手次数。
+   *
+   * 安全 = 视野里没有敌兵**下回合能打到这座废墟**（`enemyThreatAt` 用的就是
+   * "移动力 + 射程"，和"城下有人"同一个口径）。不安​​全的废墟不给接管分——
+   * 踩进去要付 `maxHp×2.5`，付完还大概率被打空，等于白送一笔钱。
+   */
+  const ruinSafe = new Map<string, boolean>();
+  for (const c of view.cities) {
+    if (!c.ruined) continue;
+    ruinSafe.set(c.id, enemyThreatAt(view, me, c.x, c.y).n === 0);
+  }
+  const cityFlips = new Map<string, number>();
+  {
+    const f = focusOf(s, me);
+    const seen = { ...(f.cityCaptured ?? {}) };
+    const flips = { ...(f.ruinFlips ?? {}) };
+    let dirty = false;
+    for (const c of view.cities) {
+      const now = Number(c.capturedTurn ?? -1);
+      const before = seen[c.id];
+      /*
+       * 接管次数按 `capturedTurn` 变没变来数，不按"归属变没变"。
+       *
+       * 废墟被打空**不改归属**：同一方可以反复接管自己那座被打空的城，
+       * 按归属计会漏掉一大半（实测一座城 22 次接管里绝大多数是同一方回头再进）。
+       */
+      if (before !== undefined && now !== before) {
+        flips[c.id] = (flips[c.id] ?? 0) + 1;
+        dirty = true;
+      }
+      if (now !== before) dirty = true;
+      seen[c.id] = now;
+    }
+    if (dirty && depth === 0) {
+      f.cityCaptured = seen;
+      f.ruinFlips = flips;
+    }
+    for (const [id, n] of Object.entries(flips)) cityFlips.set(id, n);
+  }
+
+  /*
    * 本回合的计划：攒不攒钱、收不收缩、升哪座城。采购和走位都要看它，
    * 所以在这里算一次，整回合共用（和 traits 一样）。
    *
@@ -10247,6 +10315,8 @@ function aiNextActionCoreInner(
     cityPlans,
     needCityId: needCityId,
     hubCityId: hubCity?.id ?? null,
+    ruinSafe,
+    cityFlips,
     bridgeClear: slots.bridgeArea,
     slots,
     foeSplash: enemyUnitsOf(view, me).filter((u) => (utype(view, u.type).splash ?? 0) > 0).length,

@@ -63,6 +63,7 @@ const runOne = (QID: string, SEED: number, SIDE: PlayerId): void => {
       ...(process.argv.includes('--hub') ? { aiHub: true } : {}),
       ...(process.argv.includes('--city-site') ? { aiCitySite: true } : {}),
       ...(process.argv.includes('--garrison') ? { aiGarrison: true } : {}),
+      ...(process.argv.includes('--ruin-safe') ? { aiRuinSafe: true } : {}),
     },
     SEED,
   );
