@@ -6964,7 +6964,7 @@ check('城郭与物料：HUD 显示粮和材，建造清单写明施工回合与
 console.log('\n强制键');
 
 /** 用一份现成存档起一个新页面：这类用例需要精确摆位，不能靠随机开局 */
-function bootWith(st: unknown, search = '?loadSave=1') {
+function bootWith(st: unknown, search = '?loadSave=1', prep?: (w: { localStorage: Storage }) => void) {
   const w = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', {
     url: `http://localhost/${search}`,
     pretendToBeVisual: true,
@@ -6974,6 +6974,7 @@ function bootWith(st: unknown, search = '?loadSave=1') {
     (w as unknown as { structuredClone: typeof structuredClone }).structuredClone = structuredClone;
   }
   if (st !== undefined) w.localStorage.setItem('warchess:match:v1', JSON.stringify(st));
+  prep?.(w);
   w.eval(code);
   return w;
 }
@@ -11586,6 +11587,33 @@ check('考卷：?exam= 按题号直达一局', () => {
   const d = w.document;
   // 「孤城」是 14×14，随机开局是 12×12 —— 格子数是"确实换成了这一关"的直接证据
   assert.equal(d.querySelectorAll('.tile').length, 196, '应该载入关卡那张 14×14 的图');
+  // 首页不能盖在棋盘上：第一版就是这个 bug（局面装进去了，人却盯着门面）
+  assert.equal(d.querySelector('.title-screen'), null, '考卷局不该弹首页');
+});
+
+check('考卷：?exam=user:xxx 能打开玩家自己存的关卡', () => {
+  /*
+   * 这条是用户 2026-11-23 报的那个 bug 的回归钉：
+   * 用户关卡存在 localStorage，`level.ts` 靠"注册回调"取它，
+   * 而回调要 `loadUserLevels()` 先跑过才有内容。启动时没加载 → 查不到 → 停在首页。
+   */
+  const src = LEVELS.find((l) => l.id === 'level:lone-city');
+  assert.ok(src, '内置关卡「孤城」应该在');
+  const mine = { ...src, id: 'user:exam-test', dev: true };
+  const w = bootWith(undefined, '?exam=user:exam-test', (win) => {
+    win.localStorage.setItem(
+      'warchess:user-levels:v1',
+      JSON.stringify({ v: 1, items: [{ level: mine, updatedAt: 1 }] }),
+    );
+  });
+  const d = w.document;
+  assert.equal(d.querySelectorAll('.tile').length, 196, '应该载入那张 14×14 的图');
+  assert.equal(d.querySelector('.title-screen'), null, '不该停在首页');
+});
+
+check('考卷：?exam= 仍然被 ?home=1 压过', () => {
+  const w = bootWith(undefined, '?exam=lone-city&home=1');
+  assert.ok(w.document.querySelector('.title-screen'), '想回门面时 ?home=1 要生效');
 });
 
 check('考卷：题号写错时退回普通开局，不抛错', () => {

@@ -24,6 +24,7 @@ import { DEFAULT_BUDGET, aiNameOf, anyAiSide, isAiSide } from './core/ai-meta.ts
 import type { AiBudget } from './core/ai-meta.ts';
 import { CITY, CONFIG, ORDER_IDLE, ORDER_UPGRADE, passable } from './core/config.ts';
 import { goalText, levelById, validateLevel } from './core/level.ts';
+import { loadUserLevels } from './core/userLevels.ts';
 import {
   RUN_KEY,
   canRestart,
@@ -490,7 +491,37 @@ const forceLoadSave = new URLSearchParams(location.search).get('loadSave') === '
  * 这一条不能指望测试员自己去设置里勾——他不会知道有这回事。
  */
 const examParam = new URLSearchParams(location.search).get('exam');
-const examLevel = examParam ? levelById(examParam.startsWith('level:') ? examParam : `level:${examParam}`) : null;
+/*
+ * **先把用户关卡读进内存再查**（2026-11-23 踩过）。
+ *
+ * 玩家自己做的关卡存在 localStorage，`level.ts` 用"注册回调"的方式取它，
+ * 而那个回调要 `loadUserLevels()` 先跑过才有内容。没加载就查 `user:xxx`
+ * 一律返回 null——表现是"?exam=user:xxx 停在首页，而且日志说找不到题号"。
+ */
+if (examParam) loadUserLevels();
+
+/**
+ * 要不要显示「导出动作」这颗按钮。
+ *
+ * 两种情况：① 这是 `?exam=` 局（考卷，测试员要交答案）；
+ * ② 地址栏带 `?debug`（从「编辑器」里试玩时用得上——那条路不经过 `?exam=`）。
+ * 玩家正常打开游戏两个条件都不成立，所以永远看不到它。
+ */
+function examActionsWanted(): boolean {
+  if (new URLSearchParams(location.search).has('debug')) return true;
+  /* 关卡里试玩（从「编辑器」进来）：勾了「记录详细数据」就能导出，
+   * 那样作者不必特意去记 ?exam= 的链接。玩家正常打关卡不会勾这个。 */
+  return !!state.config.level && state.config.recordDetail === true;
+}
+/*
+ * 题号有两种写法：内置关 `lone-city`（补成 `level:lone-city`）、
+ * 玩家关卡 `user:xxxx`（**已经带冒号，一个字都不许再补**）。
+ * 第一版只判断了 `startsWith('level:')`，于是 `user:xxx` 被拼成 `level:user:xxx`，
+ * 查不到、退回普通开局、还停在首页——2026-11-23 用户报的就是这个。
+ */
+const examLevel = examParam
+  ? levelById(examParam.includes(':') ? examParam : `level:${examParam}`)
+  : null;
 let state: GameState = examLevel
   ? createMatch(
       { ...DEFAULT_CONFIG, level: examLevel, recordDetail: true },
@@ -5750,7 +5781,7 @@ function handleAction(act: string, el: HTMLElement): void {
      */
     case 'export-actions': {
       if (!actionLog) {
-        toast('这一局没开「记录详细数据」，动作没被记下来——用 ?exam= 开局才会自动打开');
+        toast('这一局没开「记录详细数据」，动作没被记下来——用 ?exam= 开局（会自动打开），或在开局面板勾上它');
         return;
       }
       /* 存成局部量：`actionLog` 是模块级 `let`，进了回调就不再被收窄了 */
@@ -10977,7 +11008,12 @@ if (drift) {
  * 想看门面又不想清存档，就在地址后面加 ?home=1。
  */
 const forceHome = new URLSearchParams(location.search).get('home') === '1';
-if (forceHome || invited.length < 4) showTitle();
+/*
+ * `?exam=` 时不弹首页：那个参数的用途就是"直接坐到题目前面"，
+ * 再盖一张首页上去等于没生效（2026-11-23 用户报的第一版就是这样）。
+ * `?home=1` 仍然压过它——想回门面随时能回。
+ */
+if (forceHome || (invited.length < 4 && !examLevel)) showTitle();
 
 /*
  * 审核台：`&admin=1` 打开（2026-11-16）。
@@ -11018,7 +11054,7 @@ function openSettings(): void {
       unitArt: uiArtOn(),
       terrainArt: uiTerrainOn(),
       replay: replay !== null,
-      exam: examLevel !== null,
+      exam: examLevel !== null || examActionsWanted(),
       showAll: state.showAll === true,
       // 窄屏顶栏放不下「联机」「迷雾」，这两项只在手机上搬进设置。
       // matchMedia 在 jsdom 里没有实现，取不到就退回 innerWidth（测试跑在 1024）。
