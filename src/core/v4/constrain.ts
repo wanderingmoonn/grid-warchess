@@ -806,57 +806,6 @@ function squadBase(s: GameState, sq: Squad): { x: number; y: number } | undefine
     : undefined;
 }
 
-/** 队伍现在聚在哪（质心，四舍五入到格） */
-function squadCenter(s: GameState, ids: string[]): { x: number; y: number } | undefined {
-  const us = ids
-    .map((id) => s.units.find((u) => u.id === id))
-    .filter((u): u is Unit => !!u);
-  if (us.length === 0) return undefined;
-  const x = Math.round(us.reduce((n, u) => n + u.x, 0) / us.length);
-  const y = Math.round(us.reduce((n, u) => n + u.y, 0) / us.length);
-  return { x, y };
-}
-
-/**
- * 目标城周围"该站哪些格"——**只取面向我们的那一侧**。
- *
- * 按"离城几环"取整圈会出事：城有正面也有后方，取整圈等于让人往城背后绕
- * （路更长，还把自己送到对方增援的方向上）。这里按"离**我们这支队**多远"
- * 从近到远取 `want` 个：队伍换方向时，"正面"会自己跟着换。
- */
-function targetCells(
-  s: GameState,
-  base: { x: number; y: number },
-  from: { x: number; y: number },
-  want: number,
-): number[] {
-  const seen = new Set<number>();
-  const all: number[] = [];
-  for (let r = 1; r <= 6; r += 1) {
-    for (let dy = -r; dy <= r; dy += 1) {
-      for (let dx = -r; dx <= r; dx += 1) {
-        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
-        const x = base.x + dx;
-        const y = base.y + dy;
-        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
-        const k = y * s.w + x;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        const t = s.tiles[k];
-        if (!t || !passable(t.terrain)) continue;
-        if (t.terrain === 'city') continue; /* 城格站不上，只能围着 */
-        all.push(k);
-      }
-    }
-  }
-  all.sort(
-    (a, b) =>
-      Math.abs((a % s.w) - from.x) + Math.abs(Math.floor(a / s.w) - from.y) -
-        (Math.abs((b % s.w) - from.x) + Math.abs(Math.floor(b / s.w) - from.y)) || a - b,
-  );
-  return all.slice(0, Math.max(1, want));
-}
-
 /**
  * **战斗单位这一手走哪一格：多起点 → 多终点，一次排定。**
  *
@@ -894,83 +843,39 @@ function planMarch(
       .map((id) => s.units.find((u) => u.id === id))
       .filter((u): u is Unit => !!u && u.owner === world.me);
     if (units.length === 0) continue;
-    /* 轴：到目标城的**真实步数**（绕水绕山，不是直线） */
-    const axis = world.stepsFrom(base);
-    const axisOf = (k: number): number => axis[k] ?? Infinity;
 
     /*
-     * "正面"用**队伍质心**定（试过用前锋，更差：整队挤到前锋那一侧，堵死，
-     * 40 手城血 0、损失 20）。质心会被后方援兵拉后，这是已知的偏差，
-     * 但至少方向是稳定的。
+     * **不配"固定格子"，只朝一个点走。**
+     *
+     * 之前是"每人配一个城周围的格"，然后每回合重算——目标一换，人就掉头，
+     * 整队每手几十个 MOVE、平均距离纹丝不动（S-002 实测：14 手从 11 到 10）。
+     *
+     * 人手答案不是这样：目标只有一个（城），**每个人都走满自己的移动力**，
+     * 阵型的层次（骑兵在前、远程在后）是移动力自己形成的（骑兵 move 4、火枪 2）。
+     * 所以这里只做两件事：朝城的场走满 + 落点不重复。
      */
-    const center = squadCenter(s, sq.unitIds);
-    if (!center) continue;
-    const holes = targetCells(s, base, center, units.length);
-    if (holes.length === 0) continue;
-    const holeSet = new Set(holes);
-    const pending = units.filter((u) => !holeSet.has(u.y * s.w + u.x));
+    const field = world.stepsFrom(base);
+    const hereOf = (u: Unit): number => field[u.y * s.w + u.x] ?? Infinity;
+    const pending = units.filter((u) => hereOf(u) > 0);
     if (pending.length === 0) continue;
 
-    /*
-     * **队形按射程排：射程近的站前面，射程远的站后面。**
-     *
-     * 前排是内圈（离目标城近），后排是外圈。所以把"人"按射程升序、"格"按离城远近升序，
-     * 再同序配对——近战自然拿到内圈，远程拿到外圈。
-     *
-     * 两个键的顺序不能反：**射程是主键**（决定谁在前排），远近是次键
-     * （同射程内部仍按远近排，这一段保持不交叉）。
-     */
-    const rangeOf = (u: Unit): number => effectiveStats(s, u).range ?? 1;
-    const pend = [...pending].sort(
-      (a, b) =>
-        rangeOf(a) - rangeOf(b) ||
-        axisOf(a.y * s.w + a.x) - axisOf(b.y * s.w + b.x) ||
-        (a.id < b.id ? -1 : 1),
-    );
-    const hs = [...holes].sort((a, b) => axisOf(a) - axisOf(b) || a - b);
-
-    /*
-     * **接敌了就不再"每手一格"。**
-     *
-     * 一格一格是为了让行军队形不散；但真打起来，慢慢挪就是把前排喂给对面
-     * （S-001 实测：一律一格，20 个兵全灭、城没打掉）。判据是"这一手里有任何人能打到人"，
-     * 不是距离阈值。
-     */
-    const engaged = units.some((u) => attackableTargets(s, u).some((v) => v.owner !== world.me));
-    const mine = new Map<string, number>();
-    for (let i = 0; i < pend.length && i < hs.length; i += 1) mine.set(pend[i]!.id, hs[i]!);
-    if (mine.size === 0) continue;
-
-    /*
-     * **行军步长 = 队里最慢那个的移动力。**
-     *
-     * 快的等慢的，但不必退化到"人人一格"：队里最慢的移动力是 2，那一手就走 2 格。
-     * 一格一格挪对 8~12 格的路太慢（S-001 实测：20 个兵全灭、城没打掉）。
-     */
-    const stride = Math.max(1, Math.min(...units.map((u) => effectiveStats(s, u).move ?? 2)));
-
-    const fields = new Map<number, Float64Array>();
     const used = new Set<number>();
-    for (const u of pend) {
-      const hi = mine.get(u.id);
-      if (hi === undefined) continue;
-      let field = fields.get(hi);
-      if (!field) {
-        field = world.stepsFrom({ x: hi % s.w, y: Math.floor(hi / s.w) });
-        fields.set(hi, field);
-      }
-      const here = field[u.y * s.w + u.x] ?? Infinity;
+    /*
+     * **移动力大的先走。**
+     *
+     * 人手答案就是这个顺序：骑兵（move 4）先冲上去占住前面的格，
+     * 戟兵/火枪（move 2）跟上。反过来让慢的先走，它会占掉快兵要去的格，
+     * 快兵被自己人堵住，整队只能一起慢慢挪（S-002 实测：均距 14 手停在 10）。
+     */
+    const moveOf = (u: Unit): number => effectiveStats(s, u).move ?? 2;
+    const order2 = [...pending].sort(
+      (a, b) => moveOf(b) - moveOf(a) || hereOf(a) - hereOf(b) || (a.id < b.id ? -1 : 1),
+    );
+    for (const u of order2) {
+      const here = hereOf(u);
       let best: number | null = null;
       let bestD = here;
-      const reach = reachableTiles(s, u);
-      for (const [k] of reach) {
-        /*
-         * **行军段：这一手最多走 `stride` 步**（接敌之后不限，走满自己的移动力）。
-         *
-         * `reachableTiles` 的值是"走到这一格要花多少移动力"，拿它跟 stride 比，
-         * 而不是拿"直线格数"比——森林要花 2 步，算格数会多算一格。
-         */
-        if (!engaged && (reach.get(k) ?? Infinity) > stride) continue;
+      for (const [k] of reachableTiles(s, u)) {
         if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
         if (used.has(k)) continue;
         const d = field[k] ?? Infinity;
