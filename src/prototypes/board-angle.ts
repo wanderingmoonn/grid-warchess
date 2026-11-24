@@ -7,7 +7,9 @@ const params = new URLSearchParams(location.search);
 const size: 16 | 32 = params.get('size') === '16' ? 16 : 32;
 const rawScene = params.get('scene');
 let currentScene: BoardAngleScene =
-  rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all' ? rawScene : 'all';
+  rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
+    ? rawScene
+    : 'all';
 
 const flatBoard = document.querySelector<HTMLElement>('#flat-board')!;
 const canvas = document.querySelector<HTMLCanvasElement>('#tilted-board')!;
@@ -27,6 +29,7 @@ const angleButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-angl
 const sceneButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-scene]')];
 
 const sceneLabels: Record<BoardAngleScene, string> = {
+  cities: '时代一至五城市',
   all: '河·湖·海全览',
   river: '大河渡口',
   lake: '青山明湖',

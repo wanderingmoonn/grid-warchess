@@ -2,7 +2,7 @@ import type { FixedMap } from '../core/fixed-maps.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
-export type BoardAngleScene = 'all' | 'river' | 'lake' | 'sea';
+export type BoardAngleScene = 'cities' | 'all' | 'river' | 'lake' | 'sea';
 
 const near = (x: number, y: number, cx: number, cy: number, rx: number, ry: number): boolean =>
   ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
@@ -144,8 +144,32 @@ function seaTerrain(size: 16 | 32, x: number, y: number): string {
   return 'D';
 }
 
+function citiesTerrain(size: 16 | 32, x: number, y: number): string {
+  const s = size / 16;
+  // 右下角浅海与近海点缀
+  const dSea = ellipDist(x, y, 15.8 * s, 15.8 * s, 3.8 * s, 3.6 * s);
+  if (dSea < 1) {
+    if (dSea < 0.45) return 'D';
+    if (dSea < 0.74) return '~';
+    return 's';
+  }
+  // 西南侧小河蜿蜒而过
+  const riverY = 12.8 * s + Math.sin(x * 0.42 / s) * 0.8 * s;
+  if (x < 9.5 * s && Math.abs(y - riverY) < 1.15 * s) {
+    if (Math.round(x) === Math.round(5.5 * s)) return '=';
+    return Math.abs(y - riverY) < 0.55 * s ? '~' : 's';
+  }
+  // 四周点缀高山、丘陵、森林，中央开阔平原展示五个时代的城市
+  if (near(x, y, 13.4 * s, 2.4 * s, 1.3 * s, 1.3 * s)) return '^';
+  if (near(x, y, 13.0 * s, 3.0 * s, 2.3 * s, 2.3 * s) || near(x, y, 1.4 * s, 1.2 * s, 1.4 * s, 1.4 * s)) return 'h';
+  if (near(x, y, 14.0 * s, 7.6 * s, 1.8 * s, 2.2 * s) || near(x, y, 1.2 * s, 9.8 * s, 1.5 * s, 1.8 * s) ||
+      near(x, y, 5.2 * s, 0.8 * s, 1.6 * s, 1.1 * s)) return 'f';
+  return '.';
+}
+
 export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all'): GameState {
   const cellOf = (x: number, y: number): string => {
+    if (scene === 'cities') return citiesTerrain(size, x, y);
     if (scene === 'river') return size === 16 ? riverTerrain16(x, y) : riverTerrain32(x, y);
     if (scene === 'lake') return lakeTerrain(size, x, y);
     if (scene === 'sea') return seaTerrain(size, x, y);
@@ -153,6 +177,7 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   };
 
   const sceneNames: Record<BoardAngleScene, string> = {
+    cities: '时代一至五城市',
     all: '河湖海全览',
     river: '河口高地',
     lake: '青山明湖',
@@ -164,30 +189,48 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     b16: Array<{ x: number; y: number }>;
     a32: Array<{ x: number; y: number }>;
     b32: Array<{ x: number; y: number }>;
+    eras16: number[];
+    eras32: number[];
   }> = {
+    cities: {
+      a16: [{ x: 2, y: 3 }, { x: 7, y: 2 }, { x: 3, y: 8 }],
+      b16: [{ x: 8, y: 7 }, { x: 10, y: 11 }],
+      a32: [{ x: 6, y: 6 }, { x: 15, y: 5 }, { x: 7, y: 16 }],
+      b32: [{ x: 16, y: 14 }, { x: 21, y: 21 }],
+      eras16: [1, 2, 3, 4, 5],
+      eras32: [1, 2, 3, 4, 5],
+    },
     all: {
       a16: [{ x: 0, y: 9 }],
       b16: [{ x: 7, y: 8 }],
       a32: [{ x: 2, y: 12 }, { x: 2, y: 23 }],
       b32: [{ x: 14, y: 15 }, { x: 14, y: 10 }],
+      eras16: [2, 4],
+      eras32: [1, 3, 4, 5],
     },
     river: {
       a16: [{ x: 3, y: 10 }],
       b16: [{ x: 11, y: 3 }],
       a32: [{ x: 4, y: 12 }, { x: 8, y: 23 }],
       b32: [{ x: 24, y: 7 }, { x: 23, y: 17 }],
+      eras16: [2, 3],
+      eras32: [1, 2, 3, 4],
     },
     lake: {
       a16: [{ x: 1, y: 7 }],
       b16: [{ x: 13, y: 7 }],
       a32: [{ x: 2, y: 15 }],
       b32: [{ x: 28, y: 15 }],
+      eras16: [2, 3],
+      eras32: [2, 3],
     },
     sea: {
       a16: [{ x: 3, y: 5 }],
       b16: [{ x: 12, y: 3 }],
       a32: [{ x: 6, y: 10 }],
       b32: [{ x: 24, y: 7 }],
+      eras16: [4, 5],
+      eras32: [4, 5],
     },
   };
 
@@ -205,8 +248,19 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
 
   const match = createMatch({ ...DEFAULT_CONFIG, fixedMap: map, size, startEra: 2, expansionIds: [] }, 20261123, {});
   match.fog = false;
+  const eraPlan = size === 16 ? cCfg.eras16 : cCfg.eras32;
+  match.cities.forEach((city, idx) => {
+    city.era = eraPlan[idx] ?? city.era;
+  });
 
   const formations: Record<BoardAngleScene, Array<[Unit['owner'], string, number, number]>> = {
+    cities: size === 16 ? [
+      ['A', 'militia', 5, 4], ['A', 'spearman', 6, 8],
+      ['B', 'knight', 11, 8], ['B', 'archer', 8, 11],
+    ] : [
+      ['A', 'militia', 10, 7], ['A', 'spearman', 11, 17],
+      ['B', 'knight', 20, 15], ['B', 'archer', 18, 22],
+    ],
     all: size === 16 ? [
       ['A', 'archer', 1, 7], ['A', 'spearman', 2, 7], ['A', 'militia', 1, 11],
       ['B', 'spearman', 6, 7], ['B', 'knight', 9, 7], ['B', 'archer', 10, 8],
