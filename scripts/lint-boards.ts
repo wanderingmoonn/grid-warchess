@@ -135,9 +135,7 @@ if (bad.length > 0) {
     console.error(`      ${b.why}`);
   }
   console.error(
-    '\n如果这次改动确实只可能在地球上（桥、地雷、城市经济），' +
-      '用 `npm run lint:boards -- --update` 确认基线；\n' +
-      '否则改成按单位/按图的写法（见 scripts/lint-boards.ts 开头）。',
+    '\n改成按单位/按图的写法（见 scripts/lint-boards.ts 开头），不要更新基线了，基线只能降低不能增加。',
   );
   process.exit(1);
 }
