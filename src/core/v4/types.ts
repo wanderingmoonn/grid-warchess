@@ -48,6 +48,10 @@ export interface Squad {
   cityId?: string;
   /** 目标人数：按目标城守军算，成立时定下，之后不因伤亡而缩（见 V4Memory.squad） */
   want?: number;
+  /** 分路：本队拆成几条走廊（路数由地形宽度决定，见 constrain.planLanes） */
+  lanes?: Array<{ x: number; y: number }>;
+  /** 每个单位走第几条路 */
+  laneOf?: Record<string, number>;
   /** 全队最慢的人赶到目标还要几回合（Infinity = 到不了）。出发条件读它 */
   eta?: number;
   /**

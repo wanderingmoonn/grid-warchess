@@ -169,7 +169,23 @@ export function actFor(
   const to = targetOf(s, sq);
   if (sq.order === 'hold' && to && cheb(u, to) <= 2) return null;
   if (!to) return null;
-  const spot = stepToward(s, u, to);
+  /*
+   * 直线只在**能并排**时才有意义：分了路的队伍（走廊够宽）走直线，
+   * 窄道（桥/关隘，没分路）保持排队——硬顶成一横排会把过桥堵死。
+   * 这两件事必须一起开：单独开"直线"会让 S-002 回到 0 城伤（实测）。
+   */
+  /*
+   * 直线只在**有纵深的多排队列**里才需要。
+   *
+   * S-002（25 个兵、8~12 格的长路）实测：开直线 0 → 54 城伤；
+   * 但 S-005（10 个兵过桥）、S-011（12 个兵）开了就掉——它们没有多排，
+   * "走直线"只是把单排的人挤成一列，反而挡住侧翼。
+   *
+   * 判据是"有没有纵深"，不是"人数多不多"：人多但单排也没用。
+   * 这里先用人数做近似（≥16 = 至少三四排），等有更好的几何量再换。
+   */
+  const hasDepth = sq.unitIds.length >= 16;
+  const spot = stepToward(s, u, to, hasDepth && !!sq.lanes && sq.lanes.length > 1);
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   return null;
 }
@@ -184,10 +200,14 @@ function stepToward(
   s: GameState,
   u: Unit,
   to: { x: number; y: number },
+  /** 走廊够宽才走直线；窄道（桥/关隘）要排队，不能硬顶成一横排 */
+  straight = false,
 ): { x: number; y: number } | null {
   const cur = cheb(u, to);
+  const curE = (u.x - to.x) ** 2 + (u.y - to.y) ** 2;
   let best: { x: number; y: number } | null = null;
   let bestD = cur;
+  let bestE = curE;
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
     const y = Math.floor(key / s.w);
@@ -203,6 +223,22 @@ function stepToward(
     if (d < bestD) {
       bestD = d;
       best = { x, y };
+      bestE = (x - to.x) ** 2 + (y - to.y) ** 2;
+      continue;
+    }
+    /*
+     * **同距离时选"更正对目标"的那一格**（欧氏距离更小）。
+     *
+     * 不这么选的话，切比雪夫距离一样的两格（一格直着往前、一格横着往旁边）
+     * 谁先被遍历到就用谁——30 个兵各走各的，实际走出来是之字形，
+     * 净推进只有 0.6 格/手（移动力是 2）。这是 S-002 量出来的。
+     */
+    if (d === bestD && straight) {
+      const e = (x - to.x) ** 2 + (y - to.y) ** 2;
+      if (e < bestE) {
+        bestE = e;
+        best = { x, y };
+      }
     }
   }
   return best;
