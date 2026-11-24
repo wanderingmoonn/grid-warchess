@@ -1,0 +1,115 @@
+{
+  "me": "A",
+  "exam": "S-005",
+  "seed": 53,
+  "turns": [
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 4,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 5,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 7,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u24",
+        "x": 9,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 5,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 6,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 10,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 4,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 11,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 6,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 4,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 7,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 6,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 4,
+        "y": 5
+      }
+    ]
+  ]
+}

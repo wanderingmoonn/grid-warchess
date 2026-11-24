@@ -229,6 +229,7 @@ import { applyUiLayout, currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './
 import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
 import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
 import { settingsHtml } from './ui/settings.ts';
+import { ensureV4Hud, v4HudHtml } from './ui/v4-hud.ts';
 import { MODULES, deviceTargetOf } from './core/armor.ts';
 
 /*
@@ -507,6 +508,22 @@ if (examParam) loadUserLevels();
  * ② 地址栏带 `?debug`（从「编辑器」里试玩时用得上——那条路不经过 `?exam=`）。
  * 玩家正常打开游戏两个条件都不成立，所以永远看不到它。
  */
+/**
+ * `?ai=v4`：这一局的 AI 用 v4。
+ *
+ * 做成 URL 参数而不是设置项：它只是调试通道，玩家不该在菜单里看到
+ * "用哪个内核"这种问题（v3 转正那次就是为了删掉同类开关）。
+ */
+function v4Forced(): boolean {
+  return new URLSearchParams(location.search).get('ai') === 'v4';
+}
+
+/** v4 的三层面板：`?ai=v4` 或 `?debug=v4` 时出现 */
+function v4HudWanted(): boolean {
+  const q = new URLSearchParams(location.search);
+  return q.get('ai') === 'v4' || q.get('debug') === 'v4';
+}
+
 function examActionsWanted(): boolean {
   if (new URLSearchParams(location.search).has('debug')) return true;
   /* 局面自己带的考卷标记：覆盖「导入对局」那条路（URL 上看不出来） */
@@ -540,7 +557,12 @@ let state: GameState = examLevel
          */
         aiLevel: 'tactic',
       },
-      randomSeed(),
+      /*
+       * **固定种子**：AI 的并列取舍是抽签的，随机种子会让"同一份答案"在判分时
+       * 打出不同的局面（而且同一道题今天红明天绿）。
+       * 判分器复现也用这颗种子（`level-to-exam` 的 `--seed` 默认 1）。
+       */
+      1,
       loadCustomUnits(),
     )
   : (bootSave ?? createMatch(DEFAULT_CONFIG, randomSeed(), loadCustomUnits()));
@@ -1923,6 +1945,29 @@ function ensureArtIndex(): void {
  * 还是**点起来了但提交被挡**。把这几项直接打在屏幕上，一眼就能定位：
  * 轮到的席位、AI 席位表、暂停标记、令牌、以及房间里的进度号。
  */
+/**
+ * v4 的三层面板。
+ *
+ * **按回合缓存**：`buildWorld` + `decide` + `constrain` 不便宜，而 render 每帧都跑。
+ * 只有回合号 / 当前方 / 单位数 / 金币变了才重建（和 ai-v4 里的缓存同一个理由）。
+ */
+let v4HudKey = '';
+function renderV4Hud(): void {
+  if (!v4HudWanted()) return;
+  const el = ensureV4Hud();
+  /* 面板展示"当前这一方如果按 v4 走会怎么想"。轮到人时也能看——正好用来对照 */
+  const me = state.current;
+  const key = `${state.turn}:${state.current}:${state.units.length}:${state.players[me]?.gold ?? 0}`;
+  if (key === v4HudKey) return;
+  v4HudKey = key;
+  try {
+    el.innerHTML = v4HudHtml(state, me);
+  } catch (err) {
+    /* 面板是调试工具：它自己出错不该把对局弄崩 */
+    el.textContent = `v4 面板出错：${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
 function renderDebugHud(): void {
   if (!new URLSearchParams(location.search).has('debug')) return;
   const el =
@@ -2065,6 +2110,7 @@ function render(): void {
   }
   ensureArtIndex();
   renderDebugHud();
+  renderV4Hud();
   renderAiHud();
   // 选卡没打完时，棋盘只是一个背景：遮罩在它上面，且不响应点击
   renderDraft();
@@ -6364,13 +6410,24 @@ async function runAiLoop(): Promise<void> {
  */
 let aiEnginePromise: Promise<typeof import('./core/ai.ts')> | null = null;
 let aiEngineV2Promise: Promise<typeof import('./core/ai.ts')> | null = null;
+let aiEngineV4Promise: Promise<typeof import('./core/ai.ts')> | null = null;
 /**
  * 手写引擎：老 AI（`core/ai.ts`，v1）或实验 AI（`core/ai-v3.ts`）。
  *
  * 两份文件导出同名同签名的 `aiNextAction`，所以调用方一行不用改——
  * 这就是"复制出去单独一个模型"的意义：切内核不改主循环。
  */
-function aiEngine(brain: 'script' | 'net' | 'goal' = 'script'): Promise<typeof import('./core/ai.ts')> {
+function aiEngine(brain: 'script' | 'net' | 'goal' | 'v4' = 'script'): Promise<typeof import('./core/ai.ts')> {
+  /*
+   * `?ai=v4`：把这一局的 AI 换成人写不那么顺手的 v4（见 core/v4/）。
+   *
+   * 走同一条 `aiNextAction` 签名，所以游戏这一侧一行都不用改。
+   * 和 `?debug` 一起用会额外画出右下角的三层面板（见 ui/v4-hud.ts）。
+   */
+  if (brain === 'v4') {
+    aiEngineV4Promise ??= import('./core/v4/ai-v4.ts') as unknown as Promise<typeof import('./core/ai.ts')>;
+    return aiEngineV4Promise;
+  }
   if (brain === 'goal') {
     aiEngineV2Promise ??= import('./core/ai-v3.ts') as Promise<typeof import('./core/ai.ts')>;
     return aiEngineV2Promise;
@@ -6439,7 +6496,8 @@ async function runAiTurn(
    * 网络内核（`aiBrain === 'net'`）在下面另走一条路，这里不加载手写引擎。
    */
   const engineId = engineForAi({ level: aiLevelOf(state), brain: state.config.aiBrain ?? null });
-  const engine = await aiEngine(engineId === 'v3' ? 'goal' : 'script');
+  /* `?ai=v4` 压过档位映射：调试时不该为了试 v4 去改局面配置 */
+  const engine = await aiEngine(v4Forced() ? 'v4' : engineId === 'v3' ? 'goal' : 'script');
 
   /*
    * 网络内核：只在 `config.aiBrain === 'net'` 时加载。

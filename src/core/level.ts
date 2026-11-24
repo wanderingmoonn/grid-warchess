@@ -327,6 +327,24 @@ export interface LevelSetup {
   firstSide?: 'A' | 'B';
   /** 每家两座城 */
   twoCities?: boolean;
+  /**
+   * **逐席开局金**（2026-11-24）。写了就覆盖"按时代算"的那个数。
+   *
+   * 为什么要有：开局金原来只有一个来源 `startGoldFor(startEra)`，于是关卡想摆
+   * "金不够、只能靠手里这点兵"的局面就没办法——作者只能用第 1 手的 gold 事件去扣，
+   * 而那条路扣不准（扩展开局还会加钱，实测差 61 金），也看不见。
+   *
+   * 缺省不写＝保持老行为（按时代给），所以老关卡一个字段都不用改。
+   */
+  gold?: Partial<Record<PlayerId, number>>;
+  /**
+   * 开局雾气（2026-11-24）。`true` = 开雾、`false` = 关雾，不写 = 跟面板/默认（开）。
+   *
+   * 为什么需要：单机制题（考"这一格该不该站"）必须关雾，否则出题人和答题人看的不是
+   * 同一张图；而关卡原来没有这个字段，于是"关卡版"和"手摆快照版"永远是两局
+   * （实测同一个 S-001，关雾时 v3 绿、开雾时红）。
+   */
+  fog?: boolean;
 }
 
 /**
@@ -3574,6 +3592,28 @@ function normalizeSetup(
   }
 
   if (o.twoCities !== undefined) out.twoCities = o.twoCities === true;
+  if (o.fog !== undefined) out.fog = o.fog === true;
+
+  /* 逐席开局金：0 是合法值（"一分钱都不给"），所以要判 undefined 而不是 falsy */
+  if (o.gold !== undefined) {
+    const seated = (seats ? SEAT_ORDER.slice(0, seats.count) : ['A', 'B']) as readonly PlayerId[];
+    const raw = o.gold as Record<string, unknown>;
+    const gold: Partial<Record<PlayerId, number>> = {};
+    for (const [key, value] of Object.entries(raw ?? {})) {
+      const seat = String(key).toUpperCase() as PlayerId;
+      if (!seated.includes(seat)) {
+        errors.push(`开局金写的是第 ${seat} 家，但这一关只坐 ${seated.join(' / ')}`);
+        continue;
+      }
+      const n = Math.round(Number(value));
+      if (!Number.isFinite(n) || n < 0 || n > 9999) {
+        errors.push(`第 ${seat} 家的开局金要落在 0~9999 之间（现在 ${String(value)}）`);
+        continue;
+      }
+      gold[seat] = n;
+    }
+    if (Object.keys(gold).length > 0) out.gold = gold;
+  }
 
   return Object.keys(out).length > 0 ? out : undefined;
 }

@@ -1,0 +1,225 @@
+{
+  "id": "level:s-004",
+  "version": 1,
+  "dev": true,
+  "name": "S-004（考卷）",
+  "brief": "对面 20 个四代步枪兵比你多、比你强一代，正压过来。10 手之内把主力撤回城下（城 4 格内至少 8 个战斗单位）。这一回合你会怎么做？（最多 3 步）",
+  "map": {
+    "id": "levelmap:s-004",
+    "name": "S-004",
+    "w": 12,
+    "h": 12,
+    "rows": [
+      "............",
+      "............",
+      "............",
+      "....ff......",
+      "............",
+      "............",
+      "........ff..",
+      "............",
+      "............",
+      "............",
+      "............",
+      "............"
+    ],
+    "citiesA": [
+      {
+        "x": 1,
+        "y": 10
+      }
+    ],
+    "citiesB": [
+      {
+        "x": 10,
+        "y": 10
+      }
+    ],
+    "source": "builtin"
+  },
+  "seats": {
+    "count": 2,
+    "ai": [
+      "B"
+    ],
+    "cityEra": {
+      "A": 3,
+      "B": 4
+    }
+  },
+  "setup": {
+    "startEra": 3,
+    "firstSide": "A",
+    "fog": false,
+    "gold": {
+      "A": 0,
+      "B": 0
+    }
+  },
+  "deploy": {
+    "A": [
+      {
+        "type": "hussar",
+        "x": 5,
+        "y": 4
+      },
+      {
+        "type": "hussar",
+        "x": 6,
+        "y": 4
+      },
+      {
+        "type": "hussar",
+        "x": 7,
+        "y": 4
+      },
+      {
+        "type": "hussar",
+        "x": 5,
+        "y": 5
+      },
+      {
+        "type": "hussar",
+        "x": 6,
+        "y": 5
+      },
+      {
+        "type": "hussar",
+        "x": 7,
+        "y": 5
+      },
+      {
+        "type": "hussar",
+        "x": 5,
+        "y": 6
+      },
+      {
+        "type": "hussar",
+        "x": 6,
+        "y": 6
+      },
+      {
+        "type": "hussar",
+        "x": 7,
+        "y": 6
+      },
+      {
+        "type": "hussar",
+        "x": 8,
+        "y": 4
+      },
+      {
+        "type": "musketeer",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "musketeer",
+        "x": 8,
+        "y": 6
+      }
+    ],
+    "B": [
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 1
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 1
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 1
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 3
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 4
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 4
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 4
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 5
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 5
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 5
+      },
+      {
+        "type": "rifleman",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "rifleman",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "rifleman",
+        "x": 11,
+        "y": 6
+      },
+      {
+        "type": "rifleman",
+        "x": 7,
+        "y": 2
+      },
+      {
+        "type": "rifleman",
+        "x": 8,
+        "y": 2
+      }
+    ]
+  }
+}

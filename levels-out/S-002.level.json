@@ -51,29 +51,13 @@
   },
   "setup": {
     "startEra": 3,
-    "firstSide": "A"
-  },
-  "events": [
-    {
-      "id": "exam-setup",
-      "when": {
-        "kind": "turn",
-        "at": 1
-      },
-      "do": [
-        {
-          "kind": "gold",
-          "seat": "A",
-          "amount": -9999
-        },
-        {
-          "kind": "gold",
-          "seat": "B",
-          "amount": -9999
-        }
-      ]
+    "firstSide": "A",
+    "fog": false,
+    "gold": {
+      "A": 61,
+      "B": 0
     }
-  ],
+  },
   "deploy": {
     "A": [
       {

@@ -1,0 +1,82 @@
+{
+  "me": "A",
+  "exam": "S-006",
+  "seed": 61,
+  "turns": [
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 8,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u20",
+        "x": 6,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 5,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 6,
+        "y": 2
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 4,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 9,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u20",
+        "x": 7,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 5,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u20",
+        "x": 8,
+        "y": 6
+      }
+    ],
+    [],
+    [],
+    []
+  ]
+}

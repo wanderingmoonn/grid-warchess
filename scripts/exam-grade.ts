@@ -26,7 +26,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { applyAction, utype } from '../src/core/rules.ts';
+import { applyAction, unitYieldAt, utype } from '../src/core/rules.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 
@@ -70,6 +70,11 @@ type Criterion = {
   x?: number;
   y?: number;
   r?: number;
+  /** `unitsInZone` 用：矩形（含四边），(x0,y0) 左上、(x1,y1) 右下 */
+  x0?: number;
+  y0?: number;
+  x1?: number;
+  y1?: number;
   min?: number;
   max?: number;
   /** 为什么有这一条（写给人看，判分时会一起打印） */
@@ -132,7 +137,8 @@ async function loadAi(kind: string, who: string): Promise<AiFn | null> {
   if (kind === 'v3') return ((await import('../src/core/ai-v3.ts')) as { aiNextAction: AiFn }).aiNextAction;
   if (kind === 'v1') return ((await import('./baselines/ai-9efb961.ts')) as { aiNextAction: AiFn }).aiNextAction;
   if (kind === 'auto') return ((await import('../src/core/ai.ts')) as { aiNextAction: AiFn }).aiNextAction;
-  throw new Error(`${who} 不认识这个答题者：${kind}（只有 v3/v1/auto/none）`);
+  if (kind === 'v4') return ((await import('../src/core/v4/ai-v4.ts')) as { aiNextAction: AiFn }).aiNextAction;
+  throw new Error(`${who} 不认识这个答题者：${kind}（只有 v4/v3/v1/auto/none）`);
 }
 
 /** 人手答案：按回合分组，`{ "turns": [[{...}, {...}], [{...}]] }` */
@@ -157,6 +163,10 @@ type Stat = {
   /** 我方单位的位置与分类：`unitsNear` 要按当期的记录算，不能用终局 */
   mine: Array<{ x: number; y: number; category: string }>;
   alive: number;
+  /** 我方可累计造兵数（从开局到现在） */
+  recruited: number;
+  /** 我方经济兵本手总产出（金）。经济题的核心量：站对格子才高 */
+  econYield: number;
   meCities: number;
   /** 敌方还剩几座活城（废墟不算）。「把对方打到没有城」才是收尾的终点 */
   foeCities: number;
@@ -168,6 +178,13 @@ let lostMe = 0;
 let lostFoe = 0;
 const disbanded = new Set<string>();
 let prevIds = new Set(s0.units.map((u) => u.id));
+/**
+ * 我方**累计造兵数**（不管后来死没死）。
+ *
+ * 经济题要一条"有没有把钱换成兵"的累加量：兵力是存量（会被打死），金币会被收入补上，
+ * 只有"造了几个"是单调的，而且直接对应"钱花出去了"。
+ */
+let meRecruits = 0;
 
 function capture(s: GameState): void {
   const city: Stat['city'] = {};
@@ -193,6 +210,10 @@ function capture(s: GameState): void {
     cityMinHp: { ...cityMinHp },
     count,
     mine,
+    recruited: meRecruits,
+    econYield: s.units
+      .filter((u) => u.owner === ME && utype(s, u.type).category === 'economy')
+      .reduce((n, u) => n + (unitYieldAt(s, u, u.x, u.y).gold ?? 0), 0),
     alive: s.units.length,
     meCities: s.cities.filter((c) => c.owner === ME && !c.ruined).length,
     foeCities: s.cities.filter((c) => c.owner === FOE && !c.ruined).length,
@@ -233,7 +254,10 @@ function aiTurn(s: GameState, ai: AiFn | null): GameState {
       }
       rejected.clear();
       if (a.type === 'DISBAND' && 'unitId' in a) disbanded.add(String((a as { unitId?: string }).unitId));
-      if (a.type === 'RECRUIT') budget.recruited += 1;
+      if (a.type === 'RECRUIT') {
+        budget.recruited += 1;
+        if (cur.current === ME) meRecruits += 1;
+      }
       if (a.type === 'UPGRADE') budget.upgraded += 1;
       cur = r.state;
     }
@@ -253,6 +277,7 @@ function answerTurn(s: GameState, acts: Array<Record<string, unknown>>): GameSta
       continue;
     }
     if (a.type === 'DISBAND' && 'unitId' in a) disbanded.add(String(a.unitId));
+    if (a.type === 'RECRUIT') meRecruits += 1;
     cur = r.state;
   }
   if (cur.winner) return cur;
@@ -330,6 +355,29 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
           (!c.category || u.category === c.category),
       ).length;
       return { ok: c.min === undefined || n >= c.min, got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个` };
+    }
+    case 'recruited': {
+      /* "有没有把钱换成兵"。累加量，不受打死、也不被收入补回去影响。 */
+      const n = st.recruited;
+      return { ok: c.min === undefined || n >= c.min, got: `累计造兵 ${n}` };
+    }
+    case 'econYield': {
+      /* 经济兵按脚下地形产金：伐木工森林 12 / 平原 3，牧民丘陵 8 / 森林 2，农民平原 7 / 森林 3。
+       * 站对格子和站错差 3~4 倍，所以这条能干净地区分"有没有把经济兵摆对"。 */
+      const y = st.econYield;
+      return { ok: c.min === undefined || y >= c.min, got: `经济总产 ${y}` };
+    }
+    case 'unitsInZone': {
+      /* 区域推进类判据："过河了没有""压到哪条线了"。比 unitsNear 好用，
+       * 因为河/关隘是矩形，不是圆。 */
+      const n = st.mine.filter(
+        (u) =>
+          u.x >= (c.x0 ?? 0) && u.x <= (c.x1 ?? 0) && u.y >= (c.y0 ?? 0) && u.y <= (c.y1 ?? 0) &&
+          (!c.category || u.category === c.category),
+      ).length;
+      const lowOk = c.min === undefined || n >= c.min;
+      const highOk = c.max === undefined || n <= c.max;
+      return { ok: lowOk && highOk, got: `区域内 ${n} 个` };
     }
     case 'gold': {
       const g = st.gold[ME] ?? 0;
