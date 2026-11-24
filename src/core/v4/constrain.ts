@@ -12,6 +12,7 @@
 import { passable } from '../config.ts';
 import { attackableTargets, effectiveStats } from '../rules.ts';
 import { utype } from '../rules.ts';
+import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
 import type { World } from './world.ts';
@@ -272,6 +273,81 @@ function planLanes(
   return { lanes, laneOf };
 }
 
+/**
+ * 多城分兵（2026-11-24）：**每座受威胁的城一支队**。
+ *
+ * 为什么必须分：只有一支 `main` 时，所有兵都去最近那座城，另一座直接丢
+ * （S-013 实测 v4 = 0/2，分兵脚本 = 2/2）。
+ *
+ * 分配是两趟纯几何，不打分：
+ *   ① 每座城按"守军身价 ÷ 我方均价 × 1.5"算出需要几个人（和单城时同一个口径）；
+ *   ② 先按需求从近到远取人（谁离这座城近就归谁），剩下的兵补到最近的那座城。
+ *
+ * 不做"哪个城更重要"的判断——那是决定层的事，而决定层现在只挑一座城。
+ */
+function planMains(s: GameState, world: World, cities: City[], ids: string[]): Squad[] {
+  const units = ids.map((id) => s.units.find((u) => u.id === id)).filter((u): u is NonNullable<typeof u> => !!u);
+  if (units.length === 0 || cities.length === 0) return [];
+
+  const avg = units.reduce((n, u) => n + unitWorth(s, u), 0) / units.length || 1;
+  const needs = cities.map((c) => {
+    const guard = world.foeCombat.filter((u) => cheb(u, c) <= 6);
+    const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
+    return { city: c, want: Math.max(2, Math.min(12, Math.round((guardStr / avg) * 1.5))) };
+  });
+
+  /*
+   * 需求超过手头兵力时**按比例摊**，不是先到先得。
+   *
+   * S-013 实测：两城各要 8 个、手上只有 8 个，第一座全拿走、第二座 0 个 →
+   * 1/2（另一座直接丢）。按比例摊是 4 : 4，正好是分兵脚本守住两城的配比。
+   */
+  const totalWant = needs.reduce((n, x) => n + x.want, 0);
+  if (totalWant > units.length) {
+    const scaled = needs.map((n) => ({
+      ...n,
+      want: Math.max(2, Math.floor((n.want * units.length) / totalWant)),
+    }));
+    for (let i = 0; i < needs.length; i++) needs[i] = scaled[i]!;
+  }
+
+  /* ① 按需求从大到小，各自从近到远取人 */
+  const left = new Set(units.map((u) => u.id));
+  const picked = new Map<string, string[]>();
+  for (const n of [...needs].sort((a, b) => b.want - a.want)) {
+    const cands = [...left]
+      .map((id) => s.units.find((u) => u.id === id)!)
+      .sort((a, b) => world.marchTurns(a, n.city) - world.marchTurns(b, n.city));
+    const take = cands.slice(0, n.want);
+    picked.set(n.city.id, take.map((u) => u.id));
+    for (const u of take) left.delete(u.id);
+  }
+
+  /* ② 剩下的补到最近的那座城 */
+  for (const id of left) {
+    const u = s.units.find((x) => x.id === id);
+    if (!u) continue;
+    const near = [...cities].sort((a, b) => world.marchTurns(u, a) - world.marchTurns(u, b))[0]!;
+    picked.get(near.id)?.push(id) ?? picked.set(near.id, [id]);
+  }
+
+  const out: Squad[] = [];
+  for (const n of needs) {
+    const squadIds = picked.get(n.city.id) ?? [];
+    if (squadIds.length === 0) continue;
+    out.push({
+      id: `main-${n.city.id}`,
+      order: 'march',
+      unitIds: squadIds,
+      cityId: n.city.id,
+      want: n.want,
+      focusId: pickFocus(s, squadIds),
+      ...(planLanes(s, world, squadIds, n.city) ?? {}),
+    });
+  }
+  return out;
+}
+
 export function constrain(s: GameState, world: World, decision: Decision, mem?: V4Memory): Constraints {
   const city = decision.cityId ? s.cities.find((c) => c.id === decision.cityId) : undefined;
   const keepClear = [...world.keepClear];
@@ -300,7 +376,21 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
 
   const rest = world.myCombat.filter((u) => !held.has(u.id) && !keepSet.has(u.y * s.w + u.x));
 
-  if (decision.kind === 'press' && city) {
+  /*
+   * 两座以上城同时受威胁 → 分兵，每城一支队。
+   * 只有一座时走原来的单队路径（行为完全不变）。
+   */
+  /*
+   * 被压的城 = 附近有敌军的城。**不看决定类型**：
+   * S-013 第一手 decided=expand（不占优，先攒兵），如果只在 press 时才分兵，
+   * 八个人会一起在中间集结，两座城一起丢（实测 0/2）。
+   */
+  const threatened = world.cities.filter((info) =>
+    world.foeCombat.some((u) => cheb(u, info.city) <= 8),
+  );
+  if (threatened.length >= 2 && rest.length >= threatened.length * 2) {
+    squads.push(...planMains(s, world, threatened.map((i) => i.city), rest.map((u) => u.id)));
+  } else if (decision.kind === 'press' && city) {
     const ids = rest.map((u) => u.id);
     /*
      * `want`：打这座城要几个人。
