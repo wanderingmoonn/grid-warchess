@@ -1,0 +1,128 @@
+/**
+ * 全套题库一把跑完，出矩阵。
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────────
+ *
+ * 用户 2026-11-24 的担心：v3 是"实战发现一个问题、修一个问题"，越修越像那道题。
+ * v4 换成题库，但**如果每次修改只让一道题变绿，性质是一样的**。
+ *
+ * 所以真正要看的不是"某道题绿了没有"，而是：
+ *
+ *   **这次修改，动了几道题？**
+ *
+ *   · 机制性修改（新约束、新流程）→ 会跨题动，而且方向一致；
+ *   · 补丁式修改（调阈值、为某局面加特判）→ 只动一道题，别的纹丝不动。
+ *
+ * 这个脚本把"影响面"变成一张表：跑完和上一次对比，标出谁变了。
+ *
+ * 用法：
+ *   node --experimental-strip-types scripts/exams-all.ts            # 打一张表
+ *   ... --save                                                     # 同时存基线
+ *   ... --diff                                                     # 和基线比，标出变化
+ */
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+
+/**
+ * 在册的题。**故意写死**：作废的（S-003、S-007）不进来，
+ * 否则每次跑都要重新读一遍 review.md 判断它还算不算数。
+ * 加题在这里加一行——这也顺手挡住了"随手多造一道题"。
+ */
+const ACTIVE = ['S-000', 'S-001', 'S-002', 'S-004', 'S-005', 'S-006', 'S-009'];
+
+/** 答题者：空壳 / v1 / v3 / v4 */
+const BRAINS = ['none', 'v1', 'v3', 'v4'] as const;
+
+const BASE = '.tmp/exam-matrix.json';
+const args = process.argv.slice(2);
+const wantSave = args.includes('--save');
+const wantDiff = args.includes('--diff');
+
+interface Cell {
+  verdict: '红' | '绿' | '?';
+  /** 判据那一行原文，用来解释"为什么红" */
+  detail: string;
+}
+
+function run(exam: string, brain: string): Cell {
+  let out = '';
+  try {
+    out = execFileSync(
+      process.execPath,
+      ['--experimental-strip-types', 'scripts/exam-grade.ts', '--exam', `exams/${exam}`, '--me-ai', brain, '--foe-ai', 'auto'],
+      { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+    );
+  } catch (err) {
+    /*
+     * 判分器**红的时候退出码是 1**（拿它当 CI 闸门用）。
+     * 这里要的是"红"这个结论，不是"命令成功"，所以把 stdout 捞出来接着看。
+     */
+    const e = err as { stdout?: string; status?: number };
+    out = e.stdout ?? '';
+    if (!out) throw err;
+  }
+  const verdict = out.includes('结论：绿') ? '绿' : out.includes('结论：红') ? '红' : '?';
+  /* 第一条"必须"判据的原文：红了多半就是它 */
+  const must = out.split('\n').find((l) => l.includes('必须')) ?? '';
+  return { verdict, detail: must.replace(/^\s+/, '').slice(0, 46) };
+}
+
+const matrix: Record<string, Record<string, Cell>> = {};
+for (const exam of ACTIVE) {
+  if (!existsSync(`exams/${exam}/criteria.json`)) {
+    console.error(`⚠️ exams/${exam} 没有 criteria.json，跳过`);
+    continue;
+  }
+  matrix[exam] = {};
+  for (const brain of BRAINS) {
+    process.stderr.write(`  ${exam} / ${brain} …\n`);
+    matrix[exam]![brain] = run(exam, brain);
+  }
+}
+
+/* ── 上一次的结果（有就比） ─────────────────────────────────── */
+const prev: Record<string, Record<string, Cell>> | null =
+  wantDiff && existsSync(BASE) ? (JSON.parse(readFileSync(BASE, 'utf8')) as typeof matrix) : null;
+
+const mark = (exam: string, brain: string, now: Cell): string => {
+  const before = prev?.[exam]?.[brain]?.verdict;
+  if (!before || before === now.verdict) return now.verdict === '绿' ? '✅' : '  ';
+  return now.verdict === '绿' ? '↑✅' : '↓❌';
+};
+
+const pad = (s: string, n: number): string => {
+  /* 中文按两个宽度算，否则表会歪 */
+  const w = [...s].reduce((a, ch) => a + (/[\u4e00-\u9fa5]/.test(ch) ? 2 : 1), 0);
+  return s + ' '.repeat(Math.max(0, n - w));
+};
+
+console.log('\n' + pad('题', 8) + BRAINS.map((b) => pad(b, 7)).join(''));
+for (const exam of Object.keys(matrix)) {
+  const row = BRAINS.map((b) => pad(mark(exam, b, matrix[exam]![b]!), 7)).join('');
+  console.log(pad(exam, 8) + row);
+}
+
+/* 变化摘要：这才是判断"机制还是补丁"的地方 */
+if (prev) {
+  const changed: string[] = [];
+  for (const exam of Object.keys(matrix)) {
+    for (const b of BRAINS) {
+      const before = prev[exam]?.[b]?.verdict;
+      const now = matrix[exam]![b]!.verdict;
+      if (before && before !== now) changed.push(`${exam}/${b}: ${before} → ${now}`);
+    }
+  }
+  console.log('\n变化：' + (changed.length ? '\n  ' + changed.join('\n  ') : '无（这次修改一道题都没动）'));
+  console.log(
+    changed.length === 0
+      ? '\n⚠️ 一道题都没动：那这次改的东西，要么没生效，要么只在你没测的地方有用。'
+      : changed.length === 1
+        ? '\n⚠️ 只动了一道题：**高度怀疑是补丁**——问自己改的是机制还是数字。'
+        : `\n动了 ${changed.length} 处：像机制性修改，再看方向一致不一致。`,
+  );
+}
+
+if (wantSave) {
+  writeFileSync(BASE, JSON.stringify(matrix, null, 2));
+  console.log(`\n已存基线：${BASE}`);
+}
