@@ -844,50 +844,159 @@ function planMarch(
       .filter((u): u is Unit => !!u && u.owner === world.me);
     if (units.length === 0) continue;
 
-    /*
-     * **不配"固定格子"，只朝一个点走。**
-     *
-     * 之前是"每人配一个城周围的格"，然后每回合重算——目标一换，人就掉头，
-     * 整队每手几十个 MOVE、平均距离纹丝不动（S-002 实测：14 手从 11 到 10）。
-     *
-     * 人手答案不是这样：目标只有一个（城），**每个人都走满自己的移动力**，
-     * 阵型的层次（骑兵在前、远程在后）是移动力自己形成的（骑兵 move 4、火枪 2）。
-     * 所以这里只做两件事：朝城的场走满 + 落点不重复。
-     */
-    const field = world.stepsFrom(base);
-    const hereOf = (u: Unit): number => field[u.y * s.w + u.x] ?? Infinity;
-    const pending = units.filter((u) => hereOf(u) > 0);
+    const toBase = world.stepsFrom(base);
+    const axisOf = (u: Unit): number => toBase[u.y * s.w + u.x] ?? Infinity;
+    const pending = units.filter((u) => axisOf(u) > 0);
     if (pending.length === 0) continue;
 
-    const used = new Set<number>();
     /*
-     * **移动力大的先走。**
+     * **按"这一排干什么活"分排，不按兵种。**
      *
-     * 人手答案就是这个顺序：骑兵（move 4）先冲上去占住前面的格，
-     * 戟兵/火枪（move 2）跟上。反过来让慢的先走，它会占掉快兵要去的格，
-     * 快兵被自己人堵住，整队只能一起慢慢挪（S-002 实测：均距 14 手停在 10）。
+     * 判据是**射程**：射程 1 的顶上去、射程 2 的跟在中排、射程 3 以上在后排打输出。
+     * 同一排里的人移动力天然接近（骑兵 4 / 步兵 2），所以排内不会出现"快的等慢的"。
+     *
+     * 这样也不会"所有兵聚成一团"：每排有**自己的**紧凑阵位，排与排的阵位互不重叠。
      */
-    const moveOf = (u: Unit): number => effectiveStats(s, u).move ?? 2;
-    const order2 = [...pending].sort(
-      (a, b) => moveOf(b) - moveOf(a) || hereOf(a) - hereOf(b) || (a.id < b.id ? -1 : 1),
-    );
-    for (const u of order2) {
-      const here = hereOf(u);
-      let best: number | null = null;
-      let bestD = here;
-      for (const [k] of reachableTiles(s, u)) {
-        if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
-        if (used.has(k)) continue;
-        const d = field[k] ?? Infinity;
+    /*
+     * **窄道（桥、关隘）不收拢，排队走。**
+     *
+     * 收拢的前提是"并排站得下"。桥面只有一格宽，硬排方块等于把人摊在桥头，
+     * 整队卡死（S-005 实测：收拢版从绿变红）。宽度用现成的 `corridorWidth`，
+     * 不是拍的数字。
+     */
+    const front = [...pending].sort((a, b) => axisOf(a) - axisOf(b) || (a.id < b.id ? -1 : 1))[0]!;
+    /*
+     * 路上有没有桥/窄口：从前锋顺着"到城的步数"往下走，遇到桥就是窄道。
+     * 只看终点附近的宽度测不到——城门口是开阔的，窄的是半路上的桥。
+     */
+    let narrow = world.corridorWidth({ x: front.x, y: front.y }, base) <= 2;
+    for (let k = front.y * s.w + front.x, guard = 0; !narrow && guard < 40; guard += 1) {
+      if (s.tiles[k]?.terrain === 'bridge') {
+        narrow = true;
+        break;
+      }
+      if ((toBase[k] ?? 0) <= 0) break;
+      let next = k;
+      let bestD = toBase[k] ?? Infinity;
+      const x0 = k % s.w;
+      const y0 = (k - x0) / s.w;
+      for (const [ox, oy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = x0 + ox;
+        const ny = y0 + oy;
+        if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+        const nk = ny * s.w + nx;
+        const d = toBase[nk] ?? Infinity;
         if (d < bestD) {
           bestD = d;
-          best = k;
+          next = nk;
         }
       }
-      if (best === null) continue;
-      out[u.id] = { x: best % s.w, y: Math.floor(best / s.w) };
-      order.push(u.id);
-      used.add(best);
+      if (next === k) break;
+      k = next;
+    }
+    if (narrow) {
+      /*
+       * 窄道**整队交给打分层**（`stepToward`）：桥面一次过一个人，
+       * 排队的事它本来就比自己再实现一遍做得好（S-005 的过河数就是这么保住的）。
+       */
+      continue;
+    }
+
+    const rows = new Map<number, Unit[]>();
+    for (const u of pending) {
+      const r = effectiveStats(s, u).range ?? 1;
+      const k = r <= 1 ? 0 : r === 2 ? 1 : 2;
+      const arr = rows.get(k) ?? [];
+      arr.push(u);
+      rows.set(k, arr);
+    }
+
+    const used = new Set<number>();
+    /* 落点也要去重：两个人算到同一格时，后一个执行会"不可达"，就退回乱走了 */
+    const taken = new Set<number>();
+    for (const [, row] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
+      const n = row.length;
+      const cx = Math.round(row.reduce((a, u) => a + u.x, 0) / n);
+      const cy = Math.round(row.reduce((a, u) => a + u.y, 0) / n);
+      const moves = row.map((u) => effectiveStats(s, u).move ?? 2);
+      const maxMove = Math.max(...moves);
+      /* 方块边长：这一排挤成正方形要几格宽（由人数决定，不是拍的） */
+      const side = Math.max(1, Math.ceil(Math.sqrt(n)));
+      /*
+       * 现在是不是已经是一团：谁离排中心超过"方块半径"，就说明还散着。
+       * 散着 → 这一手只前移一格（把边缘的人吸回来）；成型了 → 走满推进。
+       */
+      const spread = Math.max(
+        ...row.map((u) => Math.abs(u.x - cx) + Math.abs(u.y - cy)),
+      );
+      const formed = spread <= side;
+
+      const dx = base.x - cx;
+      const dy = base.y - cy;
+      const dir =
+        Math.abs(dx) >= Math.abs(dy)
+          ? { x: Math.sign(dx) || 1, y: 0 }
+          : { x: 0, y: Math.sign(dy) || -1 };
+      const ahead = formed ? maxMove : 1;
+      const aim = { x: cx + dir.x * ahead, y: cy + dir.y * ahead };
+
+      /* 阵位 = 离"新中心"最近的 n 个可站格（这一排的紧凑方块） */
+      const slots: number[] = [];
+      for (let r = 0; r <= 8 && slots.length < n; r += 1) {
+        for (let oy = -r; oy <= r; oy += 1) {
+          for (let ox = -r; ox <= r; ox += 1) {
+            if (Math.abs(ox) + Math.abs(oy) !== r) continue;
+            const x = aim.x + ox;
+            const y = aim.y + oy;
+            if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+            const k = y * s.w + x;
+            if (used.has(k)) continue;
+            const t = s.tiles[k];
+            if (!t || !passable(t.terrain) || t.terrain === 'city') continue;
+            /* 敌人占着的格不能当阵位（那是要打的地方，不是要站的地方） */
+            if (s.units.some((v) => v.owner !== world.me && v.y * s.w + v.x === k)) continue;
+            slots.push(k);
+            if (slots.length >= n) break;
+          }
+        }
+      }
+      if (slots.length === 0) continue;
+
+      /*
+       * **同序配对**：人按"离城远近"排，阵位也按"离城远近"排，序号对序号。
+       * 两边都是同一条轴上单调的，所以路线不会交叉；散开的一排会被吸成方块。
+       */
+      const rowSorted = [...row].sort(
+        (a, b) => axisOf(a) - axisOf(b) || (a.id < b.id ? -1 : 1),
+      );
+      const slotSorted = [...slots].sort((a, b) => {
+        const da = toBase[a] ?? Infinity;
+        const db = toBase[b] ?? Infinity;
+        return da - db || a - b;
+      });
+
+      for (let idx = 0; idx < rowSorted.length && idx < slotSorted.length; idx += 1) {
+        const u = rowSorted[idx]!;
+        const slot = slotSorted[idx]!;
+        used.add(slot);
+        const field = world.stepsFrom({ x: slot % s.w, y: Math.floor(slot / s.w) });
+        const here = field[u.y * s.w + u.x] ?? Infinity;
+        let best: number | null = null;
+        let bestD = here;
+        for (const [k] of reachableTiles(s, u)) {
+          if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
+          if (taken.has(k)) continue;
+          const d = field[k] ?? Infinity;
+          if (d < bestD) {
+            bestD = d;
+            best = k;
+          }
+        }
+        if (best === null) continue;
+        out[u.id] = { x: best % s.w, y: Math.floor(best / s.w) };
+        taken.add(best);
+        order.push(u.id);
+      }
     }
   }
   return { steps: out, order };
