@@ -729,8 +729,16 @@ function panelHtml(input: PanelInput): string {
                      : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`
                }
              </button>`
-          : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-               ${
+          : (() => {
+              const readyLeft = myTurn && !spectator && !s.winner
+                ? unitsOf(s, me).filter((u) => {
+                    const d = s.unitTypes[u.type];
+                    if (!d || d.category === 'building' || underConstruction(u)) return false;
+                    return (canMove(u) && movePower(s, u) > 0) || (canAttack(u) && isArmed(s, u));
+                  }).length
+                : 0;
+              return `<button class="btn btn-primary btn-block end-turn-btn" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
+               <span>${
                  myTurn
                    ? '结束行动，交给对方'
                    : spectator
@@ -740,8 +748,9 @@ function panelHtml(input: PanelInput): string {
                      : quit
                        ? '你已认输 · 只能看'
                        : '等待对方行动中'
-               }
-             </button>`
+               }</span>${readyLeft > 0 ? `<span class="end-turn-badge" title="尚有 ${readyLeft} 个单位本回合可行动">剩 ${readyLeft}</span>` : ''}
+             </button>`;
+            })()
       }
       </div>
       ${input.replay ? '' : panelFold('match-actions', '对局管理', `<div class="side-actions">
@@ -1230,15 +1239,17 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             }</div>
           </div>
         </div>
-        <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
-        <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
-        ${
-          hazards.length > 0
-            ? `<div class="info-row"><span>环境</span><b style="color:#b4553f">${escapeHtml(
-                hazards.join(' · '),
-              )}</b></div>`
-            : ''
-        }
+        <div class="stat-grid stat-grid-tile">
+          <div class="info-row"><span class="stat-lbl">${uiIcon('move', 'stat-ico stat-ico-move')}进入消耗</span><b>${info.cost}</b></div>
+          <div class="info-row"><span class="stat-lbl">${uiIcon('armor', 'stat-ico stat-ico-armor')}防御加成</span><b>${info.defense}</b></div>
+          ${
+            hazards.length > 0
+              ? `<div class="info-row stat-wide"><span class="stat-lbl">环境</span><b style="color:var(--b)">${escapeHtml(
+                  hazards.join(' · '),
+                )}</b></div>`
+              : ''
+          }
+        </div>
         ${
           extLines.length > 0
             ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${extLines
@@ -1493,7 +1504,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
      * 看起来像"这里本该有个数字，没加载出来"。
      */
     const atkRow = `<div class="info-row">
-            <span>攻击 / 护甲</span>
+            <span class="stat-lbl">${uiIcon('atk', 'stat-ico stat-ico-atk')}攻击 / 护甲</span>
             <b>${eff.atk} / ${eff.armor}${baseNote}</b>
           </div>`;
     const atkCell = statModBlock
@@ -1508,11 +1519,16 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${CATEGORY_NAME[def.category] ?? '单位'}</div>
         </div>
       </div>
-      <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
+      <div class="unit-readiness" aria-label="单位行动状态">${status
+        .map((label) => {
+          const ready = label.startsWith('可移动') || label.startsWith('可攻击');
+          return `<span${ready ? ' class="is-ready"' : ''}>${label}</span>`;
+        })
+        .join('')}</div>
       ${mine && myTurn && input.combatInspectMode ? '<p class="unit-next-action">选择红框目标</p>' : ''}
       ${mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
         aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
-        ${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</button>` : ''}
+        ${uiIcon('swords')}<span>${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</span></button>` : ''}
       ${
         underCamp
           ? `<button class="btn btn-sm btn-block" data-act="open-camp" data-id="${underCamp.id}" style="margin-top:10px">
@@ -1558,15 +1574,15 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         ''
       }
       <div class="stat-grid">
-        <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(
+        <div class="info-row"><span class="stat-lbl">${uiIcon('hp', 'stat-ico stat-ico-hp')}生命</span><b>${selectedUnit.hp} / ${maxHpOf(
           s,
           selectedUnit,
         )}</b></div>
-        <div class="info-row"><span>移动力</span><b>${
+        <div class="info-row"><span class="stat-lbl">${uiIcon('move', 'stat-ico stat-ico-move')}移动力</span><b>${
           eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
         }</b></div>
         ${atkCell}
-        <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(
+        <div class="info-row"><span class="stat-lbl">${uiIcon('range', 'stat-ico stat-ico-range')}射程 / 视野</span><b>${effectiveRange(
           s,
           selectedUnit,
         )} / ${stats.vision}</b></div>
@@ -1922,7 +1938,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
         items.map(unitButton),
         { key, open: folds.has(key), limit: keep, noun: '种' },
       );
-      return `<div class="recruit-group">${title}<div class="recruit-list">${body}</div></div>`;
+      return `<div class="recruit-group">${title}<div class="recruit-list recruit-grid">${body}</div></div>`;
     })
     .join('');
 
@@ -1959,17 +1975,17 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   return `
     <div class="unit-head">
-      <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
-      <div>
-        <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}${city.ruined ? ' · <b>废墟</b>' : ''}</div>
+      <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">${uiIcon('city')}</div>
+      <div class="city-head-copy">
+        <div class="unit-title"><span>城市 ${cityName(city)}</span><span class="era-badge">${era.name}</span></div>
+        <div class="unit-sub">${s.players[city.owner].name} · 驻军 ${garrison}/${city.size * city.size}${city.ruined ? ' · <b>废墟</b>' : ''}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="stat-grid">
-      <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
-      <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-      <div class="info-row"><span>本城收入</span><b>${city.ruined ? '0 金 <small>（废墟不产出）</small>' : `${era.cityIncome} 金`}</b></div>
+      <div class="info-row"><span class="stat-lbl">${uiIcon('hp', 'stat-ico stat-ico-hp')}耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
+      <div class="info-row"><span class="stat-lbl">${uiIcon('armor', 'stat-ico stat-ico-armor')}护甲</span><b>${city.armor}</b></div>
+      <div class="info-row"><span class="stat-lbl">${uiIcon('gold', 'stat-ico stat-ico-gold')}本城收入</span><b>${city.ruined ? '0 金 <small>（废墟不产出）</small>' : `${era.cityIncome} 金`}</b></div>
       ${
         /*
          * 本方总收入单独一行，且只在**自己的城**上显示。
@@ -1979,13 +1995,13 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
          * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
          */
         mine
-          ? `<div class="info-row"><span>本方每回合收入</span><b>${incomeTextOf(
+          ? `<div class="info-row"><span class="stat-lbl">${uiIcon('income', 'stat-ico stat-ico-income')}本方每回合收入</span><b>${incomeTextOf(
               s,
               city.owner,
             )}</b></div>`
           : ''
       }
-      <div class="info-row stat-wide"><span>驻军休整</span><b>${regenText}</b></div>
+      <div class="info-row stat-wide"><span class="stat-lbl">驻军休整</span><b>${regenText}</b></div>
     </div>
     ${upgradeBlock}
     ${
@@ -2246,16 +2262,22 @@ function recruitButton(
       <span class="tip-row">${escapeHtml(detail)}</span>
       ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${escapeHtml(builds.names.join('、'))}（共 ${builds.names.length} 种）</span>` : ''}
     </span>`;
-  const role = `${def.category === 'combat' ? def.range > 1 ? '远程作战' : '近战作战' : CATEGORY_NAME[def.category] ?? '单位'}${def.domain === 'water' ? ' · 水上' : airLayer(def) ? ' · 空中' : ''}${mode === 'order' ? ' · ＋队列' : ''}`;
+  const role = `${def.category === 'combat' ? def.range > 1 ? '远程' : '近战' : CATEGORY_NAME[def.category] ?? '单位'}${def.domain === 'water' ? ' · 水' : airLayer(def) ? ' · 空' : ''}${mode === 'order' ? ' · ＋队列' : ''}`;
+  const microStats = `<span class="recruit-micro" aria-hidden="true"><span>${uiIcon('hp', 'micro-ico')}${def.maxHp}</span>${
+    def.atk > 0 ? `<span>${uiIcon('atk', 'micro-ico')}${def.atk}</span>` : ''
+  }<span>${uiIcon('armor', 'micro-ico')}${def.armor}</span><span>${uiIcon('move', 'micro-ico')}${def.move}</span></span>`;
   return `<div class="recruit-wrap" data-hover-tip>${tip}
-    <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
-    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
+    <button class="recruit-btn recruit-card" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
+    <span class="recruit-card-head">
+      <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:24px;height:24px;font-size:var(--fs-sm)">${def.short}</span>
+      <b class="recruit-name">${def.name}${sourceTag(def)}</b>
+      <span class="price">${costLabel(payCost)}</span>
+    </span>
+    ${microStats}
     <span class="meta">
-      <b>${def.name}${sourceTag(def)}</b>
       <span>${escapeHtml(role)}${extra}</span>
       ${reason ? `<span class="recruit-reason">${escapeHtml(reason)}</span>` : ''}
     </span>
-    <span class="price">${costLabel(payCost)}</span>
   </button>
   ${panelFold(`recruit-${site}-${def.id}`, '详情', `<div class="recruit-spec">${escapeHtml(detail)}</div>${builds.names.length > 0 ? `<div class="hint">可建造：${escapeHtml(builds.names.join('、'))}</div>` : ''}`, false, 'recruit-fold', `${def.name}：属性与能力`)}
   </div>`;
@@ -2378,7 +2400,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       );
       return `<div class="recruit-group">
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
-        <div class="recruit-list">${body}</div>
+        <div class="recruit-list recruit-grid">${body}</div>
       </div>`;
     })
     .join('');
@@ -2402,7 +2424,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     );
     gatedGroup = `<div class="recruit-group">
         <div class="recruit-group-title">还造不出来</div>
-        <div class="recruit-list">${body}</div>
+        <div class="recruit-list recruit-grid">${body}</div>
       </div>`;
   }
 

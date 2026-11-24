@@ -4365,8 +4365,15 @@ html[data-motion='reduced'] .combat-cues[data-phase='result'] .combat-cue b {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel-2);
-  color: var(--text);
+  color: var(--text-2);
   font-size: var(--fs-sm);
+}
+
+.unit-readiness span.is-ready {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok-deep);
+  font-weight: 600;
 }
 
 .unit-next-action {
@@ -12833,8 +12840,34 @@ a.btn {
   }
 
   .side-drawer:not([data-context='idle']) {
-    top: calc(var(--chrome, 50px) + 12px);
+    top: auto;
+    bottom: 16px;
+    max-height: calc(100dvh - var(--chrome, 50px) - 28px);
     width: 336px;
+  }
+
+  .side-drawer[data-context='tile'] {
+    width: 300px;
+  }
+
+  .side-drawer[data-context='city'] {
+    width: 376px;
+  }
+
+  .side-drawer[data-context='god'] {
+    width: 368px;
+  }
+
+  .side-drawer[data-context='dock'] {
+    width: 348px;
+  }
+
+  .toast {
+    top: calc(var(--chrome, 48px) + 12px);
+    bottom: auto;
+    border-radius: 999px;
+    padding: 7px 16px;
+    font-size: var(--fs-sm);
   }
 
   .side-drawer:not([data-context='idle']) > .desktop-panel-bar {
@@ -12877,6 +12910,16 @@ a.btn {
   .side-drawer[data-context='tile'] .side-footer > .panel-fold,
   .side-drawer[data-context='tile'] .side-footer > .hint {
     display: none;
+  }
+
+  .side-drawer:not([data-context='idle']) .side-footer {
+    position: sticky;
+    bottom: -12px;
+    z-index: 4;
+    margin: auto -12px -12px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
   }
 
   .side-drawer:not([data-context='idle']) .side-footer > .panel-fold {
@@ -12931,6 +12974,253 @@ a.btn {
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--panel-2);
+}
+
+/* ==========================================================================
+   Phase 2：图标化属性卡、双列网格产兵、结束回合余兵徽标
+   ========================================================================== */
+
+.stat-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.stat-ico-hp {
+  color: var(--ok-deep);
+}
+
+.stat-ico-atk {
+  color: var(--b);
+}
+
+.stat-ico-armor {
+  color: var(--a);
+}
+
+.stat-ico-move {
+  color: var(--brand-ink);
+}
+
+.stat-ico-range {
+  color: var(--text-2);
+}
+
+.stat-grid {
+  gap: 7px;
+  margin: 8px 0 4px;
+}
+
+.stat-grid > .info-row,
+.stat-span > .info-row {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  gap: 3px;
+}
+
+.stat-grid > .info-row > b,
+.stat-span > .info-row > b {
+  font-variant-numeric: tabular-nums;
+}
+
+.combat-aim-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.city-head-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.city-head-copy .unit-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.era-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+}
+
+/* 结束回合主按钮内的剩余可动兵力徽标 */
+.end-turn-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.end-turn-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: inherit;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-ui='modern'] .end-turn-badge {
+  background: rgba(18, 22, 28, 0.16);
+}
+
+@media (max-width: 920px) {
+  .end-turn-badge {
+    display: none;
+  }
+}
+
+/* 双列紧凑网格产兵卡（城市 / 军营） */
+.recruit-list.recruit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.recruit-list.recruit-grid > .fold-more {
+  grid-column: 1 / -1;
+}
+
+.recruit-grid > .recruit-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.recruit-grid > .recruit-wrap > .recruit-btn.recruit-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  width: 100%;
+  min-height: 0;
+  margin-right: 0;
+  flex: 1 1 auto;
+  padding: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.recruit-grid > .recruit-wrap > .recruit-btn.recruit-card:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.recruit-card-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.recruit-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recruit-card-head > .price {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--price);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.recruit-micro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.recruit-micro > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.micro-ico {
+  width: 11px;
+  height: 11px;
+  opacity: 0.78;
+}
+
+.recruit-grid > .recruit-wrap > .recruit-btn.recruit-card > .meta {
+  gap: 2px;
+}
+
+.recruit-grid > .recruit-wrap > .recruit-btn.recruit-card > .meta > span {
+  font-size: var(--fs-micro);
+  line-height: 1.3;
+}
+
+.recruit-grid > .recruit-wrap > .recruit-fold {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.recruit-grid > .recruit-wrap > .recruit-fold > .fold-head {
+  position: static;
+  width: auto;
+  min-height: 0;
+  flex-direction: row;
+  justify-content: space-between;
+  border-left: 0;
+  padding: 4px 8px;
+  font-size: var(--fs-micro);
+  color: var(--text-3);
+}
+
+.recruit-grid > .recruit-wrap > .recruit-fold[open] > .recruit-spec {
+  padding: 6px 8px;
+  font-size: var(--fs-micro);
+}
+
+.recruit-grid > .recruit-wrap > .recruit-fold[open] > .hint {
+  padding: 0 8px 6px;
+  font-size: var(--fs-micro);
+}
+
+@media (max-width: 360px) {
+  .recruit-list.recruit-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .title-iso-canvas {
