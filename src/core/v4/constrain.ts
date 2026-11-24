@@ -561,20 +561,21 @@ function planEconPosts(
     if (holeCells.length > 0) {
       /* 唯一的场：多源（所有洞）、穿过人群、带前驱 */
       const flow = world.field(holeCells, { through: 'units', prev: true });
-      const holeSet = new Set(holeCells);
-      const movedUnits = new Set<string>();
-      const usedCells = new Set<number>();
-      /* 靠洞近的先建链：近的链先成立，远的抢不走它的洞 */
-      const queued = [...units]
-        .filter((u) => posts[u.id] && !(posts[u.id]!.x === u.x && posts[u.id]!.y === u.y))
-        .sort(
-          (a, b) =>
-            (flow.dist[a.y * s.w + a.x] ?? Infinity) - (flow.dist[b.y * s.w + b.x] ?? Infinity),
-        );
+      const queued = [...units].filter(
+        (u) => posts[u.id] && !(posts[u.id]!.x === u.x && posts[u.id]!.y === u.y),
+      );
 
+      /*
+       * ── 第一步：**先把所有链建出来**，一条都先不执行 ──────────────
+       *
+       * 以前是"边建边执行"，于是先建的那条把格子占了，后面的链走到一半发现
+       * 目标被占，在中途 `break` —— 结果是**半条链**：前面几个人挪了，后面没挪，
+       * 空出来的格反而被别的链占了，越搞越乱。
+       */
+      const chains: Array<{ u: Unit; from: number; cells: number[] }> = [];
       for (const u of queued) {
         const from0 = u.y * s.w + u.x;
-        /* 先看这一手走不走得动：走得动就自己走，不建链 */
+        /* 这一手走得动吗？走得动就自己走，不建链 */
         const own = world.stepsFrom(posts[u.id]!);
         const here = own[from0] ?? Infinity;
         let canWalk = false;
@@ -589,40 +590,85 @@ function planEconPosts(
         }
         if (canWalk) continue;
 
-        /*
-         * 顺着前驱往洞走，收集整条链。
-         *
-         * 链的终点是**第一个空格**（不一定正好是空岗）：场会穿过空格继续往外，
-         * 但搬人只需要"往前挪到第一个空的地方"。原来要求"必须落到空岗上"，
-         * 结果路径上先碰到一个普通空格就整条链作废（实测只解开 1 个）。
-         */
-        const chain: number[] = [];
+        /* 顺着前驱往洞走，走到**第一个空格**为止（不必正好是空岗） */
+        const cells: number[] = [];
         let k = from0;
         let sink = false;
         for (let guard = 0; guard < 12; guard++) {
           const p = flow.prev[k]!;
           if (p < 0) break;
-          chain.push(p);
+          cells.push(p);
           k = p;
           if (!s.units.some((v) => v.y * s.w + v.x === k)) {
             sink = true;
             break;
           }
         }
-        if (!sink || chain.length === 0) continue;
-        void holeSet;
+        if (!sink || cells.length === 0) continue;
+        chains.push({ u, from: from0, cells });
+      }
 
-        /* 从洞那一端开始递补 */
-        for (let i = chain.length - 1; i >= 0; i--) {
-          const to = chain[i]!;
-          const from = i === 0 ? from0 : chain[i - 1]!;
-          const mover = s.units.find((v) => v.y * s.w + v.x === from && v.owner === world.me);
-          if (!mover || movedUnits.has(mover.id) || usedCells.has(to)) break;
-          if (utype(s, mover.type).category !== 'economy') break;
+      /*
+       * ── 第二步：**短的先成立，抢不到就整条放弃** ──────────────────
+       *
+       * 短链先占位，长链让路——短链通常贴着洞，挪得动；长链横跨人群，
+       * 一旦和已成立的链撞格，就说明这一手它过不去。
+       * 这时**整条放弃**（而不是中途截断）：截断会留下"半条链"，
+       * 前面的人挪了、后面的人没挪，空出来的格又被别人占掉。
+       */
+      chains.sort((a, b) => a.cells.length - b.cells.length || (a.u.id < b.u.id ? -1 : 1));
+      const usedCells = new Set<number>();
+      const movedUnits = new Set<string>();
+      for (const ch of chains) {
+        /* 冲突检查（先看，不动手）：链上每一格是否还能用 */
+        let ok = true;
+        for (let idx = 0; idx < ch.cells.length; idx++) {
+          const cell = ch.cells[idx]!;
+          if (usedCells.has(cell)) {
+            ok = false;
+            break;
+          }
+          const isSink = idx === ch.cells.length - 1;
+          const occ = s.units.find((v) => v.y * s.w + v.x === cell);
+          if (isSink) {
+            if (occ) {
+              ok = false;
+              break;
+            }
+          } else {
+            if (!occ || occ.owner !== world.me) {
+              ok = false;
+              break;
+            }
+            if (utype(s, occ.type).category !== 'economy') {
+              ok = false;
+              break;
+            }
+            if (movedUnits.has(occ.id)) {
+              ok = false;
+              break;
+            }
+          }
+        }
+        if (!ok) continue; /* 整条放弃，这一手它不动 */
+        if (usedCells.has(ch.from)) continue;
+
+        /* 执行：从洞那一端往人这一端递补 */
+        for (let idx = ch.cells.length - 1; idx >= 1; idx--) {
+          const to = ch.cells[idx]!;
+          const mover = s.units.find((v) => v.y * s.w + v.x === ch.cells[idx - 1]!);
+          if (!mover || mover.owner !== world.me) continue;
           posts[mover.id] = { x: to % s.w, y: Math.floor(to / s.w) };
           movedUnits.add(mover.id);
-          usedCells.add(to);
         }
+        /* 最后是这个兵自己走进链头 */
+        posts[ch.u.id] = {
+          x: ch.cells[0]! % s.w,
+          y: Math.floor(ch.cells[0]! / s.w),
+        };
+        movedUnits.add(ch.u.id);
+        for (const cell of ch.cells) usedCells.add(cell);
+        usedCells.add(ch.from);
       }
     }
   }
