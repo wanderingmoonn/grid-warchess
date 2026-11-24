@@ -2493,7 +2493,8 @@ function fitBoard(): void {
   const width = boardWrapEl.offsetWidth;
   if (width <= 0) return;
 
-  const chrome = topbarEl.offsetHeight + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
+  const headerH = topbarEl.parentElement?.offsetHeight || topbarEl.offsetHeight;
+  const chrome = headerH + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
   /*
    * 把"顶部占了多少"写给 CSS：左上角的地图列表是 `position: fixed`，
    * 它不知道指挥官条（上帝模式 / AI 观战时会多出一条）有多高，
@@ -2533,14 +2534,12 @@ function fitBoard(): void {
   boardEl.classList.toggle('zoomed', zoomed);
   boardScrollEl.classList.toggle('zoomed', zoomed);
 
-  // 放大时把"看地图的窗口"钉在"适应屏幕"那个尺寸上：地图变大、窗口不变，
-  // 于是多出来的部分可以滚（手机上是手指拖）。
-  // 不这么做的话，窄屏单列布局里 board-wrap 是按内容撑高的，
-  // 放大之后整块会跟着长大，被 .app 的 overflow:hidden 裁掉——
-  // 表现就是"一放大就只能看见左上角，剩下的永远看不到"。
+  // 放大时让滚动视口铺满整个可用画布（而不是锁死在 1× 的 baseBoardW×baseBoardH 小框里）：
+  // 斜俯视菱形地图在竖屏手机上 1× 时高度往往只有屏幕的一半，锁死在 baseBoardH 会浪费大片上下空间；
+  // 铺满整个画布后，地图无缝铺到屏幕边缘，其余 HUD/抽屉直接浮在地图之上。
   if (zoomed) {
-    boardScrollEl.style.width = `${baseBoardW}px`;
-    boardScrollEl.style.height = `${baseBoardH}px`;
+    boardScrollEl.style.width = `${width}px`;
+    boardScrollEl.style.height = `${Math.max(1, Math.round(availH))}px`;
   } else {
     boardScrollEl.style.width = '';
     boardScrollEl.style.height = '';
