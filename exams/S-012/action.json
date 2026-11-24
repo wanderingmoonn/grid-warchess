@@ -2,21 +2,21 @@
   "kind": "exam-actions",
   "exam": null,
   "seed": 212,
-  "at": "2026-11-24T05:42:57.967Z",
+  "at": "2026-11-24T05:52:50.938Z",
   "dropped": 0,
   "actions": [
-    {
-      "type": "MOVE",
-      "unitId": "u2",
-      "x": 1,
-      "y": 10,
-      "by": "A"
-    },
     {
       "type": "MOVE",
       "unitId": "u1",
       "x": 1,
       "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 1,
+      "y": 10,
       "by": "A"
     },
     {
@@ -65,20 +65,6 @@
     {
       "type": "END_TURN",
       "by": "B"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u6",
-      "x": 2,
-      "y": 8,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u7",
-      "x": 3,
-      "y": 9,
-      "by": "A"
     },
     {
       "type": "MOVE",
@@ -202,14 +188,6 @@
     {
       "type": "END_TURN",
       "by": "B"
-    },
-    {
-      "type": "ATTACK",
-      "unitId": "u12",
-      "targetId": "u3",
-      "x": 2,
-      "y": 6,
-      "by": "A"
     },
     {
       "type": "ATTACK",

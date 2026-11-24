@@ -5902,20 +5902,15 @@ function handleAction(act: string, el: HTMLElement): void {
       };
       const text = JSON.stringify(payload, null, 2);
       /*
-       * 还没"结束回合"就导出 = 只导了一半。2026-11-24 用户 S-012 就是这么交的：
-       * 只录到第 3 个回合中间，判分器让后面全程空转，看起来像 AI 打不过。
+       * 报**手数**，不猜"打完没打完"。
+       *
+       * 一开始想用"最后一步不是 END_TURN = 没打完"来判断，是错的：
+       * 结束回合之后对面会先走，再回到你——所以一次正常导出，最后一步几乎不可能是我方的 END_TURN。
+       * 真正该看的是"打够手数没有"，那是判分器的活（答案用完会警告空转）。
        */
-      const last = steps[steps.length - 1];
-      const midTurn = last !== undefined && last.type !== 'END_TURN';
       void navigator.clipboard
         ?.writeText(text)
-        .then(() =>
-          toast(
-            midTurn
-              ? `已复制 ${steps.length} 步（注意：最后一步不是"结束回合"，这一手还没打完）`
-              : `已复制 ${steps.length} 步动作到剪贴板`,
-          ),
-        )
+        .then(() => toast(`已复制 ${steps.length} 步动作（当前第 ${state.turn} 手）`))
         .catch(() => window.prompt('复制下面的内容存成文件：', text));
       return;
     }

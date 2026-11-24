@@ -5,15 +5,15 @@
     [
       {
         "type": "MOVE",
-        "unitId": "u2",
-        "x": 1,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
         "unitId": "u1",
         "x": 1,
         "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u2",
+        "x": 1,
+        "y": 10
       },
       {
         "type": "RECRUIT",
@@ -27,18 +27,6 @@
       }
     ],
     [
-      {
-        "type": "MOVE",
-        "unitId": "u6",
-        "x": 2,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u7",
-        "x": 3,
-        "y": 9
-      },
       {
         "type": "MOVE",
         "unitId": "u6",
@@ -85,13 +73,6 @@
       }
     ],
     [
-      {
-        "type": "ATTACK",
-        "unitId": "u12",
-        "targetId": "u3",
-        "x": 2,
-        "y": 6
-      },
       {
         "type": "ATTACK",
         "unitId": "u12",
