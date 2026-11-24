@@ -352,7 +352,9 @@ appEl.innerHTML = `
           <div class="board" id="board"></div>
         </div>
         <div class="zoom-bar" id="zoom-bar">
-          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换正俯视 / 斜俯视（斜俯视下按住鼠标中键可拖转视角）" hidden><span class="zoom-ico" data-ref="angle-ico">${uiIcon('flat')}</span><span data-label>正俯视</span></button>
+          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换正俯视 / 斜俯视（斜俯视下按住右键或中键可 360° 拖转视角）" hidden><span class="zoom-ico" data-ref="angle-ico">${uiIcon('flat')}</span><span data-label>正俯视</span></button>
+          <button class="zoom-btn zoom-btn-icon angle-rot-btn" data-act="board-angle-left" title="逆时针旋转 30°" aria-label="逆时针旋转 30°" hidden>↺</button>
+          <button class="zoom-btn zoom-btn-icon angle-rot-btn" data-act="board-angle-right" title="顺时针旋转 30°" aria-label="顺时针旋转 30°" hidden>↻</button>
           <button class="zoom-btn angle-reset-btn" data-act="board-angle-reset" title="恢复斜俯视默认视角（也可双击鼠标中键）" hidden>${uiIcon('reset')}<span data-label>复位</span></button>
           <span class="zoom-sep" aria-hidden="true"></span>
           <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">${uiIcon('fit')}<span data-label>适应</span></button>
@@ -2471,9 +2473,26 @@ function showAngleHud(text: string, autoHideMs = 0): void {
 }
 
 function formatAngleHud(cam: AngledCamera): string {
-  const yawDeg = Math.round((cam.yaw * 180) / Math.PI);
-  const pitchDeg = Math.round((Math.atan(cam.tilt) * 180) / Math.PI);
-  return `旋转 ${yawDeg}° · 俯角 ${pitchDeg}° · 双击中键复位`;
+  const yawDeg = Math.round((cam.yaw * 180) / Math.PI) % 360;
+  return `旋转 ${yawDeg}° · 右键/中键拖转 360° · 双击中键复位`;
+}
+
+function rotateBoardAngle(deltaRad: number): void {
+  if (!boardEl.classList.contains('has-angled-view')) return;
+  const center = boardZoom > 1 ? boardCamera() : null;
+  const updated = setAngledBoardCamera(boardEl, {
+    yaw: angledCam.yaw + deltaRad,
+    tilt: DEFAULT_ANGLED_CAMERA.tilt,
+  });
+  if (updated) {
+    angledCam = updated;
+    saveAngledCam();
+    boardDirty = true;
+    fitBoard();
+    if (center) centerBoardCamera(center);
+    syncAngleControls();
+    showAngleHud(formatAngleHud(angledCam), 1100);
+  }
 }
 
 function syncAngleControls(): void {
@@ -2481,6 +2500,8 @@ function syncAngleControls(): void {
   const angled = boardEl.classList.contains('has-angled-view');
   const angleToggle = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle"]');
   const angleReset = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle-reset"]');
+  const angleLeft = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle-left"]');
+  const angleRight = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle-right"]');
   const sep = boardWrapEl.querySelector<HTMLElement>('.zoom-sep');
   if (angleToggle) {
     angleToggle.hidden = !canAngle;
@@ -2498,9 +2519,11 @@ function syncAngleControls(): void {
     }
     angleToggle.setAttribute('aria-pressed', String(angled));
     angleToggle.title = angled
-      ? '切回正俯视（按住鼠标中键可拖转视角，双击中键复位）'
-      : '切换至斜俯视（按住鼠标中键可自由调整视角）';
+      ? '切回正俯视（按住右键或中键可 360° 拖转视角，双击中键复位）'
+      : '切换至斜俯视（支持 360° 自由旋转视角）';
   }
+  if (angleLeft) angleLeft.hidden = !angled;
+  if (angleRight) angleRight.hidden = !angled;
   if (angleReset) {
     angleReset.hidden = !angled || isDefaultAngledCamera(boardEl);
   }
@@ -2547,7 +2570,7 @@ function toggleBoardAngle(): void {
   if (preferAngledBoard && boardEl.classList.contains('has-angled-view')) {
     if (!angleHintShown) {
       angleHintShown = true;
-      showAngleHud('斜俯视已开启 · 按住鼠标中键拖转视角，双击中键复位', 2600);
+      showAngleHud('斜俯视已开启 · 按住右键/中键可 360° 拖转，双击中键复位', 2600);
     }
   } else {
     angleHudEl.hidden = true;
@@ -5664,6 +5687,14 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'board-angle':
       toggleBoardAngle();
+      return;
+
+    case 'board-angle-left':
+      rotateBoardAngle(-Math.PI / 6);
+      return;
+
+    case 'board-angle-right':
+      rotateBoardAngle(Math.PI / 6);
       return;
 
     case 'board-angle-reset':
@@ -11052,20 +11083,18 @@ function previewHoveredCombat(event: MouseEvent): void {
   if (action) showCombatPreview(action, false);
   else clearCombatPreview();
 }
-// ---------- 斜俯视鼠标中键拖转视角 ----------
+// ---------- 斜俯视 360° 水平旋转（鼠标右键或中键拖拽） ----------
 let angleOrbit: {
   id: number;
+  button: number;
   x: number;
-  y: number;
   yaw: number;
-  tilt: number;
   moved: boolean;
 } | null = null;
 let lastMiddleClickAt = 0;
 
 boardScrollEl.addEventListener('mousedown', (e) => {
-  if (e.button === 1 && boardEl.classList.contains('has-angled-view')) {
-    // 阻止浏览器原生中键四向自动滚动图标弹出
+  if ((e.button === 1 || e.button === 2) && boardEl.classList.contains('has-angled-view')) {
     e.preventDefault();
   }
 });
@@ -11076,15 +11105,20 @@ boardScrollEl.addEventListener('auxclick', (e) => {
   }
 });
 
+boardScrollEl.addEventListener('contextmenu', (e) => {
+  if (boardEl.classList.contains('has-angled-view')) {
+    e.preventDefault();
+  }
+});
+
 boardScrollEl.addEventListener('pointerdown', (e) => {
-  if (e.button !== 1 || !boardEl.classList.contains('has-angled-view')) return;
+  if ((e.button !== 1 && e.button !== 2) || !boardEl.classList.contains('has-angled-view')) return;
   e.preventDefault();
   angleOrbit = {
     id: e.pointerId,
+    button: e.button,
     x: e.clientX,
-    y: e.clientY,
     yaw: angledCam.yaw,
-    tilt: angledCam.tilt,
     moved: false,
   };
   boardScrollEl.setPointerCapture?.(e.pointerId);
@@ -11096,12 +11130,11 @@ boardScrollEl.addEventListener('pointerdown', (e) => {
 boardScrollEl.addEventListener('pointermove', (e) => {
   if (!angleOrbit || e.pointerId !== angleOrbit.id) return;
   const dx = e.clientX - angleOrbit.x;
-  const dy = e.clientY - angleOrbit.y;
-  if (!angleOrbit.moved && Math.abs(dx) + Math.abs(dy) >= 3) angleOrbit.moved = true;
+  if (!angleOrbit.moved && Math.abs(dx) >= 3) angleOrbit.moved = true;
   const center = boardZoom > 1 ? boardCamera() : null;
   const updated = setAngledBoardCamera(boardEl, {
-    yaw: angleOrbit.yaw - dx * 0.0052,
-    tilt: angleOrbit.tilt + dy * 0.0026,
+    yaw: angleOrbit.yaw + dx * 0.0075,
+    tilt: DEFAULT_ANGLED_CAMERA.tilt,
   });
   if (updated) {
     angledCam = updated;
@@ -11117,6 +11150,7 @@ boardScrollEl.addEventListener('pointermove', (e) => {
 const endAngleOrbit = (e: PointerEvent): void => {
   if (!angleOrbit || e.pointerId !== angleOrbit.id) return;
   const wasMoved = angleOrbit.moved;
+  const btn = angleOrbit.button;
   angleOrbit = null;
   boardScrollEl.classList.remove('orbiting');
   if (boardScrollEl.hasPointerCapture?.(e.pointerId)) {
@@ -11125,14 +11159,14 @@ const endAngleOrbit = (e: PointerEvent): void => {
   if (wasMoved) {
     saveAngledCam();
     showAngleHud(formatAngleHud(angledCam), 900);
-  } else {
+  } else if (btn === 1) {
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     if (now - lastMiddleClickAt < 380) {
       lastMiddleClickAt = 0;
       resetBoardAngle();
     } else {
       lastMiddleClickAt = now;
-      showAngleHud('按住鼠标中键拖动可旋转/俯仰 · 双击中键复位', 1500);
+      showAngleHud('按住右键或中键横向拖转 360° · 双击中键复位', 1500);
     }
   }
 };

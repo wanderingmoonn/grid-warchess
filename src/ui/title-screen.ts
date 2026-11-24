@@ -98,14 +98,15 @@ function buildTitleDioramaState(): GameState {
     { id: 'cA', owner: 'A', x: 0, y: 6, size: 2, hp: 30, maxHp: 30, armor: 1, era: 1 },
     { id: 'cB', owner: 'B', x: 6, y: 0, size: 2, hp: 80, maxHp: 80, armor: 5, era: 6 },
   ];
-  s.units = [
-    { id: 'u1', type: 'infantry', owner: 'A', x: 2, y: 5, hp: 10, moved: false, acted: false, kills: 0 },
-    { id: 'u2', type: 'archer', owner: 'A', x: 1, y: 4, hp: 10, moved: false, acted: false, kills: 0 },
-    { id: 'u3', type: 'cavalry', owner: 'A', x: 3, y: 6, hp: 12, moved: false, acted: false, kills: 0 },
-    { id: 'u4', type: 'tank', owner: 'B', x: 5, y: 2, hp: 20, moved: false, acted: false, kills: 0 },
-    { id: 'u5', type: 'infantry', owner: 'B', x: 4, y: 1, hp: 12, moved: false, acted: false, kills: 0 },
-    { id: 'u6', type: 'fighter', owner: 'B', x: 6, y: 3, hp: 15, moved: false, acted: false, kills: 0 },
+  const candidates = [
+    { id: 'u1', type: 'militia', owner: 'A' as const, x: 2, y: 5, hp: 28, moved: false, acted: false, kills: 0 },
+    { id: 'u2', type: 'archer', owner: 'A' as const, x: 1, y: 4, hp: 22, moved: false, acted: false, kills: 0 },
+    { id: 'u3', type: 'knight', owner: 'A' as const, x: 3, y: 6, hp: 36, moved: false, acted: false, kills: 0 },
+    { id: 'u4', type: 'tank', owner: 'B' as const, x: 5, y: 2, hp: 58, moved: false, acted: false, kills: 0 },
+    { id: 'u5', type: 'rifleman', owner: 'B' as const, x: 4, y: 1, hp: 34, moved: false, acted: false, kills: 0 },
+    { id: 'u6', type: 'squad', owner: 'B' as const, x: 6, y: 3, hp: 40, moved: false, acted: false, kills: 0 },
   ];
+  s.units = candidates.filter((u) => Boolean(s.unitTypes[u.type]));
   return s;
 }
 

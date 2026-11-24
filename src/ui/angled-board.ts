@@ -8,7 +8,7 @@ interface Cell { x: number; y: number; cityId?: string }
 interface Face { cell: Cell; points: readonly Point[] }
 
 export interface AngledCamera {
-  /** 水平方位角（弧度），默认 π/4 (45°)，支持在第一象限 [8°, 82°] 内平滑旋转 */
+  /** 水平方位角（弧度），默认 π/4 (45°)，支持全 360° 自由旋转 [0, 2π) */
   yaw: number;
   /** 俯仰压扁比（sin(pitch)），默认 11.3/19 ≈ 0.595，范围 [0.36, 0.92] */
   tilt: number;
@@ -16,24 +16,35 @@ export interface AngledCamera {
 
 const halfWidth = 19;
 const halfHeight = 11.3;
-const topPadding = 53;
+const topPadding = 66;
 const BASE_SCALE = Math.hypot(halfWidth, halfWidth);
 const DEFAULT_TILT = halfHeight / halfWidth;
 const DEFAULT_Z_COS = Math.sqrt(Math.max(0.1, 1 - DEFAULT_TILT * DEFAULT_TILT));
+const TAU = Math.PI * 2;
 
 export const DEFAULT_ANGLED_CAMERA: Readonly<AngledCamera> = {
   yaw: Math.PI / 4,
   tilt: DEFAULT_TILT,
 };
 
-export const ANGLED_YAW_MIN = 0.14; // ~8°
-export const ANGLED_YAW_MAX = Math.PI / 2 - 0.14; // ~82°
+export const ANGLED_YAW_MIN = 0;
+export const ANGLED_YAW_MAX = TAU;
 export const ANGLED_TILT_MIN = 0.36;
 export const ANGLED_TILT_MAX = 0.92;
 
+function normalizeYaw(yaw: number): number {
+  const m = yaw % TAU;
+  return m < 0 ? m + TAU : m;
+}
+
+function yawDiff(a: number, b: number): number {
+  const d = Math.abs(normalizeYaw(a) - normalizeYaw(b));
+  return d > Math.PI ? TAU - d : d;
+}
+
 export function clampAngledCamera(cam: Partial<AngledCamera>): AngledCamera {
   const yaw = typeof cam.yaw === 'number' && Number.isFinite(cam.yaw)
-    ? Math.min(ANGLED_YAW_MAX, Math.max(ANGLED_YAW_MIN, cam.yaw))
+    ? normalizeYaw(cam.yaw)
     : DEFAULT_ANGLED_CAMERA.yaw;
   const tilt = typeof cam.tilt === 'number' && Number.isFinite(cam.tilt)
     ? Math.min(ANGLED_TILT_MAX, Math.max(ANGLED_TILT_MIN, cam.tilt))
@@ -43,12 +54,34 @@ export function clampAngledCamera(cam: Partial<AngledCamera>): AngledCamera {
 
 export function angledBoardSize(cols: number, rows: number, camera?: Partial<AngledCamera>): { w: number; h: number } {
   const cam = camera ? clampAngledCamera(camera) : DEFAULT_ANGLED_CAMERA;
-  const cosY = Math.cos(cam.yaw);
-  const sinY = Math.sin(cam.yaw);
+  const cosY = Math.abs(Math.cos(cam.yaw));
+  const sinY = Math.abs(Math.sin(cam.yaw));
   return {
     w: Math.ceil((cols * cosY + rows * sinY) * BASE_SCALE + 52),
-    h: Math.ceil((cols * sinY + rows * cosY) * BASE_SCALE * cam.tilt + 94),
+    h: Math.ceil((cols * sinY + rows * cosY) * BASE_SCALE * cam.tilt + topPadding + 42),
   };
+}
+
+/** 2D 凸包（Monotone Chain）：用于任意 360° 旋转下生成 3D 城体迷雾轮廓与命中热区 */
+function convexHull(pts: readonly Point[]): Point[] {
+  if (pts.length <= 3) return [...pts];
+  const sorted = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o: Point, a: Point, b: Point): number =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: Point[] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: Point[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i]!;
+    while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
 }
 
 function contains(points: readonly Point[], x: number, y: number): boolean {
@@ -78,12 +111,14 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   let zScale = 1;
   let scene = angledBoardSize(1, 1, cam);
   let originX = 26 + halfWidth;
+  let originY = topPadding;
   let paintedState: GameState | null = null;
   let latest: { view: PlayerView; ui?: BoardUi } | undefined;
   let hoverCell: Cell | null = null;
   let faces: Face[] = [];
+  let blackoutHeights = new Map<number, number>();
 
-  function syncCameraVectors(rows: number): void {
+  function syncCameraVectors(cols: number, rows: number): void {
     const cosY = Math.cos(cam.yaw);
     const sinY = Math.sin(cam.yaw);
     ux = cosY * BASE_SCALE;
@@ -91,11 +126,21 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     vx = -sinY * BASE_SCALE;
     vy = cosY * BASE_SCALE * cam.tilt;
     zScale = Math.sqrt(Math.max(0.14, 1 - cam.tilt * cam.tilt)) / DEFAULT_Z_COS;
-    originX = rows * sinY * BASE_SCALE + 26;
+    const minX = Math.min(0, cols * ux, rows * vx, cols * ux + rows * vx);
+    const minY = Math.min(0, cols * uy, rows * vy, cols * uy + rows * vy);
+    originX = 26 - minX;
+    originY = topPadding - minY;
   }
 
   const project = (x: number, y: number, lift = 0): Point =>
-    [originX + x * ux + y * vx, topPadding + x * uy + y * vy - lift * zScale];
+    [originX + x * ux + y * vx, originY + x * uy + y * vy - lift * zScale];
+
+  const visibleSides = () => ({
+    east: uy >= 0,
+    west: uy < 0,
+    south: vy >= 0,
+    north: vy < 0,
+  });
 
   const boardFloor = -13;
   /*
@@ -119,6 +164,11 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   const FOG_SHADE = 'rgba(13, 20, 28, 0.54)';
   const FOG_CITY_SHADE = 'rgba(13, 20, 28, 0.50)';
   const FOG_PROP_TIE = 'rgba(13, 20, 28, 0.22)';
+  /** 浓雾蔽野未知区域的「暗幕高墙」高度：高于高山雪顶(z≈41)，前沿紧邻可见格时做两级缓降防遮挡 */
+  const BLACKOUT_WALL_Z = 46;
+  const BLACKOUT_EDGE_Z = 37;
+  const BLACKOUT_FRONT2_Z = 27;
+  const BLACKOUT_FRONT_Z = 15.5;
   /** 深度分档：决定水体底床可视度、边缘剖面水层厚度与深浅过渡坡 */
   const bedDepth: Partial<Record<Terrain, number>> = { shallow: 1, water: 4, deep: 9 };
   const isWaterTerrain = (t: Terrain | undefined): boolean => t === 'water' || t === 'shallow' || t === 'deep';
@@ -175,7 +225,9 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     terrain: Terrain;
     dark: boolean;
     eastEdge: boolean;
+    westEdge: boolean;
     southEdge: boolean;
+    northEdge: boolean;
     meta: WaterCellMeta;
   }
   let cachedWaterField: WaterField | null = null;
@@ -842,12 +894,13 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     y1: number,
     topZ: number,
     botZ: number,
-    side: 'east' | 'south',
+    side: 'east' | 'west' | 'south' | 'north',
     neighbor: Terrain | undefined,
     dark: boolean,
   ): Point[] {
     const [eastFill, southFill, edge] = faceColors(terrain, neighbor);
-    const baseFill = side === 'east' ? eastFill : southFill;
+    const coolSide = side === 'east' || side === 'west';
+    const baseFill = coolSide ? eastFill : southFill;
     const points: Point[] = [
       project(x0, y0, topZ),
       project(x1, y1, topZ),
@@ -1888,10 +1941,11 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     y0: number,
     x1: number,
     y1: number,
-    side: 'east' | 'south',
+    side: 'east' | 'west' | 'south' | 'north',
     dark: boolean,
     timeSec: number,
   ): Point[] {
+    const coolSide = side === 'east' || side === 'west';
     const topZ = WATER_SURFACE;
     const botZ = boardFloor;
     const drop = topZ - botZ;
@@ -1903,22 +1957,22 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ];
 
     // 1. 下方基岩/底泥地层
-    const rockFill = side === 'east' ? '#635648' : '#7b6e59';
+    const rockFill = coolSide ? '#635648' : '#7b6e59';
     polygon(ctx, points, rockFill);
 
     // 2. 上方水体纵剖层（浅流薄而清、水域适中、深水厚重湛蓝）
     const waterThick = terrain === 'shallow' ? 2.6 : terrain === 'deep' ? 7.6 : 5.1;
     const waterBotZ = Math.max(botZ + 1.2, topZ - Math.min(drop - 1.2, waterThick));
     const waterFill = terrain === 'shallow'
-      ? (side === 'east' ? '#79b5ae' : '#90cbc3')
+      ? (coolSide ? '#79b5ae' : '#90cbc3')
       : terrain === 'deep'
-        ? (side === 'east' ? '#325d7d' : '#407094')
-        : (side === 'east' ? '#5890ae' : '#6ca5c3');
+        ? (coolSide ? '#325d7d' : '#407094')
+        : (coolSide ? '#5890ae' : '#6ca5c3');
     const waterDeepFill = terrain === 'shallow'
-      ? (side === 'east' ? '#659e98' : '#78b3ac')
+      ? (coolSide ? '#659e98' : '#78b3ac')
       : terrain === 'deep'
-        ? (side === 'east' ? '#254863' : '#305978')
-        : (side === 'east' ? '#457894' : '#568ca8');
+        ? (coolSide ? '#254863' : '#305978')
+        : (coolSide ? '#457894' : '#568ca8');
 
     const midZ = (topZ + waterBotZ) * 0.5;
     polygon(ctx, [
@@ -2447,22 +2501,39 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   function paintTerrain(ctx: CanvasRenderingContext2D, x: number, y: number, state: GameState, dark: boolean): void {
     const terrain = at(state, x, y) ?? 'plain';
     const elevation = heightAt(state, x, y);
-    /*
-     * 岸壁只到**水面**，不扎到河床（2026-11-23 撤回上一版）。
-     *
-     * 上一版让岸壁扎到河床，深水的岸一下变成十几格高的陡墙——那是把
-     * "河床有高差"错误地画成了"河岸有高差"。水面齐平之后，深浅只由
-     * 水色和分界线表达，岸就是水岸。
-     */
-    const south = heightAt(state, x, y + 1);
-    const east = heightAt(state, x + 1, y);
-    if (elevation > east) {
-      const points = paintCliffFace(ctx, terrain, x + 1, y, x + 1, y + 1, elevation, east, 'east', at(state, x + 1, y), dark);
-      faces.push({ cell: { x, y }, points });
+    const sides = visibleSides();
+    const neighborElevation = (nx: number, ny: number): number => {
+      if (nx < 0 || nx >= state.w || ny < 0 || ny >= state.h) return boardFloor;
+      const bz = blackoutHeights.get(ny * state.w + nx);
+      return bz !== undefined ? bz : heightAt(state, nx, ny);
+    };
+    if (sides.east) {
+      const east = neighborElevation(x + 1, y);
+      if (elevation > east) {
+        const points = paintCliffFace(ctx, terrain, x + 1, y, x + 1, y + 1, elevation, east, 'east', at(state, x + 1, y), dark);
+        faces.push({ cell: { x, y }, points });
+      }
     }
-    if (elevation > south) {
-      const points = paintCliffFace(ctx, terrain, x, y + 1, x + 1, y + 1, elevation, south, 'south', at(state, x, y + 1), dark);
-      faces.push({ cell: { x, y }, points });
+    if (sides.west) {
+      const west = neighborElevation(x - 1, y);
+      if (elevation > west) {
+        const points = paintCliffFace(ctx, terrain, x, y, x, y + 1, elevation, west, 'west', at(state, x - 1, y), dark);
+        faces.push({ cell: { x, y }, points });
+      }
+    }
+    if (sides.south) {
+      const south = neighborElevation(x, y + 1);
+      if (elevation > south) {
+        const points = paintCliffFace(ctx, terrain, x, y + 1, x + 1, y + 1, elevation, south, 'south', at(state, x, y + 1), dark);
+        faces.push({ cell: { x, y }, points });
+      }
+    }
+    if (sides.north) {
+      const north = neighborElevation(x, y - 1);
+      if (elevation > north) {
+        const points = paintCliffFace(ctx, terrain, x, y, x + 1, y, elevation, north, 'north', at(state, x, y - 1), dark);
+        faces.push({ cell: { x, y }, points });
+      }
     }
 
     if (terrain === 'plain') {
@@ -2499,7 +2570,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
   type CityPt = (u: number, v: number, dz?: number) => Point;
 
-  /** 斜俯视 3D 方体建筑块（严格西北受光、东南背光） */
+  /** 斜俯视 3D 方体建筑块（适配全 360° 旋转，仅绘朝向镜头的立面） */
   function isoBox(
     ctx: CanvasRenderingContext2D,
     pt: CityPt,
@@ -2514,6 +2585,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     southCol: string,
     edgeCol?: string,
   ): void {
+    const bNW = pt(u0, v0, z0);
     const bNE = pt(u1, v0, z0);
     const bSE = pt(u1, v1, z0);
     const bSW = pt(u0, v1, z0);
@@ -2521,12 +2593,14 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const tNE = pt(u1, v0, z1);
     const tSE = pt(u1, v1, z1);
     const tSW = pt(u0, v1, z1);
-    polygon(ctx, [tNE, tSE, bSE, bNE], eastCol, edgeCol, 0.7);
-    polygon(ctx, [tSW, tSE, bSE, bSW], southCol, edgeCol, 0.7);
+    if (uy >= 0) polygon(ctx, [tNE, tSE, bSE, bNE], eastCol, edgeCol, 0.7);
+    else polygon(ctx, [tNW, tSW, bSW, bNW], eastCol, edgeCol, 0.7);
+    if (vy >= 0) polygon(ctx, [tSW, tSE, bSE, bSW], southCol, edgeCol, 0.7);
+    else polygon(ctx, [tNW, tNE, bNE, bNW], southCol, edgeCol, 0.7);
     polygon(ctx, [tNW, tNE, tSE, tSW], topCol, edgeCol, 0.7);
   }
 
-  /** 斜俯视 3D 双坡顶房屋（带山墙面与受光/背光双坡屋面） */
+  /** 斜俯视 3D 双坡顶房屋（带山墙面与受光/背光双坡屋面，适配全 360° 旋转） */
   function isoGable(
     ctx: CanvasRenderingContext2D,
     pt: CityPt,
@@ -2546,6 +2620,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   ): void {
     const zW = z0 + wallH;
     const zR = zW + roofH;
+    const bNW = pt(u0, v0, z0);
     const bNE = pt(u1, v0, z0);
     const bSE = pt(u1, v1, z0);
     const bSW = pt(u0, v1, z0);
@@ -2554,34 +2629,46 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const tSE = pt(u1, v1, zW);
     const tSW = pt(u0, v1, zW);
 
-    // 墙体立面
-    polygon(ctx, [tNE, tSE, bSE, bNE], wallE, edgeCol, 0.65);
-    polygon(ctx, [tSW, tSE, bSE, bSW], wallS, edgeCol, 0.65);
+    // 朝向镜头的墙体立面
+    if (uy >= 0) polygon(ctx, [tNE, tSE, bSE, bNE], wallE, edgeCol, 0.65);
+    else polygon(ctx, [tNW, tSW, bSW, bNW], wallE, edgeCol, 0.65);
+    if (vy >= 0) polygon(ctx, [tSW, tSE, bSE, bSW], wallS, edgeCol, 0.65);
+    else polygon(ctx, [tNW, tNE, bNE, bNW], wallS, edgeCol, 0.65);
 
     if (ridgeAlongU) {
       const vm = (v0 + v1) * 0.5;
       const rW = pt(u0, vm, zR);
       const rE = pt(u1, vm, zR);
-      // 东侧山墙三角
-      polygon(ctx, [tNE, tSE, rE], wallE, edgeCol, 0.6);
-      // 西北受光坡面 + 东南背光坡面
-      polygon(ctx, [tNW, tNE, rE, rW], roofLit, edgeCol, 0.65);
-      polygon(ctx, [rW, rE, tSE, tSW], roofShade, edgeCol, 0.65);
+      // 朝前侧山墙三角
+      if (uy >= 0) polygon(ctx, [tNE, tSE, rE], wallE, edgeCol, 0.6);
+      else polygon(ctx, [tNW, tSW, rW], wallE, edgeCol, 0.6);
+      // 按朝向从后往前绘制两坡屋面
+      if (vy >= 0) {
+        polygon(ctx, [tNW, tNE, rE, rW], roofLit, edgeCol, 0.65);
+        polygon(ctx, [rW, rE, tSE, tSW], roofShade, edgeCol, 0.65);
+      } else {
+        polygon(ctx, [rW, rE, tSE, tSW], roofShade, edgeCol, 0.65);
+        polygon(ctx, [tNW, tNE, rE, rW], roofLit, edgeCol, 0.65);
+      }
       strokeLine(ctx, rW, rE, '#ffffff55', 0.85);
     } else {
       const um = (u0 + u1) * 0.5;
       const rN = pt(um, v0, zR);
       const rS = pt(um, v1, zR);
-      // 南侧山墙三角
-      polygon(ctx, [tSW, tSE, rS], wallS, edgeCol, 0.6);
-      // 东北背光坡面 + 西南受光坡面
-      polygon(ctx, [rN, tNE, tSE, rS], roofShade, edgeCol, 0.65);
-      polygon(ctx, [tNW, rN, rS, tSW], roofLit, edgeCol, 0.65);
+      if (vy >= 0) polygon(ctx, [tSW, tSE, rS], wallS, edgeCol, 0.6);
+      else polygon(ctx, [tNW, tNE, rN], wallS, edgeCol, 0.6);
+      if (uy >= 0) {
+        polygon(ctx, [tNW, rN, rS, tSW], roofLit, edgeCol, 0.65);
+        polygon(ctx, [rN, tNE, tSE, rS], roofShade, edgeCol, 0.65);
+      } else {
+        polygon(ctx, [rN, tNE, tSE, rS], roofShade, edgeCol, 0.65);
+        polygon(ctx, [tNW, rN, rS, tSW], roofLit, edgeCol, 0.65);
+      }
       strokeLine(ctx, rN, rS, '#ffffff55', 0.85);
     }
   }
 
-  /** 斜俯视 3D 圆柱/锥台（烟囱、圆塔、水塔、储罐） */
+  /** 斜俯视 3D 圆柱/锥台（烟囱、圆塔、水塔、储罐，适配全 360° 旋转） */
   function isoCylinder(
     ctx: CanvasRenderingContext2D,
     pt: CityPt,
@@ -2605,16 +2692,18 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       bot.push(pt(cu + Math.cos(ang) * rBot, cv + Math.sin(ang) * rBot, z0));
       top.push(pt(cu + Math.cos(ang) * rTop, cv + Math.sin(ang) * rTop, z1));
     }
-    // 仅绘朝前的三个可见柱面（按斜俯视投影朝南/东）
-    const faceOrder: ReadonlyArray<readonly [number, string]> = [
-      [1, litCol],
-      [0, midCol],
-      [5, shadeCol],
-      [2, midCol],
-    ];
-    for (const [idx, col] of faceOrder) {
-      const next = (idx + 1) % segs;
-      polygon(ctx, [top[idx]!, top[next]!, bot[next]!, bot[idx]!], col, edgeCol, 0.55);
+    const center = pt(cu, cv, z0);
+    const quads = Array.from({ length: segs }, (_, i) => {
+      const next = (i + 1) % segs;
+      const mx = (bot[i]![0] + bot[next]![0]) * 0.5;
+      const my = (bot[i]![1] + bot[next]![1]) * 0.5;
+      return { i, next, mx, my };
+    })
+      .filter((q) => q.my >= center[1] - 0.5)
+      .sort((a, b) => a.my - b.my);
+    for (const q of quads) {
+      const col = q.mx < center[0] - 1 ? litCol : q.mx > center[0] + 1 ? shadeCol : midCol;
+      polygon(ctx, [top[q.i]!, top[q.next]!, bot[q.next]!, bot[q.i]!], col, edgeCol, 0.55);
     }
     polygon(ctx, top, topCol, edgeCol, 0.65);
   }
@@ -4481,24 +4570,26 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       else if (city.era === 7) paintCityArmor(ctx, pt, team, lightTeam, stage);
       else paintCityFusion(ctx, pt, team, lightTeam, stage);
 
-      // 仅重描东南/西南前缘两段阵营框，干脆利落且绝不压住 3D 屋顶与高塔
+      // 仅重描朝向镜头的前缘两段阵营框，干脆利落且绝不压住 3D 屋顶与高塔
+      const sides = visibleSides();
       ctx.beginPath();
-      ctx.moveTo(...ring[1]!);
-      ctx.lineTo(...ring[2]!);
-      ctx.lineTo(...ring[3]!);
+      if (sides.east) { ctx.moveTo(...ring[1]!); ctx.lineTo(...ring[2]!); }
+      if (sides.west) { ctx.moveTo(...ring[3]!); ctx.lineTo(...ring[0]!); }
+      if (sides.south) { ctx.moveTo(...ring[2]!); ctx.lineTo(...ring[3]!); }
+      if (sides.north) { ctx.moveTo(...ring[0]!); ctx.lineTo(...ring[1]!); }
       ctx.strokeStyle = ringCol;
       ctx.lineWidth = target || selected ? 3.2 : stage === 3 ? 1.8 : 2.1;
       ctx.stroke();
 
       if (dark) {
         const fogTop = rhombus(x, y, width, stage === 3 ? 6 : Math.min(26, city.era * 3 + 6));
-        polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], FOG_CITY_SHADE);
+        polygon(ctx, convexHull([...basePoly, ...fogTop]), FOG_CITY_SHADE);
       }
-      // 扩大命中面覆盖 3D 建筑轮廓，点击建筑顶部也能直接选中城市
+      // 扩大命中面覆盖 3D 建筑轮廓，点击建筑顶部也能直接选中城市（全 360° 有效）
       const pickTop = rhombus(x, y, width, (stage === 3 ? 6 : 16) * hScale);
       faces.push({
         cell: hitCell,
-        points: [pickTop[0]!, pickTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, pickTop[3]!],
+        points: convexHull([...basePoly, ...pickTop]),
       });
       return;
     }
@@ -4506,8 +4597,11 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     // 兜底（超纲时代号仍保留原有贴图方案）
     const base = rhombus(x, y, width, 0);
     const roof = rhombus(x, y, width, 13);
-    polygon(ctx, [roof[1]!, roof[2]!, base[2]!, base[1]!], '#625844', '#473e31');
-    polygon(ctx, [roof[3]!, roof[2]!, base[2]!, base[3]!], '#94856a', '#473e31');
+    const sides = visibleSides();
+    if (sides.east) polygon(ctx, [roof[1]!, roof[2]!, base[2]!, base[1]!], '#625844', '#473e31');
+    if (sides.west) polygon(ctx, [roof[0]!, roof[3]!, base[3]!, base[0]!], '#625844', '#473e31');
+    if (sides.south) polygon(ctx, [roof[3]!, roof[2]!, base[2]!, base[3]!], '#94856a', '#473e31');
+    if (sides.north) polygon(ctx, [roof[0]!, roof[1]!, base[1]!, base[0]!], '#94856a', '#473e31');
     polygon(ctx, roof, '#d6c49a', outline);
 
     if (texture.complete && texture.naturalWidth) {
@@ -4607,18 +4701,19 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     if (!hoverCell || !paintedState) return;
     const { x, y } = hoverCell;
     if (x < 0 || y < 0 || x >= paintedState.w || y >= paintedState.h) return;
-    const elev = heightAt(paintedState, x, y);
-    const poly = rhombus(x, y, 1, elev);
     const idxCell = y * paintedState.w + x;
+    const bz = blackoutHeights.get(idxCell);
+    const elev = bz !== undefined ? bz : heightAt(paintedState, x, y);
+    const poly = rhombus(x, y, 1, elev);
     const isReach = Boolean(latest?.ui?.reach?.includes(idxCell));
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(...poly[0]!);
     for (const p of poly.slice(1)) ctx.lineTo(...p);
     ctx.closePath();
-    ctx.fillStyle = isReach ? 'rgba(61,142,203,0.22)' : 'rgba(255,253,245,0.18)';
+    ctx.fillStyle = isReach ? 'rgba(61,142,203,0.22)' : bz !== undefined ? 'rgba(130,170,210,0.20)' : 'rgba(255,253,245,0.18)';
     ctx.fill();
-    ctx.strokeStyle = isReach ? '#1c6ca3' : 'rgba(42,50,42,0.52)';
+    ctx.strokeStyle = isReach ? '#1c6ca3' : bz !== undefined ? 'rgba(176,204,232,0.52)' : 'rgba(42,50,42,0.52)';
     ctx.lineWidth = isReach ? 1.8 : 1.25;
     ctx.stroke();
     ctx.restore();
@@ -4679,13 +4774,20 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     polygon(ctx, cachedBottom.map(([bx, by]) => [bx + 4, by + 9]), '#62564424');
     polygon(ctx, cachedBottom, '#736953');
 
-    // 2a. 外沿水柱剖面 + 水体底色、等深过渡坡、浅滩河床与岸壁落影
+    // 2a. 外沿水柱剖面 + 水体底色、等深过渡坡、浅滩河床与岸壁落影（适配全 360° 旋转）
+    const sides = visibleSides();
     for (const cell of waterCells) {
-      if (cell.eastEdge) {
+      if (cell.eastEdge && sides.east) {
         paintWaterCutawayFace(ctx, cell.terrain, cell.x + 1, cell.y, cell.x + 1, cell.y + 1, 'east', cell.dark, timeSec);
       }
-      if (cell.southEdge) {
+      if (cell.westEdge && sides.west) {
+        paintWaterCutawayFace(ctx, cell.terrain, cell.x, cell.y, cell.x, cell.y + 1, 'west', cell.dark, timeSec);
+      }
+      if (cell.southEdge && sides.south) {
         paintWaterCutawayFace(ctx, cell.terrain, cell.x, cell.y + 1, cell.x + 1, cell.y + 1, 'south', cell.dark, timeSec);
+      }
+      if (cell.northEdge && sides.north) {
+        paintWaterCutawayFace(ctx, cell.terrain, cell.x, cell.y, cell.x + 1, cell.y, 'north', cell.dark, timeSec);
       }
       paintWaterBaseTile(ctx, cell.x, cell.y, cell.terrain, paintedState, cell.meta);
     }
@@ -4722,10 +4824,86 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     rafId = win.requestAnimationFrame(tick);
   }
 
+  /** 浓雾蔽野未知区域的「暗幕高墙」（高于高山峰顶 + 前沿紧邻可见格自动降阶半透防遮挡） */
+  function paintBlackoutMonolith(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    topZ: number,
+    alpha: number,
+    state: GameState,
+  ): readonly Point[] {
+    const sides = visibleSides();
+    const neighborBase = (nx: number, ny: number): number => {
+      if (nx < 0 || nx >= state.w || ny < 0 || ny >= state.h) return boardFloor;
+      const bz = blackoutHeights.get(ny * state.w + nx);
+      return bz !== undefined ? bz : heightAt(state, nx, ny);
+    };
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (sides.east) {
+      const botZ = neighborBase(x + 1, y);
+      if (topZ > botZ) {
+        polygon(ctx, [
+          project(x + 1, y, topZ),
+          project(x + 1, y + 1, topZ),
+          project(x + 1, y + 1, botZ),
+          project(x + 1, y, botZ),
+        ], '#17202b', '#0f161f', 0.7);
+      }
+    }
+    if (sides.west) {
+      const botZ = neighborBase(x - 1, y);
+      if (topZ > botZ) {
+        polygon(ctx, [
+          project(x, y, topZ),
+          project(x, y + 1, topZ),
+          project(x, y + 1, botZ),
+          project(x, y, botZ),
+        ], '#17202b', '#0f161f', 0.7);
+      }
+    }
+    if (sides.south) {
+      const botZ = neighborBase(x, y + 1);
+      if (topZ > botZ) {
+        polygon(ctx, [
+          project(x, y + 1, topZ),
+          project(x + 1, y + 1, topZ),
+          project(x + 1, y + 1, botZ),
+          project(x, y + 1, botZ),
+        ], '#202c3a', '#0f161f', 0.7);
+      }
+    }
+    if (sides.north) {
+      const botZ = neighborBase(x, y - 1);
+      if (topZ > botZ) {
+        polygon(ctx, [
+          project(x, y, topZ),
+          project(x + 1, y, topZ),
+          project(x + 1, y, botZ),
+          project(x, y, botZ),
+        ], '#202c3a', '#0f161f', 0.7);
+      }
+    }
+    const top = rhombus(x, y, 1, topZ);
+    polygon(ctx, top, '#2a3848', '#42556b88', 0.9);
+    // 顶部受光棱线（背离镜头的两条外缘微提亮，强化硬朗体块感）
+    ctx.beginPath();
+    if (sides.east) { ctx.moveTo(...top[3]!); ctx.lineTo(...top[0]!); }
+    else { ctx.moveTo(...top[1]!); ctx.lineTo(...top[2]!); }
+    if (sides.south) { ctx.moveTo(...top[0]!); ctx.lineTo(...top[1]!); }
+    else { ctx.moveTo(...top[2]!); ctx.lineTo(...top[3]!); }
+    ctx.strokeStyle = 'rgba(176, 204, 232, 0.24)';
+    ctx.lineWidth = 1.05;
+    ctx.stroke();
+    ctx.restore();
+    return top;
+  }
+
   function draw(view: PlayerView, ui?: BoardUi): void {
     latest = { view, ui };
     const state = view.state;
-    syncCameraVectors(state.h);
+    syncCameraVectors(state.w, state.h);
     scene = angledBoardSize(state.w, state.h, cam);
     const resolution = Math.min(2, Math.sqrt(8_000_000 / (scene.w * scene.h)));
     const width = Math.ceil(scene.w * resolution);
@@ -4745,6 +4923,66 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     waterCells = [];
 
     const visible = new Set(view.visible);
+    const sides = visibleSides();
+
+    // 预计算浓雾蔽野未知格的「暗幕高墙」高度与前沿防遮挡半透明度（两级缓降，避免前景高墙挡住身后棋子）
+    blackoutHeights = new Map<number, number>();
+    const blackoutAlphas = new Map<number, number>();
+    if (view.terrainHidden) {
+      const dirs: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      const front1 = new Set<number>();
+      for (let y = 0; y < state.h; y++) {
+        for (let x = 0; x < state.w; x++) {
+          const idxCell = y * state.w + x;
+          if (visible.has(idxCell) || view.rememberedTiles.has(idxCell)) continue;
+          let nearExplored = false;
+          let frontOfVisible = false;
+          const myDepth = x * uy + y * vy;
+          for (const [dx, dy] of dirs) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || nx >= state.w || ny < 0 || ny >= state.h) continue;
+            const ni = ny * state.w + nx;
+            if (visible.has(ni) || view.rememberedTiles.has(ni)) {
+              nearExplored = true;
+              if (visible.has(ni) && myDepth > nx * uy + ny * vy + 0.5) {
+                frontOfVisible = true;
+              }
+            }
+          }
+          if (frontOfVisible) {
+            front1.add(idxCell);
+            blackoutHeights.set(idxCell, BLACKOUT_FRONT_Z);
+            blackoutAlphas.set(idxCell, 0.58);
+          } else if (nearExplored) {
+            blackoutHeights.set(idxCell, BLACKOUT_EDGE_Z);
+            blackoutAlphas.set(idxCell, 0.96);
+          } else {
+            blackoutHeights.set(idxCell, BLACKOUT_WALL_Z);
+            blackoutAlphas.set(idxCell, 0.98);
+          }
+        }
+      }
+      // 二级前沿缓降：紧贴一级前景雾格更靠镜头的未知格压至 z=27，避免突然拔起 z=46 裁切单位底部
+      for (const idxCell of blackoutHeights.keys()) {
+        if (front1.has(idxCell)) continue;
+        const x = idxCell % state.w;
+        const y = Math.floor(idxCell / state.w);
+        const myDepth = x * uy + y * vy;
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= state.w || ny < 0 || ny >= state.h) continue;
+          const ni = ny * state.w + nx;
+          if (front1.has(ni) && myDepth > nx * uy + ny * vy + 0.5) {
+            blackoutHeights.set(idxCell, BLACKOUT_FRONT2_Z);
+            blackoutAlphas.set(idxCell, 0.84);
+            break;
+          }
+        }
+      }
+    }
+
     const terrain = view.terrainHidden
       ? {
           ...state,
@@ -4776,7 +5014,9 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       const memory = known ? undefined : view.rememberedCities.get(city.id);
       if (!known && !memory) continue;
       const rendered = memory ? { ...city, owner: memory.owner, era: memory.era, ruined: memory.ruined } : city;
-      cities.set((city.y + city.size - 1) * state.w + city.x + city.size - 1, rendered);
+      const anchorX = sides.east ? city.x + city.size - 1 : city.x;
+      const anchorY = sides.south ? city.y + city.size - 1 : city.y;
+      cities.set(anchorY * state.w + anchorX, rendered);
     }
     const units = new Map<number, Unit[]>();
     for (const unit of state.units) {
@@ -4813,157 +5053,207 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
     const nowSec = typeof performance !== 'undefined' ? (performance.now() - animOrigin) / 1000 : 0;
 
-    for (let diagonal = 0; diagonal < state.w + state.h - 1; diagonal++) {
-      for (let y = Math.max(0, diagonal - state.w + 1); y <= Math.min(state.h - 1, diagonal); y++) {
-        const x = diagonal - y;
-        const index = y * state.w + x;
-        const dark = state.fog && !visible.has(index);
-        const cellTerrain = at(terrain, x, y) ?? 'plain';
-        const elevation = heightAt(terrain, x, y);
-        const top = rhombus(x, y, 1, elevation);
+    // 全 360° 视角通用深度排序（按投影纵向深度从远到近绘制）
+    const orderedCells: Array<{ x: number; y: number; depth: number }> = [];
+    for (let y = 0; y < state.h; y++) {
+      for (let x = 0; x < state.w; x++) {
+        orderedCells.push({ x, y, depth: x * uy + y * vy });
+      }
+    }
+    orderedCells.sort((a, b) => a.depth - b.depth);
 
-        if (isWaterTerrain(cellTerrain)) {
-          const meta = waterField.meta[index] ?? {
-            kind: 'lake' as const,
-            flowX: 0.707,
-            flowY: 0.707,
-            distToLand: 1,
-            phaseCoord: 0,
-            shoreMask: 0,
-          };
-          const eastEdge = x === state.w - 1;
-          const southEdge = y === state.h - 1;
-          if (eastEdge) {
-            faces.push({
-              cell: { x, y },
-              points: [
-                project(x + 1, y, elevation),
-                project(x + 1, y + 1, elevation),
-                project(x + 1, y + 1, boardFloor),
-                project(x + 1, y, boardFloor),
-              ],
-            });
-          }
-          if (southEdge) {
-            faces.push({
-              cell: { x, y },
-              points: [
-                project(x, y + 1, elevation),
-                project(x + 1, y + 1, elevation),
-                project(x + 1, y + 1, boardFloor),
-                project(x, y + 1, boardFloor),
-              ],
-            });
-          }
-          if (useLayerCache) {
-            waterCells.push({ x, y, terrain: cellTerrain, dark, eastEdge, southEdge, meta });
-            if (dark) polygon(targetCtx, top, FOG_SHADE);
-          } else {
-            if (eastEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x + 1, y, x + 1, y + 1, 'east', dark, nowSec);
-            if (southEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x, y + 1, x + 1, y + 1, 'south', dark, nowSec);
-            paintWaterBaseTile(targetCtx, x, y, cellTerrain, terrain, meta);
-            paintWaterGridAndContours(targetCtx, x, y, cellTerrain, terrain);
-            if (dark) polygon(targetCtx, top, FOG_SHADE);
-          }
-        } else {
-          paintTerrain(targetCtx, x, y, terrain, dark);
-        }
-
+    for (const { x, y } of orderedCells) {
+      const index = y * state.w + x;
+      const blackoutZ = blackoutHeights.get(index);
+      if (blackoutZ !== undefined) {
+        const top = paintBlackoutMonolith(targetCtx, x, y, blackoutZ, blackoutAlphas.get(index) ?? 0.98, terrain);
         faces.push({ cell: { x, y }, points: top });
+        continue;
+      }
 
-        // 扩展棋盘染色视图
-        const viewTint = ui?.boardView?.get(index);
-        if (viewTint) polygon(targetCtx, top, viewTint);
-        const glyph = ui?.boardGlyph?.get(index);
-        if (glyph) {
-          const [gx, gy] = project(x + 0.5, y + 0.5, elevation);
-          targetCtx.fillStyle = '#24302a';
-          targetCtx.font = 'bold 11px system-ui, sans-serif';
-          targetCtx.textAlign = 'center';
-          targetCtx.textBaseline = 'middle';
-          targetCtx.fillText(glyph, gx, gy);
+      const dark = state.fog && !visible.has(index);
+      const cellTerrain = at(terrain, x, y) ?? 'plain';
+      const elevation = heightAt(terrain, x, y);
+      const top = rhombus(x, y, 1, elevation);
+
+      if (isWaterTerrain(cellTerrain)) {
+        const meta = waterField.meta[index] ?? {
+          kind: 'lake' as const,
+          flowX: 0.707,
+          flowY: 0.707,
+          distToLand: 1,
+          phaseCoord: 0,
+          shoreMask: 0,
+        };
+        const eastEdge = x === state.w - 1;
+        const westEdge = x === 0;
+        const southEdge = y === state.h - 1;
+        const northEdge = y === 0;
+        if (eastEdge && sides.east) {
+          faces.push({
+            cell: { x, y },
+            points: [
+              project(x + 1, y, elevation),
+              project(x + 1, y + 1, elevation),
+              project(x + 1, y + 1, boardFloor),
+              project(x + 1, y, boardFloor),
+            ],
+          });
         }
+        if (westEdge && sides.west) {
+          faces.push({
+            cell: { x, y },
+            points: [
+              project(x, y, elevation),
+              project(x, y + 1, elevation),
+              project(x, y + 1, boardFloor),
+              project(x, y, boardFloor),
+            ],
+          });
+        }
+        if (southEdge && sides.south) {
+          faces.push({
+            cell: { x, y },
+            points: [
+              project(x, y + 1, elevation),
+              project(x + 1, y + 1, elevation),
+              project(x + 1, y + 1, boardFloor),
+              project(x, y + 1, boardFloor),
+            ],
+          });
+        }
+        if (northEdge && sides.north) {
+          faces.push({
+            cell: { x, y },
+            points: [
+              project(x, y, elevation),
+              project(x + 1, y, elevation),
+              project(x + 1, y, boardFloor),
+              project(x, y, boardFloor),
+            ],
+          });
+        }
+        if (useLayerCache) {
+          waterCells.push({ x, y, terrain: cellTerrain, dark, eastEdge, westEdge, southEdge, northEdge, meta });
+          if (dark) polygon(targetCtx, top, FOG_SHADE);
+        } else {
+          if (eastEdge && sides.east) paintWaterCutawayFace(targetCtx, cellTerrain, x + 1, y, x + 1, y + 1, 'east', dark, nowSec);
+          if (westEdge && sides.west) paintWaterCutawayFace(targetCtx, cellTerrain, x, y, x, y + 1, 'west', dark, nowSec);
+          if (southEdge && sides.south) paintWaterCutawayFace(targetCtx, cellTerrain, x, y + 1, x + 1, y + 1, 'south', dark, nowSec);
+          if (northEdge && sides.north) paintWaterCutawayFace(targetCtx, cellTerrain, x, y, x + 1, y, 'north', dark, nowSec);
+          paintWaterBaseTile(targetCtx, x, y, cellTerrain, terrain, meta);
+          paintWaterGridAndContours(targetCtx, x, y, cellTerrain, terrain);
+          if (dark) polygon(targetCtx, top, FOG_SHADE);
+        }
+      } else {
+        paintTerrain(targetCtx, x, y, terrain, dark);
+      }
 
-        // 战术范围高亮（威胁 / 可移动 / 选点落位）
-        if (threats.has(index) && !moves.has(index)) polygon(targetCtx, top, '#c94a4236', '#b83c3577');
-        if (moves.has(index)) polygon(targetCtx, top, '#3d8ecb58', '#2873a5cc');
-        if (places.has(index) || aims.has(index)) polygon(targetCtx, top, '#e7a34c66', '#ba7830');
+      // 若背风侧紧邻高耸暗幕高墙，投下一道柔和墙影以突出高度落差
+      if (blackoutHeights.size > 0) {
+        const backX = sides.east ? x - 1 : x + 1;
+        const backY = sides.south ? y - 1 : y + 1;
+        const b1 = backX >= 0 && backX < state.w ? blackoutHeights.get(y * state.w + backX) : undefined;
+        const b2 = backY >= 0 && backY < state.h ? blackoutHeights.get(backY * state.w + x) : undefined;
+        if ((b1 !== undefined && b1 > elevation + 8) || (b2 !== undefined && b2 > elevation + 8)) {
+          polygon(targetCtx, top, 'rgba(14, 22, 32, 0.16)');
+        }
+      }
 
-        // 经济单位移动产出预览（+金币）
-        const hint = ui?.incomeHints?.get(index);
-        if (hint && typeof hint.gold === 'number' && hint.gold > 0) {
-          const [hx, hy] = project(x + 0.5, y + 0.5, elevation + 0.5);
-          targetCtx.fillStyle = 'rgba(255,248,224,0.92)';
-          targetCtx.strokeStyle = '#9e7628';
-          targetCtx.lineWidth = 0.9;
-          targetCtx.beginPath();
-          targetCtx.roundRect(hx - 10, hy - 6, 20, 11, 3);
+      faces.push({ cell: { x, y }, points: top });
+
+      // 扩展棋盘染色视图
+      const viewTint = ui?.boardView?.get(index);
+      if (viewTint) polygon(targetCtx, top, viewTint);
+      const glyph = ui?.boardGlyph?.get(index);
+      if (glyph) {
+        const [gx, gy] = project(x + 0.5, y + 0.5, elevation);
+        targetCtx.fillStyle = '#24302a';
+        targetCtx.font = 'bold 11px system-ui, sans-serif';
+        targetCtx.textAlign = 'center';
+        targetCtx.textBaseline = 'middle';
+        targetCtx.fillText(glyph, gx, gy);
+      }
+
+      // 战术范围高亮（威胁 / 可移动 / 选点落位）
+      if (threats.has(index) && !moves.has(index)) polygon(targetCtx, top, '#c94a4236', '#b83c3577');
+      if (moves.has(index)) polygon(targetCtx, top, '#3d8ecb58', '#2873a5cc');
+      if (places.has(index) || aims.has(index)) polygon(targetCtx, top, '#e7a34c66', '#ba7830');
+
+      // 经济单位移动产出预览（+金币）
+      const hint = ui?.incomeHints?.get(index);
+      if (hint && typeof hint.gold === 'number' && hint.gold > 0) {
+        const [hx, hy] = project(x + 0.5, y + 0.5, elevation + 0.5);
+        targetCtx.fillStyle = 'rgba(255,248,224,0.92)';
+        targetCtx.strokeStyle = '#9e7628';
+        targetCtx.lineWidth = 0.9;
+        targetCtx.beginPath();
+        targetCtx.roundRect(hx - 10, hy - 6, 20, 11, 3);
+        targetCtx.fill();
+        targetCtx.stroke();
+        targetCtx.fillStyle = '#6c4d14';
+        targetCtx.font = 'bold 8.5px system-ui, sans-serif';
+        targetCtx.textAlign = 'center';
+        targetCtx.textBaseline = 'middle';
+        targetCtx.fillText(`+${hint.gold}`, hx, hy - 0.3);
+      }
+
+      // 地雷/水雷等地面标记
+      const marks = marksByCell.get(index);
+      if (marks && marks.length > 0) {
+        const [mx, my] = project(x + 0.5, y + 0.5, elevation + 0.5);
+        const mine = ui?.me !== undefined && marks[0]!.owner === ui.me;
+        targetCtx.save();
+        targetCtx.beginPath();
+        targetCtx.ellipse(mx, my, 5.2, 3.2, 0, 0, Math.PI * 2);
+        if (mine) {
+          targetCtx.fillStyle = '#363b40cc';
           targetCtx.fill();
-          targetCtx.stroke();
-          targetCtx.fillStyle = '#6c4d14';
-          targetCtx.font = 'bold 8.5px system-ui, sans-serif';
-          targetCtx.textAlign = 'center';
-          targetCtx.textBaseline = 'middle';
-          targetCtx.fillText(`+${hint.gold}`, hx, hy - 0.3);
-        }
-
-        // 地雷/水雷等地面标记
-        const marks = marksByCell.get(index);
-        if (marks && marks.length > 0) {
-          const [mx, my] = project(x + 0.5, y + 0.5, elevation + 0.5);
-          const mine = ui?.me !== undefined && marks[0]!.owner === ui.me;
-          targetCtx.save();
+          targetCtx.fillStyle = '#e56847';
           targetCtx.beginPath();
-          targetCtx.ellipse(mx, my, 5.2, 3.2, 0, 0, Math.PI * 2);
-          if (mine) {
-            targetCtx.fillStyle = '#363b40cc';
-            targetCtx.fill();
-            targetCtx.fillStyle = '#e56847';
-            targetCtx.beginPath();
-            targetCtx.arc(mx, my - 0.5, 1.5, 0, Math.PI * 2);
-            targetCtx.fill();
-          } else {
-            targetCtx.setLineDash([2.5, 2]);
-            targetCtx.strokeStyle = '#c43b33';
-            targetCtx.lineWidth = 1.3;
-            targetCtx.stroke();
-          }
-          targetCtx.restore();
+          targetCtx.arc(mx, my - 0.5, 1.5, 0, Math.PI * 2);
+          targetCtx.fill();
+        } else {
+          targetCtx.setLineDash([2.5, 2]);
+          targetCtx.strokeStyle = '#c43b33';
+          targetCtx.lineWidth = 1.3;
+          targetCtx.stroke();
         }
+        targetCtx.restore();
+      }
 
-        const city = cities.get(index);
-        if (city) {
-          const hitCell = cityHitCells.get(city.id) ?? { x: city.x, y: city.y };
-          paintCity(targetCtx, city, cityTexture(city.era), sieges.has(city.id), ui?.selectedCityId === city.id, dark, hitCell);
-          // 选中单位可走入城内某格时，把城内可达格的地表菱形补在城市命中面之上，确保精准走到点击的那一格
-          if (moves.size > 0) {
-            for (const ct of cityTiles(city)) {
-              const ci = ct.y * state.w + ct.x;
-              if (!moves.has(ci)) continue;
-              const subTop = rhombus(ct.x, ct.y, 1, 0.35);
-              polygon(targetCtx, subTop, '#3d8ecb45', '#2873a5cc');
-              faces.push({ cell: { x: ct.x, y: ct.y }, points: subTop });
-            }
-          }
-          // 城内驻军统一在 3D 城体之后按从远到近绘制，既不被城墙挡住，也能准确点选每个驻军
-          const garrisonUnits: Unit[] = [];
+      const city = cities.get(index);
+      if (city) {
+        const hitCell = cityHitCells.get(city.id) ?? { x: city.x, y: city.y };
+        paintCity(targetCtx, city, cityTexture(city.era), sieges.has(city.id), ui?.selectedCityId === city.id, dark, hitCell);
+        // 选中单位可走入城内某格时，把城内可达格的地表菱形补在城市命中面之上，确保精准走到点击的那一格
+        if (moves.size > 0) {
           for (const ct of cityTiles(city)) {
-            const g = units.get(ct.y * state.w + ct.x);
-            if (g) garrisonUnits.push(...g);
-          }
-          garrisonUnits.sort(
-            (a, b) => (a.x + a.y) - (b.x + b.y) || Number(isAirborne(state, a)) - Number(isAirborne(state, b)),
-          );
-          for (const unit of garrisonUnits) {
-            paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
+            const ci = ct.y * state.w + ct.x;
+            if (!moves.has(ci)) continue;
+            const subTop = rhombus(ct.x, ct.y, 1, 0.35);
+            polygon(targetCtx, subTop, '#3d8ecb45', '#2873a5cc');
+            faces.push({ cell: { x: ct.x, y: ct.y }, points: subTop });
           }
         }
-        if (!cityCellIds.has(index)) {
-          const group = units.get(index);
-          if (group) {
-            group.sort((a, b) => Number(isAirborne(state, a)) - Number(isAirborne(state, b)));
-            for (const unit of group) paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
-          }
+        // 城内驻军统一在 3D 城体之后按从远到近绘制，既不被城墙挡住，也能准确点选每个驻军
+        const garrisonUnits: Unit[] = [];
+        for (const ct of cityTiles(city)) {
+          const g = units.get(ct.y * state.w + ct.x);
+          if (g) garrisonUnits.push(...g);
+        }
+        garrisonUnits.sort(
+          (a, b) => (a.x * uy + a.y * vy) - (b.x * uy + b.y * vy) || Number(isAirborne(state, a)) - Number(isAirborne(state, b)),
+        );
+        for (const unit of garrisonUnits) {
+          paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
+        }
+      }
+      if (!cityCellIds.has(index)) {
+        const group = units.get(index);
+        if (group) {
+          group.sort((a, b) => Number(isAirborne(state, a)) - Number(isAirborne(state, b)));
+          for (const unit of group) paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
         }
       }
     }
@@ -4977,7 +5267,11 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       const target = sieges.has(city.id);
       const selected = ui?.selectedCityId === city.id;
       const team = teams[city.owner] ?? '#6e6a60';
-      const [bx, by] = project(city.x + city.size * 0.94, city.y + city.size * 0.94, 0.5);
+      const [bx, by] = project(
+        sides.east ? city.x + city.size * 0.94 : city.x + city.size * 0.06,
+        sides.south ? city.y + city.size * 0.94 : city.y + city.size * 0.06,
+        0.5,
+      );
       const damaged = city.maxHp > 0 && city.hp < city.maxHp;
       const showBar = damaged || target || selected;
       const pillW = showBar ? 38 : 20;
@@ -5036,12 +5330,12 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       return { ...cam };
     },
     isDefaultCamera(): boolean {
-      return Math.abs(cam.yaw - DEFAULT_ANGLED_CAMERA.yaw) < 0.01 &&
+      return yawDiff(cam.yaw, DEFAULT_ANGLED_CAMERA.yaw) < 0.01 &&
         Math.abs(cam.tilt - DEFAULT_ANGLED_CAMERA.tilt) < 0.01;
     },
     setCamera(next: Partial<AngledCamera>): AngledCamera {
       const clamped = clampAngledCamera({ yaw: next.yaw ?? cam.yaw, tilt: next.tilt ?? cam.tilt });
-      if (Math.abs(clamped.yaw - cam.yaw) < 0.0005 && Math.abs(clamped.tilt - cam.tilt) < 0.0005) {
+      if (yawDiff(clamped.yaw, cam.yaw) < 0.0005 && Math.abs(clamped.tilt - cam.tilt) < 0.0005) {
         return { ...cam };
       }
       cam = clamped;
@@ -5081,7 +5375,12 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       return null;
     },
     marker(x: number, y: number, span = 1, lift = 0): Point {
-      const level = paintedState ? heightAt(paintedState, Math.floor(x), Math.floor(y)) : 0;
+      const fx = Math.floor(x);
+      const fy = Math.floor(y);
+      const bz = paintedState && fx >= 0 && fy >= 0 && fx < paintedState.w && fy < paintedState.h
+        ? blackoutHeights.get(fy * paintedState.w + fx)
+        : undefined;
+      const level = bz !== undefined ? bz : (paintedState ? heightAt(paintedState, fx, fy) : 0);
       const [left, top] = project(x + span / 2, y + span / 2, level + lift);
       return [left / scene.w, top / scene.h];
     },
