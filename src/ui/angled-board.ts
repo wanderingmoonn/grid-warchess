@@ -1095,7 +1095,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
   /**
    * 丘陵高地灌木丛模型（《陷阵之志》式低多边形双球冠灌木）：
-   * 采用与暖金丘陵协调的橄榄绿/苔绿三色阶块面，包含落地暖影、主灌木冠与伴生副灌木球，
+   * 采用与暖金丘陵协调的灰黄旱地灌木三色阶块面，包含落地暖影、主灌木冠与伴生副灌木球，
    * 高度介于平原小草与森林乔木之间（约 5~6.5px），一眼可辨是丘陵矮灌木而非森林松树。
    */
   function drawHighlandShrub(ctx: CanvasRenderingContext2D, cx: number, cy: number, scale = 1, variant = 0): void {
@@ -1115,42 +1115,42 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       [sx - 1.7 * s, sy - 2.6 * s],
       [sx + 0.2 * s, sy - 3.3 * s],
       [sx + 0.3 * s, sy + 0.9 * s],
-    ], '#8ea560');
+    ], '#a8a378');
     polygon(ctx, [
       [sx + 0.2 * s, sy - 3.3 * s],
       [sx + 2.1 * s, sy - 2.3 * s],
       [sx + 2.8 * s, sy + 0.4 * s],
       [sx + 0.3 * s, sy + 0.9 * s],
-    ], '#5b7039');
+    ], '#757153');
 
-    // 3. 主灌木冠（五面体块面：西北亮冠 + 顶面亮オリーブ + 西南中调面 + 东南暗部 + 根部小枝干）
+    // 3. 主灌木冠（五面体块面：西北亮冠 + 顶面灰黄过渡 + 西南中调面 + 东南暗部 + 根部小枝干）
     polygon(ctx, [
       [cx - 0.7 * s, cy + 1.1 * s],
       [cx - 0.4 * s, cy - 0.8 * s],
       [cx + 0.6 * s, cy - 0.8 * s],
       [cx + 0.7 * s, cy + 1.1 * s],
-    ], '#6e5233');
+    ], '#6e5a3e');
     // 迎光左上冠面
     polygon(ctx, [
       [cx - 3.8 * s, cy + 0.3 * s],
       [cx - 2.7 * s, cy - 3.5 * s],
       [cx - 0.2 * s, cy - 4.9 * s],
       [cx - 0.4 * s, cy - 1.2 * s],
-    ], '#9cb36c');
+    ], '#b5ae80');
     // 正前左中调受光面
     polygon(ctx, [
       [cx - 3.8 * s, cy + 0.3 * s],
       [cx - 0.4 * s, cy - 1.2 * s],
       [cx + 0.2 * s, cy + 1.0 * s],
       [cx - 2.1 * s, cy + 0.9 * s],
-    ], '#7f9653');
+    ], '#98936a');
     // 顶部与右前过渡冠面
     polygon(ctx, [
       [cx - 0.2 * s, cy - 4.9 * s],
       [cx + 2.2 * s, cy - 3.8 * s],
       [cx + 1.1 * s, cy - 1.0 * s],
       [cx - 0.4 * s, cy - 1.2 * s],
-    ], '#879f5a');
+    ], '#a39e72');
     // 东南背光暗面
     polygon(ctx, [
       [cx + 2.2 * s, cy - 3.8 * s],
@@ -1158,10 +1158,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       [cx + 2.1 * s, cy + 0.9 * s],
       [cx + 0.2 * s, cy + 1.0 * s],
       [cx + 1.1 * s, cy - 1.0 * s],
-    ], '#576b36');
+    ], '#6d6a4d');
 
     // 冠顶微亮折棱
-    strokeLine(ctx, [cx - 2.7 * s, cy - 3.5 * s], [cx - 0.2 * s, cy - 4.9 * s], '#b3c98399', 0.75);
+    strokeLine(ctx, [cx - 2.7 * s, cy - 3.5 * s], [cx - 0.2 * s, cy - 4.9 * s], '#cac49b99', 0.75);
   }
 
   /**
@@ -1232,8 +1232,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     } else if (mode === 4) {
       // 稀疏的高地旱草簇与小砂石
       const [gx, gy] = pt(0.34 + (h % 29) * 0.01, 0.38 + ((h >>> 5) % 27) * 0.01, 0);
-      polygon(ctx, [[gx - 2.5, gy + 0.5], [gx - 1.2, gy - 2.8], [gx + 0.1, gy + 0.6]], '#9aa36c');
-      polygon(ctx, [[gx - 0.1, gy + 0.6], [gx + 1.5, gy - 2.4], [gx + 2.3, gy + 0.5]], '#7b8552');
+      polygon(ctx, [[gx - 2.5, gy + 0.5], [gx - 1.2, gy - 2.8], [gx + 0.1, gy + 0.6]], '#a9a379');
+      polygon(ctx, [[gx - 0.1, gy + 0.6], [gx + 1.5, gy - 2.4], [gx + 2.3, gy + 0.5]], '#87835f');
     }
   }
 
