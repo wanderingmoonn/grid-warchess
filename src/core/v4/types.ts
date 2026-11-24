@@ -29,10 +29,19 @@ export type DecisionKind = 'expand' | 'press' | 'defend' | 'takeover';
  */
 export type TakeoverStage = 'clear' | 'save' | 'enter';
 
+/**
+ * `press` 的两个阶段。
+ *
+ * **先清场、再砸城**：城周围的守军还在时全队打人，清到"威胁不到我方"才开始攻城。
+ * 这条是从 S-002 的人手答案里量出来的——人类第 3/5/7/9 手一次攻城都没有（25 次攻击全是打人），
+ * 第 11 手才第一次 `SIEGE`。
+ */
+export type PressStage = 'clear' | 'siege';
+
 export interface Decision {
   kind: DecisionKind;
-  /** 只在 `takeover` 时有意义 */
-  stage?: TakeoverStage;
+  /** `takeover` 用 `TakeoverStage`，`press` 用 `PressStage` */
+  stage?: TakeoverStage | PressStage;
   /** 这个决定管到第几手为止。到了就重算——**不许"一直有效"**，那样它会悄悄变成常数 */
   untilTurn: number;
   /** 一句话说明为什么（进日志，出问题时第一眼看这个） */

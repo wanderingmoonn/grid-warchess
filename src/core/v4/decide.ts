@@ -14,7 +14,7 @@
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
 import type { Decision, TakeoverStage, V4Memory } from './types.ts';
-import { utype } from '../rules.ts';
+import { effectiveStats, utype } from '../rules.ts';
 import type { GameState } from '../types.ts';
 
 /** 兵力对比（按"身价"不按个数：一个四代兵不等于一个民兵） */
@@ -149,11 +149,32 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       (a, b) => world.marchTurns({ x: a.x, y: a.y }, { x: world.myCombat[0]?.x ?? 0, y: world.myCombat[0]?.y ?? 0 })
         - world.marchTurns({ x: b.x, y: b.y }, { x: world.myCombat[0]?.x ?? 0, y: world.myCombat[0]?.y ?? 0 }),
     )[0]!;
+    /*
+     * **先清场、再砸城。**
+     *
+     * 判据：目标城周围还有没有"够得着这座城"的守军（它自己的移动力 + 射程）。
+     * 有 → `clear`（全队打人，不砸城）；清干净 → `siege`（全队攻城）。
+     *
+     * 这是从 S-002 的人手答案量出来的：人类前四波（3/5/7/9 手）25 次攻击全是打人、
+     * 0 次攻城，第 11 手才开始砸。v4 原来没有这个分段，"能打谁打谁"，
+     * 结果既没清完场也没砸城（15 手 SIEGE 0 次）。
+     */
+    const guards = world.foeCombat.filter((f) => {
+      const st = effectiveStats(s, f);
+      return (
+        Math.abs(f.x - target.x) + Math.abs(f.y - target.y) <=
+        (st.range ?? 1) + (st.move ?? 2)
+      );
+    });
     return {
       kind: 'press',
+      stage: guards.length > 0 ? 'clear' : 'siege',
       untilTurn: s.turn + horizon,
       cityId: target.id,
-      reason: `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍，推最近的 ${target.id}`,
+      reason:
+        guards.length > 0
+          ? `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍；${target.id} 周围还有 ${guards.length} 个守军，先清场`
+          : `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍；${target.id} 城下已清空，开始攻城`,
     };
   }
 

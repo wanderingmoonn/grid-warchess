@@ -1186,7 +1186,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     const detour = leadUnit ? world.marchTurns(leadUnit, city) > manhattan(leadUnit, city) + 2 : false;
     squads.push({
       id: 'main',
-      order: ready ? 'march' : 'assemble',
+      /* clear 段打人（march），siege 段砸城；人还没到齐就先收拢 */
+      order: ready ? (decision.stage === 'clear' ? 'march' : 'siege') : 'assemble',
       unitIds: ids,
       cityId: city.id,
       at: ready ? undefined : assemblePoint(s, world, city.id),
