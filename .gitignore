@@ -64,3 +64,6 @@ __pycache__/
 
 # vite 构建/加载配置时生成的临时文件
 vite.config.ts.timestamp-*.mjs
+
+# 长局回放（本地产物，别提交）
+replays/
