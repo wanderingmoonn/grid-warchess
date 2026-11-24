@@ -132,14 +132,14 @@
     "state.tiles": 2
   },
   "src/core/v4/constrain.ts": {
-    "state.tiles": 4
+    "state.tiles": 3
   },
   "src/core/v4/tactics.ts": {
     "state.tiles": 1
   },
   "src/core/v4/world.ts": {
-    "state.tiles": 9,
-    "idx(": 4
+    "state.tiles": 7,
+    "idx(": 2
   },
   "src/main.ts": {
     "state.tiles": 7,

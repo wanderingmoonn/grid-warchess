@@ -162,11 +162,6 @@ function planYield(
   );
   if (targets.length === 0) return [];
   const N = s.w * s.h;
-  /* -1 = 还没算到（注意和距离场 C 用 Infinity 表示"没算到"不同，这里用 -1） */
-  const dist = new Int32Array(N).fill(-1);
-  /* 前驱：站在这一格的人，下一步该走到哪个格号（朝最近空位的方向） */
-  const prev = new Int32Array(N).fill(-1);
-  const q: number[] = [];
 
   /*
    * ② 播种：**所有能站的空格**都是种子（距离 0）。
@@ -175,43 +170,23 @@ function planYield(
    *      · 有人站着的格不算；
    *      · 水/高山不算。
    */
+  const seeds: number[] = [];
   for (let k = 0; k < N; k++) {
     const t = s.tiles[k];
     if (!t || t.terrain === 'city') continue;
     if (s.units.some((u) => u.y * s.w + u.x === k)) continue;
     if (!passable(t.terrain)) continue;
-    dist[k] = 0;
-    q.push(k);
+    seeds.push(k);
   }
 
   /*
-   * ③ 扩散：四邻、每格一步。**穿过自己人算一步**（那个人得先让开），
-   *    敌人和不可走的地形挡死——和自己人"可以穿"这一点，正是这张表能用来搬人的原因。
+   * ③ 扩散：交给**世界层那张唯一的距离场**（多源、自己人可穿、只算 6 步、要前驱）。
    *
-   *    只往 6 格内扩：洞太远的话，链上的人这一手也走不完，没必要算。
-   *    （上限的副作用：超过 6 步的格是 -1，上层会当成"这儿没有洞"。）
+   *    以前这里是一段内联的 BFS，和 `world.flowFrom` 一个算法抄两份，
+   *    只有种子定义不同（这里种子 = 所有空格；那边 = 空岗）。现在合成一次调用，
+   *    区别只在"传哪些种子进来"。
    */
-  const MAX = 6;
-  for (let i = 0; i < q.length; i++) {
-    const k = q[i]!;
-    if (dist[k]! >= MAX) continue;
-    const x = k % s.w;
-    const y = Math.floor(k / s.w);
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
-      const nk = ny * s.w + nx;
-      if (dist[nk]! >= 0) continue;
-      const t = s.tiles[nk];
-      if (!t || !passable(t.terrain)) continue;
-      const occ = s.units.find((u) => u.y * s.w + u.x === nk);
-      if (occ && occ.owner !== world.me) continue;
-      dist[nk] = dist[k]! + 1;
-      prev[nk] = k;
-      q.push(nk);
-    }
-  }
+  const { dist, prev } = world.field(seeds, { units: 'friendly', maxDist: 6, prev: true });
 
   /*
    * ④ 推进/攻城的兵不算挡路：它们有理由待在那儿（正在过桥）。
