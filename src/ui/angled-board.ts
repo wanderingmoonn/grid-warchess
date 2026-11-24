@@ -918,8 +918,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       strokeLine(ctx, pt(0, 0, 0), pt(1, 0, 0), '#e7efd3', 1.0);
     }
 
-    // 约 55% 的地块带贴地草皮微斑块（单菱斑或双叶草斑），增加草甸地表的肌理层次
-    if ((h % 9) < 5) {
+    // 约 36% 的地块带贴地草皮微斑块，保持开阔草甸的柔和肌理
+    if ((h % 11) < 4) {
       const cu = 0.32 + ((h >>> 4) % 32) * 0.01;
       const cv = 0.32 + ((h >>> 9) % 32) * 0.01;
       const r = 0.16 + ((h >>> 14) % 8) * 0.01;
@@ -929,7 +929,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         pt(cu + r, cv, 0),
         pt(cu, cv + r, 0),
       ], (h & 4) ? '#d1dcb8' : '#e4ebd0');
-      if ((h % 9) === 1 || (h % 9) === 3) {
+      if ((h % 11) === 1) {
         const cu2 = Math.min(0.76, cu + 0.16);
         const cv2 = Math.min(0.76, cv + 0.12);
         const r2 = r * 0.65;
@@ -942,13 +942,18 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       }
     }
 
-    // 6 种不同形态的草甸地表图案（约占 2/3 地块，其余 1/3 留白保持战术棋盘透气感）
-    const tuftMod = h % 12;
+    // 疏朗分散的 6 种草甸图案：小图约 28%，大图（≥24 格）约 20%，留出充足透气草地留白
+    const bigMap = state.w >= 24 || state.h >= 24;
+    const meadowWave = 0.5 + 0.5 * Math.sin(x * 0.45 + y * 0.35 + Math.cos(x * 0.28 - y * 0.48));
+    const threshold = (bigMap ? 14 : 22) + Math.round(meadowWave * 12);
+    if ((h % 100) >= threshold) return;
+
+    const tuftMod = (h >>> 7) % 6;
     const u = 0.28 + ((h >>> 6) % 40) * 0.01;
     const v = 0.30 + ((h >>> 11) % 38) * 0.01;
     const [cx, cy] = pt(u, v, 0);
 
-    if (tuftMod === 0 || tuftMod === 1) {
+    if (tuftMod === 0) {
       // 图案 A：高低双簇伴生草（主三叶草簇 + 侧旁小幼簇）
       polygon(ctx, [
         [cx - 3.8, cy + 0.6],
@@ -966,7 +971,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       const sy = cy + 1.3;
       polygon(ctx, [[sx - 1.4, sy + 0.4], [sx - 0.6, sy - 2.6], [sx + 0.3, sy + 0.5]], '#9cb477');
       polygon(ctx, [[sx + 0.1, sy + 0.5], [sx + 1.5, sy - 2.2], [sx + 2.1, sy + 0.4]], '#728952');
-    } else if (tuftMod === 2 || tuftMod === 3) {
+    } else if (tuftMod === 1) {
       // 图案 B：微风斜拂长草簇（四叶顺风斜倾，富有动态韵律）
       polygon(ctx, [
         [cx - 3.6, cy + 0.7],
@@ -979,7 +984,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       polygon(ctx, [[cx + 1.1, cy - 4.4], [cx + 1.6, cy - 3.8], [cx + 0.5, cy + 0.9]], '#6d844e');
       polygon(ctx, [[cx + 0.3, cy + 0.8], [cx + 3.1, cy - 3.6], [cx + 2.1, cy + 0.8]], '#7b9358');
       polygon(ctx, [[cx + 1.9, cy + 0.7], [cx + 4.6, cy - 2.5], [cx + 3.8, cy + 0.7]], '#647b46');
-    } else if (tuftMod === 4) {
+    } else if (tuftMod === 2) {
       // 图案 C：草甸野花簇（阔叶草座 + 两三朵奶油黄小雏菊点缀）
       polygon(ctx, [
         [cx - 3.8, cy + 0.6],
@@ -993,7 +998,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       // 野花花蕾（柔和暖白与鹅黄，不刺眼）
       polygon(ctx, [[cx - 2.2, cy - 2.9], [cx - 1.4, cy - 3.7], [cx - 0.6, cy - 2.9], [cx - 1.4, cy - 2.1]], '#f6eed5');
       polygon(ctx, [[cx + 1.4, cy - 2.4], [cx + 2.1, cy - 3.1], [cx + 2.8, cy - 2.4], [cx + 2.1, cy - 1.7]], '#ebd48e');
-    } else if (tuftMod === 5) {
+    } else if (tuftMod === 3) {
       // 图案 D：低矮趴地苔草团（饱满的多面体小草垫 + 侧叶）
       polygon(ctx, [
         [cx - 4.2, cy + 0.7],
@@ -1017,7 +1022,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       ], '#6c834d');
       // 顶部抽出的细草尖
       polygon(ctx, [[cx - 0.8, cy - 2.2], [cx - 0.1, cy - 4.3], [cx + 0.6, cy - 2.1]], '#88a064');
-    } else if (tuftMod === 6) {
+    } else if (tuftMod === 4) {
       // 图案 E：青苔卧石伴生草（三面立体田间石 + 石畔新芽）
       const [sx, sy] = pt(u, v, 0);
       polygon(ctx, [[sx - 3.2, sy + 0.5], [sx - 1.2, sy - 1.8], [sx + 0.8, sy - 1.4], [sx + 0.2, sy + 1.0]], '#cfd5bd');
@@ -1025,7 +1030,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       // 石旁伴生双叶草
       polygon(ctx, [[sx + 1.2, sy + 0.8], [sx + 2.2, sy - 2.8], [sx + 2.9, sy + 0.8]], '#94ac70');
       polygon(ctx, [[sx + 2.5, sy + 0.8], [sx + 4.1, sy - 2.1], [sx + 4.5, sy + 0.7]], '#6c834d');
-    } else if (tuftMod === 7) {
+    } else {
       // 图案 F：疏朗对生双幼芽（相隔少许的两株V字嫩草，丰富轻盈层次）
       polygon(ctx, [[cx - 2.8, cy + 0.5], [cx - 3.6, cy - 2.2], [cx - 1.8, cy + 0.6]], '#9cb378');
       polygon(ctx, [[cx - 2.0, cy + 0.6], [cx - 0.8, cy - 2.5], [cx - 1.1, cy + 0.6]], '#728952');
