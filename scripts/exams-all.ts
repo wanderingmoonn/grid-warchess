@@ -109,7 +109,18 @@ if (prev) {
     for (const b of BRAINS) {
       const before = prev[exam]?.[b]?.verdict;
       const now = matrix[exam]![b]!.verdict;
-      if (before && before !== now) changed.push(`${exam}/${b}: ${before} → ${now}`);
+      if (before && before !== now) {
+        changed.push(`${exam}/${b}: ${before} → ${now}`);
+        continue;
+      }
+      /*
+       * 红还是红，但判据上的数字动了也算"动了"。
+       * 不加这条的话，"S-006 经济总产 13 → 39（还没到线）"会被当成"没生效"——
+       * 那正好是最容易误判的一类：机制在起作用，只是还不够。
+       */
+      const was = prev[exam]?.[b]?.detail ?? '';
+      const detailNow = matrix[exam]![b]!.detail;
+      if (was && detailNow && was !== detailNow) changed.push(`${exam}/${b}: ${was} → ${detailNow}`);
     }
   }
   console.log('\n变化：' + (changed.length ? '\n  ' + changed.join('\n  ') : '无（这次修改一道题都没动）'));
@@ -117,7 +128,8 @@ if (prev) {
     changed.length === 0
       ? '\n⚠️ 一道题都没动：那这次改的东西，要么没生效，要么只在你没测的地方有用。'
       : changed.length === 1
-        ? '\n⚠️ 只动了一道题：**高度怀疑是补丁**——问自己改的是机制还是数字。'
+        ? '\n⚠️ 只动了一道题：**先假设是补丁**——问自己改的是机制还是数字。\n' +
+          '   （例外：这次新增的机制本来就只有一道题在考，比如"经济兵站位"只有 S-006。）'
         : `\n动了 ${changed.length} 处：像机制性修改，再看方向一致不一致。`,
   );
 }

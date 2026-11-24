@@ -65,6 +65,20 @@ export interface World {
   roleOf(city: City): CityRole;
   /** 这座城现在能造的最便宜的 N 个战斗兵（含价钱） */
   affordableCombat(city: City, gold: number): Array<{ type: string; gold: number }>;
+  /**
+   * 这一格会不会被敌方战斗单位"够到"。
+   *
+   * 口径是 **贴脸**：敌人一步就能走到邻格开火（`移动 + 1`）。
+   *
+   * 这中间试错过两次，都记在这里：
+   *   ① 抄 v3 的 `2 × 移动 + 射程-1`（算"两回合内"）→ 大半个图都是危险区，
+   *      经济兵全天逃命，S-006 总产 27 → 9；
+   *   ② 改成 `移动 + 射程`（这一手能开火）→ 敌人还在 5 格外就开始跑，总产 47 → 29。
+   *
+   * 教训：**经济兵不做战略判断**。它只躲"贴脸"的，远处的威胁是守军/决定层的事；
+   * 让最便宜的一类单位去算全局威胁，代价就是把产出全丢掉。
+   */
+  harassed(p: { x: number; y: number }): boolean;
 }
 
 const idx = (s: GameState, x: number, y: number): number => y * s.w + x;
@@ -206,6 +220,12 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     /* 城格**不算** keepClear：新兵本来就出生在城里，把自己家算成"必须空"会自相矛盾 */
   }
 
+  /* 每个敌方战斗单位的"威胁半径"，只算一次 */
+  const foeReach = foeCombat.map((u) => {
+    const st = effectiveStats(s, u);
+    return Math.max(1, st.move ?? 2) + 1;
+  });
+
   const world: World = {
     me,
     foe,
@@ -226,6 +246,9 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     roleOf(city) {
       return roleMap.get(city.id) ?? 'safe';
+    },
+    harassed(p) {
+      return foeCombat.some((u, i) => Math.max(Math.abs(u.x - p.x), Math.abs(u.y - p.y)) <= foeReach[i]!);
     },
     affordableCombat(city, gold) {
       const out: Array<{ type: string; gold: number }> = [];

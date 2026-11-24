@@ -11,7 +11,7 @@
  * v3 有一半的翻车是"编队自己挑了目标"（配对 4↑8↓）。这里目标的唯一来源是约束层：
  * 单位查不到任务，就什么都不做。
  */
-import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, utype } from '../rules.ts';
+import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, unitYieldAt, utype } from '../rules.ts';
 import type { Action, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
@@ -64,6 +64,21 @@ export function actFor(
    */
   const yieldTo = con.yieldMoves.find((m) => m.unitId === u.id);
   if (yieldTo) return { type: 'MOVE', unitId: u.id, x: yieldTo.x, y: yieldTo.y };
+
+  /*
+   * ①.2 经济兵：按**一把尺子**挑格子——每回合净多产多少金（金/回合）。
+   *
+   * 这是打分层第一次用"钱"当唯一尺度，也是 S-006 那道题的全部内容：
+   * 伐木工站森林 12、站平原 3，牧民站丘陵 8、站森林 2。站错就是白丢钱。
+   *
+   * 取舍：只有当"目标格比脚下多产"时才动，且不踩 keepClear（产兵格要让出来）。
+   * 不做安全评估（第一版故意笨）：先证明它能算对这笔账，再谈"值不值得冒险挪"。
+   */
+  if (utype(s, u.type).category === 'economy') {
+    const spot = bestYieldStep(s, world, u, con);
+    if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+    return null;
+  }
 
   /*
    * ①.5 召回：`hold` 队离城还远，就先走回去——**这一步排在打人之前**。
@@ -153,6 +168,85 @@ function stepToward(
     }
   }
   return best;
+}
+
+/**
+ * 经济兵的"一把尺子"：可达格里净产出最高的那一个。
+ *
+ * 只用金/回合这一个数，不加"离城远近""会不会被抢"这种第二项——
+ * 加了就又变成 v3 那张必须调参的分数表。等它在实际对局里明显犯傻，再考虑加约束层。
+ */
+function bestYieldStep(
+  s: GameState,
+  world: World,
+  u: Unit,
+  con: Constraints,
+): { x: number; y: number } | null {
+  /*
+   * 关键格**连同它四周**都不许去。
+   *
+   * 只禁关键格本身不够：桥头那一格两边是岸，经济兵站在岸上那一格，
+   * 军队照样得绕——S-005 实测过河从 4 掉到 3，原因就是伐木工在桥口晃。
+   * 关键格是"过道"，过道边上也是过道。
+   */
+  const keep = new Set(con.keepClear);
+  const nearKeep = new Set<number>();
+  for (const k of con.keepClear) {
+    const kx = k % s.w;
+    const ky = Math.floor(k / s.w);
+    /* 八邻域（含斜角）：斜着站在桥口一样挡人 */
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1], [0, 0]] as const) {
+      const x = kx + dx;
+      const y = ky + dy;
+      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+      nearKeep.add(y * s.w + x);
+    }
+  }
+  const cur = unitYieldAt(s, u, u.x, u.y).gold ?? 0;
+
+  /*
+   * 已经贴着关键格的经济兵**不再自己找活干**：它要么正被让位计划挪开，
+   * 要么就堵在过道上——这两种情况都不该由"多赚两金"来决定它的走位。
+   */
+  if (nearKeep.has(u.y * s.w + u.x)) return null;
+
+  /* 平时：只有严格更高才动（免得在同一档格子之间横跳） */
+  let gain: { x: number; y: number } | null = null;
+  let gainGold = cur;
+  /* 危险时：安全格里产出最高的那一个，**哪怕比现在低** */
+  let safeBest: { x: number; y: number } | null = null;
+  let safeGold = -1;
+
+  for (const [key] of reachableTiles(s, u)) {
+    const x = key % s.w;
+    const y = Math.floor(key / s.w);
+    if (keep.has(key) || nearKeep.has(key)) continue;
+    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+
+    const gold = unitYieldAt(s, u, x, y).gold ?? 0;
+    /*
+     * **至少多 2 金才值得挪。**
+     * 只多 1 金就动的话，经济兵会为了零头在地图上横穿：既浪费动作预算，
+     * 又会穿过桥头/产兵格（S-005 的伐木工就是这么跑到对岸去的）。
+     */
+    if (gold >= gainGold + 2) {
+      gainGold = gold;
+      gain = { x, y };
+    }
+    if (world.harassed({ x, y })) continue;
+    if (gold > safeGold) {
+      safeGold = gold;
+      safeBest = { x, y };
+    }
+  }
+
+  /*
+   * 脚下危险就只认安全格——**但仍然按产出挑**。
+   * 早先这里是"挑离敌人最远的"，结果全跑进平原：离敌人最远的地方通常也最没用
+   * （S-006 总产 47 → 21）。逃命也要算账，只是把"安全"当选格的前置条件。
+   */
+  if (world.harassed(u)) return safeBest ?? (cur > 0 ? null : gain);
+  return gain;
 }
 
 /** 造兵：钱够就在最近的一座城里造最便宜的兵。**不挑兵种**，先保证有兵 */
