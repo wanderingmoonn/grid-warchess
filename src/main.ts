@@ -2447,8 +2447,8 @@ let angledCam: AngledCamera = (() => {
     const raw = localStorage.getItem(ANGLED_CAM_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<AngledCamera>;
-      if (typeof parsed.yaw === 'number' && typeof parsed.tilt === 'number') {
-        return clampAngledCamera({ yaw: parsed.yaw, tilt: parsed.tilt });
+      if (typeof parsed.yaw === 'number') {
+        return clampAngledCamera({ yaw: parsed.yaw, tilt: DEFAULT_ANGLED_CAMERA.tilt });
       }
     }
   } catch {}
@@ -11083,7 +11083,7 @@ function previewHoveredCombat(event: MouseEvent): void {
   if (action) showCombatPreview(action, false);
   else clearCombatPreview();
 }
-// ---------- 斜俯视 360° 水平旋转（鼠标右键或中键拖拽） ----------
+// ---------- 斜俯视 360° 水平旋转（鼠标右键或中键拖拽，按 rAF 合批保证 60fps 丝滑） ----------
 let angleOrbit: {
   id: number;
   button: number;
@@ -11091,7 +11091,29 @@ let angleOrbit: {
   yaw: number;
   moved: boolean;
 } | null = null;
+let orbitRaf = 0;
+let pendingOrbitYaw: number | null = null;
 let lastMiddleClickAt = 0;
+
+function flushOrbitFrame(): void {
+  orbitRaf = 0;
+  if (pendingOrbitYaw === null) return;
+  const targetYaw = pendingOrbitYaw;
+  pendingOrbitYaw = null;
+  const center = boardZoom > 1 ? boardCamera() : null;
+  const updated = setAngledBoardCamera(boardEl, {
+    yaw: targetYaw,
+    tilt: DEFAULT_ANGLED_CAMERA.tilt,
+  });
+  if (updated) {
+    angledCam = updated;
+    boardDirty = true;
+    fitBoard();
+    if (center) centerBoardCamera(center);
+    syncAngleControls();
+    showAngleHud(formatAngleHud(angledCam));
+  }
+}
 
 boardScrollEl.addEventListener('mousedown', (e) => {
   if ((e.button === 1 || e.button === 2) && boardEl.classList.contains('has-angled-view')) {
@@ -11131,18 +11153,9 @@ boardScrollEl.addEventListener('pointermove', (e) => {
   if (!angleOrbit || e.pointerId !== angleOrbit.id) return;
   const dx = e.clientX - angleOrbit.x;
   if (!angleOrbit.moved && Math.abs(dx) >= 3) angleOrbit.moved = true;
-  const center = boardZoom > 1 ? boardCamera() : null;
-  const updated = setAngledBoardCamera(boardEl, {
-    yaw: angleOrbit.yaw + dx * 0.0075,
-    tilt: DEFAULT_ANGLED_CAMERA.tilt,
-  });
-  if (updated) {
-    angledCam = updated;
-    boardDirty = true;
-    fitBoard();
-    if (center) centerBoardCamera(center);
-    syncAngleControls();
-    showAngleHud(formatAngleHud(angledCam));
+  pendingOrbitYaw = angleOrbit.yaw + dx * 0.0075;
+  if (!orbitRaf) {
+    orbitRaf = window.requestAnimationFrame(flushOrbitFrame);
   }
   e.preventDefault();
 });
@@ -11152,6 +11165,11 @@ const endAngleOrbit = (e: PointerEvent): void => {
   const wasMoved = angleOrbit.moved;
   const btn = angleOrbit.button;
   angleOrbit = null;
+  if (orbitRaf) {
+    window.cancelAnimationFrame(orbitRaf);
+    orbitRaf = 0;
+  }
+  if (pendingOrbitYaw !== null) flushOrbitFrame();
   boardScrollEl.classList.remove('orbiting');
   if (boardScrollEl.hasPointerCapture?.(e.pointerId)) {
     boardScrollEl.releasePointerCapture(e.pointerId);

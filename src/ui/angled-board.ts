@@ -15,7 +15,7 @@ export interface AngledCamera {
 }
 
 const halfWidth = 19;
-const halfHeight = 11.3;
+const halfHeight = 12.6;
 const BASE_SCALE = Math.hypot(halfWidth, halfWidth);
 const DEFAULT_TILT = halfHeight / halfWidth;
 const DEFAULT_Z_COS = Math.sqrt(Math.max(0.1, 1 - DEFAULT_TILT * DEFAULT_TILT));
@@ -278,7 +278,6 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   /** 迷雾压暗色：与正俯视 `--fog-shade` 对齐，确保视野内外边界一眼可辨 */
   const FOG_SHADE = 'rgba(13, 20, 28, 0.54)';
   const FOG_CITY_SHADE = 'rgba(13, 20, 28, 0.50)';
-  const FOG_PROP_TIE = 'rgba(13, 20, 28, 0.22)';
   /** 浓雾蔽野未知区域的「暗幕高墙」高度：高于高山雪顶(z≈41)，前沿紧邻可见格时做两级缓降防遮挡 */
   const BLACKOUT_WALL_Z = 46;
   const BLACKOUT_EDGE_Z = 37;
@@ -945,15 +944,39 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     return h >>> 0;
   }
 
+  /** 迷雾中森林/高山的零开销纯色压暗缓存（彻底替代高耗时的 ctx.filter，与 FOG_SHADE 54% 精确同色） */
+  let fogDim = false;
+  const fogDimCache = new Map<string, string>();
+  function dimFogColor(color: string): string {
+    if (!fogDim || color[0] !== '#') return color;
+    const hit = fogDimCache.get(color);
+    if (hit !== undefined) return hit;
+    const hex = color.length === 4
+      ? `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`
+      : color;
+    if (hex.length !== 7 && hex.length !== 9) return color;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const a = 0.54;
+    const nr = Math.round(r * (1 - a) + 13 * a);
+    const ng = Math.round(g * (1 - a) + 20 * a);
+    const nb = Math.round(b * (1 - a) + 28 * a);
+    const to2 = (n: number) => n.toString(16).padStart(2, '0');
+    const out = `#${to2(nr)}${to2(ng)}${to2(nb)}${hex.length === 9 ? hex.slice(7) : ''}`;
+    fogDimCache.set(color, out);
+    return out;
+  }
+
   function polygon(ctx: CanvasRenderingContext2D, points: readonly Point[], fill: string, edge?: string, lineWidth = 0.85): void {
     ctx.beginPath();
     ctx.moveTo(...points[0]!);
     for (const point of points.slice(1)) ctx.lineTo(...point);
     ctx.closePath();
-    ctx.fillStyle = fill;
+    ctx.fillStyle = fogDim ? dimFogColor(fill) : fill;
     ctx.fill();
     if (edge) {
-      ctx.strokeStyle = edge;
+      ctx.strokeStyle = fogDim ? dimFogColor(edge) : edge;
       ctx.lineWidth = lineWidth;
       ctx.stroke();
     }
@@ -963,7 +986,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.beginPath();
     ctx.moveTo(...a);
     ctx.lineTo(...b);
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = fogDim ? dimFogColor(color) : color;
     ctx.lineWidth = width;
     ctx.stroke();
   }
@@ -2662,15 +2685,13 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     } else if (terrain === 'marsh') {
       paintMarshArt(ctx, x, y, elevation, state);
     } else if (terrain === 'forest' || terrain === 'mountain') {
-      const canFilter = dark && typeof ctx.filter === 'string';
-      if (canFilter) {
-        ctx.save();
-        ctx.filter = 'brightness(0.56) saturate(0.72)';
+      fogDim = dark;
+      try {
+        if (terrain === 'forest') paintForestArt(ctx, x, y, elevation, state);
+        else paintMountainArt(ctx, x, y, elevation, state);
+      } finally {
+        fogDim = false;
       }
-      if (terrain === 'forest') paintForestArt(ctx, x, y, elevation, state);
-      else paintMountainArt(ctx, x, y, elevation, state);
-      if (canFilter) ctx.restore();
-      if (dark) polygon(ctx, rhombus(x, y, 1, elevation), canFilter ? FOG_PROP_TIE : FOG_SHADE);
       return;
     } else if (terrain === 'bridge') {
       paintBridgeArt(ctx, x, y, elevation, state);
