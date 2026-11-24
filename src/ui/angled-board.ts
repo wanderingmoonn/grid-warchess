@@ -120,12 +120,12 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   const isWaterTerrain = (t: Terrain | undefined): boolean => t === 'water' || t === 'shallow' || t === 'deep';
   const heights: Partial<Record<Terrain, number>> = {
     deep: WATER_SURFACE, water: WATER_SURFACE, shallow: WATER_SURFACE,
-    valley: -3, bridge: 2, hill: 8, plateau: 15, mountain: 25,
+    valley: -3, marsh: -2.2, bridge: 2, hill: 8, plateau: 15, mountain: 25,
   };
   const colors: Partial<Record<Terrain, string>> = {
     plain: '#dce4c7', forest: '#a8bd86', hill: '#d6c08f', mountain: '#8694a3',
     water: '#8cb9d0', shallow: '#abd3c8', deep: '#4f7fa1', bridge: '#ba9a6d', city: '#c5cbb1',
-    plateau: '#e2dfc1', valley: '#c3cfa6', marsh: '#a9b795', dune: '#e8d9a8',
+    plateau: '#ddd9c4', valley: '#bfcca4', marsh: '#9aa884', dune: '#e8d9a8',
     shadow: '#2b2140',
     void: '#262824', regolith: '#d8d4ca', crater: '#b6b1a7', deck: '#7c8592', wreck: '#4b413a',
   };
@@ -814,7 +814,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   function faceColors(terrain: Terrain, neighbor: Terrain | undefined): readonly [string, string, string] {
     if (!neighbor) return ['#695c4d', '#81745e', '#534638'];
     if (terrain === 'mountain') return ['#586675', '#6e7d8d', '#3e4854'];
+    if (terrain === 'plateau') return ['#8e8978', '#a9a390', '#5e594c'];
     if (terrain === 'hill') return ['#9e8052', '#b69968', '#6f5735'];
+    if (terrain === 'valley') return ['#6f7962', '#879279', '#4f5745'];
+    if (terrain === 'marsh') return ['#575f4c', '#6a735d', '#3d4335'];
     if (terrain === 'shallow' && neighbor === 'water') return ['#749cab', '#86abb4', '#658999'];
     if ((terrain === 'plain' || terrain === 'forest') && isWaterTerrain(neighbor)) {
       return ['#768264', '#919d7b', '#636f54'];
@@ -884,6 +887,59 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         project(x0, y0, botZ),
       ], side === 'east' ? '#7e643d' : '#93774c');
       strokeLine(ctx, project(x0, y0, upperZ), project(x1, y1, upperZ), '#6e563455', 0.75);
+    } else if (terrain === 'plateau') {
+      // 台地石灰岩层理峭壁：顶部厚实灰白盖岩层 + 中段水平沉积岩带 + 底部深灰褐岩脚与细垂直节理
+      const capZ = Math.max(botZ, topZ - Math.min(3.0, drop * 0.28));
+      const midZ = botZ + drop * 0.48;
+      const footZ = botZ + drop * 0.22;
+      // 顶部石灰岩盖岩层
+      polygon(ctx, [
+        project(x0, y0, topZ),
+        project(x1, y1, topZ),
+        project(x1, y1, capZ),
+        project(x0, y0, capZ),
+      ], side === 'east' ? '#b3ae9a' : '#cdc7b3');
+      // 底部压暗碎石岩脚
+      polygon(ctx, [
+        project(x0, y0, footZ),
+        project(x1, y1, footZ),
+        project(x1, y1, botZ),
+        project(x0, y0, botZ),
+      ], side === 'east' ? '#6d6859' : '#837d6d');
+      // 水平沉积层理线
+      strokeLine(ctx, project(x0, y0, capZ), project(x1, y1, capZ), '#5a554766', 0.8);
+      if (drop > 6) {
+        strokeLine(ctx, project(x0, y0, midZ), project(x1, y1, midZ), '#635e4f55', 0.7);
+      }
+      // 纵向风化岩缝
+      const fx = x0 + (x1 - x0) * 0.42;
+      const fy = y0 + (y1 - y0) * 0.42;
+      strokeLine(ctx, project(fx, fy, topZ - 0.8), project(fx + (x1 - x0) * 0.06, fy + (y1 - y0) * 0.06, footZ), '#57524566', 0.75);
+    } else if (terrain === 'valley') {
+      // 谷地湿润河谷剖面：浅灰绿薄草沿 + 潮湿河泥壤土
+      const rimZ = Math.max(botZ, topZ - Math.min(2.0, drop * 0.34));
+      polygon(ctx, [
+        project(x0, y0, topZ),
+        project(x1, y1, topZ),
+        project(x1, y1, rimZ),
+        project(x0, y0, rimZ),
+      ], side === 'east' ? '#819071' : '#98a887');
+    } else if (terrain === 'marsh') {
+      // 沼泽泥炭剖面：湿苔薄缘 + 深暗泥炭淤泥层
+      const rimZ = Math.max(botZ, topZ - Math.min(1.8, drop * 0.30));
+      const peatZ = botZ + drop * 0.35;
+      polygon(ctx, [
+        project(x0, y0, topZ),
+        project(x1, y1, topZ),
+        project(x1, y1, rimZ),
+        project(x0, y0, rimZ),
+      ], side === 'east' ? '#6d7c5c' : '#829270');
+      polygon(ctx, [
+        project(x0, y0, peatZ),
+        project(x1, y1, peatZ),
+        project(x1, y1, botZ),
+        project(x0, y0, botZ),
+      ], side === 'east' ? '#424739' : '#505646');
     } else if (terrain === 'mountain') {
       // 高山断崖剖面：三层页岩/花岗岩色带 + 纵向节理裂隙
       const upperZ = botZ + drop * 0.68;
@@ -1234,6 +1290,312 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       const [gx, gy] = pt(0.34 + (h % 29) * 0.01, 0.38 + ((h >>> 5) % 27) * 0.01, 0);
       polygon(ctx, [[gx - 2.5, gy + 0.5], [gx - 1.2, gy - 2.8], [gx + 0.1, gy + 0.6]], '#a9a379');
       polygon(ctx, [[gx - 0.1, gy + 0.6], [gx + 1.5, gy - 2.4], [gx + 2.3, gy + 0.5]], '#87835f');
+    }
+  }
+
+  /**
+   * 台地建模（《陷阵之志》高耸石灰岩平顶台原）：
+   * 对应地形高差 +2 层，比暖金丘陵更明亮干燥偏灰白石质、比青灰高山更平坦开阔；
+   * 顶面刻画干裂风化石板肌理、迎光暖白亮沿与低矮平顶石灰岩盖石，绝不遮挡棋子。
+   */
+  function paintPlateauArt(ctx: CanvasRenderingContext2D, x: number, y: number, elevation: number, state: GameState): void {
+    const h = tileHash(x, y, 37);
+    const pt = (u: number, v: number, dz = 0): Point => project(x + u, y + v, elevation + dz);
+
+    // 1. 开阔明亮的干灰米白石灰岩台面底色（跨格柔和变化）
+    const wave = Math.sin(x * 0.62 + y * 0.48) + Math.cos(x * 0.35 - y * 0.52);
+    const baseFill = wave > 0.55 ? '#e3dfd0' : wave < -0.55 ? '#d7d2be' : '#ddd9c5';
+    polygon(ctx, rhombus(x, y, 1, elevation), baseFill, '#645f4f22');
+
+    // 2. 高台迎光外沿亮白崖棱（西北/东北临低地时格外醒目，凸显 +2 层制高点平顶感）
+    const dropW = heightAt(state, x - 1, y) < elevation;
+    const dropN = heightAt(state, x, y - 1) < elevation;
+    const dropE = heightAt(state, x + 1, y) < elevation;
+    const dropS = heightAt(state, x, y + 1) < elevation;
+    if (dropW) {
+      strokeLine(ctx, pt(0, 1, 0), pt(0, 0, 0), '#f5f2e6', 1.45);
+      strokeLine(ctx, pt(0.06, 0.94, 0), pt(0.06, 0.06, 0), '#b9b49f66', 0.75);
+    }
+    if (dropN) {
+      strokeLine(ctx, pt(0, 0, 0), pt(1, 0, 0), '#f0ede0', 1.35);
+      strokeLine(ctx, pt(0.06, 0.06, 0), pt(0.94, 0.06, 0), '#b5b09b66', 0.75);
+    }
+    if (dropE) {
+      strokeLine(ctx, pt(0.96, 0.06, 0), pt(0.96, 0.94, 0), '#7d786666', 0.85);
+    }
+    if (dropS) {
+      strokeLine(ctx, pt(0.06, 0.96, 0), pt(0.94, 0.96, 0), '#87826f66', 0.85);
+    }
+
+    if (state.cities.some((c) => x >= c.x && x < c.x + c.size && y >= c.y && y < c.y + c.size)) {
+      return;
+    }
+
+    // 3. 贴地风化石板拼块与干裂岩纹（还原 plateau.webp 标志性多边形灰白石板质感）
+    if ((h % 9) < 5) {
+      const cu = 0.28 + ((h >>> 4) % 36) * 0.01;
+      const cv = 0.28 + ((h >>> 9) % 36) * 0.01;
+      const r = 0.17 + ((h >>> 14) % 8) * 0.01;
+      polygon(ctx, [
+        pt(cu - r * 1.05, cv - r * 0.15, 0),
+        pt(cu - r * 0.25, cv - r * 0.95, 0),
+        pt(cu + r * 0.90, cv - r * 0.30, 0),
+        pt(cu + r * 0.75, cv + r * 0.65, 0),
+        pt(cu - r * 0.40, cv + r * 0.85, 0),
+      ], (h & 4) ? '#e8e5d6' : '#d1ccb7', '#8f8a7738', 0.65);
+    }
+
+    // 4. 台地细节：低矮平顶石灰岩盖石、裂纹石台、稀疏灰白旱草
+    const mode = h % 8;
+    if (mode === 0 || mode === 1) {
+      // 平顶圆角石灰岩盖石（呼应 plateau.webp 标志性浅灰白台石，高度仅 ~2.6px）
+      const su = 0.34 + ((h >>> 4) % 30) * 0.01;
+      const sv = 0.34 + ((h >>> 9) % 28) * 0.01;
+      const [rx, ry] = pt(su, sv, 0);
+      const s = mode === 0 ? 1.05 : 0.84;
+      // 柔和贴地暖灰影
+      ctx.fillStyle = '#736e5d38';
+      ctx.beginPath();
+      ctx.ellipse(rx + 1.0 * s, ry + 0.9 * s, 5.2 * s, 2.3 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // 石座背光东/南侧面
+      polygon(ctx, [
+        [rx - 3.6 * s, ry + 0.4 * s],
+        [rx - 2.6 * s, ry - 1.5 * s],
+        [rx + 0.6 * s, ry - 1.1 * s],
+        [rx + 0.4 * s, ry + 1.4 * s],
+      ], '#b7b29f');
+      polygon(ctx, [
+        [rx + 0.6 * s, ry - 1.1 * s],
+        [rx + 3.5 * s, ry - 1.6 * s],
+        [rx + 4.1 * s, ry + 0.4 * s],
+        [rx + 0.4 * s, ry + 1.4 * s],
+      ], '#8c8878');
+      // 迎光平坦石顶面
+      polygon(ctx, [
+        [rx - 3.0 * s, ry - 1.4 * s],
+        [rx - 0.5 * s, ry - 2.7 * s],
+        [rx + 3.3 * s, ry - 1.7 * s],
+        [rx + 0.5 * s, ry - 0.5 * s],
+      ], '#ebe8da', '#7c776755', 0.55);
+      // 伴生一小块扁碎石
+      if (mode === 0) {
+        const bx = rx + 4.4;
+        const by = ry + 1.2;
+        polygon(ctx, [[bx - 1.8, by + 0.3], [bx - 0.3, by - 1.0], [bx + 1.6, by - 0.2], [bx + 0.3, by + 0.8]], '#e2dfd0');
+        polygon(ctx, [[bx + 1.6, by - 0.2], [bx + 2.0, by + 0.6], [bx + 0.3, by + 0.8]], '#959180');
+      }
+    } else if (mode === 2) {
+      // 干爽风化岩阶裂隙 + 细浅草芽
+      const p0 = pt(0.20, 0.66, 0);
+      const p1 = pt(0.46, 0.52, 0);
+      const p2 = pt(0.74, 0.38, 0);
+      strokeLine(ctx, p0, p1, '#85806e66', 0.9);
+      strokeLine(ctx, p1, p2, '#85806e55', 0.85);
+      strokeLine(ctx, [p0[0], p0[1] - 0.8], [p1[0], p1[1] - 0.8], '#f3f0e388', 0.7);
+      const [gx, gy] = pt(0.50, 0.48, 0);
+      polygon(ctx, [[gx - 1.8, gy + 0.4], [gx - 0.9, gy - 2.1], [gx + 0.1, gy + 0.5]], '#b6b394');
+      polygon(ctx, [[gx, gy + 0.5], [gx + 1.2, gy - 1.8], [gx + 1.9, gy + 0.4]], '#918e73');
+    } else if (mode === 3) {
+      // 零星灰白旱地小草丛（比丘陵灌木更低矮清瘦）
+      const [gx, gy] = pt(0.36 + (h % 28) * 0.01, 0.36 + ((h >>> 5) % 26) * 0.01, 0);
+      polygon(ctx, [[gx - 2.4, gy + 0.5], [gx - 1.3, gy - 2.4], [gx - 0.1, gy + 0.5]], '#b9b698');
+      polygon(ctx, [[gx - 0.3, gy + 0.5], [gx + 0.6, gy - 2.9], [gx + 1.2, gy + 0.5]], '#a29f82');
+      polygon(ctx, [[gx + 0.9, gy + 0.5], [gx + 2.3, gy - 2.0], [gx + 2.7, gy + 0.4]], '#878469');
+    }
+  }
+
+  /**
+   * 谷地建模（《陷阵之志》下陷湿润河谷凹地）：
+   * 对应地形高差 -1 层，比平原低沉且冷润；
+   * 当西北/东北紧邻更高地块时在谷底投下柔和内壁阴影、东南/西南带微亮坡沿，立体呈现“陷下去”的凹谷感；
+   * 谷底绘制顺谷延展的柔和浅沙冲积带与湿润溪石/细苔草，与沼泽的不规则积水塘明确区分。
+   */
+  function paintValleyArt(ctx: CanvasRenderingContext2D, x: number, y: number, elevation: number, state: GameState): void {
+    const h = tileHash(x, y, 43);
+    const pt = (u: number, v: number, dz = 0): Point => project(x + u, y + v, elevation + dz);
+
+    // 1. 略偏冷润隐蔽的青灰绿凹谷底板
+    const wave = Math.sin(x * 0.52 + y * 0.61) + Math.cos(x * 0.38 - y * 0.44);
+    const baseFill = wave > 0.5 ? '#c4d1aa' : wave < -0.5 ? '#b9c69e' : '#bfcca4';
+    polygon(ctx, rhombus(x, y, 1, elevation), baseFill, '#48583e24');
+
+    // 2. 顺谷走向的冲积浅沙/细砾丝带（呼应 valley.webp 标志性流动条带，与沼泽块状水洼截然不同）
+    const ribbonShift = ((x + y) % 3 - 1) * 0.06;
+    const drawRibbon = (vCenter: number, halfW: number, col: string): void => {
+      const v0 = Math.max(0.06, Math.min(0.92, vCenter + ribbonShift));
+      const v1 = Math.max(0.06, Math.min(0.92, vCenter - ribbonShift * 0.6));
+      polygon(ctx, [
+        pt(0.05, Math.max(0.04, v0 - halfW), 0),
+        pt(0.52, Math.max(0.04, (v0 + v1) * 0.5 - halfW * 1.15), 0),
+        pt(0.95, Math.max(0.04, v1 - halfW * 0.85), 0),
+        pt(0.95, Math.min(0.96, v1 + halfW * 0.85), 0),
+        pt(0.52, Math.min(0.96, (v0 + v1) * 0.5 + halfW * 1.15), 0),
+        pt(0.05, Math.min(0.96, v0 + halfW), 0),
+      ], col);
+    };
+    if ((h % 5) < 4) {
+      drawRibbon(0.32 + ((h >>> 4) % 18) * 0.01, 0.075, '#aebba088');
+    }
+    if ((h % 7) < 3) {
+      drawRibbon(0.68 + ((h >>> 8) % 14) * 0.01, 0.06, '#a3b39a77');
+    }
+
+    // 3. 凹谷内壁光影：西北/东北若高于谷地则落柔和背光内影，东南/西南若高于谷地则留细微迎光坡沿
+    if (heightAt(state, x - 1, y) > elevation) {
+      polygon(ctx, [pt(0, 0, 0), pt(0.22, 0, 0), pt(0.22, 1, 0), pt(0, 1, 0)], 'rgba(48,62,46,0.22)');
+      strokeLine(ctx, pt(0, 0, 0), pt(0, 1, 0), 'rgba(38,50,37,0.34)', 1.1);
+    }
+    if (heightAt(state, x, y - 1) > elevation) {
+      polygon(ctx, [pt(0, 0, 0), pt(1, 0, 0), pt(1, 0.22, 0), pt(0, 0.22, 0)], 'rgba(48,62,46,0.17)');
+      strokeLine(ctx, pt(0, 0, 0), pt(1, 0, 0), 'rgba(38,50,37,0.28)', 1.0);
+    }
+    if (heightAt(state, x + 1, y) > elevation) {
+      strokeLine(ctx, pt(0.97, 0.04, 0), pt(0.97, 0.96, 0), 'rgba(232,240,214,0.38)', 1.1);
+    }
+    if (heightAt(state, x, y + 1) > elevation) {
+      strokeLine(ctx, pt(0.04, 0.97, 0), pt(0.96, 0.97, 0), 'rgba(232,240,214,0.42)', 1.1);
+    }
+
+    if (state.cities.some((c) => x >= c.x && x < c.x + c.size && y >= c.y && y < c.y + c.size)) {
+      return;
+    }
+
+    // 4. 谷底光滑河卵石与阴湿细苔草（低调清雅，高度 ≤ 3.4px）
+    const mode = h % 7;
+    if (mode === 0 || mode === 1) {
+      // 光滑灰绿溪卵石 + 伴生湿草
+      const [sx, sy] = pt(0.32 + ((h >>> 5) % 34) * 0.01, 0.34 + ((h >>> 10) % 32) * 0.01, 0);
+      ctx.fillStyle = '#53624d38';
+      ctx.beginPath();
+      ctx.ellipse(sx + 0.7, sy + 0.7, 3.6, 1.7, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      polygon(ctx, [[sx - 2.9, sy + 0.4], [sx - 1.1, sy - 1.4], [sx + 1.2, sy - 1.1], [sx + 0.3, sy + 0.9]], '#c5cfb9');
+      polygon(ctx, [[sx + 1.2, sy - 1.1], [sx + 2.8, sy + 0.2], [sx + 0.3, sy + 0.9]], '#8f9d88');
+      if (mode === 0) {
+        polygon(ctx, [[sx + 1.6, sy + 0.6], [sx + 2.6, sy - 2.4], [sx + 3.2, sy + 0.6]], '#7c966c');
+        polygon(ctx, [[sx + 2.8, sy + 0.6], [sx + 4.2, sy - 1.8], [sx + 4.5, sy + 0.5]], '#5e7750');
+      }
+    } else if (mode === 2) {
+      // 柔和谷底细苔草簇
+      const [gx, gy] = pt(0.30 + ((h >>> 6) % 38) * 0.01, 0.32 + ((h >>> 11) % 36) * 0.01, 0);
+      polygon(ctx, [[gx - 2.6, gy + 0.5], [gx - 1.5, gy - 2.8], [gx - 0.2, gy + 0.6]], '#849f73');
+      polygon(ctx, [[gx - 0.4, gy + 0.6], [gx + 0.7, gy - 3.3], [gx + 1.4, gy + 0.6]], '#6b855c');
+      polygon(ctx, [[gx + 1.0, gy + 0.6], [gx + 2.6, gy - 2.4], [gx + 3.0, gy + 0.5]], '#59714c');
+    }
+  }
+
+  /**
+   * 沼泽建模（《陷阵之志》淤泥湿地与香蒲水塘）：
+   * 对应地形高差 -1 层，比谷地更深暗潮湿；
+   * 标志性的深苔淤泥底板 + 不规则暗青灰积水洼（带湿泥边沿、水天高光与浮萍）+ 苔藓泥墩与香蒲芦苇，
+   * 视觉上清晰传达“湿滑陷足”的战场直觉，与谷地和水体各自形成鲜明区分。
+   */
+  function paintMarshArt(ctx: CanvasRenderingContext2D, x: number, y: number, elevation: number, state: GameState): void {
+    const h = tileHash(x, y, 59);
+    const pt = (u: number, v: number, dz = 0): Point => project(x + u, y + v, elevation + dz);
+
+    // 1. 深暗潮湿的苔藓泥炭底板
+    const wave = Math.sin(x * 0.65 + y * 0.42) + Math.cos(x * 0.47 - y * 0.58);
+    const baseFill = wave > 0.5 ? '#a0ae89' : wave < -0.5 ? '#93a27e' : '#9aa884';
+    polygon(ctx, rhombus(x, y, 1, elevation), baseFill, '#3e4a342a');
+
+    // 2. 柔缓泥坡内影（比谷地更柔缓，表现软泥淤积缓坡）
+    if (heightAt(state, x - 1, y) > elevation) {
+      polygon(ctx, [pt(0, 0, 0), pt(0.18, 0, 0), pt(0.18, 1, 0), pt(0, 1, 0)], 'rgba(38,46,34,0.19)');
+    }
+    if (heightAt(state, x, y - 1) > elevation) {
+      polygon(ctx, [pt(0, 0, 0), pt(1, 0, 0), pt(1, 0.18, 0), pt(0, 0.18, 0)], 'rgba(38,46,34,0.15)');
+    }
+
+    if (state.cities.some((c) => x >= c.x && x < c.x + c.size && y >= c.y && y < c.y + c.size)) {
+      return;
+    }
+
+    // 3. 贴地深湿淤泥暗斑（增加湿地肌理层次）
+    if ((h % 5) < 3) {
+      const mu = 0.28 + ((h >>> 3) % 38) * 0.01;
+      const mv = 0.28 + ((h >>> 8) % 38) * 0.01;
+      const mr = 0.18 + ((h >>> 13) % 10) * 0.01;
+      polygon(ctx, [
+        pt(mu - mr, mv - mr * 0.2, 0),
+        pt(mu + mr * 0.1, mv - mr * 0.9, 0),
+        pt(mu + mr * 0.95, mv + mr * 0.2, 0),
+        pt(mu - mr * 0.2, mv + mr * 0.85, 0),
+      ], '#82906c88');
+    }
+
+    // 4. 标志性不规则沼泽积水洼（约 72% 沼泽格含水塘，形态大小交错，带泥缘 + 浊青水色 + 柔和反光）
+    const poolRoll = h % 10;
+    const hasPool = poolRoll < 7;
+    if (hasPool) {
+      const pu = 0.34 + ((h >>> 4) % 30) * 0.01;
+      const pv = 0.34 + ((h >>> 9) % 30) * 0.01;
+      const rx = (poolRoll < 3 ? 0.25 : 0.18) + ((h >>> 14) % 6) * 0.01;
+      const ry = (poolRoll < 3 ? 0.21 : 0.15) + ((h >>> 17) % 5) * 0.01;
+
+      const makeBlob = (scale: number): Point[] => [
+        pt(pu - rx * 1.02 * scale, pv - ry * 0.18 * scale, 0),
+        pt(pu - rx * 0.32 * scale, pv - ry * 0.96 * scale, 0),
+        pt(pu + rx * 0.72 * scale, pv - ry * 0.62 * scale, 0),
+        pt(pu + rx * 1.06 * scale, pv + ry * 0.20 * scale, 0),
+        pt(pu + rx * 0.34 * scale, pv + ry * 0.96 * scale, 0),
+        pt(pu - rx * 0.68 * scale, pv + ry * 0.66 * scale, 0),
+      ];
+      // 外圈暗湿泥缘
+      polygon(ctx, makeBlob(1.16), '#6b7759aa');
+      // 沼泽浊青绿水面
+      polygon(ctx, makeBlob(1.0), '#739590', '#506b6755', 0.55);
+      // 池心深淤水底
+      polygon(ctx, makeBlob(0.58), '#5a7b78aa');
+      // 水面迎光柔和反光细弧（确认这是积水）
+      const [gx0, gy0] = pt(pu - rx * 0.48, pv - ry * 0.22, 0.1);
+      const [gx1, gy1] = pt(pu + rx * 0.18, pv - ry * 0.42, 0.1);
+      strokeLine(ctx, [gx0, gy0], [gx1, gy1], 'rgba(222,243,238,0.52)', 0.95);
+
+      // 偶发绿浮萍/小睡莲叶点缀
+      if (poolRoll === 0 || poolRoll === 2) {
+        const [lx, ly] = pt(pu + rx * 0.26, pv + ry * 0.18, 0.1);
+        ctx.fillStyle = '#89a762';
+        ctx.beginPath();
+        ctx.ellipse(lx, ly, 2.0, 1.15, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // 5. 沼泽苔藓泥丘与香蒲芦苇（约 58% 格出现，避开大水塘中心，高度 4.8~6.4px 绝不挡兵）
+    const reedRoll = (h >>> 5) % 12;
+    if (reedRoll < 7) {
+      const ru = hasPool ? (reedRoll % 2 === 0 ? 0.22 : 0.76) : 0.34 + ((h >>> 7) % 32) * 0.01;
+      const rv = hasPool ? (reedRoll % 3 === 0 ? 0.74 : 0.26) : 0.36 + ((h >>> 12) % 30) * 0.01;
+      const [rx, ry] = pt(ru, rv, 0);
+
+      // 贴地湿苔泥墩
+      polygon(ctx, [
+        [rx - 3.6, ry + 0.6],
+        [rx - 1.6, ry - 1.3],
+        [rx + 0.5, ry - 1.1],
+        [rx + 0.4, ry + 1.1],
+      ], '#839464');
+      polygon(ctx, [
+        [rx + 0.5, ry - 1.1],
+        [rx + 3.2, ry + 0.4],
+        [rx + 0.4, ry + 1.1],
+      ], '#5d6c45');
+
+      // 3 茎挺立/微倾的湿地芦苇叶
+      polygon(ctx, [[rx - 2.0, ry + 0.4], [rx - 2.6, ry - 4.4], [rx - 1.0, ry + 0.4]], '#778b54');
+      polygon(ctx, [[rx - 0.5, ry + 0.4], [rx + 0.2, ry - 5.6], [rx + 0.9, ry + 0.5]], '#627642');
+      polygon(ctx, [[rx + 0.9, ry + 0.4], [rx + 2.6, ry - 4.0], [rx + 2.2, ry + 0.4]], '#536537');
+
+      // 标志性暖褐香蒲棒（Cattail），一眼锁定“沼泽湿地”
+      if (reedRoll < 4) {
+        strokeLine(ctx, [rx - 0.1, ry - 3.1], [rx + 0.1, ry - 5.2], '#7b5535', 1.75);
+        strokeLine(ctx, [rx + 0.1, ry - 5.2], [rx + 0.2, ry - 6.1], '#5b6d3f', 0.7);
+        if (reedRoll === 0 || reedRoll === 1) {
+          strokeLine(ctx, [rx - 2.3, ry - 2.6], [rx - 2.5, ry - 4.1], '#734e30', 1.5);
+        }
+      }
     }
   }
 
@@ -2103,6 +2465,12 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       paintPlainArt(ctx, x, y, elevation, state);
     } else if (terrain === 'hill') {
       paintHillArt(ctx, x, y, elevation, state);
+    } else if (terrain === 'plateau') {
+      paintPlateauArt(ctx, x, y, elevation, state);
+    } else if (terrain === 'valley') {
+      paintValleyArt(ctx, x, y, elevation, state);
+    } else if (terrain === 'marsh') {
+      paintMarshArt(ctx, x, y, elevation, state);
     } else if (terrain === 'forest') {
       paintForestArt(ctx, x, y, elevation, state);
     } else if (terrain === 'mountain') {

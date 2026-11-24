@@ -2,7 +2,7 @@ import type { FixedMap } from '../core/fixed-maps.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
-export type BoardAngleScene = 'damage2' | 'damage' | 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
+export type BoardAngleScene = 'elevation' | 'damage2' | 'damage' | 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
 
 const near = (x: number, y: number, cx: number, cy: number, rx: number, ry: number): boolean =>
   ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
@@ -175,10 +175,50 @@ function damageTerrain(w: number, h: number, x: number, y: number): string {
   return '.';
 }
 
+function elevationTerrain(w: number, _h: number, x: number, y: number): string {
+  const s = w / 24;
+  // 1. 东北方层层抬升的高原阶梯：高山(^) -> 台地(P) -> 丘陵(h) -> 平原(.)
+  const dPeak = ellipDist(x, y, 18.6 * s, 4.6 * s, 2.0 * s, 2.0 * s);
+  const dPlat = ellipDist(x, y, 16.4 * s, 6.2 * s, 5.4 * s, 4.4 * s);
+  const dHill = ellipDist(x, y, 15.6 * s, 6.8 * s, 7.6 * s, 6.2 * s);
+  // 东南偏东再设一座独立小台地，直观展示台地直落平原与丘陵的峭壁剖面
+  const dMiniPlat = ellipDist(x, y, 19.6 * s, 16.8 * s, 2.8 * s, 2.4 * s);
+  const dMiniHill = ellipDist(x, y, 19.2 * s, 17.0 * s, 4.3 * s, 3.6 * s);
+
+  if (dPeak < 1) return '^';
+  if (dPlat < 1 || dMiniPlat < 1) return 'P';
+  if (dHill < 1 || dMiniHill < 1) return 'h';
+
+  // 2. 贯穿中央的蜿蜒下陷河谷：谷地(v) 夹护溪流(s/~) 与木桥(=)
+  const gorgeY = 12.2 * s + Math.sin(x * 0.28 / s) * 1.8 * s + (x - 12 * s) * 0.22;
+  const dg = Math.abs(y - gorgeY);
+  if (dg < 0.72 * s && x >= 1 && x <= w - 2) {
+    if (Math.round(x) === Math.round(9 * s) || Math.round(x) === Math.round(15 * s)) return '=';
+    return dg < 0.36 * s ? '~' : 's';
+  }
+  if (dg < 2.55 * s && x >= 1 && x <= w - 2) return 'v';
+
+  // 3. 西南与西北的大片泥泞沼泽盆地(w) + 木桥与林缘
+  const dSwamp1 = ellipDist(x, y, 6.2 * s, 18.2 * s, 4.8 * s, 4.0 * s);
+  const dSwamp2 = ellipDist(x, y, 4.8 * s, 6.2 * s, 3.5 * s, 3.0 * s);
+  if (dSwamp1 < 1) {
+    if (Math.round(x) === Math.round(6 * s) && Math.round(y) === Math.round(18 * s)) return '=';
+    return 'w';
+  }
+  if (dSwamp2 < 1) return 'w';
+
+  // 4. 少量林地点缀，便于对比平原、森林、谷地、沼泽与台地色相
+  if (near(x, y, 1.8 * s, 14.5 * s, 1.8 * s, 2.2 * s) || near(x, y, 12.5 * s, 21.0 * s, 2.2 * s, 1.8 * s) ||
+      near(x, y, 9.2 * s, 2.2 * s, 1.8 * s, 1.5 * s)) return 'f';
+
+  return '.';
+}
+
 export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all'): GameState {
-  const mapW = scene === 'damage' ? 20 : scene === 'damage2' ? 20 : size;
-  const mapH = scene === 'damage' ? 20 : scene === 'damage2' ? 16 : size;
+  const mapW = scene === 'damage' || scene === 'damage2' ? 20 : scene === 'elevation' ? 24 : size;
+  const mapH = scene === 'damage' ? 20 : scene === 'damage2' ? 16 : scene === 'elevation' ? 24 : size;
   const cellOf = (x: number, y: number): string => {
+    if (scene === 'elevation') return elevationTerrain(mapW, mapH, x, y);
     if (scene === 'damage' || scene === 'damage2') return damageTerrain(mapW, mapH, x, y);
     if (scene === 'cities' || scene === 'future') return citiesTerrain(size, x, y);
     if (scene === 'river') return size === 16 ? riverTerrain16(x, y) : riverTerrain32(x, y);
@@ -188,6 +228,7 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   };
 
   const sceneNames: Record<BoardAngleScene, string> = {
+    elevation: '地形高差（台地 / 谷地 / 沼泽）',
     damage2: '时代六至八 · 四档受损（常态/受损/重创/废墟）',
     damage: '时代一至五 · 四档受损（常态/受损/重创/废墟）',
     future: '时代五至八（现代→未来）',
@@ -206,6 +247,14 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     eras16: number[];
     eras32: number[];
   }> = {
+    elevation: {
+      a16: [{ x: 1, y: 1 }],
+      b16: [{ x: 20, y: 20 }],
+      a32: [{ x: 1, y: 1 }],
+      b32: [{ x: 20, y: 20 }],
+      eras16: [2, 4],
+      eras32: [2, 4],
+    },
     damage2: {
       a16: [{ x: 1, y: 2 }],
       b16: [{ x: 16, y: 12 }],
@@ -285,9 +334,32 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     citiesB: size === 16 ? cCfg.b16 : cCfg.b32,
   };
 
-  const match = createMatch({ ...DEFAULT_CONFIG, fixedMap: map, size: mapW, startEra: 2, expansionIds: [] }, 20261123, {});
+  const match = createMatch({
+    ...DEFAULT_CONFIG,
+    fixedMap: map,
+    size: mapW,
+    startEra: 2,
+    expansionIds: scene === 'elevation' ? ['height-terrain'] : [],
+  }, 20261123, {});
   match.fog = false;
-  if (scene === 'damage' || scene === 'damage2') {
+  if (scene === 'elevation') {
+    const chToTerrain: Record<string, typeof match.tiles[number]['terrain']> = {
+      '.': 'plain', f: 'forest', h: 'hill', '^': 'mountain',
+      '~': 'water', s: 'shallow', D: 'deep', '=': 'bridge',
+      P: 'plateau', v: 'valley', w: 'marsh',
+    };
+    for (let y = 0; y < match.h; y++) {
+      for (let x = 0; x < match.w; x++) {
+        const tile = match.tiles[y * match.w + x];
+        if (!tile) continue;
+        tile.terrain = chToTerrain[cellOf(x, y)] ?? 'plain';
+      }
+    }
+    const eraPlan = size === 16 ? cCfg.eras16 : cCfg.eras32;
+    match.cities.forEach((city, idx) => {
+      city.era = eraPlan[idx] ?? city.era;
+    });
+  } else if (scene === 'damage' || scene === 'damage2') {
     // 确保展示区为干净平整的开阔平原，不被随机山脉/河流遮挡任何一座城
     for (let y = 0; y < match.h; y++) {
       for (let x = 0; x < match.w; x++) {
@@ -331,6 +403,11 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   }
 
   const formations: Record<BoardAngleScene, Array<[Unit['owner'], string, number, number]>> = {
+    elevation: [
+      ['A', 'archer', 14, 6], ['A', 'spearman', 19, 17],
+      ['A', 'militia', 7, 17], ['B', 'knight', 11, 13],
+      ['B', 'archer', 5, 6], ['B', 'spearman', 16, 15],
+    ],
     damage2: [],
     damage: [],
     future: size === 16 ? [
