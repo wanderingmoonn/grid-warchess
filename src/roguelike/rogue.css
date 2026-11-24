@@ -282,6 +282,10 @@
 .rg-door.k-siege b {
   color: #a43e2c;
 }
+/* 守城战：也是红事，但它是"替别人守"，用偏冷的绛色区分 */
+.rg-door.k-special b {
+  color: #7b3f5e;
+}
 .rg-bossrow {
   margin-top: 14px;
   padding: 14px 16px;

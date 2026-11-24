@@ -292,6 +292,42 @@ for (const w of Object.values(WORLDS)) {
   }
 }
 
+/**
+ * 防御工事（精英战 / 攻坚 / 层末 / 守城战都会用）。
+ *
+ * 按**时代**给一套，而不是按层写死：第一层的箭塔和第三层的碉堡不是同一种东西，
+ * 但"每一层都有一座塔"这件事是一样的。塔负责火力，墙负责挡路——
+ * 墙的 atk 很低甚至为 0，它的价值是让你必须先拆它才能摸到城。
+ */
+export interface DefenseSet {
+  tower: string;
+  wall?: string;
+  /**
+   * 数值缩放（缺省 1）。
+   *
+   * 奇想和修真的建筑本身偏弱（哥布林战营 4 攻、散灵台 12 攻），
+   * 放在第三层会被玩家当纸糊。按世界放大一点，既保住风味，又不至于没用。
+   */
+  scale?: { atk: number; hp: number };
+}
+
+/** 按时代的默认防御工事（第一/三层用；第二层看世界） */
+export const DEFENSE_BY_ERA: Record<number, DefenseSet> = {
+  1: { tower: 'tower', wall: 'camp' },
+  2: { tower: 'keep', wall: 'camp2' },
+  3: { tower: 'battery', wall: 'camp3' },
+  4: { tower: 'fortress', wall: 'camp4' },
+  5: { tower: 'bunker', wall: 'camp5' },
+  6: { tower: 'bunker', wall: 'camp5' },
+};
+
+/** 第二层四个世界各自的工事（只换外壳，数值按 scale 对齐） */
+export const WORLD_DEFENSE: Partial<Record<WorldId, DefenseSet>> = {
+  arms: { tower: 'gp_bastion', wall: 'gp_earthwork' },
+  fantasy: { tower: 'goblin-warcamp', wall: 'earth-wall', scale: { atk: 3.2, hp: 1.7 } },
+  cultivation: { tower: 'cultivation-spirit-tower', wall: 'cultivation-kill-formation', scale: { atk: 1.7, hp: 1.8 } },
+};
+
 /** 方略：开局身份 + 一条被动。被动在 battle.ts 里翻译成具体加成 */
 export interface Strategy {
   id: string;
@@ -388,7 +424,17 @@ export function relicById(id: string): Relic | undefined {
   return RELICS.find((r) => r.id === id);
 }
 
-/** 事件池：每次进普通事件房从这里随机抽一条 */
+/**
+ * 事件池。
+ *
+ * 和临战决议的分工（2026-11-24 明确）：
+ *   · **事件 = 这一趟值不值**：金币、兵、藏品、整编、赌博。影响的是整局。
+ *   · **决议 = 这一仗怎么打**：只在层末出现，只影响那一场，全部是战术修正。
+ * 所以事件里**不再出现**"下一战攻击 +2"这种临时加成——那是决议的活。
+ *
+ * 选项的骨架也刻意做得不一样：有的两选、有的四选；有的给东西、有的要你拿兵去换、
+ * 有的纯赌。这样玩家读到的不是"三个数值选一个"，是"这伙人想从你这儿拿什么"。
+ */
 export const EVENTS: EventDef[] = [
   {
     id: 'levy',
@@ -397,7 +443,7 @@ export const EVENTS: EventDef[] = [
     choices: [
       { label: '按册抽丁', hint: '民兵 ×2，−30 金', effect: { add: { type: 'militia', count: 2 }, gold: -30 } },
       { label: '只征粮', hint: '+70 金', effect: { gold: 70 } },
-      { label: '把册子还给他', hint: '下一战攻击 +2', effect: { nextAtk: 2 } },
+      { label: '从册子里挑老兵', hint: '把 1 个最差的兵换成 1 个高级兵', effect: { promote: 1 } },
     ],
   },
   {
@@ -407,7 +453,19 @@ export const EVENTS: EventDef[] = [
     choices: [
       { label: '搜能用的', hint: '+90 金', effect: { gold: 90 } },
       { label: '收拢散兵', hint: '弓手 ×1', effect: { add: { type: 'archer', count: 1 } } },
-      { label: '帮着埋人', hint: '下一战攻击 +3', effect: { nextAtk: 3 } },
+      {
+        label: '在灰里挖',
+        hint: '五成：得 1 件藏品；否则 +30 金',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            lose: { gold: 30 },
+            winText: '挖出一只没烧透的箱子',
+            loseText: '只有灰和骨头，顺手捡了点铜',
+          },
+        },
+      },
     ],
   },
   {
@@ -418,6 +476,11 @@ export const EVENTS: EventDef[] = [
       { label: '买他的货', hint: '−120 金，得 1 件藏品', effect: { gold: -120, relic: 'random' } },
       { label: '照价收税', hint: '+140 金', effect: { gold: 140 } },
       { label: '让他过去', hint: '+20 金', effect: { gold: 20 } },
+      {
+        label: '连车带人扣下',
+        hint: '+220 金，损 1 个基础兵',
+        effect: { gold: 220, remove: { type: 'layer-low', count: 1 } },
+      },
     ],
   },
   {
@@ -425,8 +488,8 @@ export const EVENTS: EventDef[] = [
     title: '旧战场',
     body: '两年前这里打过一场，现在草长得很好。兵器还插在土里，像谁忘了收。',
     choices: [
-      { label: '捡兵器', hint: '得 1 个本层兵', effect: { add: { type: 'layer-mid', count: 1 } } },
-      { label: '找那面旗', hint: '下一战攻击 +2', effect: { nextAtk: 2 } },
+      { label: '捡兵器', hint: '得 1 个中档兵', effect: { add: { type: 'layer-mid', count: 1 } } },
+      { label: '找那面旗', hint: '得 1 件藏品', effect: { relic: 'random' } },
       { label: '什么都不动', hint: '+40 金', effect: { gold: 40 } },
     ],
   },
@@ -435,8 +498,32 @@ export const EVENTS: EventDef[] = [
     title: '钟楼的影子',
     body: '太阳落下去的时候，远处那座楼的影子刚好盖到你脚边。老兵说：别在那儿站着。',
     choices: [
-      { label: '敲一下', hint: '得 1 件藏品', effect: { relic: 'random' } },
+      {
+        label: '敲一下',
+        hint: '五成：得 1 件藏品；否则损 1 个基础兵',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            lose: { remove: { type: 'layer-low', count: 1 } },
+            winText: '钟声里掉出一样东西',
+            loseText: '有人当场扔了兵器就走',
+          },
+        },
+      },
       { label: '移开眼', hint: '+60 金', effect: { gold: 60 } },
+      {
+        label: '在影子里站到天黑',
+        hint: '五成：得 1 个高级兵；否则什么都没有',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: { add: { type: 'layer-high', count: 1 } },
+            winText: '有个人从影子里走出来，跟上了队伍',
+            loseText: '什么也没有发生，只是天黑了',
+          },
+        },
+      },
     ],
   },
   {
@@ -444,9 +531,9 @@ export const EVENTS: EventDef[] = [
     title: '三家的账房',
     body: '账房先生把三本账并排放着，说：哪家都行，只要押得准。他连笔都替你备好了。',
     choices: [
-      { label: '借兵', hint: '−80 金，得 1 个本层高级兵', effect: { gold: -80, add: { type: 'layer-high', count: 1 } } },
+      { label: '借兵', hint: '−80 金，得 1 个高级兵', effect: { gold: -80, add: { type: 'layer-high', count: 1 } } },
       { label: '卖情报', hint: '+110 金', effect: { gold: 110 } },
-      { label: '不欠人情', hint: '下一战攻击 +1', effect: { nextAtk: 1 } },
+      { label: '抄一份账本', hint: '得 1 件藏品', effect: { relic: 'random' } },
     ],
   },
   {
@@ -454,9 +541,9 @@ export const EVENTS: EventDef[] = [
     title: '溃兵',
     body: '二十来个人蹲在沟里，旗扔了，甲还在。领头的不敢看你，只说：给口饭，跟你走。',
     choices: [
-      { label: '收编', hint: '得 2 个本层基础兵', effect: { add: { type: 'layer-low', count: 2 } } },
-      { label: '拿走他们的甲', hint: '下一战我军护甲 +2', effect: { nextArmor: 2 } },
-      { label: '指条路让他们走', hint: '+60 金', effect: { gold: 60 } },
+      { label: '收编', hint: '−20 金，得 2 个基础兵', effect: { gold: -20, add: { type: 'layer-low', count: 2 } } },
+      { label: '拿走他们的甲', hint: '+90 金', effect: { gold: 90 } },
+      { label: '给他们一口饭', hint: '−40 金，得 1 件藏品', effect: { gold: -40, relic: 'random' } },
     ],
   },
   {
@@ -464,9 +551,13 @@ export const EVENTS: EventDef[] = [
     title: '渡口',
     body: '摆渡的老头一天只跑两趟。他说：兵过河，船就沉。要过，得加钱。',
     choices: [
-      { label: '给钱', hint: '−50 金，下一战攻击 +3', effect: { gold: -50, nextAtk: 3 } },
-      { label: '抢船', hint: '得 1 个本层兵，+20 金', effect: { add: { type: 'layer-mid', count: 1 }, gold: 20 } },
-      { label: '绕路', hint: '下一战我军最大生命 +6', effect: { nextHp: 6 } },
+      { label: '给钱', hint: '−50 金，得 1 个中档兵', effect: { gold: -50, add: { type: 'layer-mid', count: 1 } } },
+      {
+        label: '抢船',
+        hint: '+20 金，得 1 个中档兵，损 1 个基础兵',
+        effect: { gold: 20, add: { type: 'layer-mid', count: 1 }, remove: { type: 'layer-low', count: 1 } },
+      },
+      { label: '替他们摆渡', hint: '+60 金', effect: { gold: 60 } },
     ],
   },
   {
@@ -474,9 +565,176 @@ export const EVENTS: EventDef[] = [
     title: '路边的祭坛',
     body: '石头垒的，不知道供的是谁。供品还在，说明这附近已经没人敢来拿了。',
     choices: [
-      { label: '上供', hint: '−60 金，得 1 件藏品', effect: { gold: -60, relic: 'random' } },
-      { label: '把供品拿走', hint: '+100 金', effect: { gold: 100 } },
-      { label: '拜一拜就走', hint: '下一战我军护甲 +1', effect: { nextArmor: 1 } },
+      {
+        label: '上供',
+        hint: '−60 金，六成：得 1 件藏品；否则什么都没有',
+        effect: {
+          gold: -60,
+          risk: {
+            chance: 0.6,
+            win: { relic: 'random' },
+            winText: '石头底下压着东西',
+            loseText: '供品没了，石头还是石头',
+          },
+        },
+      },
+      { label: '拿走供品', hint: '+100 金', effect: { gold: 100 } },
+      {
+        label: '撬开石座',
+        hint: '得 1 件藏品，损 1 个基础兵',
+        effect: { relic: 'random', remove: { type: 'layer-low', count: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'smith',
+    title: '铁匠',
+    body: '炉子还热着，人已经跑了。砧上放着一块没打完的铁，锤子还在旁边。',
+    choices: [
+      { label: '打一件兵器', hint: '−100 金，得 1 件藏品', effect: { gold: -100, relic: 'random' } },
+      { label: '修甲', hint: '−60 金，得 1 个中档兵', effect: { gold: -60, add: { type: 'layer-mid', count: 1 } } },
+      { label: '把废铁卖了', hint: '+80 金', effect: { gold: 80 } },
+    ],
+  },
+  {
+    id: 'captives',
+    title: '俘虏',
+    body: '沟里蹲着七个，绳子不够，只能用他们的腰带。看见你过来，有人先跪了。',
+    choices: [
+      { label: '收编', hint: '−30 金，得 1 个中档兵', effect: { gold: -30, add: { type: 'layer-mid', count: 1 } } },
+      { label: '换赎金', hint: '+120 金', effect: { gold: 120 } },
+      { label: '问完话放走', hint: '+40 金', effect: { gold: 40 } },
+    ],
+  },
+  {
+    id: 'plague',
+    title: '瘟疫',
+    body: '先是炊事班，然后是马夫。军医说别数了，数了也没用。',
+    choices: [
+      { label: '请医', hint: '−90 金', effect: { gold: -90 } },
+      { label: '隔离', hint: '损 1 个基础兵', effect: { remove: { type: 'layer-low', count: 1 } } },
+      {
+        label: '硬扛',
+        hint: '五成：没事；否则损 2 个基础兵',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: {},
+            lose: { remove: { type: 'layer-low', count: 2 } },
+            winText: '扛过去了',
+            loseText: '一夜抬出去两个',
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: 'gamble',
+    title: '赌局',
+    body: '几个兵蹲在墙根下掷骰子。见你来了，把碗往前推了推，谁也没收。',
+    choices: [
+      {
+        label: '押大',
+        hint: '−100 金，五成：+260 金',
+        effect: {
+          gold: -100,
+          risk: { chance: 0.5, win: { gold: 260 }, winText: '开了大', loseText: '开了小' },
+        },
+      },
+      {
+        label: '押小',
+        hint: '−50 金，五成：+120 金',
+        effect: {
+          gold: -50,
+          risk: { chance: 0.5, win: { gold: 120 }, winText: '开了小', loseText: '开了大' },
+        },
+      },
+      { label: '看场子', hint: '+40 金', effect: { gold: 40 } },
+    ],
+  },
+  {
+    id: 'refugees',
+    title: '逃难的人',
+    body: '路上全是人，往北走。有人把最后一袋粮换成了你的旗，说：跟着旗走，总比跟着路走强。',
+    choices: [
+      { label: '给粮', hint: '−60 金，得 2 个基础兵', effect: { gold: -60, add: { type: 'layer-low', count: 2 } } },
+      { label: '征兵', hint: '−20 金，得 1 个基础兵', effect: { gold: -20, add: { type: 'layer-low', count: 1 } } },
+      { label: '抢', hint: '+100 金', effect: { gold: 100 } },
+    ],
+  },
+  {
+    id: 'grave',
+    title: '老兵的坟',
+    body: '一块木牌，字被雨打花了。看得出是"某某营，十七人"。土是新翻的，翻的人没留下名字。',
+    choices: [
+      {
+        label: '立块碑',
+        hint: '−40 金，把 1 个最差的兵换成 1 个高级兵',
+        effect: { gold: -40, promote: 1 },
+      },
+      {
+        label: '挖开',
+        hint: '得 1 件藏品，损 1 个基础兵',
+        effect: { relic: 'random', remove: { type: 'layer-low', count: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'armsdealer',
+    title: '军械贩子',
+    body: '他掀开油布，底下一排枪，擦得比你的兵干净。他说：这些东西来路不正，所以便宜。',
+    choices: [
+      { label: '买一批', hint: '−150 金，得 1 件藏品', effect: { gold: -150, relic: 'random' } },
+      { label: '卖旧兵器', hint: '+90 金，损 1 个基础兵', effect: { gold: 90, remove: { type: 'layer-low', count: 1 } } },
+      {
+        label: '以旧换新',
+        hint: '损 1 个基础兵，得 1 个高级兵',
+        effect: { add: { type: 'layer-high', count: 1 }, remove: { type: 'layer-low', count: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'kid',
+    title: '拾荒的孩子',
+    body: '他在死人身上翻东西，翻得很熟练。看见你，先把手里的东西举起来，像是在等你开价。',
+    choices: [
+      {
+        label: '给他钱',
+        hint: '−30 金，五成：得 1 件藏品；否则什么都没有',
+        effect: {
+          gold: -30,
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            winText: '他从怀里掏出一件东西',
+            loseText: '他拿了钱就跑',
+          },
+        },
+      },
+      { label: '带走', hint: '得 1 个基础兵', effect: { add: { type: 'layer-low', count: 1 } } },
+      { label: '不管', hint: '+10 金', effect: { gold: 10 } },
+    ],
+  },
+  {
+    id: 'well',
+    title: '古井',
+    body: '井沿上刻着字，磨得只剩半个"守"。往下看，水面上有个你，比你干净。',
+    choices: [
+      {
+        label: '投钱',
+        hint: '−50 金，五成：得 1 件藏品；否则 +20 金',
+        effect: {
+          gold: -50,
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            lose: { gold: 20 },
+            winText: '井底有东西',
+            loseText: '捞上来一只铜桶',
+          },
+        },
+      },
+      { label: '打水', hint: '+30 金', effect: { gold: 30 } },
     ],
   },
 ];
@@ -485,7 +743,11 @@ export function eventById(id: string): EventDef {
   return EVENTS.find((e) => e.id === id) ?? (EVENTS[0] as EventDef);
 }
 
-/** 休整房的选项池（每次随机抽 3 个） */
+/**
+ * 休整房的选项池（每次随机抽 3 个）。
+ *
+ * 只做**人、钱、编制**三件事——战斗加成全部让给临战决议，否则两个池子又会撞。
+ */
 export interface RestOption {
   id: string;
   label: string;
@@ -495,34 +757,48 @@ export interface RestOption {
 export const REST_OPTIONS: RestOption[] = [
   { id: 'reinforce', label: '补员', hint: '得 1 个本层基础兵' },
   { id: 'wage', label: '募饷', hint: '+90 金' },
-  { id: 'drill', label: '演武', hint: '下一战我军攻击 +2' },
-  { id: 'harden', label: '加固', hint: '下一战我军最大生命 +6' },
   { id: 'recruit', label: '征召', hint: '−80 金，得 1 个本层高级兵' },
+  { id: 'reform', label: '整编', hint: '把 1 个最低级的兵换成 1 个本层高级兵' },
+  { id: 'muster', label: '犒军', hint: '−60 金，得 2 个本层基础兵' },
 ];
 
-/** 临战决议：层末 boss 前抽 3 个给玩家选 1 个 */
+/**
+ * 临战决议：层末 boss 前抽 3 个给玩家选 1 个。
+ *
+ * 全部是**这一场**的战术修正，不带金币/兵/藏品的收益（那是事件的活）。
+ * 每一个都带一点代价：要么花钱，要么拿别的属性换——没有"纯赚"的选项，
+ * 所以选起来是"这一仗我打算怎么打"，不是"哪个数大"。
+ */
 export interface DecisionOption {
   id: string;
   label: string;
   hint: string;
   /** 立刻扣的钱（不够就不能选） */
   cost?: number;
-  /** 本场加成 */
+  /** 本场加成（可以是负数：拿一样换另一样） */
   atk?: number;
   hp?: number;
   armor?: number;
+  move?: number;
   enemyCut?: number;
   cityDamage?: number;
+  /** 敌人工事（塔/墙）开场耐久 −N% */
+  defenseDamage?: number;
+  /** 敌军开场掉 N% 血 */
+  enemyHp?: number;
   /** 本场临时兵（本层基础兵） */
   tempUnits?: number;
 }
 
 export const DECISIONS: DecisionOption[] = [
-  { id: 'night', label: '夜袭', hint: '本场我军攻击 +2', atk: 2 },
-  { id: 'press', label: '强攻', hint: '本场我军最大生命 +8', hp: 8 },
+  { id: 'night', label: '夜袭', hint: '本场我军攻击 +3、护甲 −1', atk: 3, armor: -1 },
+  { id: 'press', label: '强攻', hint: '本场我军最大生命 +10、移动 −1', hp: 10, move: -1 },
   { id: 'bribe', label: '买通', hint: '−120 金，本场敌人少 2 个兵', cost: 120, enemyCut: 2 },
   { id: 'levy', label: '就地征召', hint: '本场多 2 个基础兵（活下来就带走）', tempUnits: 2 },
-  { id: 'sappers', label: '工兵破墙', hint: '本场敌城初始耐久 −40%', cityDamage: 0.4 },
+  { id: 'sappers', label: '工兵破墙', hint: '本场敌城与工事耐久 −45%', cityDamage: 0.45, defenseDamage: 0.45 },
+  { id: 'fire', label: '火攻', hint: '本场敌军开场即带伤（−25% 生命）', enemyHp: 0.25 },
+  { id: 'flank', label: '迂回', hint: '本场我军移动 +1、攻击 −1', move: 1, atk: -1 },
+  { id: 'dig', label: '掘壕', hint: '本场我军护甲 +2、移动 −1', armor: 2, move: -1 },
 ];
 
 /** 房间标题里用的地名，纯装饰 */
@@ -551,18 +827,36 @@ export function pickEnemyTypes(
   const sorted = [...pool].filter((id) => cost(id) > 0).sort((a, b) => cost(b) - cost(a));
   if (sorted.length === 0) return [];
   const cheapest = sorted[sorted.length - 1] as string;
+  const cheapestCost = Math.max(1, cost(cheapest));
 
   const out: string[] = [];
   let left = budget;
   const slots = Math.max(1, Math.min(14, count));
   for (let i = 0; i < slots; i += 1) {
     /*
-     * 第一个位置单独给一半预算：编成里要有"一个尖子"。
-     * 平均分的话，钱少的局会全买成便宜兵，一个像样的都没有；
-     * 后面的位置再按"剩余 ÷ 剩余位置"平均分，保证人头凑得齐。
+     * 每一个位置先**扣掉后面所有人的最低开销**，剩下的才是这个位置能花的钱。
+     *
+     * 上一版第一个位置直接拿一半预算，钱少的局里这一半刚好买一个贵兵，
+     * 剩下的位置连最便宜的都不够——"算 4 个人、场上只来 3 个"。
+     * 先留底再花，人数才一定凑得齐；第一个位置仍然多分一点，编成里才有尖子。
      */
-    const cap = i === 0 ? Math.floor(left * 0.5) : Math.max(1, Math.floor(left / (slots - i)));
-    const pick = sorted.find((id) => cost(id) <= cap) ?? cheapest;
+    const rest = slots - i - 1;
+    const reserve = rest * cheapestCost;
+    const spendable = Math.max(cheapestCost, left - reserve);
+    const cap = spendable;
+    const cands = sorted.filter((id) => cost(id) <= cap);
+    let pick = cands[0] ?? cheapest;
+    /*
+     * 别连着买四个一样的。
+     *
+     * 价格差在 15% 以内的两个兵战力接近，换着买不影响强度，但看起来是
+     * "一支什么样的队伍"，而不是"四个同一个模子"。价格差得远就不换——
+     * 宁可重复，也不要为了好看把编成拉垮。
+     */
+    if (out.length > 0 && pick === out[out.length - 1]) {
+      const alt = cands.find((id) => id !== pick && cost(id) >= cost(pick) * 0.85);
+      if (alt) pick = alt;
+    }
     if (cost(pick) > left) break;
     out.push(pick);
     left -= cost(pick);

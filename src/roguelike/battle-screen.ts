@@ -20,7 +20,7 @@ import { cellAtPoint, renderBoard } from '../ui/board.ts';
 import type { BoardUi } from '../ui/board.ts';
 import type { AiBudget } from '../core/ai-meta.ts';
 import type { Action, GameState, Unit } from '../core/types.ts';
-import { buildBattle, outcomeOf, resultOf, step } from './battle.ts';
+import { buildBattle, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
 import type { BattleInit, BattleResult } from './types.ts';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
@@ -44,6 +44,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   const undoStack: GameState[] = [];
   /** 敌人这一场已经补了几个兵（`AiBudget.maxRecruit` 是**每回合**的额度，得自己累计） */
   let enemyRecruited = 0;
+  /** 守城战：下一波还没到的那一波 */
+  let waveIdx = 0;
 
   host.innerHTML = `
     <div class="rg-battle">
@@ -158,17 +160,36 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     renderBoard(boardEl as HTMLElement, playerView(state, 'A'), ui);
 
     const rounds = Math.ceil(state.turn / 2);
-    const mine = unitsOf(state, 'A').length;
-    const foes = unitsOf(state, 'B').length;
+    /*
+     * 人数只数**战斗单位**：守城战时玩家有塔和墙，它们不是"人"，
+     * 混进"我 5"里会让人以为还剩五个兵，其实只剩三个。
+     */
+    const combatOf = (owner: 'A' | 'B'): number =>
+      unitsOf(state, owner).filter((u) => state.unitTypes[u.type]?.category === 'combat').length;
+    const worksOf = (owner: 'A' | 'B'): number =>
+      unitsOf(state, owner).filter((u) => state.unitTypes[u.type]?.category === 'building').length;
+    const mine = combatOf('A');
+    const myWorks = worksOf('A');
+    const foes = combatOf('B');
+    const foeWorks = worksOf('B');
+    const timer =
+      init.holdRounds > 0
+        ? `<span>守 <b>${Math.min(rounds, init.holdRounds)}</b>/${init.holdRounds} 轮</span>`
+        : `<span>回合 <b>${rounds}</b>/${init.roundLimit}</span>`;
+    const left = init.waves.filter((w) => w.atRound > rounds).length;
     hudEl!.innerHTML = `
-      <span>回合 <b>${rounds}</b>/${init.roundLimit}</span>
-      <span>我 <b>${mine}</b> · 敌 <b>${foes}</b></span>
+      ${timer}
+      <span>我 <b>${mine}</b>${myWorks > 0 ? `（工事 ${myWorks}）` : ''} · 敌 <b>${foes}</b>${
+        foeWorks > 0 ? `（工事 ${foeWorks}）` : ''
+      }</span>
+      ${init.holdRounds > 0 ? `<span>还有 <b>${left}</b> 波</span>` : ''}
       <span>${state.current === 'A' ? (busy ? '对方行动中…' : '轮到你') : '对方行动中…'}</span>`;
 
     armyEl!.innerHTML =
       mine === 0
         ? '<p class="rg-dim">一个兵都没有了。</p>'
         : unitsOf(state, 'A')
+            .filter((u) => state.unitTypes[u.type]?.category === 'combat')
             .map((u) => {
               const d = utype(state, u.type);
               const cls = u.id === selectedId ? 'sel' : '';
@@ -181,11 +202,12 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
             })
             .join('');
 
+    const bCities = state.cities.filter((c) => c.owner === 'B' && !c.ruined).length;
     foeEl!.innerHTML =
-      foes === 0
+      foes === 0 && foeWorks === 0
         ? '<p class="rg-dim">对面已经没人了。</p>'
-        : `<p class="rg-dim">还剩 ${foes} 个单位${
-            init.enemyCityCount > 0 ? `、${init.enemyCityCount} 座城` : ''
+        : `<p class="rg-dim">还剩 ${foes} 个敌人${foeWorks > 0 ? `、${foeWorks} 处工事` : ''}${
+            bCities > 0 ? `、${bCities} 座城` : ''
           }。</p>`;
 
     tipEl!.innerHTML = hintText();
@@ -197,7 +219,11 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     if (busy || state.current !== 'A') return '对面在想。';
     const unit = selected();
     if (!unit) {
-      return '点自己的兵 → 点空格移动 / 点敌人开火 / 点敌城攻城。<br>走完还能接着打，不用重新选。';
+      const head =
+        init.holdRounds > 0
+          ? `守住 <b>${init.holdRounds}</b> 轮。城破了就输，人打光了也算输。<br>`
+          : '';
+      return `${head}点自己的兵 → 点空格移动 / 点敌人（含塔）开火 / 点敌城攻城。<br>走完还能接着打，不用重新选。`;
     }
     const name = escapeHtml(utype(state, unit.type).name);
     if (unit.moved && unit.acted) return `${name} 这一回合已经动完了。`;
@@ -245,7 +271,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
 
   function checkEnd(): void {
     if (finished) return;
-    const outcome = outcomeOf(state);
+    const outcome = outcomeOf(state, init);
     if (!outcome) {
       // 超时：小图打到二十几轮还没结果，就是"两边都不想打"
       if (Math.ceil(state.turn / 2) > init.roundLimit) {
@@ -261,6 +287,27 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     window.setTimeout(() => {
       if (!disposed) handlers.onDone(resultOf(state, outcome === 'win'));
     }, 900);
+  }
+
+  /**
+   * 守城战：到点的波次上场。
+   *
+   * 放在"敌方回合结束、轮到你"这一刻：玩家先看见新来的人站在上沿，
+   * 再决定这一轮怎么挡。不在 render 里调，是因为它会改状态。
+   */
+  function arrivalWaves(): void {
+    if (finished || disposed) return;
+    let came = false;
+    while (waveIdx < init.waves.length) {
+      const wave = init.waves[waveIdx] as BattleInit['waves'][number];
+      if (wave.atRound > Math.ceil(state.turn / 2)) break;
+      waveIdx += 1;
+      const units = spawnWave(state, wave.types, init.seed ^ (waveIdx * 7919));
+      if (units.length === 0) continue;
+      came = true;
+      flashTip(`第 ${waveIdx + 1} 波到了：${units.length} 个兵`);
+    }
+    if (came) render();
   }
 
   async function runAi(): Promise<void> {
@@ -286,7 +333,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     };
     const rejected = new Set<string>();
     for (let i = 0; i < AI_MAX_STEPS; i += 1) {
-      if (disposed || finished || state.current !== 'B' || outcomeOf(state)) break;
+      if (disposed || finished || state.current !== 'B' || outcomeOf(state, init)) break;
       const action = aiNextAction(state, budget, rejected);
       if (!action) break;
       const r = step(state, action);
@@ -304,11 +351,12 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       render();
       await sleep(40);
     }
-    if (!disposed && !finished && state.current === 'B' && !outcomeOf(state)) {
+    if (!disposed && !finished && state.current === 'B' && !outcomeOf(state, init)) {
       const end = step(state, { type: 'END_TURN' });
       if (end.ok) state = end.state;
     }
     busy = false;
+    arrivalWaves();
     render();
     checkEnd();
   }
@@ -384,6 +432,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     }
   });
 
+  arrivalWaves();
   render();
   if (state.current === 'B') void runAi();
 

@@ -23,6 +23,7 @@ import {
   restOptions,
   rewardOptions,
   shopStock,
+  specialRewards,
   startRun,
   STEPS_PER_LAYER,
 } from './run.ts';
@@ -204,6 +205,7 @@ function showMap(root: HTMLElement): void {
 
 function doorTitle(d: RoomNode): string {
   if (d.kind === 'event') return `事件 · ${eventById(d.eventId ?? '').title}`;
+  if (d.kind === 'special') return `守城战 · ${d.special?.name ?? ''}`;
   if (d.kind === 'boss') return '层末会战';
   return d.title;
 }
@@ -212,7 +214,7 @@ function doorTitle(d: RoomNode): string {
 
 function enterRoom(root: HTMLElement, node: RoomNode): void {
   if (!run) return;
-  if (node.kind === 'battle' || node.kind === 'elite' || node.kind === 'siege') {
+  if (node.kind === 'battle' || node.kind === 'elite' || node.kind === 'siege' || node.kind === 'special') {
     startBattle(root, node);
     return;
   }
@@ -423,6 +425,16 @@ function onBattleDone(root: HTMLElement, node: RoomNode, result: BattleResult): 
   }
   finishBattle(r, result);
   r.log.push(`打赢「${node.title}」，剩 ${armyCount(r.army)} 人`);
+  /*
+   * 守城战：报酬是**定好的**（东家给的兵 + 一件藏品 + 一笔钱），不给三选一。
+   * 你答应了谁，就拿谁的东西——这跟"打完捡战利品"是两件事，所以单独走一条。
+   */
+  if (node.kind === 'special') {
+    const notes = specialRewards(r, node, rng);
+    afterRoom(r);
+    showResultThen(root, `${node.title} · 守住了`, `报酬：${notes.join('；')}。`);
+    return;
+  }
   const options = rewardOptions(r, node.kind, rng);
   openModal(
     root,
