@@ -3137,8 +3137,8 @@ html[data-terrain='on'] .tile.t-mountain {
 }
 
 html[data-ui-layout='refined'] .board.fog {
-  --fog-shade: rgba(23, 35, 43, 0.28);
-  --fog-memory-shade: rgba(23, 35, 43, 0.42);
+  --fog-shade: rgba(13, 20, 28, 0.54);
+  --fog-memory-shade: rgba(13, 20, 28, 0.66);
 }
 
 .board.fog .tile.out {

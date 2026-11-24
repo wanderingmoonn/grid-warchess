@@ -115,6 +115,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 比原来的浅流略低半格（避免"水比岸高"），和深水之间不再有台阶。
    */
   const WATER_SURFACE = -3.5;
+  /** 迷雾压暗色：与正俯视 `--fog-shade` 对齐，确保视野内外边界一眼可辨 */
+  const FOG_SHADE = 'rgba(13, 20, 28, 0.54)';
+  const FOG_CITY_SHADE = 'rgba(13, 20, 28, 0.50)';
+  const FOG_PROP_TIE = 'rgba(13, 20, 28, 0.22)';
   /** 深度分档：决定水体底床可视度、边缘剖面水层厚度与深浅过渡坡 */
   const bedDepth: Partial<Record<Terrain, number>> = { shallow: 1, water: 4, deep: 9 };
   const isWaterTerrain = (t: Terrain | undefined): boolean => t === 'water' || t === 'shallow' || t === 'deep';
@@ -854,7 +858,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
     const drop = topZ - botZ;
     if (drop <= 1.5) {
-      if (dark) polygon(ctx, points, '#17232b47');
+      if (dark) polygon(ctx, points, FOG_SHADE);
       return points;
     }
 
@@ -1001,7 +1005,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.lineWidth = 0.85;
     ctx.stroke();
 
-    if (dark) polygon(ctx, points, '#17232b47');
+    if (dark) polygon(ctx, points, FOG_SHADE);
     return points;
   }
 
@@ -1962,7 +1966,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.lineWidth = 0.85;
     ctx.stroke();
 
-    if (dark) polygon(ctx, points, '#17232b47');
+    if (dark) polygon(ctx, points, FOG_SHADE);
     return points;
   }
 
@@ -2471,16 +2475,23 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       paintValleyArt(ctx, x, y, elevation, state);
     } else if (terrain === 'marsh') {
       paintMarshArt(ctx, x, y, elevation, state);
-    } else if (terrain === 'forest') {
-      paintForestArt(ctx, x, y, elevation, state);
-    } else if (terrain === 'mountain') {
-      paintMountainArt(ctx, x, y, elevation, state);
+    } else if (terrain === 'forest' || terrain === 'mountain') {
+      const canFilter = dark && typeof ctx.filter === 'string';
+      if (canFilter) {
+        ctx.save();
+        ctx.filter = 'brightness(0.56) saturate(0.72)';
+      }
+      if (terrain === 'forest') paintForestArt(ctx, x, y, elevation, state);
+      else paintMountainArt(ctx, x, y, elevation, state);
+      if (canFilter) ctx.restore();
+      if (dark) polygon(ctx, rhombus(x, y, 1, elevation), canFilter ? FOG_PROP_TIE : FOG_SHADE);
+      return;
     } else if (terrain === 'bridge') {
       paintBridgeArt(ctx, x, y, elevation, state);
     } else {
       polygon(ctx, rhombus(x, y, 1, elevation), colors[terrain] ?? colors.plain!, '#34422a27');
     }
-    if (dark) polygon(ctx, rhombus(x, y, 1, elevation), '#17232b47');
+    if (dark) polygon(ctx, rhombus(x, y, 1, elevation), FOG_SHADE);
   }
 
   const teams = { A: '#a64b40', B: '#356689', C: '#53714c', D: '#99722d' };
@@ -4443,7 +4454,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const stage = cityDamageStage(city);
     if (stage === 3 && (city.era < 1 || city.era > 8)) {
       paintCityRuined(ctx, pt, outline);
-      if (dark) polygon(ctx, basePoly, '#17232b47');
+      if (dark) polygon(ctx, basePoly, FOG_SHADE);
       faces.push({ cell: hitCell, points: basePoly });
       return;
     }
@@ -4481,7 +4492,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
       if (dark) {
         const fogTop = rhombus(x, y, width, stage === 3 ? 6 : Math.min(26, city.era * 3 + 6));
-        polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], '#17232b38');
+        polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], FOG_CITY_SHADE);
       }
       // 扩大命中面覆盖 3D 建筑轮廓，点击建筑顶部也能直接选中城市
       const pickTop = rhombus(x, y, width, (stage === 3 ? 6 : 16) * hScale);
@@ -4506,7 +4517,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       ctx.drawImage(texture, 0, 0, width, width);
       ctx.restore();
     }
-    if (dark) polygon(ctx, roof, '#17232b47');
+    if (dark) polygon(ctx, roof, FOG_SHADE);
     ctx.lineWidth = target || selected ? 3.4 : 2.4;
     ctx.strokeStyle = outline;
     ctx.stroke();
@@ -4846,13 +4857,13 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           }
           if (useLayerCache) {
             waterCells.push({ x, y, terrain: cellTerrain, dark, eastEdge, southEdge, meta });
-            if (dark) polygon(targetCtx, top, '#17232b47');
+            if (dark) polygon(targetCtx, top, FOG_SHADE);
           } else {
             if (eastEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x + 1, y, x + 1, y + 1, 'east', dark, nowSec);
             if (southEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x, y + 1, x + 1, y + 1, 'south', dark, nowSec);
             paintWaterBaseTile(targetCtx, x, y, cellTerrain, terrain, meta);
             paintWaterGridAndContours(targetCtx, x, y, cellTerrain, terrain);
-            if (dark) polygon(targetCtx, top, '#17232b47');
+            if (dark) polygon(targetCtx, top, FOG_SHADE);
           }
         } else {
           paintTerrain(targetCtx, x, y, terrain, dark);
