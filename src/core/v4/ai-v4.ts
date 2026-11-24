@@ -267,11 +267,17 @@ export function aiNextActionV4(
    *
    * 每调一次都按**当下**的位置重排（动作一个一个结算，前面的走完，后面的距离就变了）。
    */
-  const toPost = (u: { id: string; x: number; y: number }): number => {
-    const p = con.econPosts?.[u.id];
-    return p ? Math.abs(p.x - u.x) + Math.abs(p.y - u.y) : 0;
-  };
-  const econOrder = [...world.myEcon].sort((a, b) => toPost(a) - toPost(b));
+  /*
+   * 顺序**由约束层给**（`con.econOrder`：靠自己岗位近的在前，按真实步数排）。
+   *
+   * 这里原来自己算"直线距离"来排——那是打分层在做微观决策，而且直线距离会把
+   * "看着近、其实要绕一大圈"的人排到前面，他先动反而堵路。
+   * 现在入口只负责**照着顺序派动作**，不再参与判断。
+   */
+  const rank = new Map((con.econOrder ?? []).map((id, i) => [id, i]));
+  const econOrder = [...world.myEcon].sort(
+    (a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9),
+  );
   for (const u of [...world.myCombat, ...econOrder]) {
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.moved) continue;

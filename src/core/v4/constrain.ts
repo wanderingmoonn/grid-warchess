@@ -369,7 +369,11 @@ function planEconPosts(
   s: GameState,
   world: World,
   mem?: V4Memory,
-): { posts?: Record<string, { x: number; y: number }>; next?: { type: string; x: number; y: number } } {
+): {
+  posts?: Record<string, { x: number; y: number }>;
+  next?: { type: string; x: number; y: number };
+  order?: string[];
+} {
   const econ = world.myEcon;
   const spots = world.econSpots();
   if (spots.length === 0) return {};
@@ -625,7 +629,25 @@ function planEconPosts(
       next = { type: p.type, x: p.x, y: p.y };
     }
   }
-  return { posts, next };
+  /*
+   * **行动顺序：靠自己岗位近的排在前面（链条末端先动）。**
+   *
+   * 这里给的"远近"是**真实步数**（`stepsFrom`，绕水绕山、不算人），不是直线距离。
+   * 直线距离会把"看着近、其实要绕一大圈"的人排到前面，他先动反而把路堵住。
+   *
+   * 只在有岗的人之间排序；没岗的排在最后（它们这一手本来就不该动）。
+   */
+  const order = [...econ]
+    .map((u) => {
+      const p = posts[u.id];
+      if (!p) return { id: u.id, d: Infinity };
+      const d = p.x === u.x && p.y === u.y ? 0 : (world.stepsFrom(p)[u.y * s.w + u.x] ?? Infinity);
+      return { id: u.id, d };
+    })
+    .sort((a, b) => a.d - b.d || (a.id < b.id ? -1 : 1))
+    .map((x) => x.id);
+
+  return { posts, next, order };
 }
 
 /**
@@ -887,6 +909,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     need,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
+    econOrder: econPlan.order,
     keepClear,
     squads,
     yieldMoves: planYield(s, world, keepClear, squads, { spawn, exit }),
