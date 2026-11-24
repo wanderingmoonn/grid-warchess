@@ -791,6 +791,145 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
   return out;
 }
 
+/**
+ * 一支队伍"这一手该站哪些格"——终点集合。
+ *
+ * 目标是城时，终点是**城外可站的格**（城格站不上）；目标是集结点时，终点是它周围。
+ * 半径 2 是"城下那一圈"：射程 1~2 的兵都能从这儿够到城。
+ */
+function targetCells(s: GameState, sq: Squad, want: number): number[] {
+  const city = sq.cityId ? s.cities.find((c) => c.id === sq.cityId) : undefined;
+  const base =
+    sq.at ??
+    (city
+      ? { x: city.x + Math.floor((city.size ?? 2) / 2), y: city.y + Math.floor((city.size ?? 2) / 2) }
+      : undefined);
+  if (!base) return [];
+  const seen = new Set<number>();
+  const out: number[] = [];
+  /*
+   * 从城下往外一圈一圈扩，**直到够分**。
+   *
+   * 固定半径会出事：城在角落时"城外 2 格内"只有两三格，十个人里只有一个能分到目标
+   * （S-011 实测 holes = 2）。人比攻位多时往外扩一圈，多出来的人跟在后面推进，
+   * 而不是站在原地看着。
+   */
+  for (let r = 1; r <= 6 && out.length < want; r += 1) {
+    for (let dy = -r; dy <= r; dy += 1) {
+      for (let dx = -r; dx <= r; dx += 1) {
+        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
+        const x = base.x + dx;
+        const y = base.y + dy;
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        const k = y * s.w + x;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const t = s.tiles[k];
+        if (!t || !passable(t.terrain)) continue;
+        if (t.terrain === 'city') continue; /* 城格站不上，只能围着 */
+        out.push(k);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * **战斗单位这一手走哪一格：多起点 → 多终点，一次排定。**
+ *
+ * ── 为什么不是每人自己 `stepToward` ────────────────────────────
+ *
+ * 那样每个兵只看自己：我离目标更近的那格站着人 → 我不动；他也这么想 → 谁也不动。
+ * 30 个兵挤成一条线时，整条线只会在原地互相等。
+ *
+ * ── 这一版怎么排 ──────────────────────────────────────────────
+ *
+ * 1. 终点 = 城外那一圈可站的格（不是城中心那一格）；
+ * 2. 从**所有终点**同时出发扩散，波**穿过自己人**（他得先让开）——
+ *    得到"每格离最近的终点隔着几个人"和"下一步往哪走"；
+ * 3. 每个还没到位的兵顺着"下一步"走到底，走到**第一个空格**为止，得到一条链；
+ * 4. 链**从短到长**成立，抢不到格的链**整条放弃**（这一手它不动）。
+ *    截断不清的链会留下"半条"：前面挪了、后面没挪，空出来的格还会被别人占掉。
+ *
+ * 每个被排到的人拿走链上"自己前面那一格"。因为链首是空格，
+ * 一步一步往里递补就永远不会两个人抢同一格——这就是"不交叉"的落地方式。
+ * 两条链真的撞上时，短的先走，长的等下一手（无解时只过去一部分人）。
+ */
+function planMarch(s: GameState, world: World, squads: Squad[]): Record<string, { x: number; y: number }> {
+  const out: Record<string, { x: number; y: number }> = {};
+  for (const sq of squads) {
+    if (sq.order === 'hold') continue;
+    const units = sq.unitIds
+      .map((id) => s.units.find((u) => u.id === id))
+      .filter((u): u is Unit => !!u && u.owner === world.me);
+    if (units.length === 0) continue;
+    const holes = targetCells(s, sq, units.length);
+    if (holes.length === 0) continue;
+    const holeSet = new Set(holes);
+    const pending = units.filter((u) => !holeSet.has(u.y * s.w + u.x));
+    if (pending.length === 0) continue;
+
+    /*
+     * ① **一人配一个终点**：按真实步数从近到远贪心配。
+     *
+     * 为什么必须先配：只做一张场的话，十个人全朝"最近的那个终点"走，
+     * 路线完全重叠，谁也让不开谁（实测只有 2 个人拿到落点）。
+     * 先把终点分开，每个人才有自己的方向。
+     */
+    const fields = holes.map((h) =>
+      world.stepsFrom({ x: h % s.w, y: Math.floor(h / s.w) }),
+    );
+    const pairs: Array<{ ui: number; hi: number; d: number }> = [];
+    pending.forEach((u, ui) => {
+      const at = u.y * s.w + u.x;
+      holes.forEach((_, hi) => {
+        const d = fields[hi]![at] ?? Infinity;
+        if (Number.isFinite(d)) pairs.push({ ui, hi, d });
+      });
+    });
+    pairs.sort((a, b) => a.d - b.d || a.ui - b.ui || a.hi - b.hi);
+    const mine = new Map<number, number>();
+    const takenHole = new Set<number>();
+    for (const pr of pairs) {
+      if (mine.has(pr.ui) || takenHole.has(pr.hi)) continue;
+      mine.set(pr.ui, pr.hi);
+      takenHole.add(pr.hi);
+    }
+    if (mine.size === 0) continue;
+
+    /*
+     * ② **离自己终点最近的先走**（前排先挪开，后排才有空格）。
+     *    落点去重：这一手不会两个人踩同一格。
+     */
+    const order = [...mine.entries()].sort(
+      (a, b) =>
+        (fields[a[1]]![pending[a[0]]!.y * s.w + pending[a[0]]!.x] ?? Infinity) -
+        (fields[b[1]]![pending[b[0]]!.y * s.w + pending[b[0]]!.x] ?? Infinity),
+    );
+    const used = new Set<number>();
+    for (const [ui, hi] of order) {
+      const u = pending[ui]!;
+      const field = fields[hi]!;
+      const here = field[u.y * s.w + u.x] ?? Infinity;
+      let best: number | null = null;
+      let bestD = here;
+      for (const [k] of reachableTiles(s, u)) {
+        if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
+        if (used.has(k)) continue;
+        const d = field[k] ?? Infinity;
+        if (d < bestD) {
+          bestD = d;
+          best = k;
+        }
+      }
+      if (best === null) continue;
+      out[u.id] = { x: best % s.w, y: Math.floor(best / s.w) };
+      used.add(best);
+    }
+  }
+  return out;
+}
+
 export function constrain(s: GameState, world: World, decision: Decision, mem?: V4Memory): Constraints {
   const city = decision.cityId ? s.cities.find((c) => c.id === decision.cityId) : undefined;
   const keepClear = [...world.keepClear];
@@ -978,6 +1117,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     econOrder: econPlan.order,
     keepClear,
     squads,
+    steps: planMarch(s, world, squads),
     yieldMoves: planYield(s, world, keepClear, squads, { spawn, exit }),
     forbid,
   };

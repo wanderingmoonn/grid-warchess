@@ -85,6 +85,31 @@ export function actFor(
   }
 
   /*
+   * ①.5 **约束层已经排好了这一手站哪一格**（多起点 → 多终点，一人一格，见 `planMarch`）。
+   *
+   * 必须排在"让开"之前：整队 18 个兵都压在城圈（关键格）上时，
+   * "让开"会把每一个人都接管成"去最近的空格"，方向是随机的——计划一次都执行不到，
+   * 部队就原地互相让位（S-001 实测：平均离城距离 19 手都停在 9 格）。
+   *
+   * 往目标走本来就是在离开城圈，两件事不冲突；真挡着产兵口的落点，
+   * 由下一步的"让开"兜底。
+   */
+  /*
+   * **约束层已经排好了这一手站哪一格**（多起点 → 多终点，一人一格，见 `planMarch`）。
+   *
+   * 照做即可。执行时只校验"这一格还可达"——前面的人先动过之后，计划里的目标格
+   * 可能已经被占了，这时退回自己的走位（`stepToward`），不要硬报一个必被拒的动作。
+   * 单位自己不再判断"我该不该先走"：那是宏观决策。
+   */
+  const planned = con.steps?.[u.id];
+  if (planned && !(planned.x === u.x && planned.y === u.y)) {
+    const key = planned.y * s.w + planned.x;
+    for (const [k] of reachableTiles(s, u)) {
+      if (k === key) return { type: 'MOVE', unitId: u.id, x: planned.x, y: planned.y };
+    }
+  }
+
+  /*
    * ② 让开：站在"必须空"的格子上。
    *
    * **只约束没有理由待在那儿的单位**（驻守兵）。正在推进的战斗单位要过桥，
@@ -182,6 +207,7 @@ export function actFor(
   const to = targetOf(s, sq);
   if (sq.order === 'hold' && to && manhattan(u, to) <= 2) return null;
   if (!to) return null;
+
   /*
    * 直线只在**能并排**时才有意义：分了路的队伍（走廊够宽）走直线，
    * 窄道（桥/关隘，没分路）保持排队——硬顶成一横排会把过桥堵死。
@@ -266,7 +292,8 @@ function stepToward(
     return Number.isFinite(d) ? d : manhattan({ x, y }, to);
   };
   const cur = distSafe(u.x, u.y);
-  const curB = Math.abs(Math.abs(u.x - to.x) - Math.abs(u.y - to.y));
+  /* 同距离时的第二判据：几何上更贴目标的优先（主判据是距离场步数，两者不同源） */
+  const curB = manhattan(u, to);
   let best: { x: number; y: number } | null = null;
   let bestD = cur;
   let bestB = curB;
@@ -286,20 +313,18 @@ function stepToward(
     if (d < bestD) {
       bestD = d;
       best = { x, y };
-      bestB = Math.abs(Math.abs(x - to.x) - Math.abs(y - to.y));
+      bestB = manhattan({ x, y }, to);
       continue;
     }
     /*
-     * **同距离时选"两轴差更均匀"的那一格。**
+     * **同距离时选几何上更贴目标的那一格。**
      *
-     * 距离相同的两格（一格横着往前、一格斜着往前），谁先被遍历到就用谁的话，
-     * 30 个兵各走各的，实际走出来是之字形，净推进只有 0.6 格/手（移动力是 2）。
-     * 这是 S-002 量出来的。
-     *
-     * 判据只是"两个轴上的差有多接近"（`||dx| - |dy||`），不引入别的距离。
+     * 不这么选的话，距离相同的两格（一格直着往前、一格横着往旁边）
+     * 谁先被遍历到就用谁——30 个兵各走各的，实际走出来是之字形，
+     * 净推进只有 0.6 格/手（移动力是 2）。这是 S-002 量出来的。
      */
     if (d === bestD && straight) {
-      const e = Math.abs(Math.abs(x - to.x) - Math.abs(y - to.y));
+      const e = manhattan({ x, y }, to);
       if (e < bestB) {
         bestB = e;
         best = { x, y };
@@ -423,13 +448,13 @@ function stepAside(
     field ? (field[y * s.w + x] ?? Infinity) : manhattan({ x, y }, to);
   const cur = d(u.x, u.y);
   let best: { x: number; y: number } | null = null;
-  let bestB = Math.abs(Math.abs(u.x - to.x) - Math.abs(u.y - to.y));
+  let bestB = manhattan(u, to);
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
     const y = Math.floor(key / s.w);
     if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
     if (d(x, y) !== cur) continue; /* 只横移，不后退 */
-    const e = Math.abs(Math.abs(x - to.x) - Math.abs(y - to.y));
+    const e = manhattan({ x, y }, to);
     if (e < bestB) {
       bestB = e;
       best = { x, y };
