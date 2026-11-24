@@ -6,6 +6,7 @@
  * 不用开浏览器就能验证"十步走完 → boss → 下一层"这条链没有断。
  */
 import { UNIT_TYPES } from '../core/config.ts';
+import { expansionUnitsFor } from '../core/setup.ts';
 import {
   DECISIONS,
   EVENTS,
@@ -41,7 +42,20 @@ import type {
 export const STEPS_PER_LAYER = 10;
 export const ROOMS_PER_LAYER = STEPS_PER_LAYER * 2;
 
-const costOf = (id: string): number => UNIT_TYPES[id]?.cost ?? 0;
+/**
+ * 兵种造价表：基础兵 + 各层扩展带来的兵。
+ *
+ * 第 6 代（摩托化步兵、中型坦克……）不在 `UNIT_TYPES` 里，它们住在「信息化」包里。
+ * 只查基础表的话 `costOf` 对它们返回 0，于是 `pickEnemyTypes` 会把它们全部跳过——
+ * 第三层后半段的敌人会变成"一个兵都没有"。这不是平衡问题，是查表漏了一层。
+ */
+const CATALOG = {
+  ...UNIT_TYPES,
+  ...expansionUnitsFor(LAYERS[1].expansions),
+  ...expansionUnitsFor(LAYERS[2].expansions),
+  ...expansionUnitsFor(LAYERS[3].expansions),
+};
+const costOf = (id: string): number => CATALOG[id]?.cost ?? 0;
 
 export function themeOf(layer: LayerId): LayerTheme {
   return LAYERS[layer];
@@ -98,31 +112,6 @@ function midOf(theme: LayerTheme): string {
 function highOf(theme: LayerTheme): string {
   const sorted = byPrice([...theme.pool, ...theme.poolHigh]);
   return sorted[sorted.length - 1] as string;
-}
-
-/**
- * 换装：进新一层时把旧兵换成这一代的同职能兵。
- *
- * 为什么要有：三层跨了 1→3→5 代，上一层的兵到下一层基本是活靶子；
- * 而玩家没有产线，只能靠奖励零散补几个。不换装的话，第二层开局就废一半。
- * 映射表写在 `data.ts` 的 `refit` 里（一眼能看出谁换成了谁）。
- */
-export function refitArmy(run: RunState): string[] {
-  const map = themeOf(run.layer).refit;
-  if (Object.keys(map).length === 0) return [];
-  const notes: string[] = [];
-  for (const entry of run.army) {
-    const to = map[entry.type];
-    if (to && to !== entry.type) {
-      entry.type = to;
-      notes.push(unitName(to));
-    }
-  }
-  // 换完会撞车（戈兵和长枪兵都换成戟兵）：同兵种要合并，否则列表里出现两行戟兵
-  const merged = new Map<string, number>();
-  for (const e of run.army) merged.set(e.type, (merged.get(e.type) ?? 0) + e.count);
-  run.army = [...merged.entries()].map(([type, count]) => ({ type, count }));
-  return [...new Set(notes)];
 }
 
 // ---------------------------------------------------------------- 房间图
@@ -291,14 +280,48 @@ export function afterRoom(run: RunState): void {
 // ---------------------------------------------------------------- 战斗输入
 
 /**
- * 敌方编成：**按我方全军造价乘一个 k**（文档里的那条"敌人永远是你的镜像"）。
- * 时代钟再叠一点：逛得越久，对面越硬。
+ * 平衡参数（**调参入口**）。
+ *
+ * 敌人有多强，**主要看层，不看我方部队**：
+ *   base[layer] —— 这一层的敌人基准价值（遭遇战、刚进门）
+ *   w[kind]     —— 房型倍率（精英/攻坚/层末更贵）
+ *   ramp        —— 层内进度：刚进门 ×ramp，走到底接近 1.15
+ *   expect[layer] / follow —— 我方部队相对"这一层该有的样子"的偏离，
+ *                              只按 25% 反映到敌人身上
+ *
+ * 为什么不再用"敌人 = 你的镜像"（纯按我方造价乘 k）：
+ * 实测那条线会滑向一个坏平衡——**兵越少越强**。因为小地图上同一时间只有
+ * 三四个兵能交手，多出来的兵挤在后面挨打；而敌人预算跟着你的总造价涨，
+ * 于是"拿兵"反而让对面也变强，通关率比"拿钱"低一截（实测 0/18 vs 8/18）。
+ * 现在：层决定对面有多强，你的成长只带来 25% 的回响。
  */
-function enemyScale(kind: RoomKind, myCost: number, clock: number): { budget: number; gold: number } {
-  const clockK = 1 + clock * 0.04;
-  const k: Record<string, number> = { battle: 0.6, elite: 0.72, siege: 0.7, boss: 0.85 };
-  const budget = Math.max(45, Math.round(myCost * (k[kind] ?? 0.6) * clockK));
+export const BALANCE = {
+  base: { 1: 140, 2: 370, 3: 690 } as Record<number, number>,
+  w: { battle: 1, elite: 1.5, siege: 1.3, boss: 1.7 } as Record<string, number>,
+  expect: { 1: 250, 2: 700, 3: 1300 } as Record<number, number>,
+  follow: 0.25,
+  ramp: 0.75,
+  rampStep: 0.04,
+  count: { battle: 3, elite: 4, siege: 4, boss: 5 } as Record<string, number>,
+};
+
+function enemyScale(layer: LayerId, kind: RoomKind, myCost: number, clock: number): { budget: number; gold: number } {
+  const ramp = BALANCE.ramp + BALANCE.rampStep * Math.min(STEPS_PER_LAYER, clock);
+  const base = BALANCE.base[layer] ?? 300;
+  const expect = BALANCE.expect[layer] ?? 600;
+  const drift = Math.max(-0.6, Math.min(1, myCost / Math.max(1, expect) - 1)) * BALANCE.follow;
+  const budget = Math.max(40, Math.round(base * (BALANCE.w[kind] ?? 1) * ramp * (1 + drift)));
   return { budget, gold: Math.round(budget * 0.25) };
+}
+
+/**
+ * 敌人这一场上几个人：按房型给基数、每深一层 +1，**但永远比我方少一个以上**。
+ *
+ * 少一个以上是硬约束：玩家必须能靠"人多"打赢，否则成长就没有回报。
+ */
+function enemyHeadcount(kind: RoomKind, layer: LayerId, myCount: number): number {
+  const base = (BALANCE.count[kind] ?? 3) + (layer - 1);
+  return Math.max(2, Math.min(base, myCount - 1));
 }
 
 /** 藏品 + 方略 + 攒下的一次性加成，合成这一场的我军加成 */
@@ -342,14 +365,36 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const isBoss = node.kind === 'boss';
   const idx = isBoss ? 3 : node.kind === 'siege' ? 2 : node.kind === 'elite' ? 1 : 0;
   const size = theme.size[idx] as number;
-  // 时代钟靠后（≥6）或层末 → 用高代兵池
-  const high = isBoss || run.clock >= 6;
-  const era = high ? theme.eraHigh : theme.eraLow;
-  const pool = high ? theme.poolHigh : theme.pool;
+  /*
+   * 敌人池按时代钟分三段（不再是"当代 / 高代"两段）：
+   *   ① 钟 0–2：**整段用上一代**（L2 是 e2、L3 是 e4）。玩家带着上一层的兵上来，
+   *      这三关就是留给他"用老兵打完最后几仗"的，不该第一间房就撞当代兵。
+   *   ② 钟 3–5：本层低代。
+   *   ③ 钟 6 以后 / 层末：2 份高代 + 1 份低代（`pickEnemyTypes` 先买贵的，
+   *      于是编成是"几个当代尖子 + 一群上一代兜底"）。
+   * 层末固定高代（boss 不读钟，这条在 FLOW 里写过）。
+   */
+  const stage: 0 | 1 | 2 = isBoss ? 2 : run.clock <= 2 ? 0 : run.clock <= 5 ? 1 : 2;
+  const era =
+    stage === 0
+      ? theme.prevPool.length > 0
+        ? theme.prevEra
+        : theme.eraLow
+      : stage === 1
+        ? theme.eraLow
+        : theme.eraHigh;
+  const pool =
+    stage === 0
+      ? theme.prevPool.length > 0
+        ? theme.prevPool
+        : theme.pool
+      : stage === 1
+        ? theme.pool
+        : [...theme.poolHigh, ...theme.poolHigh, ...theme.pool];
   // 遭遇/精英：双方无城；攻坚 1 座；层末 L1–L2 一座、L3 两座
   const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
-  const scale = enemyScale(node.kind, armyCost(run.army), isBoss ? STEPS_PER_LAYER : run.clock);
-  const types = pickEnemyTypes(pool, scale.budget, costOf);
+  const scale = enemyScale(run.layer, node.kind, armyCost(run.army), isBoss ? STEPS_PER_LAYER : run.clock);
+  const types = pickEnemyTypes(pool, scale.budget, costOf, enemyHeadcount(node.kind, run.layer, armyCount(run.army)));
   const bonus = bonusOf(run);
   // 斥候网 / 买通：从敌人里减兵（至少留 1 个）
   const cut = Math.min(Math.max(0, types.length - 1), bonus.enemyCut);
@@ -359,7 +404,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
    * 回合上限按小图重算：8×8 的遭遇战打 30 轮是不可能的，那是"两边都不想打"。
    * 有城的关卡 AI 会守，多给几轮。
    */
-  const roundLimit = isBoss ? 34 : node.kind === 'siege' ? 30 : node.kind === 'elite' ? 18 : 16;
+  const roundLimit = isBoss ? 40 : node.kind === 'siege' ? 28 : node.kind === 'elite' ? 18 : 16;
   const tempUnits: ArmyEntry[] = bonus.tempUnits > 0 ? [{ type: cheapestOf(theme), count: bonus.tempUnits }] : [];
 
   return {
@@ -377,7 +422,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     enemyGold: enemyCityCount > 0 ? scale.gold : 0,
     // 有城的关让敌人守（它得守住城），没城的关让它抢攻
     // 整场最多补这么多个（不是每回合）——城因此有防守价值，但撑不了无限磨
-    enemyRecruit: enemyCityCount > 0 ? 2 : 0,
+    enemyRecruit: isBoss ? 2 : enemyCityCount > 0 ? 1 : 0,
     enemyDoctrine: enemyCityCount > 0 ? 'boom' : 'rush',
     expansions: theme.expansions,
     bonusAtk: bonus.atk,
@@ -413,16 +458,12 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
   run.gold = Math.max(0, result.gold);
 
   /*
-   * 收编：每打赢一场，自动补 1 个本层基础兵。
+   * 这里**不再自动收编**。
    *
-   * 为什么需要：玩家没有城、也不能在战斗里造兵，编制只减不增；实测一场胜仗要
-   * 折掉两三个人，打到第 4 个房就没人了。这不是难度，是算术。
+   * 上一版每胜一场白送一个兵，是给"奖励只给一个、补不上损耗"打的补丁。
+   * 现在战利品本身就是"兵 or 钱"，再来一份白送的，那个选择就没有意义了——
+   * 兵力只减不增是这一层的压力来源，补员要靠战利品和商店，不能靠后台。
    */
-  if (after > 0) {
-    const type = cheapestOf(themeOf(run.layer));
-    addUnits(run.army, type, 1);
-    notes.push(`收编：${unitName(type)} ×1`);
-  }
 
   // 随军医官：一场战斗后返还 N 个阵亡单位（用最低级的兵补）
   const revive = run.relics.reduce((n, id) => n + (relicById(id)?.effect.revive ?? 0), 0);
@@ -440,24 +481,120 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
   return notes;
 }
 
-/** 战斗奖励的候选（三选一） */
+/**
+ * 按时代钟抽一个"本层兵"当奖励。
+ *
+ * 钟越靠后越可能给高代兵（p = 钟/10），但两边不能一边倒：
+ * **给低代时挑该池里最贵的，给高代时挑该池里最便宜的**。
+ * 这样钟走到一半的时候，抽到 e1 的斥候和抽到 e2 的长枪兵，实际战力是接近的，
+ * 玩家不会觉得"抽到低代就亏了"。
+ */
+export function rollLayerUnit(theme: LayerTheme, clock: number, rng: Rng): string {
+  const p = Math.max(0, Math.min(1, clock / STEPS_PER_LAYER));
+  if (rng.next() < p) return byPrice(theme.poolHigh)[0] as string;
+  const low = byPrice(theme.pool);
+  return low[low.length - 1] as string;
+}
+
+/**
+ * 战斗奖励（三选一）。
+ *
+ * 口径（用户定的）：
+ *   · 普通 / 攻坚：**略高于一个兵的钱** 或 **一个本层兵**（按时代钟抽代）
+ *   · 精英：**略高于三个兵的钱** 或 **三个兵** 或 **一个兵 + 一件藏品**
+ *
+ * 兵种按 `rollLayerUnit` 抽，所以同一层里前期拿到的是"低代里最好的那个"，
+ * 后期才是高代兵——换代是玩家一层一层打出来的，不是进门白送的。
+ *
+ * 特殊战斗（还没做）预留的是"介于普通和精英之间"，这里不实现。
+ */
 export function rewardOptions(run: RunState, kind: RoomKind, rng: Rng): RewardOption[] {
   const theme = themeOf(run.layer);
   const owned = new Set(run.relics);
-  const relic = RELICS.filter((r) => !owned.has(r.id))[0];
-  const gold = kind === 'boss' ? 200 : kind === 'siege' ? 120 : kind === 'elite' ? 90 : 60;
-  const unit = kind === 'boss' ? highOf(theme) : midOf(theme);
+  const unit = rollLayerUnit(theme, run.clock, rng);
+  const unitCost = costOf(unit);
 
-  const out: RewardOption[] = [
-    { id: 'unit', title: `${unitName(unit)} ×1`, sub: '编进队伍，跨层保留', effect: { add: { type: unit, count: 1 } } },
-    { id: 'gold', title: `${gold} 金`, sub: '军饷，能带进下一层', effect: { gold } },
-  ];
-  if (relic) {
-    out.push({ id: `relic-${relic.id}`, title: `藏品「${relic.name}」`, sub: relic.desc, effect: { relic: relic.id } });
-  } else {
-    out.push({ id: 'drill', title: '整训', sub: '下一战我军攻击 +2', effect: { nextAtk: 2 } });
+  if (kind === 'elite') {
+    const relic = RELICS.filter((r) => !owned.has(r.id))[0];
+    const gold = Math.round(unitCost * 3 * 1.1);
+    const out: RewardOption[] = [
+      { id: 'units', title: `${unitName(unit)} ×3`, sub: '三个兵，编进队伍跨层带走', effect: { add: { type: unit, count: 3 } } },
+      { id: 'gold', title: `${gold} 金`, sub: '略高于三个兵的价格', effect: { gold } },
+    ];
+    out.push(
+      relic
+        ? {
+            id: `unit-relic-${relic.id}`,
+            title: `${unitName(unit)} ×1 ＋「${relic.name}」`,
+            sub: relic.desc,
+            effect: { add: { type: unit, count: 1 }, relic: relic.id },
+          }
+        : { id: 'drill', title: '整训', sub: '下一战我军攻击 +2', effect: { nextAtk: 2 } },
+    );
+    return out;
   }
-  return rng.shuffle(out).slice(0, 3);
+
+  // 普通战斗与攻坚：攻坚多给一份（它多一座城要啃）
+  const mult = kind === 'siege' ? 2 : 1;
+  return [
+    {
+      id: 'unit',
+      title: `${unitName(unit)} ×${mult}`,
+      sub: mult > 1 ? '两个本层兵，编进队伍跨层带走' : '编进队伍，跨层带走',
+      effect: { add: { type: unit, count: mult } },
+    },
+    {
+      id: 'gold',
+      title: `${Math.round(unitCost * 1.15 * mult)} 金`,
+      sub: '略高于' + (mult > 1 ? '两个' : '一个') + '兵的价格',
+      effect: { gold: Math.round(unitCost * 1.15 * mult) },
+    },
+    { id: 'drill', title: '整训', sub: '下一战我军攻击 +2', effect: { nextAtk: 2 } },
+  ];
+}
+
+/**
+ * 层末战利品：**不给选择，全给**。
+ *
+ * 按设计：一件藏品 ＋ 一个本层高级兵 ＋ 相当于本层高级兵的钱 ＋ **一个下一层的初级兵**。
+ *
+ * 最后那一项是关键：不换装之后，玩家会带着一整队上一代的兵进新层，
+ * 第一个房间就撞上当代兵。给一个"下一层的兵"是让他有个落脚点，
+ * 而不是替他把整支队伍换掉——换代仍然要靠他自己一层一层攒。
+ */
+export function bossRewards(run: RunState, rng: Rng): string[] {
+  const notes: string[] = [];
+  const theme = themeOf(run.layer);
+  const owned = new Set(run.relics);
+
+  const relicPool = RELICS.filter((r) => !owned.has(r.id));
+  const relic = relicPool.length > 0 ? rng.pick(relicPool) : null;
+  if (relic) {
+    run.relics.push(relic.id);
+    notes.push(`藏品「${relic.name}」`);
+  } else {
+    run.gold += 60;
+    notes.push('藏品已集齐，折成 60 金');
+  }
+
+  const high = highOf(theme);
+  addUnits(run.army, high, 1);
+  notes.push(`${unitName(high)} ×1`);
+  run.gold += costOf(high);
+  notes.push(`${costOf(high)} 金`);
+
+  if (run.layer < 3) {
+    const next = themeOf((run.layer + 1) as LayerId);
+    const first = cheapestOf(next);
+    addUnits(run.army, first, 1);
+    notes.push(`${unitName(first)} ×1（下一层的兵）`);
+  } else {
+    run.gold += 120;
+    notes.push('120 金（没有下一层了）');
+  }
+
+  for (const n of notes) run.log.push(n);
+  return notes;
 }
 
 /** 商店的一件货 */
@@ -492,8 +629,16 @@ function shopDiscount(run: RunState): number {
 export function shopStock(run: RunState, rng: Rng): ShopItem[] {
   const theme = themeOf(run.layer);
   const off = shopDiscount(run);
+  /*
+   * 行商按造价 1.15 倍卖兵。
+   *
+   * 这个数字和战利品那条「钱 = 1.15 个兵价」是配平的：一场普通战斗拿钱，
+   * 刚好能在店里换回一个兵。于是两个选项的**价值相同、节奏不同**——
+   * 选兵是立刻到手（可能不是你想要的兵种），选钱是留着到店里挑（但要等下一家店）。
+   * 价差再大的话，选钱就成了陷阱选项（实测 1.4 倍时纯选钱只能通关 2/18）。
+   */
   const price = (base: number): number =>
-    Math.max(10, Math.round(base * (1 - off) * (1 + (run.layer - 1) * 0.08)));
+    Math.max(10, Math.round(base * 1.15 * (1 - off) * (1 + (run.layer - 1) * 0.08)));
 
   const units = rng.shuffle([...theme.pool, ...theme.poolHigh]).slice(0, 3);
   const owned = new Set(run.relics);
@@ -514,7 +659,7 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
       group: 'relic',
       title: `藏品「${r.name}」`,
       sub: r.desc,
-      price: price(170),
+      price: price(200),
       effect: { relic: r.id },
     });
   }
@@ -523,7 +668,7 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
     group: 'supply',
     title: '随军补给',
     sub: '下一战我军最大生命 +6、护甲 +1',
-    price: price(90),
+    price: price(110),
     effect: { nextHp: 6, nextArmor: 1 },
   });
   return stock;
@@ -570,7 +715,7 @@ export function applyDecision(run: RunState, opt: DecisionOption): void {
 
 // ---------------------------------------------------------------- 层推进
 
-/** 走到下一层：发军饷袋/军粮袋、换装、重排房间图。返回 false 表示这一局已经打完了 */
+/** 走到下一层：发军饷袋/军粮袋、重排房间图。返回 false 表示这一局已经打完了 */
 export function nextLayer(run: RunState, seed: number): boolean {
   if (run.layer >= 3) {
     run.over = {
@@ -589,9 +734,14 @@ export function nextLayer(run: RunState, seed: number): boolean {
   const rng = makeRng((seed ^ (layer * 0x2545f491)) >>> 0);
   run.plan = planLayer(layer, rng);
 
+  /*
+   * 这里**不换装**。
+   *
+   * 上一版是"进新层自动把旧兵升级成当代同职能兵"，那是替玩家做决定：
+   * 队伍的换代节奏应该由他自己掌握（拿奖励、逛商店、打层末），
+   * 而不是进门就被换掉。旧兵留在队里当老兵，怎么处理由玩家选。
+   */
   const notes: string[] = [];
-  const refit = refitArmy(run);
-  if (refit.length > 0) notes.push(`换装：${refit.join('、')}`);
   for (const id of run.relics) {
     const e = relicById(id)?.effect;
     if (!e) continue;

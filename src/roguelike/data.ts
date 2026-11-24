@@ -56,9 +56,12 @@ export interface LayerTheme {
   /** 本层低代（开局）/ 高代（层末） */
   eraLow: number;
   eraHigh: number;
-  /** 开局（时代钟靠前）的敌人兵池 */
+  /** 上一代的兵池：开局两关混进来一些，玩家的老兵还有得打（L1 没有） */
+  prevPool: string[];
+  prevEra: number;
+  /** 本层的低代兵池（开场主力） */
   pool: string[];
-  /** 时代钟靠后 / 层末的敌人兵池 */
+  /** 时代钟靠后 / 层末的高代兵池 */
   poolHigh: string[];
   /** 这一层要开哪些扩展（第 6 代要「信息化」解锁，它没有规则钩子） */
   expansions: string[];
@@ -66,8 +69,6 @@ export interface LayerTheme {
   size: readonly [number, number, number, number];
   /** 层末 boss 的候选 */
   bosses: ReadonlyArray<{ title: string; sub: string }>;
-  /** 本层把旧兵换成什么（进层时统一换装，见 run.ts 的 `refitArmy`） */
-  refit: Record<string, string>;
 }
 
 export const LAYERS: Record<LayerId, LayerTheme> = {
@@ -77,42 +78,37 @@ export const LAYERS: Record<LayerId, LayerTheme> = {
     subtitle: '墙还站在那儿，人已经换过三茬',
     eraLow: 1,
     eraHigh: 2,
+    // 第一层没有"上一代"，开局就是第一代
+    prevPool: [],
+    prevEra: 0,
     pool: ['militia', 'archer', 'scout', 'ge'],
     poolHigh: ['spearman', 'longbow', 'crossbow', 'knight'],
     expansions: [],
-    size: [8, 10, 12, 14],
+    size: [8, 10, 10, 12],
     bosses: [
       { title: '守墙人的土垣', sub: '他守的不是城，是"这里归谁"这件事' },
       { title: '持秤者的货栈', sub: '账本比城墙厚，也比特么城墙硬' },
       { title: '守钟人的石龛', sub: '钟还没响，他先站到了门口' },
     ],
-    refit: {},
-  },
+      },
   2: {
     id: 2,
     name: '第二层 · 商道',
     subtitle: '同一条路，昨天运粮，今天运兵',
     eraLow: 3,
     eraHigh: 4,
+    // 开局两关混一半第二代的兵：玩家刚带着第一层的老兵上来，第一关不该全是火枪
+    prevPool: ['spearman', 'longbow', 'crossbow', 'knight'],
+    prevEra: 2,
     pool: ['musketeer', 'halberdier', 'hussar', 'mortar'],
     poolHigh: ['rifleman', 'mg', 'armoredcar'],
     expansions: [],
-    size: [10, 12, 14, 16],
+    size: [10, 12, 12, 14],
     bosses: [
       { title: '守墙人的棱堡', sub: '墙学会了拐弯，人就学会了绕路' },
       { title: '持秤者的商埠', sub: '你打下的每一寸地，他都算过价' },
       { title: '守钟人的修道院', sub: '院里不敲钟了，改抄账' },
     ],
-    refit: {
-      militia: 'halberdier',
-      ge: 'halberdier',
-      spearman: 'halberdier',
-      archer: 'musketeer',
-      longbow: 'musketeer',
-      crossbow: 'musketeer',
-      scout: 'hussar',
-      knight: 'hussar',
-    },
   },
   3: {
     id: 3,
@@ -120,28 +116,14 @@ export const LAYERS: Record<LayerId, LayerTheme> = {
     subtitle: '三家的旗都挂在同一座楼上，谁也不敢先摘',
     eraLow: 5,
     eraHigh: 6,
+    // 同上：开局还留着第四代的兵，钟过 3 之后才全是第五代
+    prevPool: ['rifleman', 'mg', 'armoredcar'],
+    prevEra: 4,
     pool: ['hmg', 'squad', 'tank', 'artillery'],
     poolHigh: ['ct_infantry', 'ct_tank', 'ct_howitzer', 'ct_recon'],
     expansions: ['pack-contemporary'],
-    size: [12, 14, 16, 18],
+    size: [12, 14, 14, 16],
     bosses: [{ title: '钟楼', sub: '三家共守的地方——谁都不能让你砸这口钟' }],
-    refit: {
-      militia: 'squad',
-      ge: 'squad',
-      spearman: 'squad',
-      halberdier: 'squad',
-      musketeer: 'hmg',
-      archer: 'hmg',
-      longbow: 'hmg',
-      crossbow: 'hmg',
-      scout: 'tank',
-      knight: 'tank',
-      hussar: 'tank',
-      mortar: 'artillery',
-      rifleman: 'hmg',
-      mg: 'hmg',
-      armoredcar: 'tank',
-    },
   },
 };
 
@@ -385,19 +367,38 @@ export const PLACE_NAMES: Record<LayerId, string[]> = {
   3: ['钟楼前街', '铁厂', '轨道站', '电报房', '市政厅', '钟塔下'],
 };
 
-/** 敌方编成：按"预算"从池子里抓兵，尽量买贵的（但不超支） */
-export function pickEnemyTypes(pool: string[], budget: number, cost: (id: string) => number): string[] {
-  const sorted = [...pool].sort((a, b) => cost(b) - cost(a));
+/**
+ * 敌方编成：**先定人数，再把预算摊到每个人头上**。
+ *
+ * 以前是"按预算从贵到便宜地买"，结果预算卡在两件贵货之间时，场上只有一两个
+ * 巨兽，玩家六个兵围着打——那不是会战，是打木桩。人数和钱是两件事，
+ * 分开算才不会出现"钱够但人不够"。
+ *
+ * `count` 是这一场想要的人数；每个位置最多花 `剩余 / 剩余位置 × 1.35`，
+ * 所以前面的位置能买贵一点的，最后几个位置用便宜的填满。
+ */
+export function pickEnemyTypes(
+  pool: string[],
+  budget: number,
+  cost: (id: string) => number,
+  count: number,
+): string[] {
+  const sorted = [...pool].filter((id) => cost(id) > 0).sort((a, b) => cost(b) - cost(a));
+  if (sorted.length === 0) return [];
+  const cheapest = sorted[sorted.length - 1] as string;
+
   const out: string[] = [];
   let left = budget;
-  for (const id of sorted) {
-    const c = cost(id);
-    if (c <= 0) continue;
-    while (left >= c && out.length < 14) {
-      out.push(id);
-      left -= c;
-    }
+  const slots = Math.max(1, Math.min(14, count));
+  for (let i = 0; i < slots; i += 1) {
+    // 每个位置分到"剩余 ÷ 剩余位置"：不这么分的话，前面几件贵货会把预算吃光，
+    // 后面的人头就落空了（实测 3 个人头只出场 2 个）
+    const cap = Math.max(1, Math.floor(left / (slots - i)));
+    const pick = sorted.find((id) => cost(id) <= cap) ?? cheapest;
+    if (cost(pick) > left) break;
+    out.push(pick);
+    left -= cost(pick);
   }
-  if (out.length === 0 && sorted.length > 0) out.push(sorted[sorted.length - 1] as string);
+  if (out.length === 0) out.push(cheapest);
   return out;
 }
