@@ -58,7 +58,6 @@ import { toast } from './toast.ts';
 import { openLevelEditor } from './level-editor.ts';
 import { openLevelManager } from './level-manager.ts';
 import { mapThumbSvg } from './map-thumb.ts';
-import { currentUiLayout } from './layout.ts';
 import {
   BOARD_SIZES,
   DEFAULT_CONFIG,
@@ -483,7 +482,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     };
 
     const paint = () => {
-      const classic = currentUiLayout(mask.ownerDocument.documentElement) === 'classic';
       autoFetchCloudLevels();
       advancedOpen = mask.querySelector<HTMLDetailsElement>('.start-advanced')?.open ?? advancedOpen;
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
@@ -658,7 +656,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           : netAllowed
             ? '初级熟悉规则 · 中级战术变化 · 高级 = v3 内核（目标规划 + 产能放开）'
             : 'AI 按你的队列生产。';
-      const compact = !classic && !config.level;
+      const compact = !config.level;
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
             <button class="chip ${aiLevelOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
@@ -1649,7 +1647,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 <span>关卡 · 地图</span>
               </button>
             </nav>
-            ${classic ? '<div class="start-rail-foot">同一个种子永远生成同一张地图</div>' : ''}
           </aside>
 
           <div class="start-col">

@@ -15,9 +15,12 @@
  */
 
 export interface SettingsOptions {
-  uiLayout?: 'refined' | 'classic';
   /** 当前主题（legacy / modern） */
   theme: 'legacy' | 'modern';
+  /** 默认棋盘视角是否为斜俯视 */
+  angledBoard?: boolean;
+  /** 当前局面是否支持斜俯视切换 */
+  canAngle?: boolean;
   /** 是否减少动效 */
   reducedMotion: boolean;
   /**
@@ -74,14 +77,6 @@ export function settingsHtml(o: SettingsOptions): string {
       <section class="set-group">
         <div class="set-title">外观 <span class="set-hint">仅此设备</span></div>
         <div class="set-row">
-          <div class="set-label">界面回滚
-            <span class="set-hint">切换布局，保留进度。</span>
-          </div>
-          <div class="set-control">
-            <button class="btn btn-sm" data-act="set-ui-layout" aria-pressed="${o.uiLayout === 'classic'}">${o.uiLayout === 'classic' ? '恢复新版 UI' : '回滚到经典 UI'}</button>
-          </div>
-        </div>
-        <div class="set-row">
           <div class="set-label">主题
           </div>
           <div class="chip-row">
@@ -89,6 +84,19 @@ export function settingsHtml(o: SettingsOptions): string {
             ${chip(o.theme === 'modern', 'set-theme', '深色', 'data-theme="modern"')}
           </div>
         </div>
+        ${
+          o.canAngle !== false
+            ? `<div class="set-row">
+          <div class="set-label">默认视角
+            <span class="set-hint">斜俯视下按住中键拖转</span>
+          </div>
+          <div class="chip-row">
+            ${chip(o.angledBoard !== false, 'set-board-angle', '斜俯视', 'data-angle="angled"')}
+            ${chip(o.angledBoard === false, 'set-board-angle', '正俯视', 'data-angle="flat"')}
+          </div>
+        </div>`
+            : ''
+        }
         <div class="set-row">
           <div class="set-label">减少动态效果
           </div>

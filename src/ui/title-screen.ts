@@ -15,8 +15,11 @@
  */
 
 import { unitInsignia, type UnitRole } from './unit-insignia.ts';
-import { currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './layout.ts';
 import { titleMatchPreview, type TitleMatchPreview } from './title-match-preview.ts';
+import { createAngledBoard } from './angled-board.ts';
+import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
+import { playerView } from '../core/fog.ts';
+import type { GameState, Terrain } from '../core/types.ts';
 
 export interface TitleOptions {
   /** 本机有没有可以接着打的对局 */
@@ -50,7 +53,7 @@ export interface TitleOptions {
   onReplay: () => void;
 }
 
-/** 六个时代的色带：和棋盘里的地形色同一套语言，不用另造一套配色 */
+/** 八个时代的色带：从青铜到聚变，与斜俯视战场视觉语言一致 */
 const ERA_STRIP: Array<[string, string]> = [
   ['青铜', '#c9a878'],
   ['铁器', '#a9b795'],
@@ -58,7 +61,51 @@ const ERA_STRIP: Array<[string, string]> = [
   ['蒸汽', '#9aa3ad'],
   ['机械化', '#7f8c96'],
   ['信息化', '#4a7fa6'],
+  ['装甲', '#63718d'],
+  ['聚变', '#4aa8c2'],
 ];
+
+function buildTitleDioramaState(): GameState {
+  const s = createMatch({ ...DEFAULT_CONFIG, size: 8, startEra: 1 }, 20261124, {});
+  const rows = [
+    'pphwppcc',
+    'pfwwppcc',
+    'ffwppppp',
+    'ppwphhpp',
+    'ppwwphpp',
+    'pppwwfpp',
+    'ccppwwfp',
+    'ccpppwpp',
+  ];
+  const mapChar: Record<string, Terrain> = {
+    p: 'plain',
+    f: 'forest',
+    h: 'hill',
+    w: 'water',
+    c: 'city',
+  };
+  let i = 0;
+  for (const row of rows) {
+    for (const ch of row) {
+      if (s.tiles[i]) s.tiles[i]!.terrain = mapChar[ch] ?? 'plain';
+      i += 1;
+    }
+  }
+  s.fog = false;
+  s.cities = [
+    { id: 'cA', owner: 'A', x: 0, y: 6, size: 2, hp: 30, maxHp: 30, armor: 1, era: 1 },
+    { id: 'cB', owner: 'B', x: 6, y: 0, size: 2, hp: 80, maxHp: 80, armor: 5, era: 6 },
+  ];
+  s.units = [
+    { id: 'u1', type: 'infantry', owner: 'A', x: 2, y: 5, hp: 10, moved: false, acted: false, kills: 0 },
+    { id: 'u2', type: 'archer', owner: 'A', x: 1, y: 4, hp: 10, moved: false, acted: false, kills: 0 },
+    { id: 'u3', type: 'cavalry', owner: 'A', x: 3, y: 6, hp: 12, moved: false, acted: false, kills: 0 },
+    { id: 'u4', type: 'tank', owner: 'B', x: 5, y: 2, hp: 20, moved: false, acted: false, kills: 0 },
+    { id: 'u5', type: 'infantry', owner: 'B', x: 4, y: 1, hp: 12, moved: false, acted: false, kills: 0 },
+    { id: 'u6', type: 'fighter', owner: 'B', x: 6, y: 3, hp: 15, moved: false, acted: false, kills: 0 },
+  ];
+  return s;
+}
 
 function titleSandtable(): string {
   const terrain = ['pppppwpp', 'ppppwwhh', 'pffpwphh', 'pffwwppp', 'pppwpppp', 'pppwwppp', 'phppwppp', 'ppppwwpp'].join('');
@@ -71,14 +118,14 @@ function titleSandtable(): string {
     { x: 6, y: 1, team: 'b', glyph: '机', role: 'air' },
   ];
   return `<div class="title-visual" role="img" aria-label="跨时代沙盘示意：青铜军队与现代军队隔河对峙，不代表实际对局">
-    <div class="title-visual-head"><span>推演沙盘</span><span>青铜 → 信息化</span></div>
+    <div class="title-visual-head"><span>立体沙盘</span><span>青铜 → 聚变</span></div>
     <div class="title-sandtable">
       ${Array.from(terrain, (kind) => `<i class="hero-tile hero-${kind}"></i>`).join('')}
       <span class="hero-city a" style="--x:0;--y:6">${unitInsignia('building')}</span>
       <span class="hero-city b" style="--x:6;--y:0">${unitInsignia('building')}</span>
       ${pieces.map((piece) => `<span class="hero-piece ${piece.team}" style="--x:${piece.x};--y:${piece.y}"><b>${piece.glyph}</b><i>${unitInsignia(piece.role)}</i></span>`).join('')}
     </div>
-    <div class="title-visual-foot"><span>沙盘示意</span></div>
+    <div class="title-visual-foot"><span>斜俯视实景微缩</span></div>
   </div>`;
 }
 
@@ -90,7 +137,6 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   layer.className = 'title-screen';
   const preview = opts.hasSave && opts.preview ? titleMatchPreview(opts.preview) : '';
   layer.innerHTML = `
-    <button class="title-ui-toggle btn btn-sm" data-title="ui-layout"></button>
     <div class="title-bg" aria-hidden="true">${Array.from({ length: 48 }, (_, i) => {
       const t = i % 12;
       return `<i style="--d:${(t / 12).toFixed(2)};--r:${(i * 37) % 100}"></i>`;
@@ -128,7 +174,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       </div>
       ${opts.latest ? '<p class="title-latest"></p>' : ''}
 
-      <ol class="title-era" aria-label="六个时代">
+      <ol class="title-era" aria-label="八个时代">
         ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
       </div>
@@ -141,42 +187,54 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   const latest = layer.querySelector('.title-latest');
   if (latest) latest.textContent = opts.latest ?? '';
 
+  const win = doc.defaultView ?? window;
+  const resumeCard = layer.querySelector<HTMLButtonElement>('.title-resume');
+  const resumeFallback = layer.querySelector<HTMLButtonElement>('.title-resume-fallback')!;
+  if (resumeCard) {
+    resumeCard.hidden = false;
+    resumeCard.dataset.title = 'continue';
+  }
+  resumeFallback.hidden = !opts.hasSave || !!resumeCard;
+  if (resumeCard) delete resumeFallback.dataset.title;
+  else resumeFallback.dataset.title = 'continue';
+
+  // 真机浏览器且无存档预览时，用斜俯视微缩实景替换静态沙盘（jsdom 自动回退静态沙盘）
+  let dioramaCanvas: HTMLCanvasElement | null = null;
+  if (!preview && typeof win.CanvasRenderingContext2D === 'function') {
+    const table = layer.querySelector<HTMLElement>('.title-sandtable');
+    if (table) {
+      const wrap = doc.createElement('div');
+      wrap.className = 'title-iso-wrap';
+      const canvas = doc.createElement('canvas');
+      canvas.className = 'title-iso-canvas';
+      const badge = doc.createElement('span');
+      badge.className = 'title-iso-badge';
+      badge.textContent = '3D 斜俯视';
+      wrap.append(canvas, badge);
+      const angled = createAngledBoard(canvas, '');
+      if (angled) {
+        const diorama = buildTitleDioramaState();
+        angled.draw(playerView(diorama, 'A'));
+        table.replaceWith(wrap);
+        dioramaCanvas = canvas;
+      }
+    }
+  }
+
   const close = (): void => {
+    if (dioramaCanvas) dioramaCanvas.hidden = true;
     layer.remove();
     win.removeEventListener('keydown', onKey);
-    win.removeEventListener(UI_LAYOUT_EVENT, syncLayout);
   };
   const onKey = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && opts.hasSave) close();
   };
-  const win = doc.defaultView ?? window;
-  const resumeCard = layer.querySelector<HTMLButtonElement>('.title-resume');
-  const resumeFallback = layer.querySelector<HTMLButtonElement>('.title-resume-fallback')!;
-  const syncLayout = (): void => {
-    const classic = currentUiLayout(doc.documentElement) === 'classic';
-    const button = layer.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
-    button.textContent = classic ? '恢复新版 UI' : '回滚到经典 UI';
-    button.setAttribute('aria-pressed', String(classic));
-    if (resumeCard) {
-      resumeCard.hidden = classic;
-      if (classic) delete resumeCard.dataset.title;
-      else resumeCard.dataset.title = 'continue';
-    }
-    resumeFallback.hidden = !classic && (!opts.hasSave || !!resumeCard);
-    if (resumeCard && !classic) delete resumeFallback.dataset.title;
-    else resumeFallback.dataset.title = 'continue';
-  };
-  syncLayout();
-  win.addEventListener(UI_LAYOUT_EVENT, syncLayout);
   win.addEventListener('keydown', onKey);
 
   layer.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-title]');
     if (!btn || (btn as HTMLButtonElement).disabled) return;
     switch (btn.dataset.title) {
-      case 'ui-layout':
-        setUiLayout(currentUiLayout(doc.documentElement) === 'classic' ? 'refined' : 'classic', doc.documentElement);
-        break;
       case 'new':
         close();
         opts.onNew();

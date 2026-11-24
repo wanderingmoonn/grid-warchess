@@ -31,6 +31,7 @@ import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { foldLimit, foldRows } from './list-fold.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
+import { uiIcon } from './icons.ts';
 import {
   MODULES,
   canMount,
@@ -423,19 +424,23 @@ function incomeNoteOf(s: GameState, income: string): string {
 }
 
 export function battleStatusShell(): string {
-  return `<div class="battle-status-amounts" role="group" aria-label="本方资源">
-    <div class="battle-status-stat"><span>金币</span><b data-ref="battle-gold"></b></div>
-    <div class="battle-status-stat" data-ref="battle-income-stat"><span>每回合</span><b data-ref="battle-income"></b></div>
+  return `<button type="button" class="ready-pill" data-act="focus-ready" data-ref="battle-ready" title="点击定位下一个可行动单位" hidden>${uiIcon('ready')}<span data-ref="battle-ready-text"></span></button>
+  <div class="battle-status-amounts" role="group" aria-label="本方资源">
+    <div class="battle-status-stat">${uiIcon('gold', 'stat-ico stat-ico-gold')}<span>金币</span><b data-ref="battle-gold"></b></div>
+    <div class="battle-status-stat" data-ref="battle-income-stat">${uiIcon('income', 'stat-ico stat-ico-income')}<span>每回合</span><b data-ref="battle-income"></b></div>
   </div>
-  <button type="button" class="btn btn-sm" data-ref="battle-undo" aria-label="撤回一步" title="撤回一步，仅本回合" disabled>撤回</button>`;
+  <button type="button" class="btn btn-sm btn-ghost-hud" data-ref="battle-undo" aria-label="撤回一步" title="撤回一步，仅本回合" disabled>${uiIcon('undo')}<span>撤回</span></button>`;
 }
 
 export function updateBattleStatus(root: HTMLElement, s: GameState, me: PlayerId | null, canUndo: boolean): void {
   root.hidden = me === null;
   const undo = root.querySelector<HTMLButtonElement>('[data-ref="battle-undo"]')!;
+  const readyBtn = root.querySelector<HTMLButtonElement>('[data-ref="battle-ready"]');
+  const readyText = root.querySelector<HTMLElement>('[data-ref="battle-ready-text"]');
   if (me === null) {
     delete undo.dataset.act;
     undo.disabled = true;
+    if (readyBtn) readyBtn.hidden = true;
     return;
   }
   const income = incomeTextOf(s, me);
@@ -450,6 +455,19 @@ export function updateBattleStatus(root: HTMLElement, s: GameState, me: PlayerId
   if (incomeStat.title !== note) incomeStat.title = note;
   if (undo.dataset.act !== 'undo') undo.dataset.act = 'undo';
   if (undo.disabled === canUndo) undo.disabled = !canUndo;
+  if (readyBtn && readyText) {
+    const myTurnNow = s.current === me && !s.winner;
+    const readyCount = myTurnNow
+      ? unitsOf(s, me).filter((u) => {
+          const def = s.unitTypes[u.type];
+          if (!def || def.category === 'building' || underConstruction(u)) return false;
+          return (canMove(u) && movePower(s, u) > 0) || (canAttack(u) && isArmed(s, u));
+        }).length
+      : 0;
+    readyBtn.hidden = readyCount <= 0;
+    const txt = `${readyCount} 可动`;
+    if (readyText.textContent !== txt) readyText.textContent = txt;
+  }
 }
 
 function panelHtml(input: PanelInput): string {
@@ -665,7 +683,7 @@ function panelHtml(input: PanelInput): string {
          </div>`
       : ''}
 
-    <div class="card">
+    <div class="card card-log">
       <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>
         <summary class="card-title fold-head">战报</summary>
         ${logHtml}
@@ -673,6 +691,11 @@ function panelHtml(input: PanelInput): string {
     </div>
 
     <div class="side-footer">
+      <div class="dock-quick-row" aria-label="快捷面板">
+        <button type="button" class="dock-pill" data-act="dock-open" data-dock="match" title="查看阵营与对局概况">${uiIcon('flag')}<span>阵营</span></button>
+        <button type="button" class="dock-pill" data-act="dock-open" data-dock="log" title="查看战报记录">${uiIcon('log')}<span>战报</span></button>
+        <button type="button" class="dock-pill" data-act="dock-open" data-dock="ops" title="查看操作说明">${uiIcon('book')}<span>说明</span></button>
+      </div>
       <!--
         主按钮单独包一层（2026-11-11）。
         手机上是"棋盘在上、侧栏在下一整条"，侧栏会长到两三屏（产兵表 + 战报），
@@ -2678,21 +2701,13 @@ export function topbarShell(): string {
     <span class="watch-chip" data-ref="watch" title="45 秒内有心跳的观战者人数" hidden></span>
     <div class="topbar-spacer"></div>
     <div class="topbar-actions">
-      <button class="btn btn-sm" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>
-      <button class="btn btn-sm" data-act="ai-speed" data-ref="speed" hidden>速度</button>
-      <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
-      <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
-      <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
-      <button class="btn btn-sm" data-act="toggle-show-all" data-ref="show-all">看全图</button>
-      <!--
-        低频入口不再是顶栏按钮（2026-11-11 第二版）。
-
-        上一版把它们收进「更多」下拉，用户看了一眼说：不如干脆叫「设置」。
-        他是对的——"更多"是在给一堆杂项找词，而它们的共同点恰恰是
-        "不常改、想起来才改"：那就是设置。现在全部进设置弹窗，
-        铃声这种同样"想起来才调"的也一起搬进去，顶栏只留每回合都要看的东西。
-      -->
-      <button class="btn btn-sm" data-act="settings" title="主题、声音、导出、规则书">设置</button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="ai-speed" data-ref="speed" hidden>速度</button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="toggle-ai" data-ref="toggle-ai">${uiIcon('ai')}<span data-label>交给 AI</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="online" data-ref="online">${uiIcon('online')}<span data-label>联机</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="toggle-fog" data-ref="fog">${uiIcon('fog')}<span data-label>迷雾：开</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="toggle-show-all" data-ref="show-all">${uiIcon('eye')}<span data-label>看全图</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="settings" title="主题、视角、声音、导出、规则书">${uiIcon('settings')}<span data-label>设置</span></button>
     </div>
   `;
 }
@@ -2778,6 +2793,12 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     speed.textContent = `速度 ${s.speedName}`;
   }
 
+  const setBtnLabel = (el: HTMLElement, text: string): void => {
+    const span = el.querySelector<HTMLElement>('[data-label]');
+    if (span) span.textContent = text;
+    else el.textContent = text;
+  };
+
   const ai = ref('toggle-ai');
   if (ai) {
     // 沙盒里"托管某一方"这个开关没有意义：两边本来就归 AI 打，
@@ -2786,13 +2807,16 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     // 指挥官模式：这一方本来就在 AI 手里，"交给 AI / 收回操作权"没有第二种解释。
     // 这里的按钮改成同一件事的另一个入口——执行一批再交还，和参谋部那颗同源，
     // 顺手点错不会把对面也托管掉。
-    ai.textContent = s.commander
-      ? s.commanderRunning
-        ? '参谋部执行中…'
-        : '交给参谋部'
-      : s.aiCurrent
-        ? '收回操作权'
-        : '交给 AI';
+    setBtnLabel(
+      ai,
+      s.commander
+        ? s.commanderRunning
+          ? '参谋部执行中…'
+          : '交给参谋部'
+        : s.aiCurrent
+          ? '收回操作权'
+          : '交给 AI',
+    );
     ai.classList.toggle('btn-primary', s.commander ? false : s.aiCurrent);
     (ai as HTMLButtonElement).disabled = s.commander === true && s.commanderRunning === true;
   }
@@ -2801,7 +2825,7 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
   if (fog) {
     // 浓雾扩展下不给关：这个扩展的全部意义就是"地图本身看不见"，
     // 允许关掉雾等于让它失效
-    fog.textContent = s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`;
+    setBtnLabel(fog, s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`);
     fog.classList.toggle('is-locked', s.blackout);
     // 复盘里这个开关改的是"别人那局"的雾：改了既存不下来，也会把画面调歪
     fog.hidden = s.replay === true;
