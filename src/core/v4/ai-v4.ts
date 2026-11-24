@@ -210,7 +210,16 @@ export function aiNextActionV4(
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.acted) continue;
     const a = actFor(s, world, con, live);
-    if (usable(a) && a && a.type === 'ATTACK') return a;
+    /*
+     * **`SIEGE` 也算"打"。**
+     *
+     * 这里原来只认 `ATTACK`，于是"砸城"被留到后面的逐单位走位循环里，
+     * 而那个循环会先执行走位计划——兵就算贴着城墙也先被派去走一格。
+     * S-016 实测：8 个兵围着空城，10 手只砸出 46 血（v1/v3 同局面 81 血打空）。
+     * `actFor` 内部本来就是"攻城优先于打人"，所以这一处放开就同时保住了
+     * S-000 那条"守军站在城格上时要先砸城"。
+     */
+    if (usable(a) && a && (a.type === 'ATTACK' || a.type === 'SIEGE')) return a;
   }
 
   /*

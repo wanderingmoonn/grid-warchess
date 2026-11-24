@@ -107,6 +107,24 @@ export function actFor(
    * 由下一步的"让开"兜底。
    */
   /*
+   * ①.45 **能砸到目标城就先砸，别照着计划走开。**
+   *
+   * 走位计划给每个还在路上的人都排了下一步，于是"这一手明明够得着城"的兵
+   * 也被派去走一格。8 个兵围住一座空城，一回合只砸得出 1~2 次
+   * （S-016 实测：10 手 46 血，而 v1/v3 同局面把 81 血打空）。
+   *
+   * 能打到的东西比"往前挪一格"值钱，所以攻城排在走位之前。
+   * 判据用引擎的 `siegeTargets`（已含射程、高度差、有没有武器），不自己算。
+   */
+  {
+    const sqS = squadOf(con, u);
+    if (sqS && (sqS.order === 'march' || sqS.order === 'siege') && sqS.cityId) {
+      const canHitEarly = siegeTargets(s, u).find((c) => c.id === sqS.cityId);
+      if (canHitEarly) return { type: 'SIEGE', unitId: u.id, cityId: canHitEarly.id };
+    }
+  }
+
+  /*
    * **约束层已经排好了这一手站哪一格**（多起点 → 多终点，一人一格，见 `planMarch`）。
    *
    * 照做即可。执行时只校验"这一格还可达"——前面的人先动过之后，计划里的目标格
@@ -171,22 +189,7 @@ export function actFor(
     }
   }
 
-  /*
-   * ② 攻城：**排在打人之前**。
-   *
-   * 一开始把"能打就打"排在前面，结果 S-000 上 30 手打掉 0 城血：敌人一直站在城格上，
-   * 于是永远有目标可打，永远轮不到攻城。
-   * 这里的取舍是**约束优先**：约束层说了"去打这座城"，那到了就打城；
-   * 打人只是路上的事，不是目的。
-   */
   const sq = squadOf(con, u);
-
-  if (sq && (sq.order === 'march' || sq.order === 'siege') && sq.cityId) {
-    /* 同样问引擎：`siegeTargets` 已经含射程、高度、有没有武器 */
-    const canHit = siegeTargets(s, u).find((c) => c.id === sq.cityId);
-    if (canHit) return { type: 'SIEGE', unitId: u.id, cityId: canHit.id };
-  }
-
 
   /*
    * ②.5 集火：约束层点了名就打它。

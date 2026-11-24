@@ -66,6 +66,13 @@ interface Scene {
   me?: 'A' | 'B';
   seed?: number;
   gold?: Partial<Record<PlayerId, number>>;
+  /**
+   * **双方都没有回合收入**（`MatchConfig.noIncome`）。
+   *
+   * 用来摆"对手不该造兵"的局面：城市每回合产 50~90 金，光把开局金清成 0 挡不住
+   * 对手攒钱造兵，几手之后就会有无中生有的守军混进考题里。
+   */
+  noIncome?: boolean;
   map?: string[];
   cities?: Array<{ owner: PlayerId; x: number; y: number; era?: number; hp?: number; ruined?: boolean }>;
   units?: Array<{ owner: PlayerId; type: string; x: number; y: number; hp?: number }>;
@@ -100,7 +107,13 @@ const LEGEND: Record<string, Terrain> = {
  * 比从零拼一个 GameState 可靠得多——少一个字段就是一处莫名其妙的崩溃。
  */
 let s: GameState = createMatch(
-  { ...DEFAULT_CONFIG, size: SIZE, startEra: scene.startEra ?? 2, mapSymmetry: 'fair' },
+  {
+    ...DEFAULT_CONFIG,
+    size: SIZE,
+    startEra: scene.startEra ?? 2,
+    mapSymmetry: 'fair',
+    ...(scene.noIncome === true ? { noIncome: true } : {}),
+  },
   scene.seed ?? 1,
 );
 s.fog = scene.fog === true;

@@ -9,6 +9,7 @@
  *
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
+import { boardOf, boardIdOf } from '../board.ts';
 import { passable } from '../config.ts';
 import { attackableTargets, effectiveStats, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
@@ -844,6 +845,8 @@ function planMarch(
       .filter((u): u is Unit => !!u && u.owner === world.me);
     if (units.length === 0) continue;
 
+    /* 这一队所在的图（多图下别拿地球的格表去查月球的兵） */
+    const tiles = boardOf(s, boardIdOf(units[0]!)).tiles;
     const toBase = world.stepsFrom(base);
     const axisOf = (u: Unit): number => toBase[u.y * s.w + u.x] ?? Infinity;
     const pending = units.filter((u) => axisOf(u) > 0);
@@ -871,7 +874,7 @@ function planMarch(
      */
     let narrow = world.corridorWidth({ x: front.x, y: front.y }, base) <= 2;
     for (let k = front.y * s.w + front.x, guard = 0; !narrow && guard < 40; guard += 1) {
-      if (s.tiles[k]?.terrain === 'bridge') {
+      if (tiles[k]?.terrain === 'bridge') {
         narrow = true;
         break;
       }
@@ -987,7 +990,7 @@ function planMarch(
             if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
             const k = y * s.w + x;
             if (used.has(k)) continue;
-            const t = s.tiles[k];
+            const t = tiles[k];
             if (!t || !passable(t.terrain) || t.terrain === 'city') continue;
             /* 敌人占着的格不能当阵位（那是要打的地方，不是要站的地方） */
             if (s.units.some((v) => v.owner !== world.me && v.y * s.w + v.x === k)) continue;
