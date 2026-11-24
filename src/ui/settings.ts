@@ -14,6 +14,8 @@
  * 只负责**渲染**，开合与落盘都在 main（这个文件是纯函数，方便测）。
  */
 
+import { uiIcon } from './icons.ts';
+
 export interface SettingsOptions {
   /** 当前主题（legacy / modern） */
   theme: 'legacy' | 'modern';
@@ -70,14 +72,15 @@ export function settingsHtml(o: SettingsOptions): string {
   return `
   <div class="modal modal-narrow" role="dialog" aria-label="设置">
     <div class="modal-head">
-      <h2>设置</h2>
+      <h2 class="modal-title-ico">${uiIcon('settings')}<span>设置</span></h2>
     </div>
 
     <div class="modal-body">
       <section class="set-group">
-        <div class="set-title">外观 <span class="set-hint">仅此设备</span></div>
+        <div class="set-title">画面与视角 <span class="set-hint">仅此设备</span></div>
         <div class="set-row">
           <div class="set-label">主题
+            <span class="set-hint">日间羊皮纸 / 夜间板岩</span>
           </div>
           <div class="chip-row">
             ${chip(o.theme === 'legacy', 'set-theme', '浅色', 'data-theme="legacy"')}
@@ -98,7 +101,8 @@ export function settingsHtml(o: SettingsOptions): string {
             : ''
         }
         <div class="set-row">
-          <div class="set-label">减少动态效果
+          <div class="set-label">动态效果
+            <span class="set-hint">水波、受击与过渡动画</span>
           </div>
           <div class="chip-row">
             ${chip(!o.reducedMotion, 'set-motion', '正常', 'data-motion="full"')}
@@ -106,8 +110,8 @@ export function settingsHtml(o: SettingsOptions): string {
           </div>
         </div>
         <div class="set-row">
-          <div class="set-label">美术贴图
-            <span class="set-hint">地形与棋子</span>
+          <div class="set-label">棋盘风格
+            <span class="set-hint">正俯视地形与棋子贴图</span>
           </div>
           <div class="chip-row">
             ${chip(!(o.terrainArt || o.unitArt), 'set-fx', '原版', 'data-fx="off"')}

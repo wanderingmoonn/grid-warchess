@@ -18,7 +18,9 @@ import { unitInsignia, type UnitRole } from './unit-insignia.ts';
 import { titleMatchPreview, type TitleMatchPreview } from './title-match-preview.ts';
 import { createAngledBoard } from './angled-board.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
-import { playerView } from '../core/fog.ts';
+import { EARTH } from '../core/board.ts';
+import { playerView, viewOnBoard } from '../core/fog.ts';
+import { uiIcon } from './icons.ts';
 import type { GameState, Terrain } from '../core/types.ts';
 
 export interface TitleOptions {
@@ -53,16 +55,16 @@ export interface TitleOptions {
   onReplay: () => void;
 }
 
-/** 八个时代的色带：从青铜到聚变，与斜俯视战场视觉语言一致 */
-const ERA_STRIP: Array<[string, string]> = [
-  ['青铜', '#c9a878'],
-  ['铁器', '#a9b795'],
-  ['火器', '#c8b98f'],
-  ['蒸汽', '#9aa3ad'],
-  ['机械化', '#7f8c96'],
-  ['信息化', '#4a7fa6'],
-  ['装甲', '#63718d'],
-  ['聚变', '#4aa8c2'],
+/** 八个时代的色带：从青铜到聚变，附悬停特色说明 */
+const ERA_STRIP: Array<[string, string, string]> = [
+  ['青铜', '#c9a878', '青铜时代 · 民兵、弓手、战车与木栅城池'],
+  ['铁器', '#a9b795', '铁器时代 · 重装步兵、骑兵与石砌城防'],
+  ['火器', '#c8b98f', '火器时代 · 火枪手、野战炮与棱堡要塞'],
+  ['蒸汽', '#9aa3ad', '蒸汽时代 · 铁甲舰、蒸汽装甲与工业重炮'],
+  ['机械化', '#7f8c96', '机械化时代 · 坦克集群、空军与钢铁防线'],
+  ['信息化', '#4a7fa6', '信息化时代 · 精确制导、隐身战机与现代指挥'],
+  ['装甲', '#63718d', '装甲时代 · 模块化机甲素体、电网与高能护盾'],
+  ['聚变', '#4aa8c2', '聚变时代 · 聚变核心反应堆、轨道兵器与尖端阵列'],
 ];
 
 function buildTitleDioramaState(): GameState {
@@ -160,9 +162,9 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       </div>
 
       <div class="title-links">
-        <button data-title="rogue">肉鸽</button>
-        <button data-title="online">联机对战</button>
-        <button data-title="manual">规则手册</button>
+        <button data-title="rogue">${uiIcon('swords')}<span>肉鸽</span></button>
+        <button data-title="online">${uiIcon('online')}<span>联机对战</span></button>
+        <button data-title="manual">${uiIcon('book')}<span>规则手册</span></button>
         <details class="title-tools">
         <summary>更多</summary>
         <div class="title-tools-menu">
@@ -175,7 +177,7 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
       ${opts.latest ? '<p class="title-latest"></p>' : ''}
 
       <ol class="title-era" aria-label="八个时代">
-        ${ERA_STRIP.map(([name, color]) => `<li><i style="background:${color}"></i>${name}</li>`).join('')}
+        ${ERA_STRIP.map(([name, color, tip]) => `<li title="${tip}"><i style="background:${color}"></i>${name}</li>`).join('')}
       </ol>
       </div>
       ${preview || titleSandtable()}
@@ -198,25 +200,33 @@ export function openTitle(host: HTMLElement, opts: TitleOptions): () => void {
   if (resumeCard) delete resumeFallback.dataset.title;
   else resumeFallback.dataset.title = 'continue';
 
-  // 真机浏览器且无存档预览时，用斜俯视微缩实景替换静态沙盘（jsdom 自动回退静态沙盘）
+  // 真机浏览器下统一使用 3D 斜俯视实时沙盘（有存档则实景呈现当前战局，无存档则展示跨时代微缩沙盘；jsdom 自动回退静态沙盘）
   let dioramaCanvas: HTMLCanvasElement | null = null;
-  if (!preview && typeof win.CanvasRenderingContext2D === 'function') {
+  if (typeof win.CanvasRenderingContext2D === 'function') {
     const table = layer.querySelector<HTMLElement>('.title-sandtable');
     if (table) {
-      const wrap = doc.createElement('div');
+      const wrap = doc.createElement('span');
       wrap.className = 'title-iso-wrap';
       const canvas = doc.createElement('canvas');
       canvas.className = 'title-iso-canvas';
       const badge = doc.createElement('span');
       badge.className = 'title-iso-badge';
-      badge.textContent = '3D 斜俯视';
+      const saveView = opts.preview ? viewOnBoard(opts.preview.view, EARTH) : null;
+      const canShowSaveIso = !!saveView && saveView.state.w <= 24 && saveView.state.h <= 24;
+      badge.textContent = canShowSaveIso ? '3D 实景战局' : '3D 斜俯视';
       wrap.append(canvas, badge);
-      const angled = createAngledBoard(canvas, '');
+      const angled = createAngledBoard(canvas, doc.baseURI || win.location.href);
       if (angled) {
-        const diorama = buildTitleDioramaState();
-        angled.draw(playerView(diorama, 'A'));
-        table.replaceWith(wrap);
-        dioramaCanvas = canvas;
+        if (canShowSaveIso && saveView) {
+          angled.draw(saveView);
+          table.replaceWith(wrap);
+          dioramaCanvas = canvas;
+        } else if (!preview) {
+          const diorama = buildTitleDioramaState();
+          angled.draw(playerView(diorama, 'A'));
+          table.replaceWith(wrap);
+          dioramaCanvas = canvas;
+        }
       }
     }
   }
