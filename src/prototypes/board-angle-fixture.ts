@@ -2,7 +2,7 @@ import type { FixedMap } from '../core/fixed-maps.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
-export type BoardAngleScene = 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
+export type BoardAngleScene = 'damage' | 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
 
 const near = (x: number, y: number, cx: number, cy: number, rx: number, ry: number): boolean =>
   ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
@@ -167,8 +167,19 @@ function citiesTerrain(size: 16 | 32, x: number, y: number): string {
   return '.';
 }
 
+function damageTerrain(w: number, h: number, x: number, y: number): string {
+  // 开阔平原整齐排布 时代1~5 × 4档受损（20城），仅在最外边缘点缀极少地貌
+  if (x === w - 1 && y >= h - 3) return 's';
+  if (x === 0 && y >= h - 2) return 'f';
+  if (x === w - 1 && y <= 1) return 'h';
+  return '.';
+}
+
 export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all'): GameState {
+  const mapW = scene === 'damage' ? 20 : size;
+  const mapH = scene === 'damage' ? 20 : size;
   const cellOf = (x: number, y: number): string => {
+    if (scene === 'damage') return damageTerrain(mapW, mapH, x, y);
     if (scene === 'cities' || scene === 'future') return citiesTerrain(size, x, y);
     if (scene === 'river') return size === 16 ? riverTerrain16(x, y) : riverTerrain32(x, y);
     if (scene === 'lake') return lakeTerrain(size, x, y);
@@ -177,6 +188,7 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   };
 
   const sceneNames: Record<BoardAngleScene, string> = {
+    damage: '时代一至五 · 四档受损（常态/受损/重创/废墟）',
     future: '时代五至八（现代→未来）',
     cities: '全八时代城市演进',
     all: '河湖海全览',
@@ -193,6 +205,15 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     eras16: number[];
     eras32: number[];
   }> = {
+    damage: {
+      // 占位用 1+1 城通过固定图校验，下面直接注入完整 5 时代 × 4 档（20 城）
+      a16: [{ x: 1, y: 1 }],
+      b16: [{ x: 16, y: 17 }],
+      a32: [{ x: 1, y: 1 }],
+      b32: [{ x: 16, y: 17 }],
+      eras16: [1, 5],
+      eras32: [1, 5],
+    },
     future: {
       a16: [{ x: 2, y: 3 }, { x: 8, y: 2 }],
       b16: [{ x: 3, y: 8 }, { x: 9, y: 8 }],
@@ -245,24 +266,61 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
 
   const cCfg = citiesByScene[scene];
   const map: FixedMap = {
-    id: `prototype-${scene}-${size}`,
+    id: `prototype-${scene}-${mapW}`,
     name: sceneNames[scene],
-    w: size,
-    h: size,
-    rows: Array.from({ length: size }, (_, y) =>
-      Array.from({ length: size }, (_, x) => cellOf(x, y)).join('')),
+    w: mapW,
+    h: mapH,
+    rows: Array.from({ length: mapH }, (_, y) =>
+      Array.from({ length: mapW }, (_, x) => cellOf(x, y)).join('')),
     citiesA: size === 16 ? cCfg.a16 : cCfg.a32,
     citiesB: size === 16 ? cCfg.b16 : cCfg.b32,
   };
 
-  const match = createMatch({ ...DEFAULT_CONFIG, fixedMap: map, size, startEra: 2, expansionIds: [] }, 20261123, {});
+  const match = createMatch({ ...DEFAULT_CONFIG, fixedMap: map, size: mapW, startEra: 2, expansionIds: [] }, 20261123, {});
   match.fog = false;
-  const eraPlan = size === 16 ? cCfg.eras16 : cCfg.eras32;
-  match.cities.forEach((city, idx) => {
-    city.era = eraPlan[idx] ?? city.era;
-  });
+  if (scene === 'damage') {
+    // 确保 20 城展示区为干净平整的开阔平原，不被随机山脉/河流遮挡任何一座城
+    for (let y = 0; y < match.h; y++) {
+      for (let x = 0; x < match.w; x++) {
+        const tile = match.tiles[y * match.w + x];
+        if (!tile) continue;
+        if (x === match.w - 1 && y >= match.h - 3) tile.terrain = 'shallow';
+        else if (x === 0 && y >= match.h - 2) tile.terrain = 'forest';
+        else if (x === match.w - 1 && y <= 1) tile.terrain = 'hill';
+        else tile.terrain = 'plain';
+      }
+    }
+    const template = match.cities[0]!;
+    const xs = [1, 6, 11, 16] as const;
+    const ys = [1, 5, 9, 13, 17] as const;
+    const built = [];
+    for (let era = 1; era <= 5; era++) {
+      const owner: 'A' | 'B' = era % 2 === 1 ? 'A' : 'B';
+      for (let tier = 0; tier < 4; tier++) {
+        const maxHp = template.maxHp;
+        const hp = tier === 0 ? maxHp : tier === 1 ? Math.round(maxHp * 0.72) : tier === 2 ? Math.round(maxHp * 0.28) : 0;
+        built.push({
+          ...template,
+          id: `damage-e${era}-t${tier}`,
+          owner,
+          era,
+          x: xs[tier]!,
+          y: ys[era - 1]!,
+          hp,
+          ruined: tier === 3,
+        });
+      }
+    }
+    match.cities = built;
+  } else {
+    const eraPlan = size === 16 ? cCfg.eras16 : cCfg.eras32;
+    match.cities.forEach((city, idx) => {
+      city.era = eraPlan[idx] ?? city.era;
+    });
+  }
 
   const formations: Record<BoardAngleScene, Array<[Unit['owner'], string, number, number]>> = {
+    damage: [],
     future: size === 16 ? [
       ['A', 'spearman', 6, 4], ['B', 'knight', 7, 9],
     ] : [

@@ -7,7 +7,7 @@ const params = new URLSearchParams(location.search);
 const size: 16 | 32 = params.get('size') === '16' ? 16 : 32;
 const rawScene = params.get('scene');
 let currentScene: BoardAngleScene =
-  rawScene === 'future' || rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
+  rawScene === 'damage' || rawScene === 'future' || rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
     ? rawScene
     : 'all';
 
@@ -29,6 +29,7 @@ const angleButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-angl
 const sceneButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-scene]')];
 
 const sceneLabels: Record<BoardAngleScene, string> = {
+  damage: '一至五代四档受损（常态/受损/重创/废墟）',
   future: '时代五至八（现代→未来）',
   cities: '全八时代城市演进',
   all: '河·湖·海全览',
@@ -41,7 +42,7 @@ function renderScene(scene: BoardAngleScene): void {
   currentScene = scene;
   currentView = playerView(boardAngleFixture(size, scene), 'A', true);
   for (const label of preview.querySelectorAll('[data-map-size]')) {
-    label.textContent = `${sceneLabels[scene]} · ${size} × ${size}`;
+    label.textContent = `${sceneLabels[scene]} · ${currentView.state.w} × ${currentView.state.h}`;
   }
   for (const button of sceneButtons) {
     button.setAttribute('aria-pressed', String(button.dataset.scene === scene));

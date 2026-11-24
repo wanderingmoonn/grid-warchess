@@ -2283,7 +2283,18 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     }
   }
 
-  /** 阵营旗帜（清晰标识归属而不破坏建筑写实质感） */
+  /** 城市受损四档：0=常态(满血) 1=受损(≥50%血) 2=重创(<50%血) 3=废墟(0血) */
+  type CityDamageStage = 0 | 1 | 2 | 3;
+
+  function cityDamageStage(city: City): CityDamageStage {
+    if (city.ruined || city.hp <= 0) return 3;
+    if (city.maxHp > 0 && city.hp < city.maxHp) {
+      return city.hp >= city.maxHp * 0.5 ? 1 : 2;
+    }
+    return 0;
+  }
+
+  /** 阵营旗帜（支持按受损档位倾斜、残破、折断） */
   function isoBanner(
     ctx: CanvasRenderingContext2D,
     pt: CityPt,
@@ -2294,28 +2305,160 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     teamCol: string,
     lightCol: string,
     rect = false,
+    stage: CityDamageStage = 0,
   ): void {
+    if (stage >= 3) return;
+    const tiltU = stage === 1 ? 0.032 : stage === 2 ? 0.075 : 0;
+    const hScale = stage === 1 ? 0.92 : stage === 2 ? 0.56 : 1;
     const base = pt(u, v, z0);
-    const tip = pt(u, v, z0 + poleH);
-    strokeLine(ctx, base, tip, '#4e4232', 1.15);
-    if (rect) {
+    const tip = pt(u + tiltU, v + tiltU * 0.4, z0 + poleH * hScale);
+    strokeLine(ctx, base, tip, stage === 2 ? '#3b3329' : '#4e4232', 1.15);
+    if (stage === 2) {
+      // 重创：折断残旗（深暗撕裂布角）
       polygon(ctx, [
         tip,
-        [tip[0] + 6.8, tip[1] + 1.0],
-        [tip[0] + 5.6, tip[1] + 4.4],
-        [tip[0], tip[1] + 4.2],
-      ], teamCol, '#2e251c44', 0.55);
-      strokeLine(ctx, [tip[0] + 0.6, tip[1] + 1.1], [tip[0] + 5.8, tip[1] + 1.8], lightCol, 0.8);
+        [tip[0] + 4.4, tip[1] + 2.2],
+        [tip[0] + 2.5, tip[1] + 3.4],
+        [tip[0], tip[1] + 3.1],
+      ], teamCol, '#2e251c66', 0.55);
+      return;
+    }
+    if (rect) {
+      if (stage === 1) {
+        polygon(ctx, [
+          tip,
+          [tip[0] + 6.4, tip[1] + 1.1],
+          [tip[0] + 4.8, tip[1] + 2.7],
+          [tip[0] + 5.7, tip[1] + 4.2],
+          [tip[0], tip[1] + 4.0],
+        ], teamCol, '#2e251c55', 0.55);
+      } else {
+        polygon(ctx, [
+          tip,
+          [tip[0] + 6.8, tip[1] + 1.0],
+          [tip[0] + 5.6, tip[1] + 4.4],
+          [tip[0], tip[1] + 4.2],
+        ], teamCol, '#2e251c44', 0.55);
+      }
+      strokeLine(ctx, [tip[0] + 0.6, tip[1] + 1.1], [tip[0] + 5.2, tip[1] + 1.8], lightCol, 0.75);
     } else {
       polygon(ctx, [
         tip,
-        [tip[0] + 7.2, tip[1] + 2.0],
-        [tip[0], tip[1] + 4.0],
+        [tip[0] + (stage === 1 ? 6.2 : 7.2), tip[1] + 2.0],
+        [tip[0], tip[1] + 3.8],
       ], teamCol, '#2e251c44', 0.55);
     }
   }
 
-  /** 废墟城池（所有时代通用残垣断壁） */
+  /** 地面/屋顶烟熏焦斑 */
+  function isoScorch(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    u: number,
+    v: number,
+    z: number,
+    rx: number,
+    ry: number,
+    alpha = 0.45,
+  ): void {
+    const [sx, sy] = pt(u, v, z);
+    ctx.fillStyle = `rgba(38,32,27,${alpha})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, rx, ry, -0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(24,20,17,${alpha * 0.65})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, rx * 0.55, ry * 0.55, 0.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /** 墙体/地表结构裂纹折线 */
+  function isoCrack(ctx: CanvasRenderingContext2D, pt: CityPt, nodes: ReadonlyArray<readonly [number, number, number]>, color = '#2f2923aa', width = 0.95): void {
+    if (nodes.length < 2) return;
+    ctx.beginPath();
+    const first = pt(nodes[0]![0], nodes[0]![1], nodes[0]![2]);
+    ctx.moveTo(first[0], first[1]);
+    for (let i = 1; i < nodes.length; i++) {
+      const p = pt(nodes[i]![0], nodes[i]![1], nodes[i]![2]);
+      ctx.lineTo(p[0], p[1]);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  }
+
+  /** 材质化 3D 碎石/残木/碎砖瓦砾堆 */
+  function isoRubble(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    u: number,
+    v: number,
+    z: number,
+    size: number,
+    topCol: string,
+    rightCol: string,
+    leftCol: string,
+  ): void {
+    isoBox(ctx, pt, u - size, v - size * 0.85, u + size, v + size * 0.85, z, z + 1.0 + size * 18, topCol, rightCol, leftCol, '#2e261f55');
+  }
+
+  /** 重创状态明火与火星（克制的低多边形风格化火焰，一眼区分重创与熄灭废墟） */
+  function isoFire(ctx: CanvasRenderingContext2D, pt: CityPt, u: number, v: number, z: number, scale = 1): void {
+    const [fx, fy] = pt(u, v, z);
+    const s = scale;
+    // 暖橙火光晕
+    ctx.fillStyle = 'rgba(232,114,42,0.28)';
+    ctx.beginPath();
+    ctx.ellipse(fx, fy - 1.2 * s, 4.4 * s, 2.8 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 外焰（朱橙）
+    polygon(ctx, [
+      [fx - 2.6 * s, fy + 0.8 * s],
+      [fx - 1.4 * s, fy - 2.6 * s],
+      [fx - 0.1 * s, fy - 5.2 * s],
+      [fx + 1.3 * s, fy - 2.8 * s],
+      [fx + 2.5 * s, fy + 0.8 * s],
+      [fx, fy + 1.4 * s],
+    ], '#dc5c28');
+    // 副火舌
+    polygon(ctx, [
+      [fx + 0.8 * s, fy + 0.5 * s],
+      [fx + 2.1 * s, fy - 2.9 * s],
+      [fx + 3.0 * s, fy + 0.4 * s],
+    ], '#e5782d');
+    // 内焰（亮金黄）
+    polygon(ctx, [
+      [fx - 1.3 * s, fy + 0.5 * s],
+      [fx, fy - 3.0 * s],
+      [fx + 1.3 * s, fy + 0.5 * s],
+    ], '#f8cf68');
+  }
+
+  /** 受损/重创风格化上升烟团（与时代四蒸汽团同一椭圆几何语言） */
+  function isoSmoke(ctx: CanvasRenderingContext2D, pt: CityPt, u: number, v: number, z: number, scale = 1, heavy = false): void {
+    const s = scale;
+    const puffs = heavy
+      ? [
+          [0, 0, 0, 3.3 * s, 2.1 * s, 0.58, '58,54,50'],
+          [0.05, -0.04, 3.6 * s, 4.2 * s, 2.5 * s, 0.48, '74,70,66'],
+          [0.12, -0.09, 7.2 * s, 4.8 * s, 2.8 * s, 0.34, '96,92,88'],
+          [0.19, -0.14, 10.6 * s, 4.0 * s, 2.2 * s, 0.20, '118,114,110'],
+        ] as const
+      : [
+          [0, 0, 0, 2.5 * s, 1.6 * s, 0.42, '130,126,120'],
+          [0.05, -0.04, 2.8 * s, 3.2 * s, 1.9 * s, 0.30, '154,150,144'],
+          [0.10, -0.08, 5.5 * s, 2.8 * s, 1.6 * s, 0.18, '176,172,166'],
+        ] as const;
+    for (const [du, dv, dz, rx, ry, a, rgb] of puffs) {
+      const [sx, sy] = pt(u + du, v + dv, z + dz);
+      ctx.fillStyle = `rgba(${rgb},${a})`;
+      ctx.beginPath();
+      ctx.ellipse(sx, sy, rx, ry, -0.22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** 通用废墟城池（时代六至八暂用） */
   function paintCityRuined(ctx: CanvasRenderingContext2D, pt: CityPt, outline: string): void {
     isoBox(ctx, pt, 0, 0, 1, 1, 0, 2.5, '#aba18e', '#766d5d', '#8e8473', '#49413588');
     polygon(ctx, [pt(0.12, 0.12, 2.55), pt(0.88, 0.12, 2.55), pt(0.88, 0.88, 2.55), pt(0.12, 0.88, 2.55)], '#7b7468');
@@ -2341,54 +2484,169 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 暖土夯土矮台基 + 尖头原木木栅栏围墙 + 夯土茅草大屋 + 三座圆锥顶草庐 + 青铜绿祭坛火鼎，
    * 轮廓低矮质朴，暖黄草色与原木色调极具古拙部落感。
    */
-  function paintCityBronze(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
-    // 1. 低矮夯土台基与黄土村道
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 3.2, '#d5c08f', '#9a8052', '#b59967', '#66513177');
-    polygon(ctx, [pt(0.06, 0.06, 3.25), pt(0.94, 0.06, 3.25), pt(0.94, 0.94, 3.25), pt(0.06, 0.94, 3.25)], '#cbb482');
+  function paintCityBronze(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
+    // 1. 低矮夯土台基与黄土村道（随受损逐级焦暗）
+    const baseTop = stage >= 3 ? '#aa9977' : stage === 2 ? '#c2ae7f' : '#d5c08f';
+    const baseRight = stage >= 3 ? '#776647' : stage === 2 ? '#8a7249' : '#9a8052';
+    const baseLeft = stage >= 3 ? '#8d7a56' : stage === 2 ? '#a2885b' : '#b59967';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 3.2, baseTop, baseRight, baseLeft, '#66513177');
+    polygon(ctx, [pt(0.06, 0.06, 3.25), pt(0.94, 0.06, 3.25), pt(0.94, 0.94, 3.25), pt(0.06, 0.94, 3.25)], stage >= 3 ? '#9f8f6e' : stage === 2 ? '#b8a374' : '#cbb482');
     // 村内泥土小径
-    polygon(ctx, [pt(0.42, 0.12, 3.3), pt(0.56, 0.12, 3.3), pt(0.60, 0.94, 3.3), pt(0.44, 0.94, 3.3)], '#dfd0a5');
-    polygon(ctx, [pt(0.10, 0.48, 3.3), pt(0.90, 0.44, 3.3), pt(0.90, 0.58, 3.3), pt(0.10, 0.60, 3.3)], '#dfd0a5');
+    const roadCol = stage >= 3 ? '#b2a281' : stage === 2 ? '#c9b88e' : '#dfd0a5';
+    polygon(ctx, [pt(0.42, 0.12, 3.3), pt(0.56, 0.12, 3.3), pt(0.60, 0.94, 3.3), pt(0.44, 0.94, 3.3)], roadCol);
+    polygon(ctx, [pt(0.10, 0.48, 3.3), pt(0.90, 0.44, 3.3), pt(0.90, 0.58, 3.3), pt(0.10, 0.60, 3.3)], roadCol);
 
-    // 2. 后排尖头木栅栏（西北与东北两面）
-    const drawPalisadeRow = (u0: number, v0: number, u1: number, v1: number, count: number, gapMid = false): void => {
+    if (stage >= 1) {
+      isoScorch(ctx, pt, 0.68, 0.62, 3.32, 6.2, 3.4, stage === 1 ? 0.25 : 0.46);
+    }
+    if (stage >= 2) {
+      isoScorch(ctx, pt, 0.34, 0.34, 3.32, 9.5, 5.2, 0.50);
+      isoScorch(ctx, pt, 0.30, 0.70, 3.32, 7.6, 4.2, 0.48);
+    }
+
+    // 2. 尖头木栅栏（受损出现缺口，重创残半，废墟仅余焦黑断桩）
+    const drawPalisadeRow = (u0: number, v0: number, u1: number, v1: number, count: number, gapMid = false, seed = 0): void => {
       for (let i = 0; i < count; i++) {
         const f = (i + 0.5) / count;
         if (gapMid && f > 0.36 && f < 0.64) continue;
+        const hash = (i * 11 + seed * 7) % 13;
+        if (stage === 1 && (hash === 2 || hash === 9)) continue;
+        if (stage === 2 && hash % 3 !== 0) continue;
+        if (stage === 3 && hash % 4 !== 0) continue;
         const u = u0 + (u1 - u0) * f;
         const v = v0 + (v1 - v0) * f;
-        const h = 4.2 + ((i * 7) % 3) * 0.45;
-        isoBox(ctx, pt, u - 0.032, v - 0.032, u + 0.032, v + 0.032, 3.2, 3.2 + h, '#a78355', '#684c2d', '#82613b', '#49351e55');
+        const baseH = 4.2 + ((i * 7) % 3) * 0.45;
+        const h = stage === 3 ? 1.4 + (i % 2) * 0.9 : stage === 2 ? baseH * (0.45 + (i % 2) * 0.35) : baseH;
+        const cTop = stage >= 2 && (i + seed) % 2 === 0 ? '#65513a' : '#a78355';
+        const cR = stage >= 2 && (i + seed) % 2 === 0 ? '#3f3224' : '#684c2d';
+        const cL = stage >= 2 && (i + seed) % 2 === 0 ? '#50402d' : '#82613b';
+        isoBox(ctx, pt, u - 0.032, v - 0.032, u + 0.032, v + 0.032, 3.2, 3.2 + h, cTop, cR, cL, '#49351e55');
       }
     };
-    drawPalisadeRow(0.04, 0.04, 0.96, 0.04, 11);
-    drawPalisadeRow(0.04, 0.06, 0.04, 0.94, 10);
+    drawPalisadeRow(0.04, 0.04, 0.96, 0.04, 11, false, 1);
+    drawPalisadeRow(0.04, 0.06, 0.04, 0.94, 10, false, 2);
+
+    if (stage === 3) {
+      // 废墟：在时代一原址基础上保留焦黑大屋夯土残墙、倒伏焦梁、三处草庐灰烬圈与倾倒的青铜绿铜鼎
+      isoScorch(ctx, pt, 0.74, 0.28, 3.34, 6.8, 3.8, 0.56);
+      isoScorch(ctx, pt, 0.26, 0.68, 3.34, 7.2, 4.0, 0.58);
+      isoScorch(ctx, pt, 0.76, 0.72, 3.34, 5.8, 3.2, 0.52);
+      // 酋长大屋焦黑矮残墙 + 倒伏炭化屋梁
+      isoBox(ctx, pt, 0.14, 0.14, 0.48, 0.22, 3.2, 5.9, '#8b7756', '#5c4d35', '#736145', '#3d311f77');
+      isoBox(ctx, pt, 0.14, 0.14, 0.22, 0.40, 3.2, 5.4, '#8b7756', '#5c4d35', '#736145', '#3d311f77');
+      strokeLine(ctx, pt(0.20, 0.24, 5.4), pt(0.46, 0.38, 3.5), '#3c2f21', 2.0);
+      strokeLine(ctx, pt(0.26, 0.18, 5.1), pt(0.42, 0.34, 3.5), '#4e3d2b', 1.6);
+      // 散落木屑与焦草砾
+      isoRubble(ctx, pt, 0.72, 0.28, 3.25, 0.055, '#867354', '#554732', '#6b5b41');
+      isoRubble(ctx, pt, 0.28, 0.68, 3.25, 0.06, '#7d6b4e', '#4f422f', '#65553c');
+      isoRubble(ctx, pt, 0.75, 0.70, 3.25, 0.048, '#8a7757', '#584934', '#705e43');
+      // 标志性遗迹：中央祭坛石台 + 熄火倾倒的青铜绿铜鼎
+      isoBox(ctx, pt, 0.46, 0.46, 0.62, 0.62, 3.2, 4.2, '#9e8f70', '#6d6048', '#84765a', '#443a2966');
+      isoScorch(ctx, pt, 0.54, 0.54, 4.25, 3.8, 2.2, 0.45);
+      // 倾倒斜卧的青铜绿鼎身（醒目铜绿特征）
+      polygon(ctx, [pt(0.49, 0.50, 4.3), pt(0.60, 0.48, 4.5), pt(0.62, 0.58, 4.3), pt(0.51, 0.59, 4.2)], '#669d90', '#2a4f4788', 0.8);
+      polygon(ctx, [pt(0.51, 0.59, 4.2), pt(0.62, 0.58, 4.3), pt(0.61, 0.60, 5.4), pt(0.50, 0.61, 5.2)], '#45766b', '#2a4f4788', 0.75);
+      // 寨门仅剩一侧焦黑残柱与倒地横梁
+      drawPalisadeRow(0.96, 0.06, 0.96, 0.94, 10, false, 3);
+      drawPalisadeRow(0.06, 0.96, 0.94, 0.96, 11, true, 4);
+      isoBox(ctx, pt, 0.36, 0.92, 0.43, 0.99, 3.2, 5.8, '#6a5237', '#423220', '#55412b', '#2d211466');
+      strokeLine(ctx, pt(0.42, 0.95, 3.6), pt(0.66, 0.91, 3.4), '#533f29', 2.0);
+      return;
+    }
 
     // 3. 部落建筑群（严格按 u+v 由后向前）
     // 3a. 酋长夯土茅草大屋（西北主位）
-    isoGable(ctx, pt, 0.14, 0.14, 0.52, 0.42, 3.2, 4.4, 5.2, true, '#a68757', '#bf9f6c', '#e6d39a', '#bfa56b', '#5d472766');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.14, 0.14, 0.52, 0.42, 3.2, 4.4, 5.2, true, '#a68757', '#bf9f6c', '#e6d39a', '#bfa56b', '#5d472766');
+      if (stage === 1) {
+        // 受损：大屋右侧茅草屋顶破洞与露出暗褐木椽
+        polygon(ctx, [pt(0.32, 0.24, 9.8), pt(0.47, 0.22, 9.4), pt(0.49, 0.37, 8.2), pt(0.34, 0.39, 8.5)], '#423426', '#2a2016aa', 0.65);
+        strokeLine(ctx, pt(0.35, 0.24, 9.6), pt(0.44, 0.37, 8.4), '#80623f', 1.1);
+        strokeLine(ctx, pt(0.41, 0.23, 9.5), pt(0.48, 0.34, 8.4), '#745838', 1.0);
+      }
+    } else {
+      // 重创：大屋半边屋顶坍塌，仅存焦黑土墙与倾斜焦梁、明火浓烟
+      isoBox(ctx, pt, 0.14, 0.14, 0.52, 0.42, 3.2, 7.2, '#4a3d2e', '#7e6643', '#967a52', '#43341f77');
+      // 左侧残留半片焦暗茅草顶
+      isoGable(ctx, pt, 0.14, 0.14, 0.31, 0.42, 3.2, 4.0, 4.5, true, '#856b45', '#9e8155', '#c8b47c', '#98804e', '#4d3b2177');
+      // 右侧暴露的炭化木椽与焦黑内腔
+      strokeLine(ctx, pt(0.30, 0.20, 10.6), pt(0.49, 0.36, 7.3), '#3d2f21', 1.5);
+      strokeLine(ctx, pt(0.30, 0.32, 9.8), pt(0.50, 0.22, 7.4), '#4c3b2a', 1.3);
+      isoFire(ctx, pt, 0.40, 0.30, 7.4, 0.95);
+    }
+
     // 3b. 东北圆锥顶茅草庐
-    isoConicalHut(ctx, pt, 0.74, 0.28, 0.13, 3.2, 3.2, 5.2, '#c5a874', '#9a7e4f', '#e7d59c', '#d5be82', '#b39a62');
+    if (stage <= 1) {
+      isoConicalHut(ctx, pt, 0.74, 0.28, 0.13, 3.2, 3.2, 5.2, '#c5a874', '#9a7e4f', '#e7d59c', '#d5be82', '#b39a62');
+      if (stage === 1) isoScorch(ctx, pt, 0.76, 0.30, 7.2, 3.0, 1.8, 0.38);
+    } else {
+      // 重创：东北草庐失顶半塌，留暗圆矮墙与碎木
+      isoCylinder(ctx, pt, 0.74, 0.28, 0.13, 0.12, 3.2, 6.2, '#9c835a', '#7c6643', '#5c4b30', '#483b2b', '#3c2e1c66');
+      isoRubble(ctx, pt, 0.77, 0.33, 3.3, 0.055, '#9d885c', '#695838', '#836f49');
+    }
+
     // 3c. 西南圆锥顶茅草庐
-    isoConicalHut(ctx, pt, 0.26, 0.68, 0.135, 3.2, 3.3, 5.4, '#c7aa76', '#9c8051', '#e5d298', '#d2bb7f', '#b09760');
+    if (stage <= 1) {
+      isoConicalHut(ctx, pt, 0.26, 0.68, 0.135, 3.2, 3.3, 5.4, '#c7aa76', '#9c8051', '#e5d298', '#d2bb7f', '#b09760');
+    } else {
+      // 重创：西南草庐屋顶焦黑破洞着火
+      isoConicalHut(ctx, pt, 0.26, 0.68, 0.135, 3.2, 3.0, 4.0, '#a3895d', '#7b6440', '#b7a370', '#8f7d52', '#645536');
+      isoScorch(ctx, pt, 0.27, 0.69, 7.2, 3.6, 2.2, 0.55);
+      isoFire(ctx, pt, 0.28, 0.68, 7.4, 0.8);
+    }
+
     // 3d. 中央青铜祭坛与铜鼎火盆（青铜绿特征点睛）
-    isoBox(ctx, pt, 0.46, 0.46, 0.62, 0.62, 3.2, 4.4, '#c7b286', '#8d7851', '#a89267', '#5d4b2f55');
+    isoBox(ctx, pt, 0.46, 0.46, 0.62, 0.62, 3.2, 4.4, stage === 2 ? '#a9966f' : '#c7b286', '#8d7851', '#a89267', '#5d4b2f55');
     isoCylinder(ctx, pt, 0.54, 0.54, 0.055, 0.065, 4.4, 6.4, '#73b3a4', '#559486', '#3d7367', '#4b8276', '#2a4f4766');
     const [fx, fy] = pt(0.54, 0.54, 6.8);
-    polygon(ctx, [[fx - 1.8, fy + 0.5], [fx, fy - 2.4], [fx + 1.8, fy + 0.5]], '#ea8e3d');
-    polygon(ctx, [[fx - 0.9, fy + 0.2], [fx, fy - 1.4], [fx + 0.9, fy + 0.2]], '#f7d678');
-    // 3e. 东南小茅草屋与木栅栏小院
-    isoConicalHut(ctx, pt, 0.76, 0.72, 0.115, 3.2, 2.8, 4.5, '#c1a36f', '#957a4c', '#e2ce94', '#cfb87c', '#ac945c');
+    if (stage <= 1) {
+      polygon(ctx, [[fx - 1.8, fy + 0.5], [fx, fy - 2.4], [fx + 1.8, fy + 0.5]], '#ea8e3d');
+      polygon(ctx, [[fx - 0.9, fy + 0.2], [fx, fy - 1.4], [fx + 0.9, fy + 0.2]], '#f7d678');
+    } else {
+      polygon(ctx, [[fx - 1.1, fy + 0.3], [fx, fy - 1.2], [fx + 1.1, fy + 0.3]], '#d86e2e');
+    }
+
+    // 3e. 东南小茅草屋
+    if (stage <= 1) {
+      isoConicalHut(ctx, pt, 0.76, 0.72, 0.115, 3.2, 2.8, 4.5, '#c1a36f', '#957a4c', '#e2ce94', '#cfb87c', '#ac945c');
+      if (stage === 1) {
+        isoRubble(ctx, pt, 0.66, 0.78, 3.25, 0.042, '#b8a06e', '#7b6640', '#998256');
+      }
+    } else {
+      // 重创：东南草庐坍塌成焦黑木堆与草砾
+      isoScorch(ctx, pt, 0.76, 0.72, 3.32, 5.6, 3.0, 0.52);
+      isoRubble(ctx, pt, 0.76, 0.72, 3.25, 0.062, '#8b7752', '#574830', '#705f41');
+      strokeLine(ctx, pt(0.70, 0.75, 4.8), pt(0.83, 0.68, 3.4), '#453524', 1.4);
+    }
 
     // 4. 前排木栅栏（东南与西南两面，正南留寨门与双门柱）
-    drawPalisadeRow(0.96, 0.06, 0.96, 0.94, 10, false);
-    drawPalisadeRow(0.06, 0.96, 0.94, 0.96, 11, true);
+    drawPalisadeRow(0.96, 0.06, 0.96, 0.94, 10, false, 3);
+    drawPalisadeRow(0.06, 0.96, 0.94, 0.96, 11, true, 4);
     // 寨门双原木高柱 + 横梁
-    isoBox(ctx, pt, 0.36, 0.92, 0.43, 0.99, 3.2, 9.2, '#9c774a', '#634729', '#7d5b36', '#422e1966');
-    isoBox(ctx, pt, 0.57, 0.92, 0.64, 0.99, 3.2, 9.2, '#9c774a', '#634729', '#7d5b36', '#422e1966');
-    isoBox(ctx, pt, 0.35, 0.93, 0.65, 0.98, 8.2, 9.5, '#ae8858', '#6b4d2e', '#88653e', '#422e1966');
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.36, 0.92, 0.43, 0.99, 3.2, 9.2, '#9c774a', '#634729', '#7d5b36', '#422e1966');
+      isoBox(ctx, pt, 0.57, 0.92, 0.64, 0.99, 3.2, stage === 1 ? 8.2 : 9.2, '#9c774a', '#634729', '#7d5b36', '#422e1966');
+      isoBox(ctx, pt, 0.35, 0.93, 0.65, 0.98, 8.2, 9.5, '#ae8858', '#6b4d2e', '#88653e', '#422e1966');
+    } else {
+      // 重创：寨门横梁断裂仅余单柱与断桩
+      isoBox(ctx, pt, 0.36, 0.92, 0.43, 0.99, 3.2, 8.0, '#785a38', '#4b3620', '#61472c', '#35261666');
+      isoBox(ctx, pt, 0.57, 0.92, 0.64, 0.99, 3.2, 5.2, '#694f32', '#42301d', '#553e26', '#35261666');
+      strokeLine(ctx, pt(0.40, 0.95, 7.6), pt(0.56, 0.95, 4.0), '#6d5131', 1.8);
+    }
 
-    // 5. 阵营三角木杆旗
-    isoBanner(ctx, pt, 0.34, 0.28, 12.6, 5.8, teamCol, lightCol, false);
+    // 5. 阵营三角木杆旗 + 烟雾
+    isoBanner(ctx, pt, 0.34, 0.28, stage === 2 ? 10.2 : 12.6, 5.8, teamCol, lightCol, false, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.44, 0.30, 10.6, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.41, 0.29, 10.4, 1.0, true);
+      isoSmoke(ctx, pt, 0.29, 0.68, 9.8, 0.78, true);
+    }
   }
 
   /**
@@ -2396,53 +2654,178 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 规整黄砂岩垛口城墙 + 四角方形角楼 + 暖赤陶瓦重檐中军主殿 + 规整院落民居，
    * 暖陶橙瓦顶与黄石城郭一眼可与青铜草庐和火器青灰石堡拉开巨大差距。
    */
-  function paintCityIron(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+  function paintCityIron(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
     // 1. 夯石城基与石板十字街
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.2, '#ccb993', '#8f7c59', '#ab9670', '#584a3177');
-    polygon(ctx, [pt(0.08, 0.08, 4.25), pt(0.92, 0.08, 4.25), pt(0.92, 0.92, 4.25), pt(0.08, 0.92, 4.25)], '#d4c4a2');
-    polygon(ctx, [pt(0.43, 0.10, 4.3), pt(0.57, 0.10, 4.3), pt(0.57, 0.92, 4.3), pt(0.43, 0.92, 4.3)], '#e2d6bc');
-    polygon(ctx, [pt(0.10, 0.45, 4.3), pt(0.92, 0.45, 4.3), pt(0.92, 0.57, 4.3), pt(0.10, 0.57, 4.3)], '#e2d6bc');
+    const baseTop = stage >= 3 ? '#aa9b7e' : stage === 2 ? '#bda984' : '#ccb993';
+    const baseRight = stage >= 3 ? '#71634a' : stage === 2 ? '#806e4f' : '#8f7c59';
+    const baseLeft = stage >= 3 ? '#8c7c5e' : stage === 2 ? '#9c8864' : '#ab9670';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.2, baseTop, baseRight, baseLeft, '#584a3177');
+    polygon(ctx, [pt(0.08, 0.08, 4.25), pt(0.92, 0.08, 4.25), pt(0.92, 0.92, 4.25), pt(0.08, 0.92, 4.25)], stage >= 3 ? '#a6987e' : stage === 2 ? '#c2b393' : '#d4c4a2');
+    const streetCol = stage >= 3 ? '#b5a992' : stage === 2 ? '#d0c4aa' : '#e2d6bc';
+    polygon(ctx, [pt(0.43, 0.10, 4.3), pt(0.57, 0.10, 4.3), pt(0.57, 0.92, 4.3), pt(0.43, 0.92, 4.3)], streetCol);
+    polygon(ctx, [pt(0.10, 0.45, 4.3), pt(0.92, 0.45, 4.3), pt(0.92, 0.57, 4.3), pt(0.10, 0.57, 4.3)], streetCol);
+
+    if (stage >= 1) {
+      isoScorch(ctx, pt, 0.56, 0.60, 4.33, 5.8, 3.2, stage === 1 ? 0.24 : 0.44);
+    }
+    if (stage >= 2) {
+      isoScorch(ctx, pt, 0.44, 0.34, 4.33, 10.2, 5.4, 0.48);
+      isoScorch(ctx, pt, 0.72, 0.72, 4.33, 7.0, 3.8, 0.45);
+    }
+
+    if (stage === 3) {
+      // 废墟：保留铁器黄砂岩城基、石板十字街、高低断垣、南北残角楼墩、高台主殿残后壁与满地赤陶碎瓦
+      isoCrack(ctx, pt, [[0.18, 0.52, 4.34], [0.46, 0.49, 4.34], [0.64, 0.56, 4.34]], '#3d342799', 1.0);
+      // 后侧断壁与北角残墩
+      isoBox(ctx, pt, 0.02, 0.02, 0.44, 0.11, 4.2, 6.8, '#b8a98a', '#7e6e51', '#998665', '#4c3f2a77');
+      isoBox(ctx, pt, 0.62, 0.02, 0.96, 0.11, 4.2, 6.0, '#b2a384', '#79694d', '#938161', '#4c3f2a77');
+      isoBox(ctx, pt, 0.02, 0.16, 0.11, 0.68, 4.2, 6.4, '#b5a687', '#7b6b4f', '#958363', '#4c3f2a77');
+      isoBox(ctx, pt, 0.00, 0.00, 0.17, 0.17, 4.2, 7.6, '#c2b393', '#7f6f52', '#9d8a68', '#483b2777');
+      // 城心高台基座 + 主殿残存后墙 + 标志性暖赤陶碎瓦堆
+      isoBox(ctx, pt, 0.24, 0.19, 0.66, 0.50, 4.2, 6.2, '#b6a88e', '#7e6f56', '#98876a', '#4d3f2b66');
+      isoScorch(ctx, pt, 0.45, 0.35, 6.25, 8.2, 4.5, 0.52);
+      isoBox(ctx, pt, 0.27, 0.22, 0.60, 0.30, 6.2, 9.6, '#c0b193', '#847458', '#9f8d6c', '#4c3e2877');
+      isoBox(ctx, pt, 0.27, 0.22, 0.35, 0.45, 6.2, 8.8, '#b8a98b', '#7e6e53', '#988667', '#4c3e2877');
+      // 赤陶橙红碎瓦片铺散（一眼锁定时代二陶瓦城废墟）
+      isoRubble(ctx, pt, 0.46, 0.38, 6.22, 0.055, '#c27942', '#7e4821', '#a05f30');
+      isoRubble(ctx, pt, 0.56, 0.44, 6.22, 0.045, '#b7703c', '#74421e', '#94572c');
+      isoRubble(ctx, pt, 0.76, 0.34, 4.25, 0.06, '#be7640', '#7a4520', '#9a5b2d');
+      isoRubble(ctx, pt, 0.28, 0.70, 4.25, 0.065, '#c0b090', '#7e6e51', '#9d8a69');
+      isoRubble(ctx, pt, 0.34, 0.74, 4.25, 0.045, '#be7640', '#7a4520', '#9a5b2d');
+      isoRubble(ctx, pt, 0.72, 0.72, 4.25, 0.055, '#b8a888', '#78684c', '#958262');
+      // 前侧崩塌城墙残段与南门废墩
+      isoBox(ctx, pt, 0.89, 0.24, 0.98, 0.64, 4.2, 6.1, '#b5a687', '#7b6b4f', '#958363', '#4c3f2a77');
+      isoBox(ctx, pt, 0.14, 0.89, 0.38, 0.98, 4.2, 6.0, '#b5a687', '#7b6b4f', '#958363', '#4c3f2a77');
+      isoBox(ctx, pt, 0.83, 0.83, 1.00, 1.00, 4.2, 7.2, '#c0b191', '#7d6d50', '#9a8766', '#483b2777');
+      return;
+    }
 
     // 2. 后侧城墙与北角楼（NW / NE）
-    isoBox(ctx, pt, 0.02, 0.02, 0.98, 0.11, 4.2, 8.2, '#d8c7a3', '#998562', '#b5a07a', '#5c4d3466');
-    isoBox(ctx, pt, 0.02, 0.02, 0.11, 0.98, 4.2, 8.2, '#d8c7a3', '#998562', '#b5a07a', '#5c4d3466');
+    const wallTop = stage === 2 ? '#c5b491' : '#d8c7a3';
+    const wallR = stage === 2 ? '#887656' : '#998562';
+    const wallL = stage === 2 ? '#a38f6b' : '#b5a07a';
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.02, 0.02, 0.98, 0.11, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.02, 0.02, 0.11, 0.98, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+    } else {
+      isoBox(ctx, pt, 0.02, 0.02, 0.56, 0.11, 4.2, 7.8, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.68, 0.02, 0.98, 0.11, 4.2, 7.0, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.02, 0.02, 0.11, 0.66, 4.2, 7.8, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.02, 0.76, 0.11, 0.98, 4.2, 6.4, wallTop, wallR, wallL, '#5c4d3466');
+    }
     // 北角方形箭楼
     isoBox(ctx, pt, 0.00, 0.00, 0.17, 0.17, 4.2, 10.6, '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
     isoGable(ctx, pt, -0.01, -0.01, 0.18, 0.18, 10.6, 0.6, 3.6, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
-    // 东角箭楼
-    isoBox(ctx, pt, 0.83, 0.00, 1.00, 0.17, 4.2, 10.4, '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
-    isoGable(ctx, pt, 0.82, -0.01, 1.01, 0.18, 10.4, 0.6, 3.5, false, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
+    // 东角箭楼（重创时失顶残半）
+    isoBox(ctx, pt, 0.83, 0.00, 1.00, 0.17, 4.2, stage === 2 ? 8.4 : 10.4, stage === 2 ? '#c5b595' : '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.82, -0.01, 1.01, 0.18, 10.4, 0.6, 3.5, false, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
+    }
 
     // 3. 城内赤陶瓦建筑群（由后向前）
     // 3a. 高台主殿/城主府（城心偏北，醒目暖赤陶瓦顶）
-    isoBox(ctx, pt, 0.24, 0.19, 0.66, 0.50, 4.2, 6.6, '#d9cab0', '#9b8868', '#b8a380', '#5b4b3255');
-    isoGable(ctx, pt, 0.27, 0.22, 0.63, 0.47, 6.6, 5.2, 5.4, true, '#a99470', '#c4af89', '#d68c4f', '#9f5d2c', '#57371e66');
-    // 主殿屋脊饰带（微带阵营色琉璃脊）
-    strokeLine(ctx, pt(0.27, 0.345, 17.2), pt(0.63, 0.345, 17.2), lightCol, 1.35);
+    isoBox(ctx, pt, 0.24, 0.19, 0.66, 0.50, 4.2, 6.6, stage === 2 ? '#c5b69a' : '#d9cab0', '#9b8868', '#b8a380', '#5b4b3255');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.27, 0.22, 0.63, 0.47, 6.6, 5.2, 5.4, true, '#a99470', '#c4af89', '#d68c4f', '#9f5d2c', '#57371e66');
+      strokeLine(ctx, pt(0.27, 0.345, 17.2), pt(0.63, 0.345, 17.2), lightCol, 1.35);
+      if (stage === 1) {
+        // 受损：主殿陶瓦右坡破开焦黑洞口 + 墙裂纹
+        polygon(ctx, [pt(0.45, 0.31, 15.2), pt(0.59, 0.30, 14.6), pt(0.60, 0.43, 12.6), pt(0.46, 0.44, 13.0)], '#3d3126', '#281e16aa', 0.65);
+        strokeLine(ctx, pt(0.48, 0.31, 15.0), pt(0.56, 0.43, 12.8), '#85623d', 1.0);
+        isoCrack(ctx, pt, [[0.34, 0.472, 11.4], [0.37, 0.472, 9.2], [0.35, 0.472, 7.0]], '#423526aa', 0.9);
+      }
+    } else {
+      // 重创：主殿陶瓦顶大半塌陷，只留左侧残坡与焦黑内殿、明火浓烟
+      isoBox(ctx, pt, 0.27, 0.22, 0.63, 0.47, 6.6, 11.2, '#41352a', '#8c7857', '#a6916d', '#493a2477');
+      isoGable(ctx, pt, 0.27, 0.22, 0.43, 0.47, 6.6, 4.6, 4.8, true, '#8e7a5a', '#a99471', '#bd763e', '#864d24', '#4a2e1877');
+      strokeLine(ctx, pt(0.42, 0.28, 15.0), pt(0.60, 0.43, 11.4), '#3d2f21', 1.5);
+      isoCrack(ctx, pt, [[0.48, 0.472, 11.0], [0.52, 0.472, 8.8], [0.49, 0.472, 6.8]], '#2e241acc', 1.05);
+      isoFire(ctx, pt, 0.52, 0.36, 11.4, 1.0);
+    }
 
     // 3b. 东北侧陶瓦厢房
-    isoGable(ctx, pt, 0.68, 0.22, 0.87, 0.46, 4.2, 4.0, 3.6, false, '#a5906d', '#c0ab86', '#cf854a', '#99592b', '#57371e55');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.68, 0.22, 0.87, 0.46, 4.2, 4.0, 3.6, false, '#a5906d', '#c0ab86', '#cf854a', '#99592b', '#57371e55');
+    } else {
+      isoBox(ctx, pt, 0.68, 0.22, 0.87, 0.46, 4.2, 7.4, '#4b3d30', '#8b7757', '#a48f6c', '#4a3b2566');
+      isoRubble(ctx, pt, 0.77, 0.38, 7.4, 0.045, '#be7640', '#7a4520', '#9a5b2d');
+    }
+
     // 3c. 西南侧陶瓦民居院落
-    isoGable(ctx, pt, 0.18, 0.60, 0.42, 0.83, 4.2, 4.0, 3.8, true, '#a5906d', '#c0ab86', '#d1884c', '#9b5a2b', '#57371e55');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.18, 0.60, 0.42, 0.83, 4.2, 4.0, 3.8, true, '#a5906d', '#c0ab86', '#d1884c', '#9b5a2b', '#57371e55');
+      if (stage === 1) isoScorch(ctx, pt, 0.34, 0.74, 8.6, 3.2, 2.0, 0.42);
+    } else {
+      isoGable(ctx, pt, 0.18, 0.60, 0.42, 0.83, 4.2, 3.4, 2.8, true, '#8c7858', '#a6916e', '#b46f39', '#7d461f', '#4a2e1866');
+      isoScorch(ctx, pt, 0.31, 0.72, 8.6, 4.0, 2.4, 0.55);
+      isoFire(ctx, pt, 0.32, 0.72, 8.8, 0.85);
+    }
+
     // 3d. 东南侧陶瓦坊屋
-    isoGable(ctx, pt, 0.62, 0.62, 0.84, 0.84, 4.2, 3.8, 3.5, true, '#a38e6b', '#bea883', '#cc8348', '#965629', '#57371e55');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.62, 0.62, 0.84, 0.84, 4.2, 3.8, 3.5, true, '#a38e6b', '#bea883', '#cc8348', '#965629', '#57371e55');
+      if (stage === 1) isoRubble(ctx, pt, 0.56, 0.78, 4.25, 0.04, '#c47b43', '#804922', '#a16031');
+    } else {
+      isoRubble(ctx, pt, 0.72, 0.72, 4.25, 0.068, '#bd753f', '#7a4520', '#9b5b2d');
+      isoRubble(ctx, pt, 0.66, 0.76, 4.25, 0.052, '#c5b594', '#827153', '#a08d6b');
+    }
 
-    // 4. 前侧城墙（东南与西南）+ 垛口 + 城门楼 + 另两座角楼
-    isoBox(ctx, pt, 0.89, 0.15, 0.98, 0.85, 4.2, 8.2, '#d8c7a3', '#998562', '#b5a07a', '#5c4d3466');
-    isoBox(ctx, pt, 0.15, 0.89, 0.40, 0.98, 4.2, 8.2, '#d8c7a3', '#998562', '#b5a07a', '#5c4d3466');
-    isoBox(ctx, pt, 0.60, 0.89, 0.85, 0.98, 4.2, 8.2, '#d8c7a3', '#998562', '#b5a07a', '#5c4d3466');
+    // 4. 前侧城墙（东南与西南）+ 城门楼 + 西/南角楼
+    if (stage === 0) {
+      isoBox(ctx, pt, 0.89, 0.15, 0.98, 0.85, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.15, 0.89, 0.40, 0.98, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.60, 0.89, 0.85, 0.98, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+    } else if (stage === 1) {
+      // 受损：东南墙与西南墙出现局部缺口与裂纹
+      isoBox(ctx, pt, 0.89, 0.15, 0.98, 0.48, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.89, 0.56, 0.98, 0.85, 4.2, 7.4, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.15, 0.89, 0.40, 0.98, 4.2, 8.2, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.60, 0.89, 0.85, 0.98, 4.2, 7.6, wallTop, wallR, wallL, '#5c4d3466');
+      isoCrack(ctx, pt, [[0.72, 0.982, 7.5], [0.74, 0.982, 5.8], [0.71, 0.982, 4.4]], '#413424aa', 0.95);
+    } else {
+      // 重创：前侧城墙多处崩塌，散落石块
+      isoBox(ctx, pt, 0.89, 0.15, 0.98, 0.44, 4.2, 7.2, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.89, 0.64, 0.98, 0.85, 4.2, 6.4, wallTop, wallR, wallL, '#5c4d3466');
+      isoBox(ctx, pt, 0.15, 0.89, 0.36, 0.98, 4.2, 6.8, wallTop, wallR, wallL, '#5c4d3466');
+      isoRubble(ctx, pt, 0.72, 0.93, 4.25, 0.055, '#c2b290', '#817052', '#9e8b6a');
+    }
+
     // 正南城门楼与暗门洞
-    isoBox(ctx, pt, 0.39, 0.86, 0.61, 1.00, 4.2, 9.8, '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
-    polygon(ctx, [pt(0.45, 1.005, 4.2), pt(0.55, 1.005, 4.2), pt(0.55, 1.005, 7.6), pt(0.45, 1.005, 7.6)], '#403425');
-    isoGable(ctx, pt, 0.38, 0.85, 0.62, 1.01, 9.8, 0.5, 3.2, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
-    // 西角楼与南角楼
-    isoBox(ctx, pt, 0.00, 0.83, 0.17, 1.00, 4.2, 10.4, '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
-    isoGable(ctx, pt, -0.01, 0.82, 0.18, 1.01, 10.4, 0.5, 3.4, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
-    isoBox(ctx, pt, 0.83, 0.83, 1.00, 1.00, 4.2, 10.6, '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
-    isoGable(ctx, pt, 0.82, 0.82, 1.01, 1.01, 10.6, 0.5, 3.5, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
+    isoBox(ctx, pt, 0.39, 0.86, 0.61, 1.00, 4.2, stage === 2 ? 8.2 : 9.8, stage === 2 ? '#c7b897' : '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
+    polygon(ctx, [pt(0.45, 1.005, 4.2), pt(0.55, 1.005, 4.2), pt(0.55, 1.005, 7.4), pt(0.45, 1.005, 7.4)], '#403425');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.38, 0.85, 0.62, 1.01, 9.8, 0.5, 3.2, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
+    } else {
+      isoScorch(ctx, pt, 0.50, 0.93, 8.25, 4.4, 2.2, 0.5);
+    }
 
-    // 5. 阵营方旗
-    isoBanner(ctx, pt, 0.45, 0.34, 17.2, 5.6, teamCol, lightCol, true);
+    // 西角楼与南角楼
+    isoBox(ctx, pt, 0.00, 0.83, 0.17, 1.00, 4.2, stage === 2 ? 8.0 : 10.4, stage === 2 ? '#c5b695' : '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
+    if (stage <= 1) {
+      isoGable(ctx, pt, -0.01, 0.82, 0.18, 1.01, 10.4, 0.5, 3.4, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
+    }
+    isoBox(ctx, pt, 0.83, 0.83, 1.00, 1.00, 4.2, stage === 2 ? 7.6 : 10.6, stage === 2 ? '#c2b392' : '#dfd0ae', '#94805d', '#b39e78', '#52432c77');
+    if (stage === 0) {
+      isoGable(ctx, pt, 0.82, 0.82, 1.01, 1.01, 10.6, 0.5, 3.5, true, '#94805d', '#b39e78', '#d48a4d', '#9e5e2e', '#52341c55');
+    } else if (stage === 1) {
+      // 受损：南角楼屋顶剥落一角
+      isoGable(ctx, pt, 0.82, 0.82, 1.01, 1.01, 10.6, 0.5, 3.2, true, '#94805d', '#b39e78', '#c67d43', '#8f5226', '#52341c55');
+      isoScorch(ctx, pt, 0.92, 0.91, 12.6, 2.6, 1.5, 0.45);
+    }
+
+    // 5. 阵营方旗 + 烟雾
+    isoBanner(ctx, pt, 0.45, 0.34, stage === 2 ? 13.8 : 17.2, 5.6, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.56, 0.36, 15.0, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.52, 0.36, 14.4, 1.05, true);
+      isoSmoke(ctx, pt, 0.32, 0.72, 11.4, 0.8, true);
+    }
   }
 
   /**
@@ -2450,48 +2833,151 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 冷灰厚重花岗岩石城 + 东南角八角形棱堡炮台（配黑铁加农炮）+ 高耸青灰瓦主堡钟楼 + 密集青瓦街区，
    * 整体冷青灰石质色调，与铁器暖陶瓦和蒸汽红砖形成极其鲜明的时代分水岭。
    */
-  function paintCityGunpowder(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+  function paintCityGunpowder(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
     // 1. 厚重青灰条石堡垒台基
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.4, '#aeb7bf', '#707b86', '#8d98a3', '#444d5688');
-    polygon(ctx, [pt(0.07, 0.07, 5.45), pt(0.93, 0.07, 5.45), pt(0.93, 0.93, 5.45), pt(0.07, 0.93, 5.45)], '#c5ccd2');
-    // 广场石板拼接纹理
+    const baseTop = stage >= 3 ? '#8e969e' : stage === 2 ? '#9da6af' : '#aeb7bf';
+    const baseRight = stage >= 3 ? '#59626b' : stage === 2 ? '#646e78' : '#707b86';
+    const baseLeft = stage >= 3 ? '#717b85' : stage === 2 ? '#7f8994' : '#8d98a3';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.4, baseTop, baseRight, baseLeft, '#444d5688');
+    polygon(ctx, [pt(0.07, 0.07, 5.45), pt(0.93, 0.07, 5.45), pt(0.93, 0.93, 5.45), pt(0.07, 0.93, 5.45)], stage >= 3 ? '#9ea6ae' : stage === 2 ? '#b3bbc2' : '#c5ccd2');
     strokeLine(ctx, pt(0.50, 0.10, 5.5), pt(0.50, 0.90, 5.5), '#959fa888', 0.85);
     strokeLine(ctx, pt(0.10, 0.50, 5.5), pt(0.90, 0.50, 5.5), '#959fa888', 0.85);
 
+    if (stage >= 1) {
+      isoScorch(ctx, pt, 0.56, 0.54, 5.52, 5.6, 3.1, stage === 1 ? 0.26 : 0.48);
+    }
+    if (stage >= 2) {
+      isoScorch(ctx, pt, 0.34, 0.34, 5.52, 9.6, 5.2, 0.52);
+      isoScorch(ctx, pt, 0.72, 0.72, 5.52, 8.2, 4.4, 0.50);
+    }
+
+    if (stage === 3) {
+      // 废墟：保留冷灰花岗岩台基、锯齿状主堡残壁、崩口低矮八角棱堡残基与倒地断炮管
+      isoCrack(ctx, pt, [[0.20, 0.54, 5.54], [0.48, 0.50, 5.54], [0.68, 0.58, 5.54]], '#323a42aa', 1.05);
+      isoBox(ctx, pt, 0.01, 0.01, 0.50, 0.10, 5.4, 7.8, '#9fa8b0', '#616c76', '#7d8893', '#39424a77');
+      isoBox(ctx, pt, 0.01, 0.18, 0.10, 0.64, 5.4, 7.6, '#9ca5ad', '#5e6973', '#7a8590', '#39424a77');
+      // 西北主堡轰塌后的冷灰断塔残壁
+      isoBox(ctx, pt, 0.16, 0.16, 0.44, 0.25, 5.4, 10.6, '#a9b2ba', '#65707b', '#838f9b', '#38404888');
+      isoBox(ctx, pt, 0.16, 0.16, 0.26, 0.44, 5.4, 9.4, '#a2abb3', '#616b76', '#7e8a96', '#38404888');
+      isoScorch(ctx, pt, 0.34, 0.32, 5.56, 7.5, 4.2, 0.58);
+      // 散落冷灰花岗岩与蓝灰碎瓦
+      isoRubble(ctx, pt, 0.40, 0.38, 5.5, 0.06, '#718596', '#445462', '#596b7b');
+      isoRubble(ctx, pt, 0.68, 0.28, 5.5, 0.065, '#9ea7af', '#626c76', '#7f8994');
+      isoRubble(ctx, pt, 0.30, 0.68, 5.5, 0.062, '#99a2aa', '#5f6973', '#7b8690');
+      isoRubble(ctx, pt, 0.37, 0.72, 5.5, 0.045, '#6d8090', '#41505e', '#566776');
+      // 标志性遗迹：东南角炸塌残缺的低矮八角棱堡残基 + 坠落断裂黑铁加农炮管
+      isoCylinder(ctx, pt, 0.78, 0.78, 0.24, 0.22, 0, 7.6, '#9ba4ad', '#7c8791', '#5a646e', '#a9b2ba', '#39414a88');
+      isoScorch(ctx, pt, 0.78, 0.78, 7.65, 6.2, 3.4, 0.56);
+      isoRubble(ctx, pt, 0.70, 0.74, 7.6, 0.05, '#a8b1b9', '#67727c', '#86919c');
+      // 斜倒在残基上的黑铁加农炮管
+      strokeLine(ctx, pt(0.73, 0.76, 8.2), pt(0.95, 0.87, 7.7), '#2a2f35', 2.4);
+      strokeLine(ctx, pt(0.71, 0.84, 7.8), pt(0.83, 0.94, 7.6), '#353b42', 1.9);
+      return;
+    }
+
     // 2. 后侧厚石护墙（西北与东北）
-    isoBox(ctx, pt, 0.01, 0.01, 0.99, 0.10, 5.4, 9.6, '#c2cad1', '#77838e', '#97a3ae', '#454e5777');
-    isoBox(ctx, pt, 0.01, 0.01, 0.10, 0.99, 5.4, 9.6, '#c2cad1', '#77838e', '#97a3ae', '#454e5777');
+    const wTop = stage === 2 ? '#adb6be' : '#c2cad1';
+    const wR = stage === 2 ? '#68737e' : '#77838e';
+    const wL = stage === 2 ? '#84909b' : '#97a3ae';
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.01, 0.01, 0.99, 0.10, 5.4, 9.6, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.01, 0.01, 0.10, 0.99, 5.4, 9.6, wTop, wR, wL, '#454e5777');
+    } else {
+      isoBox(ctx, pt, 0.01, 0.01, 0.58, 0.10, 5.4, 8.8, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.72, 0.01, 0.99, 0.10, 5.4, 7.8, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.01, 0.01, 0.10, 0.62, 5.4, 8.8, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.01, 0.75, 0.10, 0.99, 5.4, 7.4, wTop, wR, wL, '#454e5777');
+    }
 
     // 3. 城内青瓦高堡与街区（由后向前）
     // 3a. 西北高耸主堡/要塞指挥塔（冷灰巨石 + 深蓝灰陡坡瓦顶）
-    isoBox(ctx, pt, 0.16, 0.16, 0.48, 0.46, 5.4, 15.6, '#ccd3d9', '#7d8995', '#9da9b5', '#424b5488');
-    // 塔身枪眼与石腰线
+    const keepTopH = stage === 2 ? 13.6 : 15.6;
+    isoBox(ctx, pt, 0.16, 0.16, 0.48, 0.46, 5.4, keepTopH, stage === 2 ? '#b5bdc4' : '#ccd3d9', stage === 2 ? '#6d7883' : '#7d8995', stage === 2 ? '#8a96a2' : '#9da9b5', '#424b5488');
     strokeLine(ctx, pt(0.16, 0.46, 11.2), pt(0.48, 0.46, 11.2), '#5b667088', 0.9);
     strokeLine(ctx, pt(0.48, 0.16, 11.2), pt(0.48, 0.46, 11.2), '#4e586188', 0.9);
     for (const u of [0.25, 0.39]) {
-      const [wx, wy] = pt(u, 0.462, 13.0);
-      ctx.fillStyle = '#38414a';
+      const [wx, wy] = pt(u, 0.462, stage === 2 ? 11.8 : 13.0);
+      ctx.fillStyle = stage === 2 && u > 0.3 ? '#d8662c' : '#38414a';
       ctx.fillRect(wx - 1.1, wy - 1.4, 2.2, 3.0);
     }
-    isoGable(ctx, pt, 0.14, 0.14, 0.50, 0.48, 15.6, 0.8, 5.8, true, '#7d8995', '#9da9b5', '#788e9f', '#526575', '#36434e77');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.14, 0.14, 0.50, 0.48, 15.6, 0.8, 5.8, true, '#7d8995', '#9da9b5', '#788e9f', '#526575', '#36434e77');
+      if (stage === 1) {
+        // 受损：主堡正面弹坑焦痕与石墙裂纹 + 瓦顶缺口
+        isoScorch(ctx, pt, 0.35, 0.462, 10.6, 2.8, 2.0, 0.46);
+        isoCrack(ctx, pt, [[0.35, 0.463, 14.2], [0.33, 0.463, 11.6], [0.38, 0.463, 8.6]], '#2b323acc', 1.0);
+        polygon(ctx, [pt(0.32, 0.28, 19.6), pt(0.46, 0.28, 19.0), pt(0.47, 0.42, 16.8), pt(0.34, 0.42, 17.2)], '#333b42', '#1f252baa', 0.65);
+      }
+    } else {
+      // 重创：主堡陡坡瓦顶轰塌大半，留西侧残顶与锯齿断壁、明火浓烟
+      isoGable(ctx, pt, 0.14, 0.14, 0.31, 0.48, 13.6, 0.6, 4.4, true, '#6a7681', '#8894a0', '#637685', '#42525f', '#2d374077');
+      isoCrack(ctx, pt, [[0.34, 0.463, 13.4], [0.30, 0.463, 10.6], [0.36, 0.463, 7.6]], '#22282ecc', 1.15);
+      isoScorch(ctx, pt, 0.36, 0.34, 13.65, 5.2, 3.0, 0.62);
+      isoFire(ctx, pt, 0.38, 0.34, 13.8, 1.05);
+    }
 
     // 3b. 东北青瓦联排楼宇
-    isoGable(ctx, pt, 0.54, 0.16, 0.86, 0.44, 5.4, 5.2, 4.2, true, '#85919c', '#a3aeb8', '#7d92a3', '#566979', '#3b485266');
-    // 3c. 西南青瓦联排楼宇
-    isoGable(ctx, pt, 0.16, 0.54, 0.48, 0.84, 5.4, 5.0, 4.2, false, '#85919c', '#a3aeb8', '#798ea0', '#546676', '#3b485266');
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.54, 0.16, 0.86, 0.44, 5.4, 5.2, 4.2, true, '#85919c', '#a3aeb8', '#7d92a3', '#566979', '#3b485266');
+    } else {
+      isoBox(ctx, pt, 0.54, 0.16, 0.86, 0.44, 5.4, 9.0, '#3f464d', '#737f8a', '#909ca6', '#353e4666');
+      isoRubble(ctx, pt, 0.72, 0.32, 9.0, 0.05, '#6e8191', '#465664', '#5b6d7c');
+    }
 
-    // 4. 前侧厚石堡垒墙 + 东南角标志性「八角石砌棱堡炮台」（还原 city-gunpowder.webp 灵魂地标）
-    isoBox(ctx, pt, 0.90, 0.10, 0.99, 0.62, 5.4, 9.6, '#c2cad1', '#77838e', '#97a3ae', '#454e5777');
-    isoBox(ctx, pt, 0.10, 0.90, 0.62, 0.99, 5.4, 9.6, '#c2cad1', '#77838e', '#97a3ae', '#454e5777');
-    // 八角棱堡炮台（宽厚突出于东南角）
-    isoCylinder(ctx, pt, 0.78, 0.78, 0.24, 0.22, 0, 11.4, '#b5bfc8', '#96a2ad', '#6e7a86', '#cfd6dc', '#3f485288');
-    // 炮台内凹胸墙与黑铁火炮
-    isoCylinder(ctx, pt, 0.78, 0.78, 0.15, 0.15, 11.4, 12.1, '#8b96a1', '#79848f', '#66717c', '#9da8b2', '#47515c66');
-    // 两门朝东南伸出的黑铁加农炮管
-    strokeLine(ctx, pt(0.79, 0.77, 12.6), pt(0.98, 0.84, 13.0), '#31373d', 2.2);
-    strokeLine(ctx, pt(0.75, 0.80, 12.6), pt(0.84, 0.99, 13.0), '#31373d', 2.2);
-    // 阵营旗插于主堡尖顶与棱堡边
-    isoBanner(ctx, pt, 0.32, 0.31, 22.2, 6.0, teamCol, lightCol, true);
+    // 3c. 西南青瓦联排楼宇
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.16, 0.54, 0.48, 0.84, 5.4, 5.0, 4.2, false, '#85919c', '#a3aeb8', '#798ea0', '#546676', '#3b485266');
+      if (stage === 1) isoScorch(ctx, pt, 0.34, 0.70, 12.2, 3.4, 2.0, 0.42);
+    } else {
+      isoGable(ctx, pt, 0.16, 0.54, 0.48, 0.84, 5.4, 4.2, 3.0, false, '#727d87', '#8e99a3', '#647786', '#435360', '#2e384066');
+      isoScorch(ctx, pt, 0.33, 0.69, 10.6, 4.4, 2.4, 0.56);
+      isoFire(ctx, pt, 0.34, 0.69, 10.8, 0.85);
+    }
+
+    // 4. 前侧厚石堡垒墙 + 东南角标志性「八角石砌棱堡炮台」
+    if (stage === 0) {
+      isoBox(ctx, pt, 0.90, 0.10, 0.99, 0.62, 5.4, 9.6, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.10, 0.90, 0.62, 0.99, 5.4, 9.6, wTop, wR, wL, '#454e5777');
+    } else if (stage === 1) {
+      isoBox(ctx, pt, 0.90, 0.10, 0.99, 0.62, 5.4, 9.2, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.10, 0.90, 0.36, 0.99, 5.4, 9.6, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.43, 0.90, 0.62, 0.99, 5.4, 8.6, wTop, wR, wL, '#454e5777');
+      isoRubble(ctx, pt, 0.40, 0.95, 5.45, 0.045, '#b6bec6', '#727d88', '#909ba6');
+    } else {
+      isoBox(ctx, pt, 0.90, 0.14, 0.99, 0.46, 5.4, 8.0, wTop, wR, wL, '#454e5777');
+      isoBox(ctx, pt, 0.14, 0.90, 0.44, 0.99, 5.4, 7.8, wTop, wR, wL, '#454e5777');
+      isoRubble(ctx, pt, 0.54, 0.94, 5.45, 0.055, '#aeb7bf', '#6d7883', '#8b96a1');
+    }
+
+    // 八角棱堡炮台
+    const bastionH = stage === 2 ? 9.6 : 11.4;
+    isoCylinder(ctx, pt, 0.78, 0.78, 0.24, 0.22, 0, bastionH, stage === 2 ? '#a2acb5' : '#b5bfc8', stage === 2 ? '#84909b' : '#96a2ad', stage === 2 ? '#5d6873' : '#6e7a86', stage === 2 ? '#b8c0c7' : '#cfd6dc', '#3f485288');
+    if (stage <= 1) {
+      isoCylinder(ctx, pt, 0.78, 0.78, 0.15, 0.15, 11.4, 12.1, '#8b96a1', '#79848f', '#66717c', '#9da8b2', '#47515c66');
+      strokeLine(ctx, pt(0.79, 0.77, 12.6), pt(0.98, 0.84, 13.0), '#31373d', 2.2);
+      strokeLine(ctx, pt(0.75, 0.80, 12.6), pt(0.84, stage === 1 ? 0.97 : 0.99, stage === 1 ? 12.4 : 13.0), '#31373d', 2.2);
+      if (stage === 1) isoScorch(ctx, pt, 0.82, 0.86, 12.15, 3.2, 1.8, 0.45);
+    } else {
+      // 重创：棱堡胸墙炸缺熏黑，一门加农炮管坠歪冒烟
+      isoScorch(ctx, pt, 0.78, 0.78, 9.65, 5.4, 3.0, 0.58);
+      isoRubble(ctx, pt, 0.74, 0.76, 9.6, 0.048, '#adb6be', '#69747f', '#89949f');
+      strokeLine(ctx, pt(0.78, 0.77, 10.4), pt(0.96, 0.86, 9.8), '#2b3036', 2.2);
+      strokeLine(ctx, pt(0.74, 0.82, 10.0), pt(0.82, 0.96, 8.9), '#2b3036', 2.0);
+    }
+
+    // 阵营旗 + 烟雾
+    isoBanner(ctx, pt, 0.32, 0.31, stage === 2 ? 17.6 : 22.2, 6.0, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.36, 0.68, 12.6, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.39, 0.34, 16.8, 1.05, true);
+      isoSmoke(ctx, pt, 0.80, 0.78, 11.4, 0.85, true);
+    }
   }
 
   /**
@@ -2499,61 +2985,146 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 标志性红砖双跨工业厂房 + 两根高耸锥形红砖大烟囱（飘出柔和蒸汽团）+ 蒸汽铁轨与煤堆 + 暖黄工业拱窗，
    * 红砖热工业配色与高耸烟囱剪影具备极高辨识度。
    */
-  function paintCitySteam(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+  function paintCitySteam(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
     // 1. 工业灰石地基 + 蒸汽铁轨与煤炭堆场
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.6, '#9e9990', '#6d6962', '#858077', '#4a464088');
-    polygon(ctx, [pt(0.05, 0.05, 4.65), pt(0.95, 0.05, 4.65), pt(0.95, 0.95, 4.65), pt(0.05, 0.95, 4.65)], '#aba59a');
+    const baseTop = stage >= 3 ? '#847f77' : stage === 2 ? '#918c83' : '#9e9990';
+    const baseR = stage >= 3 ? '#595550' : stage === 2 ? '#635f58' : '#6d6962';
+    const baseL = stage >= 3 ? '#6f6b63' : stage === 2 ? '#7a766d' : '#858077';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.6, baseTop, baseR, baseL, '#4a464088');
+    polygon(ctx, [pt(0.05, 0.05, 4.65), pt(0.95, 0.05, 4.65), pt(0.95, 0.95, 4.65), pt(0.05, 0.95, 4.65)], stage >= 3 ? '#8d877e' : stage === 2 ? '#9c968c' : '#aba59a');
 
-    // 穿过西南前院的双轨铁道（枕木 + 双钢轨）
+    // 穿过西南前院的双轨铁道（重创/废墟中段扭曲炸断）
     for (let i = 0; i <= 7; i++) {
+      if (stage >= 2 && (i === 3 || i === 4)) continue;
       const f = 0.06 + (i / 7) * 0.88;
       strokeLine(ctx, pt(f - 0.02, 0.77, 4.75), pt(f + 0.02, 0.91, 4.75), '#5e4c3c88', 1.2);
     }
-    strokeLine(ctx, pt(0.05, 0.80, 4.85), pt(0.95, 0.80, 4.85), '#4a5056', 1.1);
-    strokeLine(ctx, pt(0.05, 0.88, 4.85), pt(0.95, 0.88, 4.85), '#4a5056', 1.1);
+    if (stage <= 1) {
+      strokeLine(ctx, pt(0.05, 0.80, 4.85), pt(0.95, 0.80, 4.85), '#4a5056', 1.1);
+      strokeLine(ctx, pt(0.05, 0.88, 4.85), pt(0.95, 0.88, 4.85), '#4a5056', 1.1);
+    } else {
+      // 炸断翘起的变形钢轨
+      strokeLine(ctx, pt(0.05, 0.80, 4.85), pt(0.38, 0.80, 4.85), '#42474c', 1.1);
+      strokeLine(ctx, pt(0.38, 0.80, 4.85), pt(0.47, 0.76, 6.2), '#3c4045', 1.15);
+      strokeLine(ctx, pt(0.58, 0.82, 5.5), pt(0.95, 0.80, 4.85), '#42474c', 1.1);
+      strokeLine(ctx, pt(0.05, 0.88, 4.85), pt(0.42, 0.88, 4.85), '#42474c', 1.1);
+      strokeLine(ctx, pt(0.62, 0.88, 4.85), pt(0.95, 0.88, 4.85), '#42474c', 1.1);
+      isoScorch(ctx, pt, 0.50, 0.84, 4.75, 5.5, 3.0, 0.52);
+    }
 
-    // 2. 高耸锥形红砖大烟囱 × 2（蒸汽时代灵魂剪影，位于厂房西北后侧）
-    isoCylinder(ctx, pt, 0.24, 0.20, 0.085, 0.055, 4.6, 26.5, '#cf7055', '#b45840', '#873d2b', '#443f3c', '#4f241977');
-    // 烟囱顶部铁箍
-    isoCylinder(ctx, pt, 0.24, 0.20, 0.062, 0.062, 24.4, 25.8, '#53585e', '#43484d', '#33373b', '#404449');
-    isoCylinder(ctx, pt, 0.41, 0.16, 0.070, 0.048, 4.6, 21.5, '#ca6b51', '#ae543c', '#823a29', '#443f3c', '#4f241977');
+    if (stage === 3) {
+      // 废墟：保留工业地基、断轨煤渣、两截断口红砖烟囱残桩与暗红砖厂房残墙、黑铁桁架
+      isoScorch(ctx, pt, 0.44, 0.44, 4.7, 11.5, 6.2, 0.56);
+      // 标志性遗迹：一高一低两截折断的红砖大烟囱残桩（无白汽）
+      isoCylinder(ctx, pt, 0.24, 0.20, 0.085, 0.068, 4.6, 13.8, '#a65742', '#8c4431', '#672f21', '#383431', '#3e1c1477');
+      isoCylinder(ctx, pt, 0.41, 0.16, 0.070, 0.060, 4.6, 9.8, '#9e533e', '#84402e', '#612c1f', '#383431', '#3e1c1477');
+      // 坍塌的红砖双跨厂房残墙与暗红碎砖瓦砾
+      isoBox(ctx, pt, 0.14, 0.26, 0.66, 0.34, 4.6, 8.6, '#aa5b44', '#7a3929', '#944834', '#441f1577');
+      isoBox(ctx, pt, 0.14, 0.26, 0.22, 0.64, 4.6, 8.0, '#a35640', '#753626', '#8d4431', '#441f1577');
+      isoBox(ctx, pt, 0.56, 0.56, 0.74, 0.66, 4.6, 7.2, '#a1543f', '#723525', '#8b4330', '#441f1577');
+      // 折断露出的黑色钢桁架
+      strokeLine(ctx, pt(0.22, 0.34, 8.2), pt(0.56, 0.54, 5.2), '#33363a', 1.6);
+      strokeLine(ctx, pt(0.36, 0.34, 8.0), pt(0.64, 0.50, 5.0), '#3d4045', 1.4);
+      // 红砖碎堆与熄灭散落煤渣
+      isoRubble(ctx, pt, 0.44, 0.48, 4.65, 0.068, '#b55e46', '#7b3827', '#984a35');
+      isoRubble(ctx, pt, 0.82, 0.38, 4.65, 0.06, '#ac5841', '#743424', '#904531');
+      isoScorch(ctx, pt, 0.82, 0.69, 4.72, 6.2, 3.2, 0.55);
+      isoRubble(ctx, pt, 0.82, 0.69, 4.65, 0.055, '#4c4e52', '#2c2e31', '#3c3e42');
+      return;
+    }
 
-    // 柔和飘散的暖白蒸汽团
+    // 2. 高耸锥形红砖大烟囱 × 2（重创时矮烟囱拦腰折断、高烟囱缩短冒黑烟）
+    const stack1H = stage === 2 ? 20.5 : 26.5;
+    const stack2H = stage === 2 ? 12.2 : stage === 1 ? 19.8 : 21.5;
+    isoCylinder(ctx, pt, 0.24, 0.20, 0.085, stage === 2 ? 0.062 : 0.055, 4.6, stack1H, stage === 2 ? '#b8624a' : '#cf7055', stage === 2 ? '#9d4c36' : '#b45840', '#873d2b', '#443f3c', '#4f241977');
+    if (stage <= 1) {
+      isoCylinder(ctx, pt, 0.24, 0.20, 0.062, 0.062, 24.4, 25.8, '#53585e', '#43484d', '#33373b', '#404449');
+    }
+    isoCylinder(ctx, pt, 0.41, 0.16, 0.070, stage === 2 ? 0.058 : 0.048, 4.6, stack2H, stage === 2 ? '#b35e47' : '#ca6b51', stage === 2 ? '#994934' : '#ae543c', '#823a29', '#443f3c', '#4f241977');
+
+    // 柔和暖白蒸汽团（常态纯白，受损灰白，重创转为黑灰浓烟）
     const drawSteamPuff = (u: number, v: number, z: number, rx: number, ry: number, alpha: number): void => {
       const [sx, sy] = pt(u, v, z);
-      ctx.fillStyle = `rgba(241,238,231,${alpha})`;
+      ctx.fillStyle = stage === 0 ? `rgba(241,238,231,${alpha})` : `rgba(195,190,183,${alpha})`;
       ctx.beginPath();
       ctx.ellipse(sx, sy, rx, ry, -0.2, 0, Math.PI * 2);
       ctx.fill();
     };
-    drawSteamPuff(0.28, 0.14, 29.0, 4.2, 2.6, 0.65);
-    drawSteamPuff(0.36, 0.07, 32.0, 5.4, 3.1, 0.45);
-    drawSteamPuff(0.46, 0.01, 34.4, 4.4, 2.5, 0.28);
-    drawSteamPuff(0.45, 0.11, 24.0, 3.2, 2.0, 0.52);
-
-    // 3. 主红砖双跨工业大厂房（中北偏西，锯齿双坡屋顶 + 暖黄亮窗）
-    isoGable(ctx, pt, 0.14, 0.24, 0.72, 0.46, 4.6, 7.2, 4.8, true, '#9e4b36', '#be6047', '#d17357', '#9c4833', '#54261a66');
-    isoGable(ctx, pt, 0.20, 0.46, 0.74, 0.68, 4.6, 6.6, 4.4, true, '#9a4733', '#ba5c43', '#cd6e53', '#964430', '#54261a66');
-    // 厂房南墙暖黄工业拱窗阵列
-    for (const u of [0.28, 0.41, 0.54, 0.66]) {
-      const [wx, wy] = pt(u, 0.684, 7.8);
-      ctx.fillStyle = '#efd28a';
-      ctx.fillRect(wx - 1.4, wy - 1.8, 2.8, 3.4);
-      ctx.strokeStyle = '#5a2d2066';
-      ctx.lineWidth = 0.55;
-      ctx.strokeRect(wx - 1.4, wy - 1.8, 2.8, 3.4);
+    if (stage <= 1) {
+      drawSteamPuff(0.28, 0.14, 29.0, 4.2, 2.6, 0.65);
+      drawSteamPuff(0.36, 0.07, 32.0, 5.4, 3.1, 0.45);
+      drawSteamPuff(0.46, 0.01, 34.4, 4.4, 2.5, 0.28);
+      if (stage === 0) drawSteamPuff(0.45, 0.11, 24.0, 3.2, 2.0, 0.52);
+    } else {
+      isoSmoke(ctx, pt, 0.25, 0.19, 21.8, 1.05, true);
     }
 
-    // 4. 东侧红砖小工坊 / 锅炉房 + 阵营红砖矮围墙
-    isoGable(ctx, pt, 0.75, 0.22, 0.93, 0.54, 4.6, 4.6, 3.4, false, '#984632', '#b55a41', '#c96b50', '#92422e', '#54261a55');
+    // 3. 主红砖双跨工业大厂房（中北偏西，锯齿双坡屋顶 + 暖黄亮窗）
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.14, 0.24, 0.72, 0.46, 4.6, 7.2, 4.8, true, '#9e4b36', '#be6047', '#d17357', '#9c4833', '#54261a66');
+      isoGable(ctx, pt, 0.20, 0.46, 0.74, 0.68, 4.6, 6.6, 4.4, true, '#9a4733', '#ba5c43', '#cd6e53', '#964430', '#54261a66');
+      if (stage === 1) {
+        // 受损：前跨红砖厂房屋面撕开焦黑洞口与墙面裂纹
+        polygon(ctx, [pt(0.40, 0.52, 14.0), pt(0.60, 0.52, 13.6), pt(0.62, 0.65, 11.4), pt(0.42, 0.65, 11.7)], '#362e29', '#201a16aa', 0.65);
+        strokeLine(ctx, pt(0.46, 0.53, 13.8), pt(0.55, 0.64, 11.5), '#5a5f64', 1.0);
+        isoCrack(ctx, pt, [[0.32, 0.684, 10.6], [0.35, 0.684, 8.2], [0.33, 0.684, 5.4]], '#3d2219aa', 0.9);
+      }
+      // 厂房南墙暖黄工业拱窗阵列（受损熄灭两扇）
+      for (const [wi, u] of ([0.28, 0.41, 0.54, 0.66] as const).entries()) {
+        const [wx, wy] = pt(u, 0.684, 7.8);
+        ctx.fillStyle = stage === 1 && (wi === 1 || wi === 2) ? '#3b332e' : '#efd28a';
+        ctx.fillRect(wx - 1.4, wy - 1.8, 2.8, 3.4);
+        ctx.strokeStyle = '#5a2d2066';
+        ctx.lineWidth = 0.55;
+        ctx.strokeRect(wx - 1.4, wy - 1.8, 2.8, 3.4);
+      }
+    } else {
+      // 重创：后跨半塌焦黑，前跨屋顶坍塌露钢桁架、拱窗全黑破碎并喷火冒浓烟
+      isoGable(ctx, pt, 0.14, 0.24, 0.46, 0.46, 4.6, 6.4, 4.2, true, '#853f2d', '#a2503b', '#b46047', '#7f3a29', '#451f1566');
+      isoBox(ctx, pt, 0.46, 0.24, 0.72, 0.46, 4.6, 10.4, '#3c342f', '#823d2c', '#9c4b37', '#441e1566');
+      isoBox(ctx, pt, 0.20, 0.46, 0.74, 0.68, 4.6, 10.2, '#342c28', '#833d2c', '#9e4c38', '#451f1577');
+      // 暴露的扭曲黑色屋顶钢桁架
+      strokeLine(ctx, pt(0.24, 0.50, 10.2), pt(0.50, 0.64, 12.6), '#2e3136', 1.4);
+      strokeLine(ctx, pt(0.50, 0.64, 12.6), pt(0.70, 0.52, 10.2), '#2e3136', 1.4);
+      strokeLine(ctx, pt(0.32, 0.48, 10.2), pt(0.60, 0.62, 10.4), '#3b3f45', 1.15);
+      for (const u of [0.28, 0.41, 0.54, 0.66]) {
+        const [wx, wy] = pt(u, 0.684, 7.6);
+        ctx.fillStyle = u === 0.54 ? '#de6a2a' : '#2d2622';
+        ctx.fillRect(wx - 1.4, wy - 1.8, 2.8, 3.4);
+      }
+      isoFire(ctx, pt, 0.52, 0.56, 10.5, 1.05);
+    }
 
-    // 5. 庭院煤堆（黑灰锥体，凸显煤炭蒸汽时代特征）
+    // 4. 东侧红砖小工坊 / 锅炉房
+    if (stage <= 1) {
+      isoGable(ctx, pt, 0.75, 0.22, 0.93, 0.54, 4.6, 4.6, 3.4, false, '#984632', '#b55a41', '#c96b50', '#92422e', '#54261a55');
+      if (stage === 1) isoRubble(ctx, pt, 0.72, 0.58, 4.65, 0.042, '#b96047', '#7b3928', '#9b4d37');
+    } else {
+      isoBox(ctx, pt, 0.75, 0.22, 0.93, 0.54, 4.6, 8.2, '#3a322d', '#803b2a', '#9b4a36', '#451f1566');
+      isoFire(ctx, pt, 0.84, 0.38, 8.4, 0.82);
+    }
+
+    // 5. 庭院煤堆（重创时炸散泛红余烬）
     const [cx, cy] = pt(0.82, 0.69, 4.7);
-    polygon(ctx, [[cx - 5.2, cy + 1.0], [cx - 0.6, cy - 4.0], [cx + 0.8, cy + 1.8]], '#525457');
-    polygon(ctx, [[cx - 0.6, cy - 4.0], [cx + 5.0, cy + 0.8], [cx + 0.8, cy + 1.8]], '#343639');
+    polygon(ctx, [[cx - 5.2, cy + 1.0], [cx - 0.6, cy - (stage === 2 ? 2.6 : 4.0)], [cx + 0.8, cy + 1.8]], '#525457');
+    polygon(ctx, [[cx - 0.6, cy - (stage === 2 ? 2.6 : 4.0)], [cx + 5.0, cy + 0.8], [cx + 0.8, cy + 1.8]], '#343639');
+    if (stage === 2) {
+      polygon(ctx, [[cx - 1.4, cy + 0.2], [cx, cy - 1.0], [cx + 1.4, cy + 0.3]], '#e66c28');
+    }
 
-    // 6. 厂房顶阵营旗
-    isoBanner(ctx, pt, 0.62, 0.35, 16.5, 5.5, teamCol, lightCol, true);
+    // 6. 厂房顶阵营旗 + 烟雾
+    isoBanner(ctx, pt, 0.62, 0.35, stage === 2 ? 10.6 : 16.5, 5.5, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.52, 0.56, 13.6, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.53, 0.56, 13.6, 1.05, true);
+      isoSmoke(ctx, pt, 0.84, 0.38, 11.2, 0.78, true);
+    }
   }
 
   /**
@@ -2561,42 +3132,36 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 粗粝暖灰混凝土基座 + 标志性二战「圆拱顶波纹钢坦克/兵工装配库」+ 粗犷防空指挥堡（顶置高射炮与钢架无线电铁塔）
    * + 双联军用圆柱储油罐 + 战时卡其工业装卸坪，整体敦实厚重，与现代大都会时代六彻底拉开时代鸿沟。
    */
-  function paintCityMechanized(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+  function paintCityMechanized(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
     // 1. 战时重型暖灰混凝土工业底座 + 深灰柏油装卸坪
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.4, '#b8b1a1', '#777164', '#979080', '#48433988');
-    polygon(ctx, [pt(0.05, 0.05, 4.45), pt(0.95, 0.05, 4.45), pt(0.95, 0.95, 4.45), pt(0.05, 0.95, 4.45)], '#c5beb0');
-    // 战时重车柏油通道与前院装甲整备场
-    polygon(ctx, [pt(0.06, 0.56, 4.5), pt(0.94, 0.56, 4.5), pt(0.94, 0.92, 4.5), pt(0.06, 0.92, 4.5)], '#686a68');
-    strokeLine(ctx, pt(0.10, 0.74, 4.55), pt(0.90, 0.74, 4.55), '#d4c38577', 0.9);
-    // 东北侧小块混凝土挡土矮墙
-    isoBox(ctx, pt, 0.02, 0.02, 0.98, 0.07, 4.4, 6.4, '#cec8ba', '#827c6e', '#a39c8d', '#4c473d66');
-
-    // 2. 西北角：二战粗犷阶梯式混凝土防空司令部（Flak Tower / HQ）+ 顶置高射炮与钢架无线电铁塔
-    isoBox(ctx, pt, 0.08, 0.09, 0.41, 0.43, 4.4, 15.8, '#cbc4b4', '#868072', '#a8a192', '#4c473d88');
-    // 粗犷战时水平狭长防空窗与混凝土腰线
-    for (const z of [8.2, 12.2]) {
-      polygon(ctx, [pt(0.12, 0.434, z), pt(0.37, 0.434, z), pt(0.37, 0.434, z + 1.5), pt(0.12, 0.434, z + 1.5)], '#4b4e4c');
-      polygon(ctx, [pt(0.414, 0.13, z), pt(0.414, 0.39, z), pt(0.414, 0.39, z + 1.5), pt(0.414, 0.13, z + 1.5)], '#3a3d3b');
-      // 零星暖黄灯火透窗
-      polygon(ctx, [pt(0.15, 0.436, z + 0.3), pt(0.22, 0.436, z + 0.3), pt(0.22, 0.436, z + 1.2), pt(0.15, 0.436, z + 1.2)], '#e6c678aa');
+    const baseTop = stage >= 3 ? '#9a9486' : stage === 2 ? '#a9a293' : '#b8b1a1';
+    const baseR = stage >= 3 ? '#625d52' : stage === 2 ? '#6d675b' : '#777164';
+    const baseL = stage >= 3 ? '#7c7669' : stage === 2 ? '#8a8374' : '#979080';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.4, baseTop, baseR, baseL, '#48433988');
+    polygon(ctx, [pt(0.05, 0.05, 4.45), pt(0.95, 0.05, 4.45), pt(0.95, 0.95, 4.45), pt(0.05, 0.95, 4.45)], stage >= 3 ? '#a49e91' : stage === 2 ? '#b4ada0' : '#c5beb0');
+    polygon(ctx, [pt(0.06, 0.56, 4.5), pt(0.94, 0.56, 4.5), pt(0.94, 0.92, 4.5), pt(0.06, 0.92, 4.5)], stage >= 3 ? '#535553' : '#686a68');
+    if (stage <= 1) {
+      strokeLine(ctx, pt(0.10, 0.74, 4.55), pt(0.90, 0.74, 4.55), '#d4c38577', 0.9);
+    } else {
+      strokeLine(ctx, pt(0.10, 0.74, 4.55), pt(0.42, 0.74, 4.55), '#c2b27855', 0.85);
+      strokeLine(ctx, pt(0.64, 0.74, 4.55), pt(0.90, 0.74, 4.55), '#c2b27855', 0.85);
     }
-    // 防空塔顶部加厚混凝土炮位胸墙
-    isoBox(ctx, pt, 0.12, 0.13, 0.37, 0.39, 15.8, 18.6, '#d3ccbd', '#8b8577', '#aea798', '#4c473d88');
-    // 屋顶防空高射炮轮廓（暗钢炮座 + 仰角炮管）
-    isoBox(ctx, pt, 0.25, 0.24, 0.34, 0.33, 18.6, 20.5, '#626863', '#3e433f', '#505651', '#292d2a88');
-    strokeLine(ctx, pt(0.30, 0.28, 20.0), pt(0.43, 0.22, 24.4), '#303532', 1.65);
-    // 二战钢架无线电发射铁塔（经典锥形钢桁架）
-    const rFL = pt(0.16, 0.26, 18.6);
-    const rFR = pt(0.24, 0.26, 18.6);
-    const rBL = pt(0.16, 0.18, 18.6);
-    const rTop = pt(0.20, 0.22, 29.8);
-    strokeLine(ctx, rFL, rTop, '#4a4f4d', 1.15);
-    strokeLine(ctx, rFR, rTop, '#4a4f4d', 1.15);
-    strokeLine(ctx, rBL, rTop, '#646b68', 0.9);
-    strokeLine(ctx, pt(0.175, 0.245, 22.4), pt(0.225, 0.245, 22.4), '#555b58', 0.85);
-    strokeLine(ctx, pt(0.185, 0.235, 25.8), pt(0.215, 0.235, 25.8), '#555b58', 0.8);
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.02, 0.02, 0.98, 0.07, 4.4, 6.4, '#cec8ba', '#827c6e', '#a39c8d', '#4c473d66');
+    } else {
+      isoBox(ctx, pt, 0.02, 0.02, 0.56, 0.07, 4.4, 5.8, '#b5afa2', '#706b5f', '#8e887a', '#4c473d66');
+    }
 
-    // 3. 东半部：标志性二战「大跨度圆拱顶波纹钢坦克/兵工装配库」（Quonset / Barrel-Vault Hangar）
+    if (stage >= 1) {
+      isoScorch(ctx, pt, 0.54, 0.74, 4.56, 5.6, 3.0, stage === 1 ? 0.30 : 0.52);
+    }
+
     const hU0 = 0.47;
     const hU1 = 0.93;
     const hV0 = 0.14;
@@ -2604,11 +3169,98 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const hBase = 4.4;
     const hWall = 4.6;
     const hArch = 5.4;
-    // 装配库混凝土矮墙与正面宽大暗色车库大门
-    isoBox(ctx, pt, hU0, hV0, hU1, hV1, hBase, hBase + hWall, '#8e8a7d', '#7b7669', '#9c9688', '#48433977');
-    polygon(ctx, [pt(0.55, hV1 + 0.004, hBase), pt(0.85, hV1 + 0.004, hBase), pt(0.85, hV1 + 0.004, hBase + 4.0), pt(0.55, hV1 + 0.004, hBase + 4.0)], '#3a3e3d');
-    // 拱顶 5 段圆弧瓦楞钢屋面（军灰橄榄钢色，极具二战兵工厂特征）
     const archAngles = [0, 0.25, 0.5, 0.75, 1];
+
+    if (stage === 3) {
+      // 废墟：保留混凝土底座、炸裂柏油坪、防空司令部混凝土断壁与钢筋、折断无线电铁塔、拱形装配库残钢肋与瘪油罐
+      isoScorch(ctx, pt, 0.26, 0.28, 4.55, 9.6, 5.2, 0.56);
+      isoScorch(ctx, pt, 0.70, 0.36, 4.55, 10.5, 5.6, 0.54);
+      isoScorch(ctx, pt, 0.30, 0.76, 4.55, 8.8, 4.8, 0.62);
+      // 1) 西北防空司令部炸裂混凝土残墙 + 弯曲外露钢筋
+      isoBox(ctx, pt, 0.08, 0.09, 0.39, 0.19, 4.4, 10.6, '#b3ada0', '#726c60', '#90897b', '#413d3588');
+      isoBox(ctx, pt, 0.08, 0.09, 0.19, 0.41, 4.4, 9.4, '#aba598', '#6c665b', '#888274', '#413d3588');
+      isoCrack(ctx, pt, [[0.19, 0.412, 9.0], [0.15, 0.412, 6.8], [0.18, 0.412, 4.8]], '#2d2a25cc', 1.0);
+      // 露出混凝土断面的钢筋毛刺
+      strokeLine(ctx, pt(0.24, 0.14, 10.6), pt(0.29, 0.17, 13.0), '#3d4042', 0.95);
+      strokeLine(ctx, pt(0.32, 0.14, 10.6), pt(0.38, 0.19, 12.2), '#3d4042', 0.9);
+      // 折断斜倒的钢架无线电铁塔
+      strokeLine(ctx, pt(0.20, 0.24, 9.2), pt(0.45, 0.44, 5.0), '#3d4240', 1.25);
+      strokeLine(ctx, pt(0.26, 0.20, 8.8), pt(0.45, 0.44, 5.0), '#4e5452', 1.05);
+      strokeLine(ctx, pt(0.31, 0.31, 7.2), pt(0.36, 0.27, 7.0), '#4a504e', 0.85);
+      // 2) 标志性遗迹：圆拱波纹钢坦克装配库仅余混凝土矮墙 + 断裂扭曲的 3 道军绿半弧钢拱骨架
+      isoBox(ctx, pt, hU0, hV0, hU1, hV0 + 0.08, hBase, hBase + 3.2, '#827e73', '#676359', '#7d786d', '#3e3a3277');
+      isoBox(ctx, pt, hU0, hV0, hU0 + 0.08, hV1, hBase, hBase + 3.0, '#827e73', '#676359', '#7d786d', '#3e3a3277');
+      for (const fv of [0.22, 0.36, 0.50]) {
+        const stopAt = fv === 0.36 ? 2 : 3;
+        for (let i = 0; i < stopAt; i++) {
+          const t0 = archAngles[i]!;
+          const t1 = archAngles[i + 1]!;
+          const p0 = pt(hU0 + (hU1 - hU0) * t0, fv, hBase + 2.8 + Math.sin(Math.PI * (1 - t0)) * (hArch * 0.82));
+          const p1 = pt(hU0 + (hU1 - hU0) * t1, fv, hBase + 2.8 + Math.sin(Math.PI * (1 - t1)) * (hArch * 0.82));
+          strokeLine(ctx, p0, p1, '#586458', 1.5);
+        }
+      }
+      isoRubble(ctx, pt, 0.72, 0.40, hBase + 0.05, 0.075, '#727e72', '#475147', '#5c675c');
+      isoRubble(ctx, pt, 0.58, 0.48, hBase + 0.05, 0.055, '#9d978a', '#656055', '#807a6d');
+      // 3) 西南炸瘪破裂的军用钢储油罐残壳 + 东南碉堡碎混凝土
+      isoCylinder(ctx, pt, 0.20, 0.72, 0.11, 0.10, 4.5, 7.2, '#7d8280', '#606563', '#444947', '#323534', '#292d2b88');
+      isoRubble(ctx, pt, 0.39, 0.79, 4.55, 0.06, '#6d7270', '#424745', '#575c5a');
+      isoRubble(ctx, pt, 0.76, 0.82, 4.55, 0.065, '#a8a192', '#6a6559', '#878173');
+      return;
+    }
+
+    // 2. 西北角：二战粗犷阶梯式混凝土防空司令部（Flak Tower / HQ）+ 顶置高射炮与钢架无线电铁塔
+    const hqTop = stage === 2 ? 14.2 : 15.8;
+    isoBox(ctx, pt, 0.08, 0.09, 0.41, 0.43, 4.4, hqTop, stage === 2 ? '#b8b1a2' : '#cbc4b4', stage === 2 ? '#757063' : '#868072', stage === 2 ? '#969082' : '#a8a192', '#4c473d88');
+    for (const z of [8.2, 12.2]) {
+      if (stage === 2 && z > 11.5) continue;
+      polygon(ctx, [pt(0.12, 0.434, z), pt(0.37, 0.434, z), pt(0.37, 0.434, z + 1.5), pt(0.12, 0.434, z + 1.5)], '#4b4e4c');
+      polygon(ctx, [pt(0.414, 0.13, z), pt(0.414, 0.39, z), pt(0.414, 0.39, z + 1.5), pt(0.414, 0.13, z + 1.5)], '#3a3d3b');
+      if (stage <= 1) {
+        polygon(ctx, [pt(0.15, 0.436, z + 0.3), pt(0.22, 0.436, z + 0.3), pt(0.22, 0.436, z + 1.2), pt(0.15, 0.436, z + 1.2)], '#e6c678aa');
+      }
+    }
+    if (stage >= 1) {
+      isoCrack(ctx, pt, [[0.30, 0.435, hqTop - 0.8], [0.27, 0.435, 10.6], [0.33, 0.435, 7.2]], '#2c2a26cc', stage === 2 ? 1.15 : 0.95);
+    }
+    // 防空塔顶部炮位胸墙（重创时炸缺一角熏黑）
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.12, 0.13, 0.37, 0.39, 15.8, 18.6, '#d3ccbd', '#8b8577', '#aea798', '#4c473d88');
+      isoBox(ctx, pt, 0.25, 0.24, 0.34, 0.33, 18.6, 20.5, '#626863', '#3e433f', '#505651', '#292d2a88');
+      strokeLine(ctx, pt(0.30, 0.28, 20.0), pt(0.43, 0.22, 24.4), '#303532', 1.65);
+    } else {
+      isoBox(ctx, pt, 0.12, 0.13, 0.31, 0.33, 14.2, 16.6, '#beb7a9', '#797467', '#9b9587', '#4c473d88');
+      isoScorch(ctx, pt, 0.31, 0.31, 14.3, 4.8, 2.6, 0.6);
+      // 倾斜冒烟的高射炮残座
+      isoBox(ctx, pt, 0.25, 0.25, 0.34, 0.34, 14.2, 15.8, '#555b56', '#353936', '#464b47', '#24272588');
+      strokeLine(ctx, pt(0.30, 0.29, 15.4), pt(0.45, 0.36, 17.0), '#2a2e2c', 1.6);
+    }
+    // 二战钢架无线电发射铁塔（受损微斜，重创拦腰折弯）
+    const rBaseZ = stage === 2 ? 16.6 : 18.6;
+    const rFL = pt(0.16, 0.26, rBaseZ);
+    const rFR = pt(0.24, 0.26, rBaseZ);
+    const rBL = pt(0.16, 0.18, rBaseZ);
+    if (stage <= 1) {
+      const lean = stage === 1 ? 0.035 : 0;
+      const rTop = pt(0.20 + lean, 0.22 + lean * 0.5, stage === 1 ? 28.6 : 29.8);
+      strokeLine(ctx, rFL, rTop, '#4a4f4d', 1.15);
+      strokeLine(ctx, rFR, rTop, '#4a4f4d', 1.15);
+      strokeLine(ctx, rBL, rTop, '#646b68', 0.9);
+      strokeLine(ctx, pt(0.175 + lean * 0.35, 0.245, 22.4), pt(0.225 + lean * 0.35, 0.245, 22.4), '#555b58', 0.85);
+      strokeLine(ctx, pt(0.185 + lean * 0.65, 0.235, 25.8), pt(0.215 + lean * 0.65, 0.235, 25.8), '#555b58', 0.8);
+    } else {
+      // 重创：折弯半截铁塔
+      const rMid = pt(0.21, 0.22, 21.8);
+      const rBent = pt(0.33, 0.27, 20.0);
+      strokeLine(ctx, rFL, rMid, '#464b49', 1.15);
+      strokeLine(ctx, rFR, rMid, '#464b49', 1.15);
+      strokeLine(ctx, rBL, rMid, '#5e6562', 0.9);
+      strokeLine(ctx, rMid, rBent, '#3c403e', 1.15);
+    }
+
+    // 3. 东半部：标志性二战「大跨度圆拱顶波纹钢坦克/兵工装配库」
+    isoBox(ctx, pt, hU0, hV0, hU1, hV1, hBase, hBase + hWall, stage === 2 ? '#7b776b' : '#8e8a7d', stage === 2 ? '#686459' : '#7b7669', stage === 2 ? '#8a8578' : '#9c9688', '#48433977');
+    polygon(ctx, [pt(0.55, hV1 + 0.004, hBase), pt(0.85, hV1 + 0.004, hBase), pt(0.85, hV1 + 0.004, hBase + 4.0), pt(0.55, hV1 + 0.004, hBase + 4.0)], '#3a3e3d');
     const archPtsS: Point[] = [];
     const archPtsN: Point[] = [];
     for (const t of archAngles) {
@@ -2618,32 +3270,86 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       archPtsN.push(pt(u, hV0, hBase + hWall + dz));
       archPtsS.push(pt(u, hV1, hBase + hWall + dz));
     }
-    const archShades = ['#8e9a8d', '#818d80', '#677367', '#535e53'] as const;
+    const archShades = stage === 2
+      ? (['#788377', '#6a7569', '#535e53', '#424c42'] as const)
+      : (['#8e9a8d', '#818d80', '#677367', '#535e53'] as const);
     for (let i = 0; i < archAngles.length - 1; i++) {
+      // 重创时右侧两段波纹钢屋面塌穿，露出焦黑拱肋与烈焰
+      if (stage === 2 && i >= 2) continue;
       polygon(ctx, [archPtsN[i]!, archPtsN[i + 1]!, archPtsS[i + 1]!, archPtsS[i]!], archShades[i]!, '#3b423b55', 0.65);
     }
-    // 拱顶正面半圆端墙（暗灰混凝土 + 拱形窗）
-    polygon(ctx, [archPtsS[0]!, archPtsS[1]!, archPtsS[2]!, archPtsS[3]!, archPtsS[4]!], '#888275', '#46423877', 0.75);
-    // 屋顶横向瓦楞钢加强筋
-    for (const fv of [0.28, 0.42]) {
-      for (let i = 0; i < archAngles.length - 1; i++) {
-        const t0 = archAngles[i]!;
-        const t1 = archAngles[i + 1]!;
-        const p0 = pt(hU0 + (hU1 - hU0) * t0, fv, hBase + hWall + Math.sin(Math.PI * (1 - t0)) * hArch);
-        const p1 = pt(hU0 + (hU1 - hU0) * t1, fv, hBase + hWall + Math.sin(Math.PI * (1 - t1)) * hArch);
-        strokeLine(ctx, p0, p1, '#39403944', 0.7);
+    if (stage <= 1) {
+      polygon(ctx, [archPtsS[0]!, archPtsS[1]!, archPtsS[2]!, archPtsS[3]!, archPtsS[4]!], '#888275', '#46423877', 0.75);
+      for (const fv of [0.28, 0.42]) {
+        for (let i = 0; i < archAngles.length - 1; i++) {
+          const t0 = archAngles[i]!;
+          const t1 = archAngles[i + 1]!;
+          const p0 = pt(hU0 + (hU1 - hU0) * t0, fv, hBase + hWall + Math.sin(Math.PI * (1 - t0)) * hArch);
+          const p1 = pt(hU0 + (hU1 - hU0) * t1, fv, hBase + hWall + Math.sin(Math.PI * (1 - t1)) * hArch);
+          strokeLine(ctx, p0, p1, '#39403944', 0.7);
+        }
       }
+      if (stage === 1) {
+        // 受损：圆拱波纹钢屋面破开焦黑豁口 + 外露弧形钢肋
+        polygon(ctx, [
+          pt(0.68, 0.25, hBase + hWall + 4.9),
+          pt(0.84, 0.24, hBase + hWall + 3.4),
+          pt(0.85, 0.43, hBase + hWall + 3.1),
+          pt(0.69, 0.44, hBase + hWall + 4.7),
+        ], '#303431', '#1e211faa', 0.65);
+        strokeLine(ctx, pt(0.70, 0.34, hBase + hWall + 4.8), pt(0.83, 0.34, hBase + hWall + 3.3), '#697469', 1.0);
+      }
+    } else {
+      // 重创：半边塌陷的正面半圆墙 + 裸露扭曲钢拱肋 + 内部烈焰
+      polygon(ctx, [archPtsS[0]!, archPtsS[1]!, archPtsS[2]!, pt(0.70, hV1, hBase + hWall)], '#767166', '#3d393077', 0.75);
+      for (const fv of [0.24, 0.40]) {
+        for (let i = 2; i < archAngles.length - 1; i++) {
+          const t0 = archAngles[i]!;
+          const t1 = archAngles[i + 1]!;
+          const p0 = pt(hU0 + (hU1 - hU0) * t0, fv, hBase + hWall + Math.sin(Math.PI * (1 - t0)) * hArch);
+          const p1 = pt(hU0 + (hU1 - hU0) * t1, fv, hBase + hWall + Math.sin(Math.PI * (1 - t1)) * hArch);
+          strokeLine(ctx, p0, p1, '#4c554c', 1.25);
+        }
+      }
+      isoScorch(ctx, pt, 0.76, 0.36, hBase + hWall + 0.4, 5.8, 3.2, 0.62);
+      isoFire(ctx, pt, 0.76, 0.36, hBase + hWall + 0.6, 1.05);
     }
 
-    // 4. 西南侧：双联军用铆接钢储油罐 + 管道（强化战时机械化后勤特征）
-    isoCylinder(ctx, pt, 0.20, 0.72, 0.11, 0.11, 4.5, 10.6, '#b0b5b2', '#8f9693', '#666d6a', '#c3c8c4', '#3f454277');
-    isoCylinder(ctx, pt, 0.39, 0.79, 0.10, 0.10, 4.5, 9.8, '#acb1ae', '#8b928f', '#636a67', '#bfc4c0', '#3f454277');
-    // 东南哨所小碉堡与军用迷彩油桶/沙袋阵位
-    isoBox(ctx, pt, 0.66, 0.74, 0.88, 0.90, 4.5, 8.6, '#c4bdad', '#7f796c', '#9f9888', '#49443a77');
-    polygon(ctx, [pt(0.69, 0.904, 6.2), pt(0.85, 0.904, 6.2), pt(0.85, 0.904, 7.3), pt(0.69, 0.904, 7.3)], '#343735');
-    // 兵工厂门楣阵营标识条与司令部军旗
-    polygon(ctx, [pt(0.11, 0.435, 15.9), pt(0.38, 0.435, 15.9), pt(0.38, 0.435, 17.2), pt(0.11, 0.435, 17.2)], teamCol);
-    isoBanner(ctx, pt, 0.13, 0.14, 18.6, 5.6, teamCol, lightCol, true);
+    // 4. 西南侧：双联军用铆接钢储油罐（受损熏黑，重创炸裂一只燃起油火黑烟）
+    if (stage <= 1) {
+      isoCylinder(ctx, pt, 0.20, 0.72, 0.11, 0.11, 4.5, 10.6, '#b0b5b2', '#8f9693', '#666d6a', '#c3c8c4', '#3f454277');
+      isoCylinder(ctx, pt, 0.39, 0.79, 0.10, 0.10, 4.5, 9.8, stage === 1 ? '#9ba09d' : '#acb1ae', '#8b928f', '#636a67', stage === 1 ? '#a4a9a6' : '#bfc4c0', '#3f454277');
+      if (stage === 1) isoScorch(ctx, pt, 0.39, 0.79, 9.85, 3.4, 2.0, 0.52);
+    } else {
+      isoCylinder(ctx, pt, 0.20, 0.72, 0.11, 0.11, 4.5, 9.6, '#909593', '#737976', '#515755', '#9ba09d', '#353a3877');
+      isoScorch(ctx, pt, 0.20, 0.72, 9.65, 3.6, 2.1, 0.54);
+      // 炸裂燃烧的副储油罐
+      isoCylinder(ctx, pt, 0.39, 0.79, 0.10, 0.10, 4.5, 7.0, '#6e7371', '#535856', '#3b3f3e', '#2c2f2e', '#26292888');
+      isoFire(ctx, pt, 0.39, 0.79, 7.2, 0.95);
+    }
+
+    // 东南哨所小碉堡
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.66, 0.74, 0.88, 0.90, 4.5, stage === 1 ? 8.0 : 8.6, '#c4bdad', '#7f796c', '#9f9888', '#49443a77');
+      polygon(ctx, [pt(0.69, 0.904, 6.2), pt(0.85, 0.904, 6.2), pt(0.85, 0.904, 7.3), pt(0.69, 0.904, 7.3)], '#343735');
+      if (stage === 1) isoRubble(ctx, pt, 0.62, 0.86, 4.55, 0.042, '#b6afa0', '#767063', '#968f80');
+    } else {
+      isoBox(ctx, pt, 0.66, 0.74, 0.84, 0.88, 4.5, 6.8, '#a69f90', '#6c665a', '#898274', '#403c3377');
+      isoRubble(ctx, pt, 0.86, 0.88, 4.55, 0.052, '#afa899', '#716b5e', '#8e8879');
+    }
+
+    // 阵营标识条与司令部军旗 + 烟雾
+    if (stage <= 1) {
+      polygon(ctx, [pt(0.11, 0.435, 15.9), pt(0.38, 0.435, 15.9), pt(0.38, 0.435, 17.2), pt(0.11, 0.435, 17.2)], teamCol);
+    } else {
+      polygon(ctx, [pt(0.11, 0.435, 13.0), pt(0.28, 0.435, 13.0), pt(0.28, 0.435, 14.1), pt(0.11, 0.435, 14.1)], teamCol);
+    }
+    isoBanner(ctx, pt, 0.13, 0.14, rBaseZ, 5.6, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.39, 0.79, 10.6, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.76, 0.36, 12.6, 1.05, true);
+      isoSmoke(ctx, pt, 0.39, 0.79, 10.2, 0.95, true);
+    }
   }
 
   /** 斜俯视 3D 流线未来穹顶（珠光圆顶/椭圆穹顶，用于时代八聚变城） */
@@ -3019,7 +3725,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const basePoly = rhombus(x, y, width, 0);
     polygon(ctx, basePoly.map(([bx, by]) => [bx + 2.2, by + 2.4]), '#2d271e26');
 
-    if (city.ruined) {
+    const stage = cityDamageStage(city);
+    if (stage === 3 && (city.era < 1 || city.era > 5)) {
       paintCityRuined(ctx, pt, outline);
       if (dark) polygon(ctx, basePoly, '#17232b47');
       faces.push({ cell: { x: city.x, y: city.y }, points: basePoly });
@@ -3029,20 +3736,21 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     if (city.era >= 1 && city.era <= 8) {
       const ringZ = city.era === 1 ? 0.3 : 0.4;
       const ring = rhombus(x - 0.02, y - 0.02, width + 0.04, ringZ);
+      const ringCol = stage === 3 && !selected && !target ? '#6b6356cc' : outline;
       // 先在底层绘制完整阵营框（让西北/东北后缘自然贴于城基后方，不穿插建筑）
       ctx.beginPath();
       ctx.moveTo(...ring[0]!);
       for (const p of ring.slice(1)) ctx.lineTo(...p);
       ctx.closePath();
-      ctx.strokeStyle = outline;
-      ctx.lineWidth = target || selected ? 3.2 : 2.1;
+      ctx.strokeStyle = ringCol;
+      ctx.lineWidth = target || selected ? 3.2 : stage === 3 ? 1.8 : 2.1;
       ctx.stroke();
 
-      if (city.era === 1) paintCityBronze(ctx, pt, team, lightTeam);
-      else if (city.era === 2) paintCityIron(ctx, pt, team, lightTeam);
-      else if (city.era === 3) paintCityGunpowder(ctx, pt, team, lightTeam);
-      else if (city.era === 4) paintCitySteam(ctx, pt, team, lightTeam);
-      else if (city.era === 5) paintCityMechanized(ctx, pt, team, lightTeam);
+      if (city.era === 1) paintCityBronze(ctx, pt, team, lightTeam, stage);
+      else if (city.era === 2) paintCityIron(ctx, pt, team, lightTeam, stage);
+      else if (city.era === 3) paintCityGunpowder(ctx, pt, team, lightTeam, stage);
+      else if (city.era === 4) paintCitySteam(ctx, pt, team, lightTeam, stage);
+      else if (city.era === 5) paintCityMechanized(ctx, pt, team, lightTeam, stage);
       else if (city.era === 6) paintCityInfo(ctx, pt, team, lightTeam);
       else if (city.era === 7) paintCityArmor(ctx, pt, team, lightTeam);
       else paintCityFusion(ctx, pt, team, lightTeam);
@@ -3052,16 +3760,16 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       ctx.moveTo(...ring[1]!);
       ctx.lineTo(...ring[2]!);
       ctx.lineTo(...ring[3]!);
-      ctx.strokeStyle = outline;
-      ctx.lineWidth = target || selected ? 3.2 : 2.1;
+      ctx.strokeStyle = ringCol;
+      ctx.lineWidth = target || selected ? 3.2 : stage === 3 ? 1.8 : 2.1;
       ctx.stroke();
 
       if (dark) {
-        const fogTop = rhombus(x, y, width, Math.min(26, city.era * 3 + 6));
+        const fogTop = rhombus(x, y, width, stage === 3 ? 6 : Math.min(26, city.era * 3 + 6));
         polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], '#17232b38');
       }
       // 扩大命中面覆盖 3D 建筑轮廓，点击建筑顶部也能直接选中城市
-      const pickTop = rhombus(x, y, width, 16 * hScale);
+      const pickTop = rhombus(x, y, width, (stage === 3 ? 6 : 16) * hScale);
       faces.push({
         cell: { x: city.x, y: city.y },
         points: [pickTop[0]!, pickTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, pickTop[3]!],
