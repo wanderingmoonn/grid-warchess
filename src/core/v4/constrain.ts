@@ -10,7 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats } from '../rules.ts';
+import { attackableTargets, effectiveStats, unitYieldAt } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -274,6 +274,75 @@ function planLanes(
 }
 
 /**
+ * 经济兵的岗位（2026-11-24）：给每个经济兵指定一格，**已经站对了就别动**。
+ *
+ * 分配是两趟：
+ *   ① 已经站在高产格上的**原地不动**（迟滞——不然每天换位等于白跑）；
+ *   ② 剩下的兵按"离哪块空的高产格最近"认领。
+ *
+ * 为什么不让打分层自己算：它每步重算一次，被"让位"推走之后就丢了意图
+ * （S-015 的伐木工被推到北边平原，再也回不到两格外的森林）。
+ */
+function planEconPosts(s: GameState, world: World, keepClear: number[]): Record<string, { x: number; y: number }> | undefined {
+  const econ = world.myEcon;
+  if (econ.length === 0) return undefined;
+  const keep = new Set(keepClear);
+  /* 每种经济兵的高产格（只要 ≥4 金，太低的不值得占） */
+  const spots: Array<{ x: number; y: number; gold: number }> = [];
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if (!passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) continue;
+      if (keep.has(y * s.w + x)) continue;
+      let g = 0;
+      for (const u of econ) g = Math.max(g, unitYieldAt(s, u, x, y).gold ?? 0);
+      if (g >= 4) spots.push({ x, y, gold: g });
+    }
+  }
+  spots.sort((a, b) => b.gold - a.gold);
+
+  /*
+   * **岗位要按"这个兵"的产出选，不能按"所有经济兵里最高的那个"。**
+   *
+   * 否则伐木工会被派到丘陵（伐木工在那儿只有 5），牧民被派进森林（2）——
+   * 两个人都亏。S-015 实测：错配之后只有 1 格森林被用上，经济卡在 31。
+   */
+  const posts: Record<string, { x: number; y: number }> = {};
+  const taken = new Set<number>();
+  /* 先给"已经站在自己高产格上"的人定岗——迟滞，避免每天换位 */
+  for (const u of econ) {
+    const g = unitYieldAt(s, u, u.x, u.y).gold ?? 0;
+    const best = spots.reduce((n, p) => Math.max(n, unitYieldAt(s, u, p.x, p.y).gold ?? 0), 0);
+    if (g > 0 && g >= best && !taken.has(u.y * s.w + u.x)) {
+      posts[u.id] = { x: u.x, y: u.y };
+      taken.add(u.y * s.w + u.x);
+    }
+  }
+  /* 剩下的：每个兵挑"自己最能产"的空位（产出优先，其次近） */
+  for (const u of econ) {
+    if (posts[u.id]) continue;
+    let pick: { x: number; y: number } | null = null;
+    let pickScore = -Infinity;
+    for (const p of spots) {
+      if (taken.has(p.y * s.w + p.x)) continue;
+      if (s.units.some((v) => v.id !== u.id && v.x === p.x && v.y === p.y)) continue;
+      const g = unitYieldAt(s, u, p.x, p.y).gold ?? 0;
+      if (g <= 0) continue;
+      const d = Math.abs(p.x - u.x) + Math.abs(p.y - u.y);
+      const score = g * 10 - d;
+      if (score > pickScore) {
+        pickScore = score;
+        pick = { x: p.x, y: p.y };
+      }
+    }
+    if (pick) {
+      posts[u.id] = pick;
+      taken.add(pick.y * s.w + pick.x);
+    }
+  }
+  return posts;
+}
+
+/**
  * 多城分兵（2026-11-24）：**每座受威胁的城一支队**。
  *
  * 为什么必须分：只有一支 `main` 时，所有兵都去最近那座城，另一座直接丢
@@ -509,7 +578,14 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         }
       : undefined;
 
-  return { need, keepClear, squads, yieldMoves: planYield(s, world, keepClear, squads), forbid };
+  return {
+    need,
+    econPosts: planEconPosts(s, world, keepClear),
+    keepClear,
+    squads,
+    yieldMoves: planYield(s, world, keepClear, squads),
+    forbid,
+  };
 }
 
 /** 这个单位属于哪支队（查表；没有任务 = undefined） */

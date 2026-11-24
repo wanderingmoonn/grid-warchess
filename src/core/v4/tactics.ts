@@ -84,6 +84,19 @@ export function actFor(
      *
      * 改成：把计划落点当**方向**，用当前局面重新挑一个可达格走过去。
      */
+    /*
+     * 有岗位的经济兵：让位**朝岗位走**，别往随机方向撤。
+     *
+     * 让位的落点是多源 BFS 给的"最近空格"，方向是随机的——北边先被扫到就往北。
+     * 于是伐木工被推离产兵格之后落在北边平原，再也回不到两格外的森林。
+     * 岗位在约束层，这里只是"绕着走过去"。
+     */
+    const post = con.econPosts?.[u.id];
+    if (post) {
+      const toPost = stepToward(s, u, post);
+      if (toPost && !con.keepClear.includes(toPost.y * s.w + toPost.x))
+        return { type: 'MOVE', unitId: u.id, x: toPost.x, y: toPost.y };
+    }
     const spot = stepToward(s, u, { x: yieldTo.x, y: yieldTo.y });
     if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   }
@@ -318,6 +331,21 @@ function bestYieldStep(
     }
   }
   const cur = unitYieldAt(s, u, u.x, u.y).gold ?? 0;
+
+  /*
+   * **有岗位就朝岗位走**（约束层的指令，打分层只负责"怎么走过去"）。
+   *
+   * 原来这里自己算"附近哪格最高"：被让位推走之后就从当前格重新贪心，
+   * 于是走上平原就再也不回头（S-015 卡在 19/31 的原因）。
+   * 岗位由约束层按"这个兵种在这格能产多少"分配，一步跨不过去就挪近一格。
+   */
+  const post = con.econPosts?.[u.id];
+  if (post) {
+    if (u.x === post.x && u.y === post.y) return null; /* 到位了就别动 */
+    const toward = stepToward(s, u, post);
+    if (toward && !keep.has(toward.y * s.w + toward.x))
+      return toward;
+  }
 
   /*
    * 已经贴着关键格的经济兵**不再自己找活干**：它要么正被让位计划挪开，

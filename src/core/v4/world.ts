@@ -250,6 +250,16 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   const keepClear: number[] = [];
   for (const city of myCities) {
     const n = city.size ?? 2;
+    /*
+     * **城格 + 外一圈都保**（2026-11-24 试过只保城格，回退了）。
+     *
+     * 试的理由：产兵口就是城格本身，外圈挡住的是城边的好地形（S-015 那 2 格森林正好贴着城）。
+     * 回退的理由：**外圈是军队出城的通道**——只保城格之后 S-001（必赢题）从"胜"变成"未分胜负"，
+     * 兵挤在城墙外，主力出不来。
+     *
+     * 结论：城边的高产地在这个口径下吃不到。要吃得改地图（把高产地形挪出外圈），
+     * 不是改 keepClear。
+     */
     for (let dy = -1; dy <= n; dy++) {
       for (let dx = -1; dx <= n; dx++) {
         /*
