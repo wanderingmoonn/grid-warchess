@@ -391,11 +391,42 @@ function stepOffSpawn(
 }
 
 /** 造兵：钱够就在最近的一座城里造最便宜的兵。**不挑兵种**，先保证有兵 */
-export function recruitAction(s: GameState, world: World): Action | null {
+export function recruitAction(s: GameState, world: World, need?: { hp: number; atk: number }): Action | null {
   const gold = s.players[world.me]?.gold ?? 0;
   for (const info of world.cities) {
     if (info.role === 'threatened') continue; // 被压着的城造不出来
-    for (const opt of world.affordableCombat(info.city, gold)) {
+    const opts = world.affordableCombat(info.city, gold);
+    /*
+     * 先按**门槛**筛，再按价钱挑——顺序不能反。
+     *
+     * 反过来的话永远是"买得起的最便宜"（民兵），而民兵在装甲车面前一发都挨不住。
+     * 筛完空了就退回"攻击最高的"（打不穿也总比完全不还手强），再空就退回原样。
+     */
+    const ok = need
+      ? opts.filter((o) => {
+          const d = utype(s, o.type);
+          return (d.maxHp ?? 0) > need.hp && (d.atk ?? 0) * 3 >= need.atk * 3;
+        })
+      : [];
+    /*
+     * 满足门槛之后：**先挑射程远的**（先手权），射程一样再挑便宜的。
+     *
+     * S-012 实测：都满足两条不等式的弩手（射程 3）和火枪（射程 4），
+     * 从便宜的挑会选弩手——和装甲车（射程 3）对射，谁先手全看站位。
+     * 射程 4 的火枪能站着不动先打一轮，这才是"编制"里该有的那一条。
+     */
+    const order = (a: { type: string }, b: { type: string }): number => {
+      const da = utype(s, a.type);
+      const db = utype(s, b.type);
+      return ((db.range ?? 1) - (da.range ?? 1)) || 0;
+    };
+    const pick =
+      ok.length > 0
+        ? [...ok].sort(order)
+        : need
+          ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
+          : opts;
+    for (const opt of pick) {
       const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: opt.type };
       const r = applyAction(s, a);
       if (r.ok) return a;

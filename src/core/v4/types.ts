@@ -48,6 +48,15 @@ export interface Squad {
   cityId?: string;
   /** 目标人数：按目标城守军算，成立时定下，之后不因伤亡而缩（见 V4Memory.squad） */
   want?: number;
+  /**
+   * 采购的**门槛**（约束）：要造什么样的兵。挂在约束层（不是某支队）——
+   * 守城时同样要按对面的构成配兵，而守城时根本没有 `main` 队。
+   *
+   * 两条不等式，都从"目标城的守军"算出来，不是偏好、不是权重：
+   *   · `hp`：能挨住对面一发（`hp > 敌方单发攻击`）——挨不住就等于白送；
+   *   · `atk`：能在三发内打穿（`atk × 3 ≥ 敌方血量`）——打不穿等于没来。
+   * 满足这两条的里面挑最便宜的（一把尺子：金）。
+   */
   /** 分路：本队拆成几条走廊（路数由地形宽度决定，见 constrain.planLanes） */
   lanes?: Array<{ x: number; y: number }>;
   /** 每个单位走第几条路 */
@@ -74,6 +83,8 @@ export interface Squad {
  * 在 v4 里"这几格必须空"是一个约束，打分层只许照做，不许权衡。
  */
 export interface Constraints {
+  /** 采购门槛：要造"挨得住一发、三发能打穿"的兵（从对面构成算，见 constrain） */
+  need?: { hp: number; atk: number };
   /** 必须空出来的格子（产兵格、城门口）。打分层发现自家单位站着，第一件事就是把它挪开 */
   keepClear: number[];
   squads: Squad[];

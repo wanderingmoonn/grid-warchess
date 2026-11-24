@@ -310,6 +310,11 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      * （v3 的注释：敌方一个兵都看不见时比值反而最大，越是空城越要凑满编）。
      */
     const guard = world.foeCombat.filter((u) => cheb(u, city) <= 6);
+    /*
+     * 采购门槛：从守军身上读出"要造什么样的兵"。
+     * 挨不住一发（hp ≤ 敌方单发）的兵是白送；三发打不穿的兵是白来。
+     */
+
     const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
     const avg = ids.length > 0
       ? ids.reduce((n, id) => {
@@ -391,7 +396,30 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const forbid: string[] = [];
   if (decision.kind === 'press') forbid.push('DISBAND');
 
-  return { keepClear, squads, yieldMoves: planYield(s, world, keepClear, squads), forbid };
+  /*
+   * 采购门槛：从**看得见的敌军**里读（不限于某一座城的守军）。
+   *
+   * 两条不等式：挨得住一发（hp > 对面最高单发）、三发能打穿（3×atk ≥ 对面最厚血）。
+   * 守城时也要用它——而守城时没有 `main` 队，所以这条挂在约束层、不挂在某支队上。
+   */
+  const foes = world.foeCombat;
+  /*
+   * 只在**人数不占优**时才讲"质量"。
+   *
+   * S-002 有 30 个兵打 12 个：数量本身就是答案，硬按"挨得住一发"筛会把
+   * 便宜的量产兵全筛掉（实测 S-002 从绿变红）。S-012 是 2~6 个打 3~4 个，
+   * 这时候再堆便宜兵就是白送。
+   */
+  const outnumbered = world.myCombat.length <= foes.length;
+  const need =
+    foes.length > 0 && outnumbered
+      ? {
+          hp: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).atk ?? 0), 0),
+          atk: Math.ceil(foes.reduce((n, u) => Math.max(n, u.hp), 0) / 3),
+        }
+      : undefined;
+
+  return { need, keepClear, squads, yieldMoves: planYield(s, world, keepClear, squads), forbid };
 }
 
 /** 这个单位属于哪支队（查表；没有任务 = undefined） */
