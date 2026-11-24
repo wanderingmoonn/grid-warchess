@@ -985,7 +985,46 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const threatened = world.cities.filter((info) =>
     world.foeCombat.some((u) => manhattan(u, info.city) <= 8),
   );
-  if (threatened.length >= 2 && rest.length >= threatened.length * 2) {
+  /*
+   * **接管废墟**（`decision.kind === 'takeover'`）：三件事一起定。
+   *
+   *   · clear：主力照打（走 march，路上遇敌就打），不攒钱——清场要花钱；
+   *   · save ：主力守住废墟附近（hold），采购上限压到"金币 − 重建费"；
+   *   · enter：从主力里挑**一个**兵走进城格，其余继续守。
+   */
+  let captureId: string | undefined;
+  let captureTarget: { x: number; y: number } | undefined;
+  let spendCap: number | undefined;
+  if (decision.kind === 'takeover' && city) {
+    const center = {
+      x: city.x + Math.floor((city.size ?? 2) / 2),
+      y: city.y + Math.floor((city.size ?? 2) / 2),
+    };
+    captureTarget = center;
+    const cost = world.ruinCost(city);
+    const gold = s.players[world.me]?.gold ?? 0;
+    if (decision.stage !== 'clear') spendCap = Math.max(0, gold - cost);
+    if (decision.stage === 'enter') {
+      /*
+       * 派**离废墟最近的那个**去，不派"最强/最贵"的。
+       * 走进废墟只看"能不能站进去 + 付不付得起"，谁去都一样；
+       * 最近的那个少走两步，被路上的炮打的机会也最少。
+       */
+      const field = world.stepsFrom(center);
+      const pick = [...rest].sort(
+        (a, b) =>
+          (field[a.y * s.w + a.x] ?? Infinity) - (field[b.y * s.w + b.x] ?? Infinity) ||
+          (a.id < b.id ? -1 : 1),
+      )[0];
+      if (pick) captureId = pick.id;
+    }
+    squads.push({
+      id: 'main',
+      order: decision.stage === 'clear' ? 'march' : 'hold',
+      unitIds: rest.filter((u) => u.id !== captureId).map((u) => u.id),
+      cityId: city.id,
+    });
+  } else if (threatened.length >= 2 && rest.length >= threatened.length * 2) {
     squads.push(...planMains(s, world, threatened.map((i) => i.city), rest.map((u) => u.id)));
   } else if (decision.kind === 'press' && city) {
     const ids = rest.map((u) => u.id);
@@ -1127,6 +1166,9 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
 
   return {
     need,
+    spendCap,
+    captureId,
+    captureTarget,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

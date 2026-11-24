@@ -12,7 +12,8 @@
  * `untilTurn` 是硬要求。没有期限的决定会悄悄变成常数，然后没人记得它是谁写的。
  */
 import type { World } from './world.ts';
-import type { Decision, V4Memory } from './types.ts';
+import type { City } from '../types.ts';
+import type { Decision, TakeoverStage, V4Memory } from './types.ts';
 import { utype } from '../rules.ts';
 import type { GameState } from '../types.ts';
 
@@ -44,6 +45,31 @@ export const DECIDE_HORIZON = 6;
  * 第一版只有三条规则，都很粗——这是**故意的**：先把"决定有期限、有理由、只有一个"
  * 这件事立住，细则靠题库一题一题长。v3 那六千行系数不抄。
  */
+/**
+ * **接管一座废墟**：先清场、再攒钱、最后入驻（见 `TakeoverStage`）。
+ *
+ * 为什么这件事要一个独立的决定：它的成功条件不是"把城打空"（那是 `press`），
+ * 而是"钱够了、并且有一个兵站进去"。挤进 `press` 会让"城血 0"被当成"打完了"——
+ * S-001 就是这么卡的：城打空后还在 press，继续造兵，把 248 金 rebuilding 费花光，
+ * 40 手都接管不了。
+ *
+ * 阶段是**每回合重算**的（不沿用）：它只依赖两件每回合都在变的事（敌人还在不在、
+ * 钱够不够），而且只会往一个方向走（clear → save → enter），不会抖。
+ */
+function takeoverDecision(s: GameState, world: World, ruin: City): Decision {
+  const threats = world.ruinThreats(ruin);
+  const cost = world.ruinCost(ruin);
+  const gold = s.players[world.me]?.gold ?? 0;
+  const stage: TakeoverStage = threats.length > 0 ? 'clear' : gold < cost ? 'save' : 'enter';
+  const why =
+    stage === 'clear'
+      ? `废墟还有 ${threats.length} 个单位能打到它，先清场`
+      : stage === 'save'
+        ? `城下清干净了，攒 ${cost} 金重建（现有 ${gold}）`
+        : `钱够了（${gold} ≥ ${cost}），派兵入驻`;
+  return { kind: 'takeover', stage, untilTurn: s.turn + DECIDE_HORIZON, cityId: ruin.id, reason: why };
+}
+
 export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   const horizon = DECIDE_HORIZON;
 
@@ -63,6 +89,12 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     const ratio = myStr / Math.max(1, foeStr);
     if (prev.kind === 'press') {
       const cityAlive = !!prev.cityId && world.foeCities.some((c) => c.id === prev.cityId);
+      /*
+       * **目标城已经成废墟 → 这不是"还在打"，是"该去接管了"。**
+       * 不转的话会一直按 press 造兵，把钱花光（S-001：城血 0 之后 40 手都没钱重建）。
+       */
+      const ruin = prev.cityId ? s.cities.find((c) => c.id === prev.cityId && c.ruined) : undefined;
+      if (ruin) return takeoverDecision(s, world, ruin);
       /* 打不动了就提前收手：兵力比跌破 1.0（原来是 1.25 才进） */
       if (cityAlive && ratio >= 1.0) {
         return { kind: 'press', untilTurn: prev.untilTurn, cityId: prev.cityId, reason: `${prev.reason}（沿用）` };
@@ -87,6 +119,27 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       cityId: worst.city.id,
       reason: `对面身价 ${Math.round(foeStr)} > 我 ${Math.round(myStr)}，${worst.city.id} 离敌军最近，先守`,
     };
+  }
+
+  /* 1.5) **有打空的城 → 接管它**（在"再打下一座"之前） */
+  if (world.ruins.length > 0) {
+    /*
+     * 只接管"手上这座"：要么是上一段 press 的目标，要么是身边最近的那座
+     * （部队已经推到城下，下一手就能进去）。远处的废墟先不碰——跑过去再被抢，
+     * 不如先把眼前的事办完。
+     */
+    const near = [...world.ruins].sort((a, b) => {
+      const da = Math.min(
+        ...world.myCombat.map((u) => world.marchTurns({ x: a.x, y: a.y }, { x: u.x, y: u.y })),
+        Infinity,
+      );
+      const db = Math.min(
+        ...world.myCombat.map((u) => world.marchTurns({ x: b.x, y: b.y }, { x: u.x, y: u.y })),
+        Infinity,
+      );
+      return da - db;
+    })[0];
+    if (near) return takeoverDecision(s, world, near);
   }
 
   /* 2) 我明显更强、且有敌城 → 推 */

@@ -85,6 +85,18 @@ export function actFor(
   }
 
   /*
+   * ①.4 **去接管废墟**（约束层指了人）。
+   *
+   * 排在走位前面：这是一条明确的差事（走进城格付重建费），
+   * 不能被"守住/推进"的走位盖掉。`stepToward` 用的场从废墟格出发，
+   * 废墟格本身在 `reachableTiles` 里是可达的（引擎对已废墟的城放行）。
+   */
+  if (con.captureId === u.id && con.captureTarget) {
+    const step = stepToward(s, u, con.captureTarget, false, world.stepsFrom(con.captureTarget));
+    if (step) return { type: 'MOVE', unitId: u.id, x: step.x, y: step.y };
+  }
+
+  /*
    * ①.5 **约束层已经排好了这一手站哪一格**（多起点 → 多终点，一人一格，见 `planMarch`）。
    *
    * 必须排在"让开"之前：整队 18 个兵都压在城圈（关键格）上时，
@@ -498,8 +510,19 @@ function stepOffSpawn(
 }
 
 /** 造兵：钱够就在最近的一座城里造最便宜的兵。**不挑兵种**，先保证有兵 */
-export function recruitAction(s: GameState, world: World, need?: { hp: number; atk: number }): Action | null {
-  const gold = s.players[world.me]?.gold ?? 0;
+/**
+ * 造战斗兵。
+ *
+ * `cap` 是**这一手最多能花多少**（接管废墟的攒钱阶段会把它压到"金币 − 重建费"）。
+ * 用"可用金币"而不是"买完再检查"：这样上层不用把每件装备的价格抄一遍。
+ */
+export function recruitAction(
+  s: GameState,
+  world: World,
+  need?: { hp: number; atk: number },
+  cap?: number,
+): Action | null {
+  const gold = Math.min(s.players[world.me]?.gold ?? 0, cap ?? Infinity);
   for (const info of world.cities) {
     if (info.role === 'threatened') continue; // 被压着的城造不出来
     const opts = world.affordableCombat(info.city, gold);

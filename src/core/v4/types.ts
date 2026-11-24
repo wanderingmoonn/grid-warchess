@@ -15,10 +15,24 @@
  */
 
 /** 决定层能做的三种事。**只有这三种**，想加第四种先证明前三种表达不了它 */
-export type DecisionKind = 'expand' | 'press' | 'defend';
+export type DecisionKind = 'expand' | 'press' | 'defend' | 'takeover';
+
+/**
+ * 接管废墟的三个子阶段。**顺序是硬的**：先清场，再攒钱，最后入驻。
+ *
+ *   · `clear`：废墟周围还有能威胁它的敌人 → 先打，不攒钱（该花就花）；
+ *   · `save`：干净了，但钱不够重建费 → 停止造兵，等金币攒够；
+ *   · `enter`：钱够了 → 派一个兵走进废墟。
+ *
+ * 为什么分三段而不是"一个接管分"：三段做的事完全不同（打仗 / 不花钱 / 走一格），
+ * 混成一个数就又会变成"该打还是该攒"的调参表。
+ */
+export type TakeoverStage = 'clear' | 'save' | 'enter';
 
 export interface Decision {
   kind: DecisionKind;
+  /** 只在 `takeover` 时有意义 */
+  stage?: TakeoverStage;
   /** 这个决定管到第几手为止。到了就重算——**不许"一直有效"**，那样它会悄悄变成常数 */
   untilTurn: number;
   /** 一句话说明为什么（进日志，出问题时第一眼看这个） */
@@ -123,6 +137,22 @@ export interface Constraints {
    * 退回自己的走位（`stepToward`），不要硬报。
    */
   steps?: Record<string, { x: number; y: number }>;
+  /**
+   * 接管废墟：**派谁去、走到哪一格**。
+   *
+   * 单独给，不进 `squads`：队伍任务是"守/推"，而接管是"走进城格付钱"，
+   * 后者不能被 `hold` 的"离城 2 格就停"截住（那正好停在他要进去的门口）。
+   */
+  captureId?: string;
+  captureTarget?: { x: number; y: number };
+  /**
+   * 这一手**最多能花多少金**（采购上限）。
+   *
+   * 只在接管废墟的"攒钱/入驻"阶段出现：钱里要留出 `ruinCost` 那笔，
+   * 不然会被一路造兵花光，走到废墟上又付不起（S-001 实测：248 金的重建费，
+   * 全程金币 60~193，一次都没够过）。
+   */
+  spendCap?: number;
   /** 采购门槛：要造"挨得住一发、三发能打穿"的兵（从对面构成算，见 constrain） */
   need?: { hp: number; atk: number };
   /** 必须空出来的格子（产兵格、城门口）。打分层发现自家单位站着，第一件事就是把它挪开 */

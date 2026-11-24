@@ -230,7 +230,16 @@ export function aiNextActionV4(
      * 这条是 S-015 逼出来的：v4 原来只会 `affordableCombat`，一个经济兵都不造，
      * 长局里经济 8 vs 对手 51，前期压着打、后期被拖死。
      */
-    const preferEcon = view.decision.kind === 'expand' || world.foeCombat.length === 0;
+    /*
+     * **攒钱接管废墟的时候，一个兵都不造**（连经济兵也不造）。
+     *
+     * 这里踩过一个坑：清场之后看不见敌人了，`foeCombat.length === 0` 让
+     * `preferEcon` 变成 true，于是每回合买经济兵——钱又漏光，40 手攒不到 248 的重建费
+     * （S-001 实测：金币在 4~111 之间来回，一次没够）。
+     * 重建费是一笔**确定的支出**，攒钱期任何采购都是在跟它抢。
+     */
+    const saving = view.decision.kind === 'takeover' && view.decision.stage !== 'clear';
+    const preferEcon = !saving && (view.decision.kind === 'expand' || world.foeCombat.length === 0);
     /*
      * **有需求才造兵**。看不见敌人、又在发展期时，攒钱是对的——
      * "有钱就造兵"是 v1 的病：S-015（一条没人烟的题）它花 367 金造了 5 个战斗兵，
@@ -249,9 +258,11 @@ export function aiNextActionV4(
      *
      * 现在：发展期才补经济；打仗期钱只买战斗兵，买不起就攒。
      */
-    const rec = preferEcon
-      ? recruitEcon(s, world, con) ?? (needArmy ? recruitAction(s, world, con.need) : null)
-      : recruitAction(s, world, con.need);
+    const rec = saving
+      ? null
+      : preferEcon
+        ? recruitEcon(s, world, con) ?? (needArmy ? recruitAction(s, world, con.need, con.spendCap) : null)
+        : recruitAction(s, world, con.need, con.spendCap);
     if (usable(rec)) {
       view.recruits += 1;
       return rec;

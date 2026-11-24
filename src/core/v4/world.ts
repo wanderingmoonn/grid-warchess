@@ -50,7 +50,7 @@
  * （引擎没有"交换两个人位置"这个动作）。
  */
 import { passable } from '../config.ts';
-import { effectiveStats, recruitSpawnCells, recruitPriceOf, unitYieldAt, utype } from '../rules.ts';
+import { cityTiles, effectiveStats, rebuildCost, recruitSpawnCells, recruitPriceOf, unitYieldAt, utype } from '../rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
 
 /** 一座城在这一局里的角色——**只有这一个口径** */
@@ -98,6 +98,25 @@ export interface World {
   cities: CityInfo[];
   myCities: City[];
   foeCities: City[];
+  /**
+   * **我方视野里的废墟**（`ruined` 的城）。接管它要付 `ruinCost`。
+   *
+   * 单独列出来，是因为"敌城"和"敌城的废墟"要办的事完全不同：
+   * 前者是打掉，后者是塞钱 + 走进去。混在 `foeCities` 里会让"城血 0"被当成"打完了"——
+   * S-001 就是这么卡的：城打空之后还在 press，继续造兵，把 248 金花光，永远接管不了。
+   */
+  ruins: City[];
+  /** 接管一座废墟要多少钱（引擎的 `rebuildCost`，纯函数，不拍数） */
+  ruinCost(city: City): number;
+  /**
+   * **能威胁到这座废墟的敌人**：这一步能走到废墟格边、并且打得到它。
+   *
+   * 用距离场 + 它自己的移动力/射程算，不是"半径 N 格"。
+   * 清场要清的就是这一批——清完它才敢站在那儿掏钱。
+   */
+  ruinThreats(city: City): Unit[];
+  /** 能走进废墟接管的兵：地面、活着、不是建筑 */
+  captureCandidates(): Unit[];
   /** 战斗 / 经济单位，按"离敌人由近到远"排好序（上层不用再排） */
   myCombat: Unit[];
   myEcon: Unit[];
@@ -509,6 +528,26 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       }
       return w;
     },
+    /*
+     * 废墟：只在**看得见**的城里找（`s` 已经是玩家视角裁过的 state）。
+     * 单独列出来，是因为"敌城"和"敌城的废墟"要办的事完全不同：
+     * 前者是打掉，后者是塞钱 + 走进去。
+     */
+    ruins: s.cities.filter((c) => c.ruined === true),
+    ruinCost: (city) => rebuildCost(city, s.config?.freeRebuild === true),
+    ruinThreats: (city) => {
+      const cells = cityTiles(city).map((t) => t.y * s.w + t.x);
+      if (cells.length === 0) return [];
+      /* 按格计步（不穿人）：敌人走到废墟边要几步 */
+      const field = distanceField(s, cells, { perTurn: 1 }).dist;
+      return foeCombat.filter((u) => {
+        const st = effectiveStats(s, u);
+        const reach = (st.move ?? 2) + (st.range ?? 1);
+        return (field[u.y * s.w + u.x] ?? Infinity) <= reach;
+      });
+    },
+    captureCandidates: () =>
+      myCombat.filter((u) => u.hp > 0 && utype(s, u.type).category !== 'building'),
     affordableCombat(city, gold) {
       const out: Array<{ type: string; gold: number }> = [];
       for (const def of Object.values(s.unitTypes)) {

@@ -132,7 +132,7 @@
     "state.tiles": 2
   },
   "src/core/v4/constrain.ts": {
-    "state.tiles": 3
+    "state.tiles": 4
   },
   "src/core/v4/tactics.ts": {
     "state.tiles": 1
