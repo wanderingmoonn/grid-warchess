@@ -1,0 +1,198 @@
+{
+  "me": "A",
+  "seed": 212,
+  "turns": [
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u2",
+        "x": 1,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u1",
+        "x": 1,
+        "y": 9
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "halberdier"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "halberdier"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 2,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 3,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 2,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 3,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u1",
+        "x": 1,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u2",
+        "x": 3,
+        "y": 10
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "mortar"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "mortar"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "mortar"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "mortar"
+      }
+    ],
+    [
+      {
+        "type": "ATTACK",
+        "unitId": "u12",
+        "targetId": "u3",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u12",
+        "targetId": "u5",
+        "x": 1,
+        "y": 7
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u11",
+        "targetId": "u5",
+        "x": 1,
+        "y": 7
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u6",
+        "targetId": "u5",
+        "x": 1,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 3,
+        "y": 7
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u7",
+        "targetId": "u5",
+        "x": 1,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u2",
+        "x": 3,
+        "y": 9
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u2",
+        "targetId": "u4",
+        "x": 5,
+        "y": 9
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "mortar"
+      }
+    ],
+    [
+      {
+        "type": "ATTACK",
+        "unitId": "u12",
+        "targetId": "u3",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u14",
+        "targetId": "u3",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 2,
+        "y": 9
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u11",
+        "targetId": "u3",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u7",
+        "targetId": "u3",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 3,
+        "y": 9
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u6",
+        "targetId": "u4",
+        "x": 5,
+        "y": 9
+      }
+    ]
+  ]
+}

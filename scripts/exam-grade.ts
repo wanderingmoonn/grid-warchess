@@ -290,11 +290,27 @@ let s = structuredClone(s0);
 capture(s);
 const cap = START + window;
 let meTurnIdx = 0;
+let bookWarned = false;
 while (!s.winner && s.turn < cap) {
   const who = s.current;
   const before = s.turn;
   if (book && who === ME) {
     const acts = book.turns?.[meTurnIdx] ?? [];
+    /*
+     * 答案用完了：后面全是我方空转。
+     *
+     * 这个坑很隐蔽——2026-11-24 用户 S-012 的回放只录了 3 个回合（判据要 12 手），
+     * 判分器照常算完，给出"我负、城归对方"，看起来像 AI 打不过，其实是**答案只有三分之一**。
+     * 所以这里记一笔，跑完明确告诉人"后面是空转"。
+     */
+    if (meTurnIdx >= (book.turns?.length ?? 0) && acts.length === 0 && !bookWarned) {
+      bookWarned = true;
+      const covered = meTurnIdx; /* 已经用掉的回合数 */
+      console.warn(
+        `\n⚠️ 答案只覆盖 ${covered} 个回合（约 ${covered * 2} 手），这一手之后**我方全程空转**。` +
+          `\n   判据要 ${window} 手。如果是导出早了，回放里后面的结果不作数。\n`,
+      );
+    }
     meTurnIdx += 1;
     s = answerTurn(s, acts);
   } else {

@@ -779,6 +779,14 @@ let replaySeeking = false;
  * 旧对象不会再被修改，留着引用是安全的，也省掉每步一次深拷贝。
  */
 let undoStack: GameState[] = [];
+/**
+ * 和 `undoStack` 一一对应的"动作日志长度".
+ *
+ * 撤销只恢复局面、不回退日志的话，被撤掉的那一步还留在日志里，
+ * 回放时同一个兵就会"一回合走两次"、被引擎拒——2026-11-24 用户 S-012 的回放
+ * 就是这么坏的（导出的动作里有 `该单位本回合已经移动过`）。
+ */
+let undoLogMarks: number[] = [];
 const UNDO_LIMIT = 30;
 
 /** 回合提示音的音量，存在 localStorage 里 */
@@ -4183,9 +4191,14 @@ function dispatch(action: Action): boolean {
     // 清空之后本回合继续走子照旧可撤，只是撤不回传送之前——够用，也不会让
     // 手滑一次就锁死整回合。
     undoStack = [];
+    undoLogMarks = [];
   } else {
     undoStack.push(state);
-    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    undoLogMarks.push(actionLog ? actionLog.length : -1);
+    if (undoStack.length > UNDO_LIMIT) {
+      undoStack.shift();
+      undoLogMarks.shift();
+    }
   }
   state = result.state;
   clearCombatPreview();
@@ -4226,6 +4239,7 @@ function dispatch(action: Action): boolean {
     clearActionFeedback();
     // 回合结束了，这个回合的走子就不许再撤——账已经结了
     undoStack = [];
+    undoLogMarks = [];
     clearSelection();
     render();
     if (room) {
@@ -4345,6 +4359,16 @@ function undoLast(): void {
     return;
   }
   state = prev;
+  /*
+   * **日志跟着退**。不退的话，被撤掉的动作还在里面，
+   * 导出给判分器时就是一个自相矛盾的序列（同一单位一回合走两次）。
+   */
+  const mark = undoLogMarks.pop();
+  if (actionLog && mark !== undefined && mark >= 0) {
+    actionLog.length = mark;
+    actionBytes = actionLog.reduce((n, a) => n + JSON.stringify(a).length + 1, 0);
+    actionDropped = 0;
+  }
   // 撤回来的这一步没有"刚刚打过"这回事：闪着的格子跟着一起撤掉
   dropHeatFlash();
   saveMatch(state);
@@ -5877,9 +5901,21 @@ function handleAction(act: string, el: HTMLElement): void {
         actions: steps,
       };
       const text = JSON.stringify(payload, null, 2);
+      /*
+       * 还没"结束回合"就导出 = 只导了一半。2026-11-24 用户 S-012 就是这么交的：
+       * 只录到第 3 个回合中间，判分器让后面全程空转，看起来像 AI 打不过。
+       */
+      const last = steps[steps.length - 1];
+      const midTurn = last !== undefined && last.type !== 'END_TURN';
       void navigator.clipboard
         ?.writeText(text)
-        .then(() => toast(`已复制 ${steps.length} 步动作到剪贴板`))
+        .then(() =>
+          toast(
+            midTurn
+              ? `已复制 ${steps.length} 步（注意：最后一步不是"结束回合"，这一手还没打完）`
+              : `已复制 ${steps.length} 步动作到剪贴板`,
+          ),
+        )
         .catch(() => window.prompt('复制下面的内容存成文件：', text));
       return;
     }
