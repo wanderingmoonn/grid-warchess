@@ -1525,7 +1525,7 @@ export function angledBoardMarker(board: HTMLElement, x: number, y: number, span
 }
 
 /** 从事件目标反推棋盘坐标 */
-export function coordsFromEvent(e: Event): { x: number; y: number } | null {
+export function coordsFromEvent(e: Event): { x: number; y: number; cityId?: string } | null {
   const target = e.target as HTMLElement | null;
   if (!target) return null;
   const node = target.closest<HTMLElement>('[data-x]');
@@ -1575,7 +1575,7 @@ export function cellAtPoint(
   board: HTMLElement,
   clientX: number,
   clientY: number,
-): { x: number; y: number } | null {
+): { x: number; y: number; cityId?: string } | null {
   if (board.classList.contains('has-angled-view')) return angledBoards.get(board)?.pick(clientX, clientY) ?? null;
   const tiles = board.querySelector<HTMLElement>('.tiles');
   if (!tiles) return null;

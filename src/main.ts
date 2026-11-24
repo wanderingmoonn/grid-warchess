@@ -4550,8 +4550,13 @@ function canRepeatSkill(unitId: string, skillId: string): boolean {
  * 而那段等待恰恰是最想点开对面那个兵、看看它射程几格、还剩多少血的时候。
  * 动词不用在这里挡：面板拿到的 myTurn 是假，产兵/升级/技能本来就是灰的。
  */
-function inspectAt(coords: { x: number; y: number } | null): void {
+function inspectAt(coords: { x: number; y: number; cityId?: string } | null): void {
   if (!coords) return;
+
+  if (coords.cityId) {
+    selectCity(coords.cityId);
+    return;
+  }
 
   const id = pickUnitId(coords, false);
   const u = id ? viewNow().state.units.find((x) => x.id === id) : undefined;
@@ -4923,7 +4928,7 @@ function onBoardClick(e: Event): void {
     return;
   }
 
-  const clickedUnitId = pickUnitId(coords, wantAttack);
+  const clickedUnitId = coords?.cityId ? null : pickUnitId(coords, wantAttack);
 
   // 1.2) 点在**可达的桥面**上：桥是"能站的地形"，不是一个等着被选中的物件。
   //
@@ -5162,6 +5167,12 @@ function onBoardClick(e: Event): void {
       x: coords.x,
       y: coords.y,
     });
+    return;
+  }
+
+  // 3.5) 明确点中斜俯视城市主体或 E1 铭牌（且未落在可达格/单位标上）→ 直接打开城市面板
+  if (coords.cityId && city) {
+    selectCity(city.id);
     return;
   }
 
