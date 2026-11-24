@@ -56,20 +56,14 @@ export function actFor(
   con: Constraints,
   u: Unit,
 ): Action | null {
-  const keep = new Set(con.keepClear);
-
   /*
    * ① 让开：站在"必须空"的格子上。
    *
    * **只约束没有理由待在那儿的单位**（经济兵、驻守兵）。正在推进的战斗单位要过桥，
    * 让它"让开"就等于不许过河——桥面那一格本来就是临时占用。
    */
-  const squadNow = squadOf(con, u);
-  const mustClearOnBridge = utype(s, u.type).category === 'economy' || squadNow?.order === 'hold';
-  if (keep.has(u.y * s.w + u.x) && mustClearOnBridge) {
-    const spot = stepToward(s, u, awayPoint(s, u, keep), keep);
-    if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
-  }
+  const yieldTo = con.yieldMoves.find((m) => m.unitId === u.id);
+  if (yieldTo) return { type: 'MOVE', unitId: u.id, x: yieldTo.x, y: yieldTo.y };
 
   /*
    * ①.5 召回：`hold` 队离城还远，就先走回去——**这一步排在打人之前**。
@@ -83,7 +77,7 @@ export function actFor(
     const home = s.cities.find((c) => c.id === sqNow.cityId);
     if (home && cheb(u, home) > 2) {
       const to = { x: home.x, y: home.y };
-      const spot = stepToward(s, u, to, keep);
+      const spot = stepToward(s, u, to);
       if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
     }
   }
@@ -122,7 +116,7 @@ export function actFor(
   const to = targetOf(s, sq);
   if (sq.order === 'hold' && to && cheb(u, to) <= 2) return null;
   if (!to) return null;
-  const spot = stepToward(s, u, to, keep);
+  const spot = stepToward(s, u, to);
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   return null;
 }
@@ -137,7 +131,6 @@ function stepToward(
   s: GameState,
   u: Unit,
   to: { x: number; y: number },
-  keep: Set<number>,
 ): { x: number; y: number } | null {
   const cur = cheb(u, to);
   let best: { x: number; y: number } | null = null;
@@ -145,40 +138,18 @@ function stepToward(
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
     const y = Math.floor(key / s.w);
-    if (keep.has(key) && !(x === to.x && y === to.y)) continue;
+    /*
+     * **允许踩 keepClear**（2026-11-24 改）。
+     *
+     * 关键格的语义是"不许停"，不是"不许过"。原来这里把 keepClear 当墙，
+     * 结果桥头一进 keepClear，全军就过不了河（S-005 从过河 3 个掉到 0）。
+     * "别停"由约束层的搬迁计划负责：停在上面的单位下一手会被挪开。
+     */
     if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
     const d = cheb({ x, y }, to);
     if (d < bestD) {
       bestD = d;
       best = { x, y };
-    }
-  }
-  return best;
-}
-
-/** 让开时往哪儿走：离 `from` 远一点、不在 keepClear 上的空格 */
-function awayPoint(
-  s: GameState,
-  u: Unit,
-  keep: Set<number>,
-): { x: number; y: number } {
-  let best: { x: number; y: number } = { x: u.x, y: u.y };
-  let bestScore = -Infinity;
-  for (let dy = -2; dy <= 2; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      const x = u.x + dx;
-      const y = u.y + dy;
-      if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
-      const k = y * s.w + x;
-      if (keep.has(k)) continue;
-      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-      const t = s.tiles[k]?.terrain;
-      if (!t || t === 'water' || t === 'deep' || t === 'mountain') continue;
-      const score = Math.abs(dx) + Math.abs(dy);
-      if (score > bestScore) {
-        bestScore = score;
-        best = { x, y };
-      }
     }
   }
   return best;

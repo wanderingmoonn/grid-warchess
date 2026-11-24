@@ -9,6 +9,7 @@
  *
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
+import { passable } from '../config.ts';
 import { utype } from '../rules.ts';
 import type { GameState, Unit } from '../types.ts';
 import type { Constraints, Decision, Squad } from './types.ts';
@@ -35,6 +36,105 @@ function assemblePoint(s: GameState, world: World, cityId: string): { x: number;
     return p;
   }
   return undefined;
+}
+
+/**
+ * 让位搬迁计划（多源 BFS）——**思路抄 v3 的 `buildYieldPlan`，代码不抄**。
+ *
+ * 种子是**所有空格**（能站人的、非城格）。从它们向外扩，穿过自己人算一步
+ * （那个人得先让开），敌人和不可通行直接挡死。于是每格都知道了"离最近的洞几步"。
+ *
+ * 然后对每个被占的关键格：沿 `prev` 倒着走到洞，这条链上的人各朝洞挪一格。
+ * 好处是**一回合能清多格**——一个人挪开、后面的人依次递补，而不是一回合只挪一个。
+ *
+ * v3 那份还带着"谁更急"的分数（urgency）；这里不需要：关键格就是必须空，
+ * 不存在"先让哪一格"的问题——链式搬迁天然按距离排好了。
+ */
+function planYield(
+  s: GameState,
+  world: World,
+  keepClear: number[],
+  squads: Squad[],
+): Array<{ unitId: string; x: number; y: number }> {
+  if (keepClear.length === 0) return [];
+  const N = s.w * s.h;
+  const dist = new Int32Array(N).fill(-1);
+  const prev = new Int32Array(N).fill(-1);
+  const q: number[] = [];
+
+  for (let k = 0; k < N; k++) {
+    const t = s.tiles[k];
+    if (!t || t.terrain === 'city') continue;
+    if (s.units.some((u) => u.y * s.w + u.x === k)) continue;
+    if (!passable(t.terrain)) continue;
+    dist[k] = 0;
+    q.push(k);
+  }
+
+  /* 只往 6 格内扩：洞太远的话，链上的人这一手也走不完，没必要算 */
+  const MAX = 6;
+  for (let i = 0; i < q.length; i++) {
+    const k = q[i]!;
+    if (dist[k]! >= MAX) continue;
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+      const nk = ny * s.w + nx;
+      if (dist[nk]! >= 0) continue;
+      const t = s.tiles[nk];
+      if (!t || !passable(t.terrain)) continue;
+      const occ = s.units.find((u) => u.y * s.w + u.x === nk);
+      if (occ && occ.owner !== world.me) continue;
+      dist[nk] = dist[k]! + 1;
+      prev[nk] = k;
+      q.push(nk);
+    }
+  }
+
+  /*
+   * 推进/攻城的兵不算挡路：它们有理由待在那儿（正在过桥）。
+   * 只让"没事待着"的单位（经济兵、驻守兵）让开——否则过桥的兵会被自己的规则赶回去，
+   * 在桥上来回横跳。
+   */
+  const passing = new Set<string>();
+  for (const sq of squads) {
+    if (sq.order !== 'march' && sq.order !== 'siege') continue;
+    for (const id of sq.unitIds) passing.add(id);
+  }
+
+  const out: Array<{ unitId: string; x: number; y: number }> = [];
+  const usedCells = new Set<number>();
+  const usedUnits = new Set<string>();
+
+  for (const cell of keepClear) {
+    /* 关键格自己得是被自己人占着的，否则没什么可让 */
+    const blocker = s.units.find((u) => u.y * s.w + u.x === cell && u.owner === world.me);
+    if (!blocker || usedUnits.has(blocker.id) || passing.has(blocker.id)) continue;
+    let k = cell;
+    /* 沿 prev 往洞的方向倒着走；到不了洞（-1）就算了，这一手不硬挪 */
+    const chain: number[] = [];
+    let guard = 0;
+    while (dist[k]! > 0 && guard++ < 12) {
+      k = prev[k]!;
+      if (k < 0) break;
+      chain.push(k);
+    }
+    if (chain.length === 0) continue;
+    /* 链上第一个空位就是这一手的目标；链上每个单位挪到它前一个的位置（倒序） */
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const to = chain[i]!;
+      const from = i === 0 ? cell : chain[i - 1]!;
+      const u = s.units.find((v) => v.y * s.w + v.x === from && v.owner === world.me);
+      if (!u || usedUnits.has(u.id) || usedCells.has(to)) continue;
+      usedUnits.add(u.id);
+      usedCells.add(to);
+      out.push({ unitId: u.id, x: to % s.w, y: Math.floor(to / s.w) });
+    }
+  }
+  return out;
 }
 
 /**
@@ -92,7 +192,7 @@ export function constrain(s: GameState, world: World, decision: Decision): Const
   const forbid: string[] = [];
   if (decision.kind === 'press') forbid.push('DISBAND');
 
-  return { keepClear, squads, forbid };
+  return { keepClear, squads, yieldMoves: planYield(s, world, keepClear, squads), forbid };
 }
 
 /** 这个单位属于哪支队（查表；没有任务 = undefined） */
