@@ -3409,62 +3409,148 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * + 拔地而起的斜切全玻璃幕墙摩天大楼 + 阶梯金融中心 H 停机坪 + 太阳能光伏现代展馆」，
    * 轻盈高耸的蔚蓝现代天际线，与二战敦实重工业时代五及军绿装甲时代七形成三足鼎立的视觉差分。
    */
-  function paintCityInfo(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+  function paintCityInfo(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
     // 1. 现代整洁银灰底座 + 斜向城市绿地广场与深灰环道
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.2, '#dde5eb', '#8c9ca8', '#b1c0cb', '#54667477');
-    polygon(ctx, [pt(0.04, 0.04, 4.25), pt(0.96, 0.04, 4.25), pt(0.96, 0.96, 4.25), pt(0.04, 0.96, 4.25)], '#e7eef3');
-    // 斜穿广场的现代沥青景观大道（非传统十字格，打破千城一面）
-    polygon(ctx, [pt(0.04, 0.68, 4.3), pt(0.68, 0.04, 4.3), pt(0.84, 0.04, 4.3), pt(0.04, 0.84, 4.3)], '#54606b');
-    strokeLine(ctx, pt(0.07, 0.75, 4.35), pt(0.75, 0.07, 4.35), '#edf3f799', 0.85);
-    // 左前开阔翡翠市民绿地公园（现代都市花园特征）
-    polygon(ctx, [pt(0.06, 0.84, 4.35), pt(0.54, 0.36, 4.35), pt(0.56, 0.86, 4.35), pt(0.14, 0.92, 4.35)], '#7bb467');
-    const drawUrbanTree = (u: number, v: number, r = 2.9): void => {
+    const baseTop = stage >= 3 ? '#b5bec6' : stage === 2 ? '#c8d1d8' : '#dde5eb';
+    const baseR = stage >= 3 ? '#6f7d88' : stage === 2 ? '#7d8c98' : '#8c9ca8';
+    const baseL = stage >= 3 ? '#8d9ba6' : stage === 2 ? '#9facb7' : '#b1c0cb';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.2, baseTop, baseR, baseL, '#54667477');
+    polygon(ctx, [pt(0.04, 0.04, 4.25), pt(0.96, 0.04, 4.25), pt(0.96, 0.96, 4.25), pt(0.04, 0.96, 4.25)], stage >= 3 ? '#bcc5cc' : stage === 2 ? '#d2dbe2' : '#e7eef3');
+    // 斜穿广场的现代沥青景观大道
+    polygon(ctx, [pt(0.04, 0.68, 4.3), pt(0.68, 0.04, 4.3), pt(0.84, 0.04, 4.3), pt(0.04, 0.84, 4.3)], stage >= 3 ? '#465058' : '#54606b');
+    if (stage <= 1) {
+      strokeLine(ctx, pt(0.07, 0.75, 4.35), pt(0.75, 0.07, 4.35), '#edf3f799', 0.85);
+    } else {
+      strokeLine(ctx, pt(0.07, 0.75, 4.35), pt(0.32, 0.50, 4.35), '#cfd8df66', 0.8);
+      strokeLine(ctx, pt(0.54, 0.28, 4.35), pt(0.75, 0.07, 4.35), '#cfd8df66', 0.8);
+    }
+    // 左前开阔市民绿地公园（随受损由翡翠绿转枯褐焦土）
+    const parkCol = stage >= 3 ? '#6e6a59' : stage === 2 ? '#8b8a63' : stage === 1 ? '#7ca765' : '#7bb467';
+    polygon(ctx, [pt(0.06, 0.84, 4.35), pt(0.54, 0.36, 4.35), pt(0.56, 0.86, 4.35), pt(0.14, 0.92, 4.35)], parkCol);
+    const drawUrbanTree = (u: number, v: number, r = 2.9, dead = false): void => {
       const [tx, ty] = pt(u, v, 4.65);
       ctx.fillStyle = '#3c623444';
       ctx.beginPath();
       ctx.ellipse(tx + 0.8, ty + 0.9, r * 1.05, r * 0.6, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#4e8045';
+      ctx.fillStyle = dead ? '#5e5645' : '#4e8045';
       ctx.beginPath();
       ctx.arc(tx, ty - r * 0.45, r, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#7ec06a';
+      ctx.fillStyle = dead ? '#82775f' : '#7ec06a';
       ctx.beginPath();
       ctx.arc(tx - r * 0.24, ty - r * 0.65, r * 0.72, 0, Math.PI * 2);
       ctx.fill();
     };
-    drawUrbanTree(0.16, 0.84, 2.8);
-    drawUrbanTree(0.28, 0.76, 2.5);
-    drawUrbanTree(0.42, 0.84, 2.7);
+    if (stage === 0) {
+      drawUrbanTree(0.16, 0.84, 2.8);
+      drawUrbanTree(0.28, 0.76, 2.5);
+      drawUrbanTree(0.42, 0.84, 2.7);
+    } else if (stage === 1) {
+      drawUrbanTree(0.16, 0.84, 2.8);
+      drawUrbanTree(0.28, 0.76, 2.3, true);
+      drawUrbanTree(0.42, 0.84, 2.7);
+      isoScorch(ctx, pt, 0.36, 0.56, 4.38, 4.6, 2.6, 0.32);
+    } else if (stage === 2) {
+      drawUrbanTree(0.16, 0.84, 2.4, true);
+      isoScorch(ctx, pt, 0.34, 0.72, 4.38, 6.2, 3.4, 0.46);
+    }
 
-    // 2. 西北标志性「现代都市广播电视观光塔」（纤细银白塔身 + 晶蓝球形观景舱 + 发射针，21世纪都市灵魂剪影）
-    isoCylinder(ctx, pt, 0.22, 0.22, 0.12, 0.08, 4.3, 8.6, '#eef3f7', '#cad5de', '#9aaab6', '#f4f8fb', '#5b6f7e66');
-    isoCylinder(ctx, pt, 0.22, 0.22, 0.055, 0.042, 8.6, 27.5, '#f2f6f9', '#d2dce4', '#a1b1be', '#ffffff', '#5b6f7e55');
+    if (stage === 3) {
+      // 废墟：保留现代银灰底座、裂开斜向大道、炸断广播电视塔柱与坠地碎蓝球、低矮玻璃钢骨摩天楼残基、破损 H 停机坪
+      isoScorch(ctx, pt, 0.52, 0.28, 4.38, 9.8, 5.4, 0.56);
+      isoScorch(ctx, pt, 0.76, 0.60, 4.38, 8.6, 4.6, 0.52);
+      isoScorch(ctx, pt, 0.26, 0.76, 4.38, 7.2, 4.0, 0.50);
+      isoCrack(ctx, pt, [[0.14, 0.66, 4.38], [0.46, 0.38, 4.38], [0.68, 0.16, 4.38]], '#283038aa', 1.0);
+      // 标志性遗迹 1：轰断的银白广播电视塔残柱 + 滚落碎裂的蓝玻璃球观景舱
+      isoCylinder(ctx, pt, 0.22, 0.22, 0.12, 0.08, 4.3, 8.4, '#c7d0d8', '#9eaab4', '#75838f', '#d5dee5', '#4c5d6b77');
+      isoCylinder(ctx, pt, 0.22, 0.22, 0.055, 0.048, 8.4, 15.2, '#cfd8df', '#a5b2bc', '#7c8a96', '#3c454d', '#4c5d6b77');
+      // 倒地碎裂的蓝玻璃球舱与弯折天线
+      const [bx, by] = pt(0.32, 0.36, 5.4);
+      ctx.fillStyle = '#3c6e8f';
+      ctx.beginPath();
+      ctx.arc(bx, by, 3.8, 0.15, Math.PI * 1.65);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#74b3d4';
+      ctx.beginPath();
+      ctx.arc(bx - 0.8, by - 0.7, 2.0, 0.3, Math.PI * 1.4);
+      ctx.fill();
+      strokeLine(ctx, pt(0.34, 0.38, 5.6), pt(0.46, 0.48, 4.6), '#7b8a96', 1.15);
+      // 标志性遗迹 2：玻璃摩天主大厦残基（仅余底层 3 层暗碎幕墙 + 裸露弯曲银灰钢柱）
+      isoBox(ctx, pt, 0.40, 0.12, 0.67, 0.39, 4.3, 10.6, '#465562', '#355f7e', '#4f83a8', '#c0d4e2aa');
+      strokeLine(ctx, pt(0.40, 0.39, 7.6), pt(0.67, 0.39, 7.6), '#b8d0e088', 0.7);
+      strokeLine(ctx, pt(0.42, 0.14, 10.6), pt(0.43, 0.15, 14.4), '#8fa2b0', 1.1);
+      strokeLine(ctx, pt(0.65, 0.14, 10.6), pt(0.63, 0.16, 13.4), '#8fa2b0', 1.0);
+      strokeLine(ctx, pt(0.42, 0.37, 10.6), pt(0.48, 0.34, 12.8), '#6b7e8c', 0.95);
+      // 标志性遗迹 3：东侧金融中心残楼与熏黑裂开的半个 H 停机坪
+      isoBox(ctx, pt, 0.65, 0.44, 0.92, 0.71, 4.3, 9.2, '#b4c0ca', '#476e8c', '#6390b2', '#cfdce6aa');
+      const [hx, hy] = pt(0.785, 0.57, 9.35);
+      ctx.fillStyle = '#3f4a53';
+      ctx.beginPath();
+      ctx.ellipse(hx, hy, 4.5, 2.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      strokeLine(ctx, [hx - 1.5, hy - 0.9], [hx - 1.5, hy + 0.9], '#cfd8dfaa', 0.85);
+      strokeLine(ctx, [hx - 1.5, hy], [hx + 1.1, hy], '#cfd8dfaa', 0.75);
+      // 碎晶蓝玻璃瓦砾与破碎深蓝光伏板残片
+      isoRubble(ctx, pt, 0.54, 0.52, 4.35, 0.055, '#68a2c8', '#38688a', '#4f84a8');
+      isoRubble(ctx, pt, 0.70, 0.82, 4.35, 0.068, '#2b4a70', '#1c324d', '#243f60');
+      isoRubble(ctx, pt, 0.80, 0.84, 4.35, 0.05, '#b6c1ca', '#75838f', '#95a3ae');
+      return;
+    }
+
+    // 2. 西北标志性「现代都市广播电视观光塔」（受损微弯裂球，重创断针碎球冒黑烟）
+    isoCylinder(ctx, pt, 0.22, 0.22, 0.12, 0.08, 4.3, 8.6, stage === 2 ? '#d6dfe6' : '#eef3f7', stage === 2 ? '#b4c0ca' : '#cad5de', '#9aaab6', '#f4f8fb', '#5b6f7e66');
+    isoCylinder(ctx, pt, 0.22, 0.22, 0.055, 0.042, 8.6, stage === 2 ? 24.5 : 27.5, stage === 2 ? '#dce4eb' : '#f2f6f9', '#d2dce4', '#a1b1be', '#ffffff', '#5b6f7e55');
     // 标志性悬浮玻璃观景球舱
-    const [px, py] = pt(0.22, 0.22, 23.0);
-    ctx.fillStyle = '#5da9d4';
+    const [px, py] = pt(0.22, 0.22, stage === 2 ? 21.0 : 23.0);
+    ctx.fillStyle = stage === 2 ? '#427594' : '#5da9d4';
     ctx.beginPath();
     ctx.arc(px, py, 4.8, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#a2e2f8';
+    ctx.fillStyle = stage === 2 ? '#6ea6c4' : '#a2e2f8';
     ctx.beginPath();
-    ctx.arc(px - 1.0, py - 1.1, 3.2, 0, Math.PI * 2);
+    ctx.arc(px - 1.0, py - 1.1, stage === 2 ? 2.4 : 3.2, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#f2f8fb';
+    if (stage >= 1) {
+      // 球舱表面暗裂与熏黑缺口
+      polygon(ctx, [[px + 0.4, py - 2.6], [px + 4.0, py - 0.8], [px + 3.2, py + 2.6], [px + 0.2, py + 0.8]], '#28323a');
+    }
+    ctx.strokeStyle = stage === 2 ? '#b8c6d0' : '#f2f8fb';
     ctx.lineWidth = 1.0;
     ctx.beginPath();
     ctx.ellipse(px, py + 0.4, 5.4, 2.1, 0, 0, Math.PI * 2);
     ctx.stroke();
-    // 电视塔高耸发射天线针 + 航空警示灯
-    const tvTop = pt(0.22, 0.22, 39.2);
-    strokeLine(ctx, pt(0.22, 0.22, 27.5), tvTop, '#d7e2ea', 1.4);
-    strokeLine(ctx, pt(0.22, 0.22, 27.5), tvTop, '#637a8c88', 0.6);
-    ctx.fillStyle = teamCol;
-    ctx.beginPath();
-    ctx.arc(tvTop[0], tvTop[1], 1.4, 0, Math.PI * 2);
-    ctx.fill();
+    // 电视塔发射天线针
+    if (stage === 0) {
+      const tvTop = pt(0.22, 0.22, 39.2);
+      strokeLine(ctx, pt(0.22, 0.22, 27.5), tvTop, '#d7e2ea', 1.4);
+      strokeLine(ctx, pt(0.22, 0.22, 27.5), tvTop, '#637a8c88', 0.6);
+      ctx.fillStyle = teamCol;
+      ctx.beginPath();
+      ctx.arc(tvTop[0], tvTop[1], 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (stage === 1) {
+      // 受损：天线微弯
+      const tvTop = pt(0.25, 0.23, 37.8);
+      strokeLine(ctx, pt(0.22, 0.22, 27.5), tvTop, '#cad6df', 1.3);
+      ctx.fillStyle = teamCol;
+      ctx.beginPath();
+      ctx.arc(tvTop[0], tvTop[1], 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // 重创：天线拦腰折断并冒黑烟
+      strokeLine(ctx, pt(0.22, 0.22, 24.5), pt(0.27, 0.25, 29.8), '#9fb0bd', 1.2);
+      isoSmoke(ctx, pt, 0.24, 0.23, 22.8, 0.82, true);
+    }
 
-    // 3. 中央偏北：拔地而起的「现代斜切晶蓝摩天主大厦」（高耸收分全玻璃幕墙 + 银白钢骨）
+    // 3. 中央偏北：现代斜切晶蓝摩天主大厦
     const drawSkyscraper = (u0: number, v0: number, u1: number, v1: number, z0: number, z1: number, slant: number): void => {
       const bNE = pt(u1, v0, z0);
       const bSE = pt(u1, v1, z0);
@@ -3473,61 +3559,95 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       const tNE = pt(u1, v0, z1 + slant * 0.45);
       const tSE = pt(u1, v1, z1);
       const tSW = pt(u0, v1, z1 + slant * 0.45);
-      // 蔚蓝现代玻璃幕墙
-      polygon(ctx, [tNE, tSE, bSE, bNE], '#3d82b3', '#e6f2f8cc', 0.85);
-      polygon(ctx, [tSW, tSE, bSE, bSW], '#65b0df', '#eff7fccc', 0.85);
-      // 天空对角镜面反光带
-      polygon(ctx, [
-        pt(u0 + (u1 - u0) * 0.10, v1, z0 + (z1 - z0) * 0.82),
-        pt(u0 + (u1 - u0) * 0.45, v1, z0 + (z1 - z0) * 0.94),
-        pt(u0 + (u1 - u0) * 0.84, v1, z0 + (z1 - z0) * 0.28),
-        pt(u0 + (u1 - u0) * 0.48, v1, z0 + (z1 - z0) * 0.16),
-      ], 'rgba(220,246,255,0.34)');
-      // 精致银白玻璃幕墙层间横框
+      polygon(ctx, [tNE, tSE, bSE, bNE], stage === 2 ? '#31648a' : '#3d82b3', '#e6f2f8cc', 0.85);
+      polygon(ctx, [tSW, tSE, bSE, bSW], stage === 2 ? '#4d8bb5' : '#65b0df', '#eff7fccc', 0.85);
+      if (stage <= 1) {
+        polygon(ctx, [
+          pt(u0 + (u1 - u0) * 0.10, v1, z0 + (z1 - z0) * 0.82),
+          pt(u0 + (u1 - u0) * 0.45, v1, z0 + (z1 - z0) * 0.94),
+          pt(u0 + (u1 - u0) * 0.84, v1, z0 + (z1 - z0) * 0.28),
+          pt(u0 + (u1 - u0) * 0.48, v1, z0 + (z1 - z0) * 0.16),
+        ], stage === 1 ? 'rgba(220,246,255,0.22)' : 'rgba(220,246,255,0.34)');
+      }
       const floors = Math.max(3, Math.floor((z1 - z0) / 4.4));
       for (let f = 1; f < floors; f++) {
         const zf = z0 + ((z1 - z0) * f) / floors;
         strokeLine(ctx, pt(u0, v1, zf), pt(u1, v1, zf), '#e6f4fcaa', 0.7);
         strokeLine(ctx, pt(u1, v0, zf), pt(u1, v1, zf), '#c4dff088', 0.65);
       }
-      // 斜切天窗玻璃顶
-      polygon(ctx, [tNW, tNE, tSE, tSW], '#a8e0f7', '#f5fafe', 1.0);
+      polygon(ctx, [tNW, tNE, tSE, tSW], stage === 2 ? '#435361' : '#a8e0f7', '#f5fafe', 1.0);
     };
 
-    drawSkyscraper(0.39, 0.11, 0.67, 0.39, 4.3, 28.5, 6.2);
-    // 摩天楼顶阵营光饰条 + 通讯双针
-    strokeLine(ctx, pt(0.39, 0.39, 28.0), pt(0.67, 0.39, 28.0), teamCol, 1.6);
-    strokeLine(ctx, pt(0.46, 0.18, 33.4), pt(0.46, 0.18, 38.0), '#7a95aa', 1.0);
+    const skyH = stage === 2 ? 21.8 : 28.5;
+    const skySlant = stage === 2 ? 2.4 : 6.2;
+    drawSkyscraper(0.39, 0.11, 0.67, 0.39, 4.3, skyH, skySlant);
+    if (stage === 0) {
+      strokeLine(ctx, pt(0.39, 0.39, 28.0), pt(0.67, 0.39, 28.0), teamCol, 1.6);
+      strokeLine(ctx, pt(0.46, 0.18, 33.4), pt(0.46, 0.18, 38.0), '#7a95aa', 1.0);
+    } else if (stage === 1) {
+      strokeLine(ctx, pt(0.39, 0.39, 28.0), pt(0.67, 0.39, 28.0), teamCol, 1.5);
+      strokeLine(ctx, pt(0.46, 0.18, 33.4), pt(0.46, 0.18, 37.6), '#7a95aa', 0.95);
+      // 受损：玻璃幕墙中上部暗碎破口 + 斜裂纹
+      polygon(ctx, [pt(0.48, 0.392, 18.2), pt(0.62, 0.392, 18.2), pt(0.62, 0.392, 23.4), pt(0.48, 0.392, 23.4)], '#263038');
+      strokeLine(ctx, pt(0.48, 0.393, 20.8), pt(0.62, 0.393, 20.8), '#9fb6c7', 0.75);
+      isoCrack(ctx, pt, [[0.52, 0.393, 18.2], [0.49, 0.393, 14.0], [0.55, 0.393, 10.2]], '#1e2830cc', 0.9);
+    } else {
+      // 重创：楼顶轰塌外露钢骨 + 大面积暗碎玻璃窗 + 燃火浓黑烟
+      polygon(ctx, [pt(0.44, 0.392, 11.4), pt(0.63, 0.392, 11.4), pt(0.63, 0.392, 18.6), pt(0.44, 0.392, 18.6)], '#212930');
+      polygon(ctx, [pt(0.672, 0.16, 13.0), pt(0.672, 0.34, 13.0), pt(0.672, 0.34, 20.4), pt(0.672, 0.16, 20.4)], '#1d242b');
+      strokeLine(ctx, pt(0.44, 0.15, 24.0), pt(0.45, 0.16, 28.6), '#93a6b5', 1.1);
+      strokeLine(ctx, pt(0.64, 0.16, 23.0), pt(0.61, 0.22, 27.4), '#8598a8', 1.0);
+      isoFire(ctx, pt, 0.55, 0.28, 22.8, 1.05);
+      isoFire(ctx, pt, 0.54, 0.39, 15.6, 0.78);
+    }
 
     // 4. 东侧阶梯现代金融中心 + 屋顶白色 H 停机坪
-    isoBox(ctx, pt, 0.64, 0.42, 0.93, 0.72, 4.3, 17.2, '#e6eef4', '#508fb9', '#77bbe3', '#eef6facc');
+    const finH = stage === 2 ? 13.4 : 17.2;
+    isoBox(ctx, pt, 0.64, 0.42, 0.93, 0.72, 4.3, finH, stage === 2 ? '#c4cfd8' : '#e6eef4', stage === 2 ? '#417396' : '#508fb9', stage === 2 ? '#5e96ba' : '#77bbe3', '#eef6facc');
     for (const z of [8.2, 11.8, 15.0]) {
+      if (z >= finH - 0.8) continue;
       strokeLine(ctx, pt(0.64, 0.72, z), pt(0.93, 0.72, z), '#eef7fcaa', 0.7);
       strokeLine(ctx, pt(0.93, 0.42, z), pt(0.93, 0.72, z), '#cbe3f288', 0.65);
     }
-    // 屋顶现代停机坪（深灰圆垫 + 白色 H）
-    const [hx, hy] = pt(0.785, 0.57, 17.35);
-    ctx.fillStyle = '#53626e';
+    const [hx, hy] = pt(0.785, 0.57, finH + 0.15);
+    ctx.fillStyle = stage === 2 ? '#3c4750' : '#53626e';
     ctx.beginPath();
     ctx.ellipse(hx, hy, 5.2, 3.0, 0, 0, Math.PI * 2);
     ctx.fill();
     strokeLine(ctx, [hx - 1.7, hy - 1.1], [hx - 1.7, hy + 1.1], '#f4f9fc', 0.95);
-    strokeLine(ctx, [hx + 1.7, hy - 1.1], [hx + 1.7, hy + 1.1], '#f4f9fc', 0.95);
-    strokeLine(ctx, [hx - 1.7, hy], [hx + 1.7, hy], '#f4f9fc', 0.85);
-
-    // 5. 东南现代流线科技会展中心 + 屋顶深蓝太阳能光伏板
-    isoBox(ctx, pt, 0.54, 0.74, 0.88, 0.93, 4.3, 10.6, '#eef4f8', '#609dc4', '#86c6e8', '#f4f9fcaa');
-    for (const su of [0.58, 0.72]) {
-      polygon(ctx, [
-        pt(su, 0.78, 10.8),
-        pt(su + 0.11, 0.78, 10.8),
-        pt(su + 0.11, 0.89, 10.8),
-        pt(su, 0.89, 10.8),
-      ], '#264b78', '#a3d0f2aa', 0.65);
+    if (stage <= 1) {
+      strokeLine(ctx, [hx + 1.7, hy - 1.1], [hx + 1.7, hy + 1.1], '#f4f9fc', 0.95);
+      strokeLine(ctx, [hx - 1.7, hy], [hx + 1.7, hy], '#f4f9fc', 0.85);
+      if (stage === 1) isoScorch(ctx, pt, 0.83, 0.60, finH + 0.25, 3.2, 1.8, 0.45);
+    } else {
+      isoScorch(ctx, pt, 0.80, 0.58, finH + 0.25, 4.6, 2.5, 0.58);
+      isoFire(ctx, pt, 0.82, 0.58, finH + 0.4, 0.85);
     }
 
-    // 6. 摩天主楼阵营旗
-    isoBanner(ctx, pt, 0.54, 0.22, 31.8, 5.2, teamCol, lightCol, true);
+    // 5. 东南现代流线科技会展中心 + 屋顶深蓝太阳能光伏板
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.54, 0.74, 0.88, 0.93, 4.3, 10.6, '#eef4f8', '#609dc4', '#86c6e8', '#f4f9fcaa');
+      for (const [si, su] of ([0.58, 0.72] as const).entries()) {
+        polygon(ctx, [
+          pt(su, 0.78, 10.8),
+          pt(su + 0.11, 0.78, 10.8),
+          pt(su + 0.11, 0.89, 10.8),
+          pt(su, 0.89, 10.8),
+        ], stage === 1 && si === 1 ? '#2a3440' : '#264b78', '#a3d0f2aa', 0.65);
+      }
+      if (stage === 1) isoRubble(ctx, pt, 0.50, 0.86, 4.35, 0.04, '#83b4d4', '#4d7a9a', '#6898b8');
+    } else {
+      isoBox(ctx, pt, 0.54, 0.74, 0.84, 0.92, 4.3, 7.8, '#5a6a76', '#4a7a9c', '#6397bb', '#c8dbe8aa');
+      isoRubble(ctx, pt, 0.72, 0.83, 7.8, 0.048, '#284972', '#1b324e', '#223e60');
+    }
+
+    // 6. 摩天主楼阵营旗 + 烟雾
+    isoBanner(ctx, pt, 0.54, 0.22, stage === 2 ? 23.6 : 31.8, 5.2, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.56, 0.38, 22.8, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.55, 0.28, 26.0, 1.05, true);
+      isoSmoke(ctx, pt, 0.82, 0.58, 16.4, 0.85, true);
+    }
   }
 
   /**
@@ -3535,74 +3655,146 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 军绿钛灰六边形复合装甲甲板 + 重型斜壁八角防爆主堡（顶置双联炮塔）+ 标志性钢铁机甲龙门吊架 + 警示标线地堡，
    * 厚重硬核的军工堡垒剪影，与时代六晶莹玻璃和时代八纯白聚变穹顶彻底拉开视觉跨度。
    */
-  function paintCityArmor(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
-    // 1. 厚重六边形复合装甲底座甲板（还原 city-armor.webp 标志性六边形装甲板）
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.8, '#9aa89c', '#57645b', '#768579', '#323c3699');
-    polygon(ctx, [pt(0.05, 0.05, 5.85), pt(0.95, 0.05, 5.85), pt(0.95, 0.95, 5.85), pt(0.05, 0.95, 5.85)], '#8e9d91');
-    // 刻画六边形复合装甲板块拼接沟槽
-    const drawHexPlate = (cu: number, cv: number, r: number): void => {
+  function paintCityArmor(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
+    // 1. 厚重六边形复合装甲底座甲板（标志性六边形装甲板）
+    const baseTop = stage >= 3 ? '#7c887e' : stage === 2 ? '#8b988d' : '#9aa89c';
+    const baseR = stage >= 3 ? '#465149' : stage === 2 ? '#4f5b53' : '#57645b';
+    const baseL = stage >= 3 ? '#606d63' : stage === 2 ? '#6b796e' : '#768579';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.8, baseTop, baseR, baseL, '#323c3699');
+    polygon(ctx, [pt(0.05, 0.05, 5.85), pt(0.95, 0.05, 5.85), pt(0.95, 0.95, 5.85), pt(0.05, 0.95, 5.85)], stage >= 3 ? '#727f75' : stage === 2 ? '#808e83' : '#8e9d91');
+    const drawHexPlate = (cu: number, cv: number, r: number, charred = false): void => {
       const hex: Point[] = [];
       for (let i = 0; i < 6; i++) {
         const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
         hex.push(pt(cu + Math.cos(a) * r, cv + Math.sin(a) * r, 5.9));
       }
-      polygon(ctx, hex, '#a7b5a8', '#46544b88', 0.85);
+      polygon(ctx, hex, charred ? '#6c776e' : stage === 2 ? '#95a396' : '#a7b5a8', '#46544b88', 0.85);
     };
-    drawHexPlate(0.28, 0.28, 0.21);
-    drawHexPlate(0.73, 0.28, 0.21);
-    drawHexPlate(0.28, 0.73, 0.21);
-    drawHexPlate(0.73, 0.73, 0.21);
+    drawHexPlate(0.28, 0.28, 0.21, stage >= 3);
+    drawHexPlate(0.73, 0.28, 0.21, stage >= 2);
+    drawHexPlate(0.28, 0.73, 0.21, stage >= 3);
+    drawHexPlate(0.73, 0.73, 0.21, stage >= 3);
+
+    if (stage >= 1) {
+      isoScorch(ctx, pt, 0.52, 0.52, 5.94, 5.5, 3.0, stage === 1 ? 0.28 : 0.50);
+    }
+
+    if (stage === 3) {
+      // 废墟：保留军绿六边形复合装甲底盘、炸塌的八角装甲主堡残壳+坠落双联炮塔、折塌龙门吊主梁与警示黄残块、撕裂装甲板
+      isoScorch(ctx, pt, 0.28, 0.28, 5.95, 9.5, 5.2, 0.58);
+      isoScorch(ctx, pt, 0.74, 0.28, 5.95, 8.8, 4.8, 0.54);
+      isoScorch(ctx, pt, 0.74, 0.74, 5.95, 7.6, 4.2, 0.52);
+      isoCrack(ctx, pt, [[0.14, 0.50, 5.96], [0.50, 0.48, 5.96], [0.84, 0.56, 5.96]], '#262e29aa', 1.1);
+      // 标志性遗迹 1：西北八角装甲主堡炸塌低矮残壳 + 倾覆的双联炮塔残骸
+      isoCylinder(ctx, pt, 0.28, 0.27, 0.24, 0.21, 5.8, 10.6, '#8b988c', '#6a776d', '#49544d', '#3a423d', '#28302b88');
+      isoBox(ctx, pt, 0.36, 0.36, 0.48, 0.47, 5.9, 8.0, '#68736d', '#3b4340', '#505a55', '#22282588');
+      strokeLine(ctx, pt(0.42, 0.41, 7.6), pt(0.58, 0.50, 6.2), '#262d2b', 1.9);
+      strokeLine(ctx, pt(0.39, 0.45, 7.4), pt(0.52, 0.56, 6.2), '#262d2b', 1.8);
+      // 标志性遗迹 2：东北起降甲板暗黄标线 + 折断倒伏的钢铁龙门吊主钢梁与警示黄吊车残块
+      polygon(ctx, [pt(0.56, 0.12, 6.0), pt(0.90, 0.12, 6.0), pt(0.90, 0.44, 6.0), pt(0.56, 0.44, 6.0)], '#46504a', '#2b322f88', 0.75);
+      strokeLine(ctx, pt(0.60, 0.16, 6.1), pt(0.76, 0.16, 6.1), '#b58d3e88', 1.1);
+      isoBox(ctx, pt, 0.60, 0.13, 0.67, 0.20, 6.0, 10.4, '#737f78', '#3e4743', '#57635c', '#242b2888');
+      // 倒塌的斜跨钢梁
+      polygon(ctx, [pt(0.62, 0.16, 9.6), pt(0.67, 0.16, 9.6), pt(0.88, 0.42, 6.4), pt(0.81, 0.42, 6.4)], '#859289', '#2b332f88', 0.8);
+      isoRubble(ctx, pt, 0.74, 0.32, 6.05, 0.052, '#c89e48', '#896728', '#a88136');
+      // 标志性遗迹 3：西南防爆地堡炸裂残壁 + 东南哨堡撕裂装甲板
+      isoBox(ctx, pt, 0.10, 0.58, 0.40, 0.72, 5.8, 9.2, '#8b988c', '#4c5850', '#69776d', '#28302b88');
+      isoRubble(ctx, pt, 0.30, 0.78, 5.95, 0.068, '#839085', '#49544c', '#66746a');
+      isoCylinder(ctx, pt, 0.74, 0.74, 0.19, 0.17, 5.8, 8.8, '#879488', '#657268', '#455149', '#38403b', '#28302b88');
+      isoRubble(ctx, pt, 0.70, 0.78, 5.95, 0.055, '#9ea9a0', '#636e66', '#808c83');
+      return;
+    }
 
     // 2. 西北重型八角复合装甲指挥主堡 + 顶置双联装防御炮塔
-    isoCylinder(ctx, pt, 0.28, 0.27, 0.24, 0.20, 5.8, 17.6, '#b0beb1', '#88978b', '#5b6960', '#bdcabd', '#343e3899');
-    // 装甲腰带与重型防爆观察缝
-    isoCylinder(ctx, pt, 0.28, 0.27, 0.16, 0.13, 17.6, 21.0, '#9eada0', '#79887c', '#505e55', '#b1bfb2', '#343e3888');
-    // 顶部双联装自动防御炮塔（深钛铁炮座 + 双炮管）
-    isoBox(ctx, pt, 0.22, 0.21, 0.34, 0.33, 21.0, 23.8, '#7a8780', '#444e4a', '#5d6963', '#272f2c99');
-    strokeLine(ctx, pt(0.31, 0.25, 22.8), pt(0.49, 0.32, 24.0), '#2d3533', 1.8);
-    strokeLine(ctx, pt(0.29, 0.29, 22.8), pt(0.47, 0.36, 24.0), '#2d3533', 1.8);
-    // 堡身警示橙灯与阵营涂装带
-    const [lx, ly] = pt(0.32, 0.45, 13.5);
-    ctx.fillStyle = '#e5a944';
-    ctx.fillRect(lx - 1.4, ly - 0.9, 2.8, 1.8);
+    const keepH = stage === 2 ? 15.2 : 17.6;
+    isoCylinder(ctx, pt, 0.28, 0.27, 0.24, 0.20, 5.8, keepH, stage === 2 ? '#98a69a' : '#b0beb1', stage === 2 ? '#758478' : '#88978b', stage === 2 ? '#4d5a52' : '#5b6960', stage === 2 ? '#a5b2a6' : '#bdcabd', '#343e3899');
+    if (stage <= 1) {
+      isoCylinder(ctx, pt, 0.28, 0.27, 0.16, 0.13, 17.6, 21.0, '#9eada0', '#79887c', '#505e55', '#b1bfb2', '#343e3888');
+      isoBox(ctx, pt, 0.22, 0.21, 0.34, 0.33, 21.0, 23.8, '#7a8780', '#444e4a', '#5d6963', '#272f2c99');
+      strokeLine(ctx, pt(0.31, 0.25, 22.8), pt(0.49, 0.32, 24.0), '#2d3533', 1.8);
+      strokeLine(ctx, pt(0.29, 0.29, 22.8), pt(0.47, stage === 1 ? 0.38 : 0.36, stage === 1 ? 23.0 : 24.0), '#2d3533', 1.8);
+      const [lx, ly] = pt(0.32, 0.45, 13.5);
+      ctx.fillStyle = stage === 1 ? '#b88535' : '#e5a944';
+      ctx.fillRect(lx - 1.4, ly - 0.9, 2.8, 1.8);
+      if (stage === 1) {
+        isoCrack(ctx, pt, [[0.34, 0.45, 16.4], [0.31, 0.46, 12.2], [0.36, 0.44, 8.2]], '#242b27cc', 1.0);
+        isoScorch(ctx, pt, 0.33, 0.42, 17.7, 3.6, 2.0, 0.46);
+      }
+    } else {
+      // 重创：顶层炮塔被轰掀半毁、一根炮管折断，装甲颈部喷火冒浓烟
+      isoCylinder(ctx, pt, 0.28, 0.27, 0.16, 0.14, 15.2, 17.6, '#849286', '#647267', '#434f47', '#353d38', '#28302b88');
+      isoBox(ctx, pt, 0.22, 0.22, 0.33, 0.32, 17.6, 19.6, '#646f69', '#38403d', '#4d5752', '#22282599');
+      strokeLine(ctx, pt(0.30, 0.27, 18.8), pt(0.46, 0.36, 17.4), '#252b29', 1.8);
+      isoScorch(ctx, pt, 0.31, 0.30, 17.7, 5.0, 2.8, 0.60);
+      isoFire(ctx, pt, 0.31, 0.30, 17.9, 1.05);
+    }
 
-    // 3. 东北重型钢铁机甲装配龙门吊架与起降甲板（还原 city-armor.webp 灵魂构筑物）
-    // 起降平台与战术黄黑警示标线
+    // 3. 东北重型钢铁机甲装配龙门吊架与起降甲板
     polygon(ctx, [pt(0.56, 0.12, 6.0), pt(0.90, 0.12, 6.0), pt(0.90, 0.44, 6.0), pt(0.56, 0.44, 6.0)], '#58645d', '#353e3a88', 0.75);
     strokeLine(ctx, pt(0.60, 0.16, 6.1), pt(0.86, 0.16, 6.1), '#dfad4d', 1.2);
     strokeLine(ctx, pt(0.60, 0.40, 6.1), pt(0.86, 0.40, 6.1), '#dfad4d', 1.2);
-    // 龙门吊后柱与前柱 + 顶部钢铁桁架横梁
-    isoBox(ctx, pt, 0.60, 0.13, 0.67, 0.20, 6.0, 17.8, '#8a9790', '#4b5651', '#68756e', '#2d363288');
-    isoBox(ctx, pt, 0.80, 0.34, 0.87, 0.41, 6.0, 17.8, '#8a9790', '#4b5651', '#68756e', '#2d363288');
-    // 龙门架斜跨主钢梁与吊车小车
-    polygon(ctx, [
-      pt(0.59, 0.14, 17.6),
-      pt(0.66, 0.14, 17.6),
-      pt(0.87, 0.39, 17.6),
-      pt(0.80, 0.39, 17.6),
-    ], '#a4b2a8', '#333d3888', 0.8);
-    polygon(ctx, [
-      pt(0.59, 0.14, 17.6),
-      pt(0.80, 0.39, 17.6),
-      pt(0.80, 0.39, 15.6),
-      pt(0.59, 0.14, 15.6),
-    ], '#5c6962', '#2f383488', 0.75);
-    // 吊臂警示黄涂装块
-    isoBox(ctx, pt, 0.70, 0.24, 0.76, 0.30, 14.5, 16.2, '#e2b254', '#a67d30', '#c79940', '#47361577');
+    if (stage <= 1) {
+      const topR = stage === 1 ? 16.8 : 17.8;
+      isoBox(ctx, pt, 0.60, 0.13, 0.67, 0.20, 6.0, 17.8, '#8a9790', '#4b5651', '#68756e', '#2d363288');
+      isoBox(ctx, pt, 0.80, 0.34, 0.87, 0.41, 6.0, topR, '#8a9790', '#4b5651', '#68756e', '#2d363288');
+      polygon(ctx, [
+        pt(0.59, 0.14, 17.6),
+        pt(0.66, 0.14, 17.6),
+        pt(0.87, 0.39, topR - 0.2),
+        pt(0.80, 0.39, topR - 0.2),
+      ], stage === 1 ? '#8c9990' : '#a4b2a8', '#333d3888', 0.8);
+      polygon(ctx, [
+        pt(0.59, 0.14, 17.6),
+        pt(0.80, 0.39, topR - 0.2),
+        pt(0.80, 0.39, topR - 2.2),
+        pt(0.59, 0.14, 15.6),
+      ], '#5c6962', '#2f383488', 0.75);
+      isoBox(ctx, pt, 0.70, 0.24, 0.76, 0.30, 14.5, 16.2, '#e2b254', '#a67d30', '#c79940', '#47361577');
+    } else {
+      // 重创：前钢柱折断，龙门主梁斜塌砸在起降甲板上并起火
+      isoBox(ctx, pt, 0.60, 0.13, 0.67, 0.20, 6.0, 15.8, '#78847d', '#414a46', '#5c6761', '#28302c88');
+      isoBox(ctx, pt, 0.80, 0.34, 0.87, 0.41, 6.0, 9.2, '#737f78', '#3d4642', '#57625c', '#28302c88');
+      polygon(ctx, [pt(0.59, 0.14, 15.4), pt(0.66, 0.14, 15.4), pt(0.87, 0.39, 8.6), pt(0.80, 0.39, 8.6)], '#8d9b92', '#2e373288', 0.8);
+      isoBox(ctx, pt, 0.72, 0.26, 0.78, 0.32, 6.1, 8.0, '#cfa048', '#906c28', '#b08638', '#402f1277');
+      isoFire(ctx, pt, 0.76, 0.32, 8.0, 0.9);
+    }
 
-    // 4. 西南重型斜壁防爆地堡（带发射井盖与通风百叶）
-    isoBox(ctx, pt, 0.10, 0.58, 0.44, 0.88, 5.8, 12.6, '#aebbae', '#5d6b62', '#7e8d82', '#323c3688');
-    isoBox(ctx, pt, 0.15, 0.63, 0.39, 0.83, 12.6, 14.2, '#8b998d', '#505d55', '#6c7a70', '#323c3688');
-    // 重型装甲阵营条纹
-    polygon(ctx, [pt(0.14, 0.885, 8.2), pt(0.40, 0.885, 8.2), pt(0.40, 0.885, 10.2), pt(0.14, 0.885, 10.2)], teamCol);
+    // 4. 西南重型斜壁防爆地堡
+    if (stage <= 1) {
+      isoBox(ctx, pt, 0.10, 0.58, 0.44, 0.88, 5.8, 12.6, '#aebbae', '#5d6b62', '#7e8d82', '#323c3688');
+      isoBox(ctx, pt, 0.15, 0.63, 0.39, 0.83, 12.6, 14.2, '#8b998d', '#505d55', '#6c7a70', '#323c3688');
+      polygon(ctx, [pt(0.14, 0.885, 8.2), pt(0.40, 0.885, 8.2), pt(0.40, 0.885, 10.2), pt(0.14, 0.885, 10.2)], teamCol);
+      if (stage === 1) isoScorch(ctx, pt, 0.27, 0.74, 14.25, 3.6, 2.0, 0.45);
+    } else {
+      isoBox(ctx, pt, 0.10, 0.58, 0.44, 0.88, 5.8, 11.4, '#444d47', '#4e5a52', '#6a786e', '#28302b88');
+      isoScorch(ctx, pt, 0.27, 0.73, 11.45, 5.0, 2.8, 0.62);
+      polygon(ctx, [pt(0.14, 0.885, 7.6), pt(0.32, 0.885, 7.6), pt(0.32, 0.885, 9.4), pt(0.14, 0.885, 9.4)], teamCol);
+    }
 
-    // 5. 东南加固装甲哨堡与斜坡护裙
-    isoCylinder(ctx, pt, 0.74, 0.74, 0.19, 0.16, 5.8, 13.6, '#a9b7aa', '#819084', '#55635a', '#b6c4b7', '#323c3688');
-    // 哨堡顶部军用雷达圆罩
-    isoCylinder(ctx, pt, 0.74, 0.74, 0.08, 0.06, 13.6, 15.6, '#c8d3ca', '#97a59a', '#6d7b71', '#d9e3db');
+    // 5. 东南加固装甲哨堡与军用雷达圆罩
+    if (stage <= 1) {
+      isoCylinder(ctx, pt, 0.74, 0.74, 0.19, 0.16, 5.8, 13.6, '#a9b7aa', '#819084', '#55635a', '#b6c4b7', '#323c3688');
+      isoCylinder(ctx, pt, 0.74, 0.74, 0.08, 0.06, 13.6, 15.6, stage === 1 ? '#a4b0a6' : '#c8d3ca', '#97a59a', '#6d7b71', stage === 1 ? '#7d8a80' : '#d9e3db');
+      if (stage === 1) isoScorch(ctx, pt, 0.76, 0.76, 15.65, 2.6, 1.5, 0.48);
+    } else {
+      isoCylinder(ctx, pt, 0.74, 0.74, 0.19, 0.16, 5.8, 11.2, '#8f9d90', '#6d7b70', '#4a574f', '#38403b', '#28302b88');
+      isoScorch(ctx, pt, 0.74, 0.74, 11.25, 4.4, 2.4, 0.58);
+      isoRubble(ctx, pt, 0.64, 0.82, 5.95, 0.048, '#95a397', '#5a665d', '#778579');
+    }
 
-    // 6. 战术铁杆阵营军旗
-    isoBanner(ctx, pt, 0.18, 0.18, 21.0, 5.8, teamCol, lightCol, true);
+    // 6. 战术铁杆阵营军旗 + 烟雾
+    isoBanner(ctx, pt, 0.18, 0.18, stage === 2 ? 17.6 : 21.0, 5.8, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.75, 0.75, 16.0, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.31, 0.30, 20.6, 1.05, true);
+      isoSmoke(ctx, pt, 0.76, 0.32, 11.0, 0.9, true);
+    }
   }
 
   /**
@@ -3610,22 +3802,52 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 珠光纯白未来底座 + 纵横发光青蓝聚变能量导流沟槽 + 巨型光滑椭圆形珠光穹顶 + 中央托卡马克聚变光环与悬浮能量尖塔，
    * 极具未来科幻乌托邦史诗感，与时代七冷硬军绿装甲形成终极文明跃迁对比。
    */
-  function paintCityFusion(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
-    // 1. 珠光洁白未来底座
-    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.0, '#eef4f8', '#9eb2c0', '#c4d4df', '#657f9188');
-    polygon(ctx, [pt(0.05, 0.05, 5.05), pt(0.95, 0.05, 5.05), pt(0.95, 0.95, 5.05), pt(0.05, 0.95, 5.05)], '#f4f8fb');
+  function paintCityFusion(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    teamCol: string,
+    lightCol: string,
+    stage: CityDamageStage = 0,
+  ): void {
+    // 1. 珠光洁白未来底座（随受损逐级失光熏灰）
+    const baseTop = stage >= 3 ? '#bac6d0' : stage === 2 ? '#d3dee6' : '#eef4f8';
+    const baseR = stage >= 3 ? '#768896' : stage === 2 ? '#8a9eab' : '#9eb2c0';
+    const baseL = stage >= 3 ? '#96a8b5' : stage === 2 ? '#aebfca' : '#c4d4df';
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.0, baseTop, baseR, baseL, '#657f9188');
+    polygon(ctx, [pt(0.05, 0.05, 5.05), pt(0.95, 0.05, 5.05), pt(0.95, 0.95, 5.05), pt(0.05, 0.95, 5.05)], stage >= 3 ? '#c2ced7' : stage === 2 ? '#dce5ec' : '#f4f8fb');
 
-    // 2. 纵横交错的发光青蓝聚变能量导流光脉（还原 city-fusion.webp 灵魂视觉符号）
-    const drawConduit = (u0: number, v0: number, u1: number, v1: number): void => {
+    // 2. 纵横交错的聚变能量导流光脉（常态璀璨，受损局部熄灭，重创残弱过载，废墟彻底熄灭成死灰沟槽）
+    const drawConduit = (u0: number, v0: number, u1: number, v1: number, dead = false): void => {
       const a = pt(u0, v0, 5.15);
       const b = pt(u1, v1, 5.15);
+      if (dead) {
+        strokeLine(ctx, a, b, '#566470', 2.0);
+        strokeLine(ctx, a, b, '#353e46', 0.9);
+        return;
+      }
       strokeLine(ctx, a, b, 'rgba(72,218,246,0.34)', 4.2);
       strokeLine(ctx, a, b, '#6be7fc', 1.7);
       strokeLine(ctx, a, b, '#dafaff', 0.75);
     };
-    drawConduit(0.06, 0.50, 0.94, 0.50);
-    drawConduit(0.50, 0.06, 0.50, 0.94);
-    // 外环发光能量光圈
+    if (stage === 0) {
+      drawConduit(0.06, 0.50, 0.94, 0.50);
+      drawConduit(0.50, 0.06, 0.50, 0.94);
+    } else if (stage === 1) {
+      drawConduit(0.06, 0.50, 0.56, 0.50);
+      drawConduit(0.56, 0.50, 0.94, 0.50, true);
+      drawConduit(0.50, 0.06, 0.50, 0.94);
+    } else if (stage === 2) {
+      drawConduit(0.06, 0.50, 0.34, 0.50);
+      drawConduit(0.34, 0.50, 0.94, 0.50, true);
+      drawConduit(0.50, 0.06, 0.50, 0.44, true);
+      drawConduit(0.50, 0.44, 0.50, 0.72);
+      drawConduit(0.50, 0.72, 0.50, 0.94, true);
+    } else {
+      drawConduit(0.06, 0.50, 0.94, 0.50, true);
+      drawConduit(0.50, 0.06, 0.50, 0.94, true);
+    }
+
+    // 外环能量光圈（重创残缺，废墟熄灭成暗灰环）
     const ringPts: Point[] = [];
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
@@ -3635,77 +3857,196 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.moveTo(...ringPts[0]!);
     for (const p of ringPts.slice(1)) ctx.lineTo(...p);
     ctx.closePath();
-    ctx.strokeStyle = 'rgba(84,225,250,0.42)';
-    ctx.lineWidth = 2.6;
-    ctx.stroke();
-    ctx.strokeStyle = '#9cf2ff';
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
+    if (stage <= 1) {
+      ctx.strokeStyle = stage === 1 ? 'rgba(84,225,250,0.26)' : 'rgba(84,225,250,0.42)';
+      ctx.lineWidth = 2.6;
+      ctx.stroke();
+      ctx.strokeStyle = stage === 1 ? '#7ecfe0' : '#9cf2ff';
+      ctx.lineWidth = 1.0;
+      ctx.stroke();
+    } else if (stage === 2) {
+      ctx.strokeStyle = '#607382';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = '#53626e';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
 
-    // 3. 西北巨型光滑珠光纯白椭圆生态穹顶（还原 city-fusion.webp 椭圆大穹顶）
-    // 穹顶基座青蓝发光护环
+    if (stage === 3) {
+      // 废墟：珠光变灰底座 + 熄灭深灰导流槽 + 坍塌洁白椭圆穹顶弧形肋骨残壳 + 熄灭炸裂的托卡马克反应堆残环与断拱臂
+      isoScorch(ctx, pt, 0.28, 0.26, 5.18, 11.2, 6.0, 0.56);
+      isoScorch(ctx, pt, 0.62, 0.62, 5.18, 12.0, 6.4, 0.60);
+      isoCrack(ctx, pt, [[0.14, 0.42, 5.20], [0.48, 0.52, 5.20], [0.78, 0.72, 5.20]], '#333e47aa', 1.05);
+      // 标志性遗迹 1：西北巨型椭圆生态穹顶残余低矮白瓷环缘 + 3 道折断纯白弧形穹顶肋骨
+      const [d1x, d1y] = pt(0.28, 0.26, 5.3);
+      ctx.strokeStyle = '#8fa4b4';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.ellipse(d1x, d1y, 13.0, 7.6, 0, Math.PI * 0.15, Math.PI * 1.45);
+      ctx.stroke();
+      // 裸露折断的白瓷穹顶弧骨
+      strokeLine(ctx, pt(0.08, 0.26, 5.3), pt(0.18, 0.24, 11.4), '#dce6ee', 1.7);
+      strokeLine(ctx, pt(0.18, 0.24, 11.4), pt(0.26, 0.23, 12.6), '#b8c8d4', 1.3);
+      strokeLine(ctx, pt(0.28, 0.10, 5.3), pt(0.30, 0.19, 10.2), '#d5e0e9', 1.5);
+      strokeLine(ctx, pt(0.22, 0.42, 5.3), pt(0.26, 0.34, 8.8), '#c7d5e0', 1.3);
+      isoRubble(ctx, pt, 0.34, 0.30, 5.15, 0.058, '#dde7ef', '#8ea3b2', '#b3c4d1');
+      // 东北/西南副穹顶白瓷碎环
+      isoRubble(ctx, pt, 0.78, 0.24, 5.15, 0.062, '#d5e0e9', '#8a9fae', '#aebfcb');
+      isoRubble(ctx, pt, 0.24, 0.76, 5.15, 0.065, '#d5e0e9', '#8a9fae', '#aebfcb');
+      // 标志性遗迹 2：彻底熄灭炸裂的托卡马克反应堆低矮圆环基座 + 折断核心柱 + 两根折弯纯白磁约束拱臂
+      isoCylinder(ctx, pt, 0.62, 0.62, 0.25, 0.22, 5.0, 8.2, '#cfdbe4', '#9fb3c2', '#758a99', '#38434c', '#4c5f6e88');
+      const [tx, ty] = pt(0.62, 0.62, 8.4);
+      ctx.strokeStyle = '#586976';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.2, 5.8, 0, 0.2, Math.PI * 1.55);
+      ctx.stroke();
+      // 折断核心柱与弯折磁约束拱臂
+      isoCylinder(ctx, pt, 0.62, 0.62, 0.10, 0.08, 8.2, 13.8, '#d4dfe8', '#a3b6c4', '#7a8f9e', '#323c44', '#4c5f6e77');
+      strokeLine(ctx, pt(0.45, 0.62, 8.6), pt(0.55, 0.62, 14.2), '#d6e1ea', 1.55);
+      strokeLine(ctx, pt(0.62, 0.45, 8.6), pt(0.64, 0.56, 13.0), '#c5d3de', 1.45);
+      strokeLine(ctx, pt(0.79, 0.62, 8.6), pt(0.73, 0.68, 9.6), '#9cb0be', 1.3);
+      return;
+    }
+
+    // 3. 西北巨型光滑珠光纯白椭圆生态穹顶
     const [d1x, d1y] = pt(0.28, 0.26, 5.2);
-    ctx.strokeStyle = 'rgba(88,228,252,0.55)';
+    ctx.strokeStyle = stage === 2 ? 'rgba(88,228,252,0.22)' : 'rgba(88,228,252,0.55)';
     ctx.lineWidth = 2.2;
     ctx.beginPath();
     ctx.ellipse(d1x, d1y, 13.5, 8.0, 0, 0, Math.PI * 2);
     ctx.stroke();
-    isoDome(ctx, pt, 0.28, 0.26, 0.24, 0.19, 5.1, 13.2, '#f8fbfd', '#dce7ef', '#aebfce', '#ffffff', '#7e9bb055');
-
-    // 4. 东北与西南对称流线能量副穹顶
-    isoDome(ctx, pt, 0.78, 0.24, 0.14, 0.14, 5.1, 9.2, '#f7fafc', '#dae5ee', '#acc0cf', '#ffffff', '#7e9bb055');
-    isoDome(ctx, pt, 0.24, 0.76, 0.15, 0.15, 5.1, 9.6, '#f7fafc', '#dae5ee', '#acc0cf', '#ffffff', '#7e9bb055');
-
-    // 5. 中央偏东南：标志性「托卡马克聚变反应堆 + 发光等离子环 + 悬浮聚变核心尖塔」
-    isoCylinder(ctx, pt, 0.62, 0.62, 0.25, 0.21, 5.0, 10.6, '#f4f8fb', '#d6e2eb', '#a6b9c8', '#eef5f9', '#6e8ba066');
-    // 发光聚变等离子约束光环（托卡马克核心）
-    const [tx, ty] = pt(0.62, 0.62, 11.4);
-    ctx.strokeStyle = 'rgba(72,222,250,0.36)';
-    ctx.lineWidth = 5.4;
-    ctx.beginPath();
-    ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = '#6ce9fd';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.strokeStyle = '#e5fdff';
-    ctx.lineWidth = 0.95;
-    ctx.beginPath();
-    ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // 反应堆内核心柱与四根弧形洁白磁约束拱臂
-    isoCylinder(ctx, pt, 0.62, 0.62, 0.10, 0.06, 10.6, 26.8, '#f8fbfd', '#dce7ef', '#aec1d0', '#ffffff', '#6d8ca155');
-    for (const [du, dv] of [[-0.17, 0], [0.17, 0], [0, -0.17], [0, 0.17]] as const) {
-      strokeLine(ctx, pt(0.62 + du, 0.62 + dv, 11.2), pt(0.62 + du * 0.35, 0.62 + dv * 0.35, 25.0), '#edf4f8', 1.6);
-      strokeLine(ctx, pt(0.62 + du, 0.62 + dv, 11.2), pt(0.62 + du * 0.35, 0.62 + dv * 0.35, 25.0), '#7a98ad66', 0.6);
+    if (stage <= 1) {
+      isoDome(ctx, pt, 0.28, 0.26, 0.24, 0.19, 5.1, 13.2, '#f8fbfd', '#dce7ef', '#aebfce', '#ffffff', '#7e9bb055');
+      if (stage === 1) {
+        // 受损：主生态穹顶右侧壳面破开暗窟窿 + 细裂纹
+        const [bx, by] = pt(0.36, 0.30, 12.2);
+        polygon(ctx, [[bx - 3.0, by - 2.2], [bx + 3.2, by - 1.0], [bx + 2.6, by + 3.0], [bx - 2.4, by + 2.2]], '#2c3944', '#92a8b8aa', 0.65);
+        strokeLine(ctx, [bx - 2.2, by - 0.5], [bx + 2.2, by + 1.4], '#c2d3e0', 0.85);
+        isoCrack(ctx, pt, [[0.33, 0.31, 12.4], [0.26, 0.36, 10.0], [0.30, 0.40, 7.2]], '#3a4b58aa', 0.85);
+      }
+    } else {
+      // 重创：主生态穹顶半边塌穿露出漆黑内腔、纯白内肋与失控烈焰浓烟
+      isoDome(ctx, pt, 0.24, 0.24, 0.20, 0.16, 5.1, 10.6, '#dde7ef', '#b8c8d5', '#8ca1b2', '#eaf1f6', '#5e778866');
+      isoScorch(ctx, pt, 0.35, 0.31, 9.6, 6.2, 3.6, 0.66);
+      strokeLine(ctx, pt(0.28, 0.20, 14.8), pt(0.44, 0.32, 7.6), '#dce7f0', 1.35);
+      strokeLine(ctx, pt(0.24, 0.30, 13.6), pt(0.42, 0.38, 7.0), '#c4d4e0', 1.2);
+      isoFire(ctx, pt, 0.36, 0.31, 9.8, 0.95);
     }
 
-    // 尖塔顶部悬浮璀璨聚变光核
-    const [ox, oy] = pt(0.62, 0.62, 31.6);
-    const orbGrad = ctx.createRadialGradient(ox, oy, 0.8, ox, oy, 8.2);
-    orbGrad.addColorStop(0, 'rgba(235,254,255,0.95)');
-    orbGrad.addColorStop(0.38, 'rgba(92,230,252,0.72)');
-    orbGrad.addColorStop(1, 'rgba(92,230,252,0)');
-    ctx.fillStyle = orbGrad;
-    ctx.beginPath();
-    ctx.arc(ox, oy, 8.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#f2feff';
-    ctx.beginPath();
-    ctx.arc(ox, oy, 2.3, 0, Math.PI * 2);
-    ctx.fill();
+    // 4. 东北与西南对称流线能量副穹顶
+    if (stage <= 1) {
+      isoDome(ctx, pt, 0.78, 0.24, 0.14, 0.14, 5.1, 9.2, '#f7fafc', '#dae5ee', '#acc0cf', '#ffffff', '#7e9bb055');
+      isoDome(ctx, pt, 0.24, 0.76, 0.15, 0.15, 5.1, 9.6, '#f7fafc', '#dae5ee', '#acc0cf', '#ffffff', '#7e9bb055');
+      if (stage === 1) isoScorch(ctx, pt, 0.78, 0.24, 13.2, 3.0, 1.8, 0.36);
+    } else {
+      isoDome(ctx, pt, 0.78, 0.24, 0.14, 0.14, 5.1, 7.8, '#dce6ee', '#b8c8d5', '#8fa3b4', '#eaf0f5', '#5e778866');
+      isoScorch(ctx, pt, 0.24, 0.76, 5.25, 6.0, 3.4, 0.56);
+      isoRubble(ctx, pt, 0.24, 0.76, 5.15, 0.068, '#d4e0e9', '#889eae', '#aec0ce');
+    }
 
-    // 极简科技阵营光带与细流线旗
-    const [fx, fy] = pt(0.62, 0.62, 10.7);
+    // 5. 中央偏东南：托卡马克聚变反应堆 + 等离子环 + 悬浮聚变核心尖塔
+    isoCylinder(ctx, pt, 0.62, 0.62, 0.25, 0.21, 5.0, stage === 2 ? 9.4 : 10.6, stage === 2 ? '#dce5ed' : '#f4f8fb', stage === 2 ? '#b6c7d4' : '#d6e2eb', '#a6b9c8', stage === 2 ? '#cedae3' : '#eef5f9', '#6e8ba066');
+    const [tx, ty] = pt(0.62, 0.62, stage === 2 ? 10.2 : 11.4);
+    if (stage === 0) {
+      ctx.strokeStyle = 'rgba(72,222,250,0.36)';
+      ctx.lineWidth = 5.4;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#6ce9fd';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#e5fdff';
+      ctx.lineWidth = 0.95;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (stage === 1) {
+      // 受损：等离子约束环出现局部断口与不稳青弧
+      ctx.strokeStyle = 'rgba(72,222,250,0.30)';
+      ctx.lineWidth = 4.6;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0.35, Math.PI * 1.78);
+      ctx.stroke();
+      ctx.strokeStyle = '#6ce9fd';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0.35, Math.PI * 1.78);
+      ctx.stroke();
+    } else {
+      // 重创：等离子环撕裂成危险的青橙交错过载电弧 + 反应堆失控起火
+      ctx.strokeStyle = '#536574';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.6, 6.0, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#67e4fb';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.6, 6.0, 0, 0.15, 1.35);
+      ctx.stroke();
+      ctx.strokeStyle = '#f08c3a';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.ellipse(tx, ty, 10.6, 6.0, 0, 2.5, 4.1);
+      ctx.stroke();
+    }
+
+    // 反应堆内核心柱与四根弧形洁白磁约束拱臂
+    const spireTop = stage === 2 ? 19.6 : 26.8;
+    isoCylinder(ctx, pt, 0.62, 0.62, 0.10, stage === 2 ? 0.075 : 0.06, stage === 2 ? 9.4 : 10.6, spireTop, stage === 2 ? '#d7e2ea' : '#f8fbfd', stage === 2 ? '#b1c2d0' : '#dce7ef', '#aec1d0', stage === 2 ? '#424f5a' : '#ffffff', '#6d8ca155');
+    const arms: ReadonlyArray<readonly [number, number]> = [[-0.17, 0], [0.17, 0], [0, -0.17], [0, 0.17]];
+    for (let ai = 0; ai < arms.length; ai++) {
+      const [du, dv] = arms[ai]!;
+      if (stage === 2 && (ai === 1 || ai === 3)) {
+        // 重创：两根磁约束拱臂折断
+        strokeLine(ctx, pt(0.62 + du, 0.62 + dv, 10.0), pt(0.62 + du * 0.72, 0.62 + dv * 0.72, 14.8), '#c7d5e0', 1.45);
+        continue;
+      }
+      strokeLine(ctx, pt(0.62 + du, 0.62 + dv, stage === 2 ? 10.0 : 11.2), pt(0.62 + du * 0.35, 0.62 + dv * 0.35, stage === 2 ? 18.8 : 25.0), '#edf4f8', 1.6);
+      strokeLine(ctx, pt(0.62 + du, 0.62 + dv, stage === 2 ? 10.0 : 11.2), pt(0.62 + du * 0.35, 0.62 + dv * 0.35, stage === 2 ? 18.8 : 25.0), '#7a98ad66', 0.6);
+    }
+
+    // 尖塔顶部悬浮聚变光核（受损缩小偏移，重创失控成橙青过载火花+火焰）
+    if (stage <= 1) {
+      const [ox, oy] = pt(stage === 1 ? 0.64 : 0.62, 0.62, stage === 1 ? 30.8 : 31.6);
+      const orbR = stage === 1 ? 6.0 : 8.2;
+      const orbGrad = ctx.createRadialGradient(ox, oy, 0.8, ox, oy, orbR);
+      orbGrad.addColorStop(0, 'rgba(235,254,255,0.95)');
+      orbGrad.addColorStop(0.38, stage === 1 ? 'rgba(92,230,252,0.52)' : 'rgba(92,230,252,0.72)');
+      orbGrad.addColorStop(1, 'rgba(92,230,252,0)');
+      ctx.fillStyle = orbGrad;
+      ctx.beginPath();
+      ctx.arc(ox, oy, orbR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f2feff';
+      ctx.beginPath();
+      ctx.arc(ox, oy, stage === 1 ? 1.8 : 2.3, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      isoFire(ctx, pt, 0.62, 0.62, 19.8, 1.0);
+      // 过载电弧折线
+      isoCrack(ctx, pt, [[0.62, 0.62, 20.4], [0.70, 0.56, 22.8], [0.66, 0.68, 16.5]], '#8df2ff', 1.15);
+    }
+
+    // 极简科技阵营光带与细流线旗 + 烟雾
+    const [fx, fy] = pt(0.62, 0.62, stage === 2 ? 9.6 : 10.7);
     ctx.strokeStyle = teamCol;
     ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.ellipse(fx, fy, 13.8, 7.9, 0, 0.15, Math.PI - 0.15);
+    ctx.ellipse(fx, fy, 13.8, 7.9, 0, 0.15, stage === 2 ? Math.PI * 0.65 : Math.PI - 0.15);
     ctx.stroke();
-    isoBanner(ctx, pt, 0.28, 0.26, 18.0, 5.2, teamCol, lightCol, true);
+    isoBanner(ctx, pt, 0.28, 0.26, stage === 2 ? 15.2 : 18.0, 5.2, teamCol, lightCol, true, stage);
+    if (stage === 1) isoSmoke(ctx, pt, 0.36, 0.30, 14.0, 0.85, false);
+    if (stage === 2) {
+      isoSmoke(ctx, pt, 0.36, 0.31, 13.0, 0.95, true);
+      isoSmoke(ctx, pt, 0.62, 0.62, 22.6, 1.05, true);
+    }
   }
 
   function paintCity(
@@ -3726,7 +4067,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     polygon(ctx, basePoly.map(([bx, by]) => [bx + 2.2, by + 2.4]), '#2d271e26');
 
     const stage = cityDamageStage(city);
-    if (stage === 3 && (city.era < 1 || city.era > 5)) {
+    if (stage === 3 && (city.era < 1 || city.era > 8)) {
       paintCityRuined(ctx, pt, outline);
       if (dark) polygon(ctx, basePoly, '#17232b47');
       faces.push({ cell: { x: city.x, y: city.y }, points: basePoly });
@@ -3751,9 +4092,9 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       else if (city.era === 3) paintCityGunpowder(ctx, pt, team, lightTeam, stage);
       else if (city.era === 4) paintCitySteam(ctx, pt, team, lightTeam, stage);
       else if (city.era === 5) paintCityMechanized(ctx, pt, team, lightTeam, stage);
-      else if (city.era === 6) paintCityInfo(ctx, pt, team, lightTeam);
-      else if (city.era === 7) paintCityArmor(ctx, pt, team, lightTeam);
-      else paintCityFusion(ctx, pt, team, lightTeam);
+      else if (city.era === 6) paintCityInfo(ctx, pt, team, lightTeam, stage);
+      else if (city.era === 7) paintCityArmor(ctx, pt, team, lightTeam, stage);
+      else paintCityFusion(ctx, pt, team, lightTeam, stage);
 
       // 仅重描东南/西南前缘两段阵营框，干脆利落且绝不压住 3D 屋顶与高塔
       ctx.beginPath();
