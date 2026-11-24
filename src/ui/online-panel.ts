@@ -14,6 +14,7 @@ import { DEFAULT_PLAYER_NAMES } from '../core/setup.ts';
 import { isAiSide } from '../core/ai-meta.ts';
 import { seatsOf } from '../core/types.ts';
 import type { GameState, PlayerId } from '../core/types.ts';
+import { uiIcon } from './icons.ts';
 import {
   claimSeat,
   createRoom,
@@ -97,7 +98,7 @@ export function openOnlinePanel(host: OnlineHost): void {
     if (probing || !probe) {
       return '<div class="cloud-probe wait">正在检查云端连通…</div>';
     }
-    if (probe.ok) return '<div class="cloud-probe ok">云端连通正常</div>';
+    if (probe.ok) return `<div class="cloud-probe ok">${uiIcon('ready')}<span>云端连通正常</span></div>`;
     return `<div class="cloud-probe bad">${escapeHtml(probe.message)}</div>`;
   };
 
@@ -128,7 +129,7 @@ export function openOnlinePanel(host: OnlineHost): void {
       mask.innerHTML = `
         <div class="modal modal-narrow">
           <div class="modal-head">
-            <h2>联机 / 云存档</h2>
+            <h2 class="modal-title-ico">${uiIcon('online')}联机 / 云存档</h2>
             <p>把这一局存到网上，拿一个房间码。同学用手机输入这六个字符就能接着打。</p>
           </div>
           <div class="modal-body">
@@ -219,14 +220,16 @@ export function openOnlinePanel(host: OnlineHost): void {
     mask.innerHTML = `
       <div class="modal modal-narrow">
         <div class="modal-head">
-          <h2>房间 ${room.code}</h2>
+          <h2 class="modal-title-ico">${uiIcon('online')}房间 ${room.code}</h2>
           <p>${isWatcher ? '你是观战者：不占座位，看的是全图。' : `你执 ${seatName(room.seat)}。`}</p>
         </div>
         <div class="modal-body">
-          <div class="room-code">${room.code}</div>
-          <div class="room-actions">
-            <button class="btn btn-primary" data-act="copy-code">复制代码</button>
-            <button class="btn" data-act="copy-link">复制邀请链接</button>
+          <div class="room-code-card">
+            <div class="room-code">${room.code}</div>
+            <div class="room-actions">
+              <button class="btn btn-primary" data-act="copy-code">复制代码</button>
+              <button class="btn" data-act="copy-link">复制邀请链接</button>
+            </div>
           </div>
 
           <div class="room-status ${statusKind}">${escapeHtml(status)}</div>
