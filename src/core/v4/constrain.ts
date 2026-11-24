@@ -10,7 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats } from '../rules.ts';
+import { attackableTargets, effectiveStats, reachableTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -115,7 +115,31 @@ function planYield(
   need: { spawn: boolean; exit: boolean },
 ): Array<{ unitId: string; x: number; y: number }> {
   /*
-   * **只在"这一手真有人要用这格"时才赶人**（用户 2026-11-24 定）。
+   * ════════════════════════════════════════════════════════════════
+   * **【距离场 D】多源、从"所有空格"出发，用来"把人从关键格上搬开"。**
+   *
+   * 它和 world 里那张 C（`flowFrom`）用的是同一套算法（多源 + 前驱指针），
+   * 但**种子的定义完全相反**，这是最容易看错的一处：
+   *
+   *   · C 的种子 = **洞**（该被占的空岗）→ 人顺着 prev 走，就是在"上岗"；
+   *   · D 的种子 = **所有空格**（包括根本不该站人的空地）→ 人顺着 prev 走，是在"让开"。
+   *
+   * 为什么 D 不能复用 C：D 要回答的是"从这一格往哪个方向最近能腾出位置"，
+   * 所以起点必须是"空"；C 要回答的是"往哪个方向最近的岗位"。
+   * 两个问题的答案经常方向相反，混用会让人往反方向跑。
+   *
+   * ── 下面分成五段，按顺序读 ──────────────────────────────────
+   *
+   *   ① 决定这一手要赶哪些格（不是整圈都赶，见下）
+   *   ② 播种：把所有空格当成"洞"
+   *   ③ 扩散：算出每格"离最近的空位几步"，并记下"下一步往哪走"
+   *   ④ 排除"正在执行任务的兵"（过桥/推进的不算挡路）
+   *   ⑤ 沿前驱把链上的人依次挪一格
+   * ════════════════════════════════════════════════════════════════
+   */
+
+  /*
+   * ① **只在"这一手真有人要用这格"时才赶人**（用户 2026-11-24 定）。
    *
    * 原来是对 `keepClear` 一刀切：只要站在城圈（城格 + 城墙外一圈）上就赶。
    * 实测两个毛病：
@@ -138,10 +162,19 @@ function planYield(
   );
   if (targets.length === 0) return [];
   const N = s.w * s.h;
+  /* -1 = 还没算到（注意和距离场 C 用 Infinity 表示"没算到"不同，这里用 -1） */
   const dist = new Int32Array(N).fill(-1);
+  /* 前驱：站在这一格的人，下一步该走到哪个格号（朝最近空位的方向） */
   const prev = new Int32Array(N).fill(-1);
   const q: number[] = [];
 
+  /*
+   * ② 播种：**所有能站的空格**都是种子（距离 0）。
+   *    三条排除：
+   *      · 城格不算洞（它是"要空出来的地方"，不是"能塞人的地方"）；
+   *      · 有人站着的格不算；
+   *      · 水/高山不算。
+   */
   for (let k = 0; k < N; k++) {
     const t = s.tiles[k];
     if (!t || t.terrain === 'city') continue;
@@ -151,7 +184,13 @@ function planYield(
     q.push(k);
   }
 
-  /* 只往 6 格内扩：洞太远的话，链上的人这一手也走不完，没必要算 */
+  /*
+   * ③ 扩散：四邻、每格一步。**穿过自己人算一步**（那个人得先让开），
+   *    敌人和不可走的地形挡死——和自己人"可以穿"这一点，正是这张表能用来搬人的原因。
+   *
+   *    只往 6 格内扩：洞太远的话，链上的人这一手也走不完，没必要算。
+   *    （上限的副作用：超过 6 步的格是 -1，上层会当成"这儿没有洞"。）
+   */
   const MAX = 6;
   for (let i = 0; i < q.length; i++) {
     const k = q[i]!;
@@ -175,7 +214,7 @@ function planYield(
   }
 
   /*
-   * 推进/攻城的兵不算挡路：它们有理由待在那儿（正在过桥）。
+   * ④ 推进/攻城的兵不算挡路：它们有理由待在那儿（正在过桥）。
    * 只让"没事待着"的单位（经济兵、驻守兵）让开——否则过桥的兵会被自己的规则赶回去，
    * 在桥上来回横跳。
    */
@@ -185,6 +224,18 @@ function planYield(
     for (const id of sq.unitIds) passing.add(id);
   }
 
+  /*
+   * ⑤ 沿前驱把链上的人依次挪一格。
+   *
+   *    对每一个"要腾出来的格"：从它出发顺着 prev 一直走到某个空格，得到一条链
+   *    `关键格 → … → 空格`。然后**从空格那一头开始**，每个人挪到前一个人的位置。
+   *    之所以要从那一头开始，是因为每一次移动都必须落在一个"刚刚被腾出来的格"上
+   *    （引擎不允许两个人占同一格，也没有"交换位置"这个动作）。
+   *
+   *    `usedCells` / `usedUnits` 是**链与链之间**的去重：两条链不能用同一格、
+   *    也不能重复派同一个人。**链内部不能用它判**——那样每条链只会走一格，
+   *    整列纹丝不动（v3 在这里踩过，注释写在下面）。
+   */
   const out: Array<{ unitId: string; x: number; y: number }> = [];
   const usedCells = new Set<number>();
   const usedUnits = new Set<string>();
@@ -193,8 +244,17 @@ function planYield(
     /* 关键格自己得是被自己人占着的，否则没什么可让 */
     const blocker = s.units.find((u) => u.y * s.w + u.x === cell && u.owner === world.me);
     if (!blocker || usedUnits.has(blocker.id) || passing.has(blocker.id)) continue;
+
+    /*
+     * 沿 prev 一路走到"最近的空位"，得到一条链：
+     *
+     *     关键格（被占） → 中间若干格（也可能被占） → 空位（dist = 0）
+     *
+     * `guard` 只是防死循环的保险（prev 是一棵树，理论上不会绕圈）。
+     * 走不到空位（prev = -1，也就是 6 格内没有洞）就放弃：这一手不硬挪，
+     * 因为"没有落点"时挪等于让人凭空消失。
+     */
     let k = cell;
-    /* 沿 prev 往洞的方向倒着走；到不了洞（-1）就算了，这一手不硬挪 */
     const chain: number[] = [];
     let guard = 0;
     while (dist[k]! > 0 && guard++ < 12) {
@@ -203,7 +263,19 @@ function planYield(
       chain.push(k);
     }
     if (chain.length === 0) continue;
-    /* 链上第一个空位就是这一手的目标；链上每个单位挪到它前一个的位置（倒序） */
+
+    /*
+     * **从空位那一头开始倒着派**（`i` 从链尾往链头走）。
+     *
+     * 链 = [关键格, c1, c2, …, 空位]（空位在最后）。
+     *   i = 最后 → `to` = 空位，`from` = 空位前面那格 → 那个人先挪进空位；
+     *   i 往前 → 每个人的目标都是"后一个人刚刚腾出来的格"。
+     * 所以每一次移动都落在空出来的格上——引擎没有"两个人交换位置"这个动作，
+     * 只能靠这个顺序。
+     *
+     * 顺序反过来的话（从关键格那端先派），第一个人的目标格还被人占着，必被引擎拒，
+     * 整条链就白算了。
+     */
     for (let i = chain.length - 1; i >= 0; i--) {
       const to = chain[i]!;
       const from = i === 0 ? cell : chain[i - 1]!;
@@ -386,6 +458,8 @@ function planEconPosts(
    * （实测长局：两个牧民的岗在 30 格外，走一辈子到不了）。
    */
   const nearestCity = (u: Unit): string => {
+    const home = mem?.econHome?.[u.id];
+    if (home) return home; /* 出生城是钉住的，不随走动变 */
     let bestId = world.myCities[0]?.id ?? '';
     let bestD = Infinity;
     for (const c of world.myCities) {
@@ -435,6 +509,84 @@ function planEconPosts(
       }
       /* 站在城圈/城格上又没有岗：不给岗，让搬迁计划把它请出去 */
     });
+
+    /*
+     * **分到的岗走不进去时，换一个能走进去的空岗。**
+     *
+     * 同一地形上的岗产出一样，本来就可以互换——重要的不是"哪一格"，
+     * 是"这块地产出有没有被占住"。所以进不去就别硬顶：挑一个这一手真能到的空岗，
+     * 原来那个继续空着，留给后面的人。
+     *
+     * 这正是"最后一个牧民死活进不去"的正解：它分到的岗在队伍深处、前面全站满，
+     * 而旁边另一格空岗其实一伸手就到。
+     *
+     * 引擎不支持两个单位换位（必须先有空格），所以**没有空岗 = 真的满了**，
+     * 那就原地等着，不做任何"硬挤"。
+     */
+    /* 这一组里"现在没人站"的岗（= 距离场 C 眼里的"洞"） */
+    const freeCells = sortedSpots
+      .filter((p) => !s.units.some((v) => v.y * s.w + v.x === p.y * s.w + p.x))
+      .map((p) => p.y * s.w + p.x);
+    if (freeCells.length > 0) {
+      /* 距离场 C：从这些空岗同时出发，得到"每格离最近空岗几步、往哪走" */
+      const flow = world.flowFrom(freeCells);
+      for (const u of sortedUnits) {
+        const cur = posts[u.id];
+        /* 已经站在自己岗上的不用管 */
+        if (!cur || (cur.x === u.x && cur.y === u.y)) continue;
+
+        /*
+         * 判"这一手到底走不走得动"：拿**自己分到的那个岗**做终点，
+         * 用距离场 A/B 那套（`stepsFrom`，不算人）看这一格离它几步；
+         * 再把"这一手能踩到的格"逐个比一遍——只要有一个更近的，就说明路是通的。
+         *
+         * 注意这里问的是"能不能朝我自己的岗挪近"，不是"能不能到空岗"。
+         * 两个问题答不上来就是两件不同的事：
+         *   · 走不动 → 才是被堵住，才需要下面换岗；
+         *   · 走得到、只是慢 → 不该换，换了反而绕远。
+         */
+        const field = world.stepsFrom({ x: cur.x, y: cur.y });
+        const here = field[u.y * s.w + u.x] ?? Infinity;
+        let canAdvance = false;
+        for (const [k] of reachableTiles(s, u)) {
+          const x = k % s.w;
+          const y = (k - x) / s.w;
+          if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+          if ((field[k] ?? Infinity) < here) {
+            canAdvance = true;
+            break;
+          }
+        }
+        if (canAdvance) continue;
+
+        /*
+         * 被堵住了 → 改投"这一手就能踩到"的空岗。
+         *
+         * 挑法用的是距离场 C 的 `dist`：它衡量"这格离最近的空岗群有多近"，
+         * 也就是"站上去之后，剩下的空岗是不是还在我旁边"（不至于把自己塞进死角）。
+         * 这里**不按离城远近挑**——那会又变回"按城配岗"，人还会被引到远处。
+         */
+        let pick: number | null = null;
+        let pickD = Infinity;
+        for (const [k] of reachableTiles(s, u)) {
+          const x = k % s.w;
+          const y = (k - x) / s.w;
+          if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+          if (!freeCells.includes(k)) continue;
+          const d = flow.dist[k] ?? Infinity;
+          if (d < pickD) {
+            pickD = d;
+            pick = k;
+          }
+        }
+        if (pick !== null) {
+          const x = pick % s.w;
+          const y = (pick - x) / s.w;
+          posts[u.id] = { x, y };
+          claimed.add(pick);
+        }
+      }
+    }
   }
 
   /*

@@ -19,6 +19,21 @@
  * ── 不许做的事 ──────────────────────────────────────────────
  *
  * 这里**不许有"该不该打"的判断**。那属于决定层。这里只回答"到那儿要几回合"。
+ *
+ * ── 距离场（BFS）一览：全项目只有这四个，别处一律不许再写 ──────────
+ *
+ * "距离场" = 一张和地图同样大的表，每格存一个数（离某个起点多远）。
+ * 它们最容易出错的地方是**同一个名字在四处指的不是一回事**，所以先在这里点名：
+ *
+ * | 编号 | 名字 | 从哪出发 | 算出来的数 | 谁在用 |
+ * |---|---|---|---|---|
+ * | A | `flipBfs` | 一个点 | **几回合**（格数 ÷ 移动力，向上取整） | `turnsFrom` / `marchTurns` / 城的角色 |
+ * | B | `walkDist` | 一座城 | **走几步**（按兵种的地形代价：森林 2 步，有"穿林"的 1 步） | `econSpots`（认领表） |
+ * | C | `flowFrom` | **一组"洞"（多源）** | 离最近那个洞几步 + **"下一步该往哪走"** | 约束层"进不去就换空岗" |
+ * | D | `planYield` 里的那张 | **所有空格（多源）** | 同上（几步 + 前驱） | 约束层"让位搬迁"（把人从关键格上挪开） |
+ *
+ * 注意 A/B 只给"多远"，C/D 还给"往哪走"（前驱指针）。看行为问题时先分清是哪一个：
+ * A/B 用错 = 选错了地方；C/D 用错 = 走的方向错、或者整队不动。
  */
 import { passable } from '../config.ts';
 import { effectiveStats, recruitSpawnCells, recruitPriceOf, unitYieldAt, utype } from '../rules.ts';
@@ -121,6 +136,17 @@ export interface World {
    */
   econSpots(): EconSpot[];
   /**
+   * **从一组"洞"出发的距离场**：每格离最近的洞几步，以及"下一步该往哪走"。
+   *
+   * 洞 = 空出来的岗位（不是所有空格）。穿过自己人算一步（那个人得先让开），
+   * 敌人和不可通行挡死。
+   *
+   * 为什么要它：人挨人的时候，"各自算各自最近的一格"会互相堵死——
+   * 两个人的"更近"都指向对方，于是谁也不动。一张共享的场里，洞有明确流向，
+   * 整列会像传送带一样依次前挪（这是 v3 `buildYieldPlan` 的思路，代码不抄）。
+   */
+  flowFrom(holes: number[]): { dist: Float64Array; prev: Int32Array };
+  /**
    * 这一格会不会被敌方战斗单位"够到"。
    *
    * 口径是 **贴脸**：敌人一步就能走到邻格开火（`移动 + 1`）。
@@ -149,21 +175,48 @@ export interface World {
 const idx = (s: GameState, x: number, y: number): number => y * s.w + x;
 
 /**
- * 一张地形图上的"到各格要几回合"。
+ * **【距离场 A】单源、按"回合"算的距离场。**
  *
- * 为什么用**回合**而不是格数：一格森林走两回合、一格平原走一回合，
- * 拿格数当距离会把"贴着一片林子走"算得比"绕开"还近。
+ * ── 它回答什么 ──────────────────────────────────────────────
  *
- * 代价：每次算都是 O(格子数)，所以只在 `buildWorld` 里对少数几个源点算，
- * 算完缓存在 World 上——上层要问就查表，不许自己再跑。
+ * "从这一个点出发，到地图上每一格要花几个回合"。走不到（水、高山）是 Infinity。
+ *
+ * ── 逐段在做什么 ────────────────────────────────────────────
+ *
+ * ① 初始化：把全表填成 Infinity（= 还没走到），起点写 0。
+ *
+ * ② 扩散：**一层一层往外推**（标准 BFS）。队列 `q` 里放的是"已经知道距离、还没往外看"的格。
+ *    `head` 是读指针、只往前走（不 `shift`，因为数组头部删除是 O(n)）。
+ *    每格只看上下左右四邻（这个游戏是四邻移动，斜走要两步）。
+ *
+ * ③ 判"这一格要不要更新"：用的是 `!Number.isFinite(dist[ni])`，
+ *    也就是"第一次走到它就定了"。这一步之所以成立，是因为**所有边代价都是 1**——
+ *    层数越小的先出队，所以第一次到达一定是最短的。这也是为什么它不能直接拿来算
+ *    "森林要走两步"（见 ④ 的取舍）。
+ *
+ * ④ 水/高山直接 `continue`：它们不是"远"，是"根本过不去"，保持 Infinity。
+ *    桥面是 `passable`（它本来就是路），所以能过。
+ *
+ * ⑤ 收尾：BFS 存的是**格数**，这里统一除以移动力、向上取整，换成**回合**。
+ *    向上取整是因为"这一手只走 1 格、还剩 1 格没走完"也算用掉了这一回合。
+ *
+ * ── 已知的取舍（别指望它算准）────────────────────────────────
+ *
+ * 它把森林的额外消耗**拍平**了（森林和草地在它眼里一样，都是 1 格）。
+ * 真要按地形代价算，得用下面的 `walkDist`（距离场 B），或者换成真正的
+ * Dijkstra。现在的口径是"够用就行"，等它开始让选点出错再换。
+ *
+ * 每次调用是 O(格子数)，所以只在 `buildWorld` 里对少数几个源点算，算完缓存在 World 上。
  */
 function flipBfs(s: GameState, src: { x: number; y: number }, move: number): Float64Array {
   const n = s.w * s.h;
   const dist = new Float64Array(n).fill(Infinity);
   const start = idx(s, src.x, src.y);
   if (start < 0 || start >= n) return dist;
+  /* ① 起点 */
   dist[start] = 0;
   const q: number[] = [start];
+  /* ② 逐层扩散 */
   for (let head = 0; head < q.length; head++) {
     const cur = q[head]!;
     const cx = cur % s.w;
@@ -173,29 +226,49 @@ function flipBfs(s: GameState, src: { x: number; y: number }, move: number): Flo
       const ny = cy + dy;
       if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
       const ni = idx(s, nx, ny);
+      /* ③ 第一次走到就定下来（所有边代价都是 1，所以先到即最短） */
       if (!Number.isFinite(dist[ni])) {
-        /* 水和高山走不了。桥面是 passable（它本来就是路）。 */
+        /* ④ 水和高山走不了。桥面是 passable（它本来就是路）。 */
         const t = s.tiles[ni]?.terrain;
         if (!t || !passable(t)) continue;
-        /* 一格 = 一"步"，一步能走 `move` 格。这里按层推进，所以每次 +1 回合。 */
         dist[ni] = dist[cur]! + 1;
         q.push(ni);
       }
     }
   }
-  /* BFS 出来的是"格数/步"，除以移动力才是回合（向上取整，因为走不满也算一回合） */
+  /* ⑤ 格数 → 回合 */
   for (let i = 0; i < n; i++) if (Number.isFinite(dist[i])) dist[i] = Math.ceil(dist[i]! / Math.max(1, move));
   return dist;
 }
 
 /**
- * 一个兵种从某格出发、走到各格要**几回合**（按它自己的地形消耗和移动力）。
+ * **【距离场 B】单源、按"这个兵种自己的地形代价"算的距离场（单位是"步"）。**
  *
- * 为什么不能用 `flipBfs`：那张表把森林的额外消耗拍平了（注释里写的已知取舍）。
- * 经济兵恰恰靠地形吃饭——伐木工有"穿林"，进森林只花 1 步，别的兵要花 2 步，
- * 拍平之后"伐木工进林"和"牧民进林"会被算成一样远，选岗就偏了。
+ * ── 它和距离场 A 的差别 ──────────────────────────────────────
  *
- * 代价只有 1 和 2 两种，所以用三个桶的队列（Dial），比堆简单也够快。
+ * A 把地形拍平（森林 = 草地 = 1 格），B 按兵种算：
+ *   森林对普通兵是 **2 步**，对带"穿林"的兵（伐木工）是 **1 步**。
+ *
+ * 为什么非要这个差别：经济兵的价值全在脚下那一格。伐木工进林只花一步、
+ * 牧民进林要花两步，用 A 的口径这两个会算成一样远，选岗就会把牧民也往林子里派。
+ *
+ * ── 为什么用"三个桶"而不是普通队列 ──────────────────────────
+ *
+ * 普通 BFS 只对"所有边代价相同"成立。这里的边代价是 1 或 2，如果还用普通队列，
+ * 会出现"先到的其实是贵的路"这种错。
+ * 但代价只有 1 和 2 两种，所以不用上堆：开 3 个桶，按距离 d 一轮一轮扫，
+ * 桶编号 = d % 3，`dist[k] !== d` 那一句是"这条记录过期了，丢掉"
+ * （同一格可能被更短的路重新写过一次）。
+ *
+ * ── 输出怎么读 ──────────────────────────────────────────────
+ *
+ * `dist[格号]` = 从起点走到那格要**几步**（不是回合）。要回合再除以这个兵的移动力。
+ * 走不到是 Infinity。`econSpots` 就是拿它算"走过去几回合"的。
+ *
+ * ── 已知局限 ────────────────────────────────────────────────
+ *
+ * 只算地形，**不算人**。有兵站在路上时，它照样认为"能过去、就这么远"——
+ * 所以它适合拿来"选哪块地"，不适合拿来判断"这一手走不走得动"。
  */
 function walkDist(s: GameState, from: { x: number; y: number }, def: { abilities?: string[] }): Float64Array {
   const n = s.w * s.h;
@@ -203,15 +276,17 @@ function walkDist(s: GameState, from: { x: number; y: number }, def: { abilities
   const start = from.y * s.w + from.x;
   if (start < 0 || start >= n) return dist;
   dist[start] = 0;
+  /* 代价只有 1 和 2 → 3 个桶就够（桶号 = 距离 % 3） */
   const K = 3;
   const q: number[][] = [[], [], []];
   q[0]!.push(start);
+  /* d 就是"当前在处理的距离"，从 0 一路往上扫 */
   for (let d = 0; ; d++) {
     if (q[0]!.length === 0 && q[1]!.length === 0 && q[2]!.length === 0) break;
     const bucket = q[d % K]!;
     while (bucket.length) {
       const k = bucket.pop()!;
-      if (dist[k] !== d) continue; /* 被更短的替换过了，丢掉 */
+      if (dist[k] !== d) continue; /* 过期的记录：这一格已经被更短的路重写过 */
       const x = k % s.w;
       const y = (k - x) / s.w;
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -376,6 +451,8 @@ export function buildWorld(s: GameState, me: PlayerId): World {
 
   /* 认领表的原料算一次就够（一场棋里问很多遍），算完缓存 */
   let spotCache: EconSpot[] | null = null;
+  /* 距离场按"洞的集合"缓存：同一手会同一条链问很多遍 */
+  const flowCache = new Map<string, { dist: Float64Array; prev: Int32Array }>();
 
   const world: World = {
     me,
@@ -515,6 +592,81 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         }
       }
       spotCache = out;
+      return out;
+    },
+
+    flowFrom(holes) {
+      /*
+       * **【距离场 C】多源：从一组"洞"同时出发，带"下一步该往哪走"。**
+       *
+       * ── "洞"是什么 ────────────────────────────────────────────
+       *
+       * 洞 = **空出来、但应该被占的格**（现在用在"空岗"上，见约束层）。
+       * 注意它不是"所有空格"——空格到处都有，那是距离场 D 的口径。
+       * 两者千万别混：用 D 的口径去找岗位，人会被引到地图另一头的空地上。
+       *
+       * ── 输出的两个数 ──────────────────────────────────────────
+       *
+       * · `dist[i]`：这一格离**最近那个洞**几步；走不到是 Infinity。
+       * · `prev[i]`：站在这一格的人，下一步应该走到哪个格号（朝洞的方向）。
+       *   `prev[洞] = -1`（到头了）。**整张表是一棵以洞为根的树**，
+       *   所以顺着 prev 走一定到得了洞、不会兜圈子。
+       *
+       * ── 逐段在做什么 ──────────────────────────────────────────
+       *
+       * ① 种子：所有洞，距离都写 0，一起进队列（这就是"多源"——
+       *    如果是单源，人和洞离得远时会绕一大圈；多源等于"谁都从最近的洞算起"）。
+       *
+       * ② 扩散：四邻、每格一步。**穿过自己人算一步**（那个人得先让开），
+       *    敌人和不可走的地形直接挡死。这条很关键：
+       *    如果自己不挡自己，这张表就会给出"人穿着人走"的路线，执行时全被引擎拒。
+       *
+       * ③ `MAX = 10` 是个上限：离得再远就没必要算了（省时间）。
+       *    副作用：超过 10 步的格子是 Infinity，上层会当成"走不到"。
+       *
+       * ④ 缓存：按"洞的集合"缓存（排序后拼成 key）。同一手会反复问同一条链，
+       *    不缓存的话每问一次就是一次全图扫描。
+       */
+      const key = holes.slice().sort((a, b) => a - b).join(',');
+      const hit = flowCache.get(key);
+      if (hit) return hit;
+      const n = s.w * s.h;
+      const dist = new Float64Array(n).fill(Infinity);
+      const prev = new Int32Array(n).fill(-1);
+      const q: number[] = [];
+      /* ① 所有洞同时当种子 */
+      for (const h of holes) {
+        if (h < 0 || h >= n) continue;
+        if (dist[h] === 0) continue;
+        dist[h] = 0;
+        q.push(h);
+      }
+      const MAX = 10;
+      /* ② 逐层扩散（所有边代价都是 1，所以第一次到达即最短） */
+      for (let i = 0; i < q.length; i++) {
+        const k = q[i]!;
+        if (dist[k]! >= MAX) continue;
+        const x = k % s.w;
+        const y = (k - x) / s.w;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+          const nk = ny * s.w + nx;
+          if (Number.isFinite(dist[nk])) continue;
+          const t = s.tiles[nk]?.terrain;
+          if (!t || !passable(t)) continue;
+          /* 穿过自己人算一步（他得先让开）；敌人挡死 */
+          const occ = s.units.find((u) => u.y * s.w + u.x === nk);
+          if (occ && occ.owner !== me) continue;
+          dist[nk] = dist[k]! + 1;
+          prev[nk] = k; /* 下一步往 k 走，就是朝洞的方向 */
+          q.push(nk);
+        }
+      }
+      /* ④ 缓存 */
+      const out = { dist, prev };
+      flowCache.set(key, out);
       return out;
     },
   };

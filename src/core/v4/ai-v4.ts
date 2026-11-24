@@ -83,6 +83,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     decision: { ...decision, since: s.turn },
     squad: squadMemo(con, mem, s.turn),
     econSince: econSinceMemo(s, me, mem),
+    econHome: econHomeMemo(s, me, mem, world),
   });
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
   logSquads(s, world.me, decision, con);
@@ -137,6 +138,26 @@ function econSinceMemo(s: GameState, me: PlayerId, mem: V4Memory): Record<string
     if (u.owner !== me) continue;
     if (utype(s, u.type).category !== 'economy') continue;
     out[u.id] = prev[u.id] ?? s.turn;
+  }
+  return out;
+}
+
+/**
+ * 记"每个经济兵出生在哪座城"（第一次见到它时，离它最近的那座城）。
+ *
+ * 出生城必须钉住：按"现在离哪座城近"算的话，人一走动最近城就翻，
+ * 分组跟着翻，岗位每回合重排，全场兵来回挪。
+ */
+function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): Record<string, string> {
+  const prev = mem.econHome ?? {};
+  const out: Record<string, string> = {};
+  for (const u of s.units) {
+    if (u.owner !== me) continue;
+    if (utype(s, u.type).category !== 'economy') continue;
+    const near = [...world.myCities].sort(
+      (a, b) => Math.abs(u.x - a.x) + Math.abs(u.y - a.y) - (Math.abs(u.x - b.x) + Math.abs(u.y - b.y)),
+    )[0];
+    out[u.id] = prev[u.id] ?? near?.id ?? '';
   }
   return out;
 }
