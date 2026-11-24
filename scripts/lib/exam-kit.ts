@@ -199,11 +199,35 @@ export function writeExam(opts: ExamWriteOpts): { panelFull: string; panelSafe: 
   /* ── 写文件 ───────────────────────────────────────────────── */
   mkdirSync(opts.out, { recursive: true });
 
-  /* 快照：显式关掉两个席位的 AI。
-   * 回放来源的 config 里 `aiSeats` 通常是空数组，本来就不会自己走；
-   * 但"本来就对"不能当依赖——手摆的局面里这条更容易漏。 */
+  /*
+   * 快照里的对手席位：**B 归 AI，且内核和判分器用的一致**。
+   *
+   * 这里曾经写死 `{ A: false, B: false }`（两席都不归 AI），理由是"出题时别让 AI 自己跑"。
+   * 但人拿这份快照去「导入对局」时，B 也一起变成手动——打完红方还要自己替蓝方走
+   * （2026-11-24 用户报的）。
+   *
+   * 更隐蔽的一条：`aiLevel` 是 `advanced`，游戏里映射到 **v3**；
+   * 而判分器默认对手是 `core/ai.ts`（v1）。就算 B 给了 AI，也不是判分时的那个 AI。
+   * 所以这里两样都钉死：B 归 AI + 档位 `tactic`（→ v1，和 `--foe-ai auto` 同一个内核）。
+   */
   const snapState = structuredClone(at);
-  snapState.aiControl = { A: false, B: false } as Record<PlayerId, boolean>;
+  snapState.aiControl = { A: false, B: true } as Record<PlayerId, boolean>;
+  snapState.config = {
+    ...snapState.config,
+    /*
+     * 对手档位钉死 `tactic`：`engineForAi` 把它映射到 **v1（`core/ai.ts`）**，
+     * 正好等于判分器 `--foe-ai auto` 用的那个内核。
+     *
+     * 为什么必须钉：原来这里是 `advanced`，游戏里映射到 **v3**，而判分用 v1——
+     * 人打的和判分复现的根本不是同一局（2026-11-24 用户导入后蓝方不动，就是这个族的问题）。
+     *
+     * 另外实测：**只改这一个字段，S-001 的结果就会翻转**。
+     * 所以它不是"显示用的档位"，是实打实的行为参数，改它等于改题目难度。
+     */
+    aiLevel: 'tactic',
+    aiOpponent: true,
+    aiSeats: ['B'],
+  };
   /*
    * 在局面里打上考卷标记。
    *
