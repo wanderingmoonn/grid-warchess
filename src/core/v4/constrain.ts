@@ -12,11 +12,17 @@
 import { passable } from '../config.ts';
 import { utype } from '../rules.ts';
 import type { GameState, Unit } from '../types.ts';
-import type { Constraints, Decision, Squad } from './types.ts';
+import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
 import type { World } from './world.ts';
 
 const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
   Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+
+/** 一个单位值多少（身价）：atk + hp + 射程×4，按剩余血量打折。和决定层同一个口径 */
+function unitWorth(s: GameState, u: Unit): number {
+  const d = utype(s, u.type);
+  return ((d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4) * (u.hp / Math.max(1, d.maxHp ?? 1));
+}
 
 /** 集结点：自家城朝敌方向外挪两格，取一个能站人的空点 */
 function assemblePoint(s: GameState, world: World, cityId: string): { x: number; y: number } | undefined {
@@ -145,7 +151,7 @@ function planYield(
  *   2. **每个兵最多属于一支队**——v3 的"一兵多队"让两套指令互相覆盖；
  *   3. **守城的兵不出去**——`hold` 是约束，不是"倾向"。
  */
-export function constrain(s: GameState, world: World, decision: Decision): Constraints {
+export function constrain(s: GameState, world: World, decision: Decision, mem?: V4Memory): Constraints {
   const city = decision.cityId ? s.cities.find((c) => c.id === decision.cityId) : undefined;
   const keepClear = [...world.keepClear];
   const keepSet = new Set(keepClear);
@@ -174,7 +180,63 @@ export function constrain(s: GameState, world: World, decision: Decision): Const
   const rest = world.myCombat.filter((u) => !held.has(u.id) && !keepSet.has(u.y * s.w + u.x));
 
   if (decision.kind === 'press' && city) {
-    squads.push({ id: 'main', order: 'march', unitIds: rest.map((u) => u.id), cityId: city.id });
+    const ids = rest.map((u) => u.id);
+    /*
+     * `want`：打这座城要几个人。
+     *
+     * 口径是"目标城的守军身价 ÷ 我方平均单位身价 × 1.5"，夹在 4~12。
+     * 不按固定配额（v3 试过乘数，三次调参把胜局调成平局），也不按"总兵力比"
+     * （v3 的注释：敌方一个兵都看不见时比值反而最大，越是空城越要凑满编）。
+     */
+    const guard = world.foeCombat.filter((u) => cheb(u, city) <= 6);
+    const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
+    const avg = ids.length > 0
+      ? ids.reduce((n, id) => {
+          const u = s.units.find((x) => x.id === id);
+          return n + (u ? unitWorth(s, u) : 0);
+        }, 0) / ids.length
+      : 1;
+    const freshWant = Math.max(4, Math.min(12, Math.round((guardStr / Math.max(1, avg)) * 1.5)));
+
+    /*
+     * 成立时定下的 `want` **不因为伤亡而缩**（存进记忆）。
+     * 不这样的话，人一死 want 跟着降，队伍就永远"刚好够"，越打越小。
+     */
+    const memo = mem?.squad;
+    const keepWant = memo && memo.cityId === city.id && s.turn - memo.formedAt <= 12 ? memo.want : freshWant;
+
+    /*
+     * 出发条件：**两回合内能站到城下的人够不够**，不看"总人数够不够"。
+     *
+     * 一开始写的是 `人数 >= want`，结果 25 个兵一字长蛇阵也立刻开拔——
+     * 人数够不等于队形到齐，先到的几个照样被各个击破（S-002：0 城伤、损失 22）。
+     *
+     * 现在看 eta80（八成人的行军回合）。这是纯几何判断，不需要记"我等了几回合"。
+     */
+    const etas = ids
+      .map((id) => {
+        const u = s.units.find((x) => x.id === id);
+        return u ? world.marchTurns(u, city) : Infinity;
+      })
+      .sort((a, b) => a - b);
+    const eta80 = etas[Math.min(etas.length - 1, Math.floor(etas.length * 0.8))] ?? Infinity;
+    const eta = etas[etas.length - 1] ?? Infinity;
+    /*
+     * 够数就走；或者整队已经贴到城下（八成人一步能到）。
+     *
+     * 试过"两回合内到城下的人 ≥ want"，那样是循环条件：队伍在城外集结，
+     * 到不了城下就永远凑不够人出发（S-000 从绿变红、S-005 过河 4→3）。
+     */
+    const ready = ids.length >= keepWant || eta80 <= 1;
+    squads.push({
+      id: 'main',
+      order: ready ? 'march' : 'assemble',
+      unitIds: ids,
+      cityId: city.id,
+      at: ready ? undefined : assemblePoint(s, world, city.id),
+      want: keepWant,
+      eta: Number.isFinite(eta) ? eta : 99,
+    });
   } else if (decision.kind === 'defend' && city) {
     /* 守：把外面的兵收回城下（这条和 S-004 那道题是同一件事） */
     squads.push({

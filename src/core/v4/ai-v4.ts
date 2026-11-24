@@ -27,7 +27,7 @@ import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction } from './tactics.ts';
-import type { Constraints, Decision } from './types.ts';
+import type { Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId } from '../types.ts';
 
 interface TurnCache {
@@ -68,10 +68,54 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
    */
   const view = playerView(s, me).state;
   const world = buildWorld(view, me);
-  const decision = decide(view, world);
-  const con = constrain(view, world, decision);
+  /*
+   * 记忆从**真状态**读、往**真状态**写。
+   *
+   * 注意 `view` 是 `playerView` 的副本：往副本上写，下一步 `applyAction` 一换状态就没了。
+   * 这也解释 v3 为什么把读写都收在 `focusOf` / `setFocus` 两个函数里——只有一处写，
+   * 才不会出现"写到了副本上、看起来生效了其实没有"。
+   */
+  const mem = memoryOf(s, me);
+  const decision = decide(view, world, mem);
+  const con = constrain(view, world, decision, mem);
+  writeMemory(s, me, { decision: { ...decision, since: s.turn }, squad: squadMemo(con, mem, s.turn) });
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
   return cache;
+}
+
+/** 读记忆。形状是 `types.ts` 里的 `V4Memory` */
+function memoryOf(s: GameState, me: PlayerId): V4Memory {
+  return (s.aiFocus?.[me]?.v4 ?? {}) as V4Memory;
+}
+
+/**
+ * 写记忆。**唯一写入点**（v3 的 `setFocus` 也是这个角色）。
+ *
+ * 为什么单一写入点重要：v3 的 `aiFocus` 里塞了 plan / squads / keep 一堆缓存，
+ * 好几个模块各写各的，于是"这个字段是谁改的"永远说不清——那就是耦合的来源。
+ * v4 只允许这一个函数改，且只写两类东西：承诺与事实。
+ */
+function writeMemory(s: GameState, me: PlayerId, mem: V4Memory): void {
+  const bag = { ...(s.aiFocus ?? {}) } as NonNullable<GameState['aiFocus']>;
+  bag[me] = { ...(bag[me] ?? {}), v4: mem };
+  s.aiFocus = bag;
+}
+
+/** 把这一手的编队身份记成事实（成立手数 + 目标人数），供下回合沿用 */
+function squadMemo(con: Constraints, mem: V4Memory, turn: number): V4Memory['squad'] {
+  const main = con.squads.find((q) => q.id === 'main');
+  if (!main || main.order === 'hold' || !main.cityId) return null;
+  const prev = mem.squad;
+  /* 同一座城、还在有效期内：沿用原来的成立手数与 want（want 不因伤亡而缩） */
+  if (prev && prev.cityId === main.cityId && turn - prev.formedAt <= 12) {
+    return { ...prev, want: main.want ?? prev.want };
+  }
+  return {
+    id: `${main.cityId}-${turn}`,
+    cityId: main.cityId,
+    formedAt: turn,
+    want: main.want ?? 6,
+  };
 }
 
 /** 给探针清缓存用（换局时调一次） */

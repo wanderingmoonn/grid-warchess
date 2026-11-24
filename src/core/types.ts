@@ -2026,6 +2026,21 @@ export interface AiFocus {
    * 一小时换一次主意。所以用回滞：进入要 1.30，退出掉到 0.90 才放。
    */
   decide?: { call: 'attack' | 'develop'; since: number; ratioAt: number } | null;
+  /**
+   * **v4 内核的记忆**（2026-11-24）。v3 不读它，两个内核各用各的。
+   *
+   * 只允许两类东西进来：
+   *   · **承诺**（`decision`）：我说过要打哪座城、管到第几手；
+   *   · **事实**（`squad`）：这支队第几手成立、当初定下打几个人。
+   *
+   * 不许放中间计算（候选表、分数、plan 树）——v3 的 `aiFocus` 里塞了
+   * `plan` / `squads` / `keep` 一堆缓存，于是"谁改了它"永远说不清。
+   * 形状定义在 `core/v4/types.ts`，这里只留一个结构占位，免得 types 反向依赖 v4。
+   */
+  v4?: {
+    decision?: { kind: string; cityId?: string; since: number; untilTurn: number; reason: string } | null;
+    squad?: { id: string; cityId: string; formedAt: number; want: number } | null;
+  } | null;
 }
 
 /** 收尾计划（接管废墟）的跨回合记忆 */

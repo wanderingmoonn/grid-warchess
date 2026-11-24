@@ -46,6 +46,10 @@ export interface Squad {
   at?: { x: number; y: number };
   /** march / siege 的目标城 */
   cityId?: string;
+  /** 目标人数：按目标城守军算，成立时定下，之后不因伤亡而缩（见 V4Memory.squad） */
+  want?: number;
+  /** 全队最慢的人赶到目标还要几回合（Infinity = 到不了）。出发条件读它 */
+  eta?: number;
 }
 
 /**
@@ -79,6 +83,14 @@ export interface UnitTask {
   order: SquadOrder;
   at?: { x: number; y: number };
   cityId?: string;
+}
+
+/** `GameState.aiFocus[p].v4` 的形状（见 core/types.ts 里的同名注释） */
+export interface V4Memory {
+  /** 承诺：上一次做的决定、哪一手立的、管到第几手 */
+  decision?: Decision & { since: number } | null;
+  /** 事实：这支队第几手成立、当初定下打几个人（防止 want 每回合被人一死就缩） */
+  squad?: { id: string; cityId: string; formedAt: number; want: number } | null;
 }
 
 /** 结构化日志的一条。出了问题先看它，别看代码 */
