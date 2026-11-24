@@ -52,6 +52,8 @@ export interface Squad {
   lanes?: Array<{ x: number; y: number }>;
   /** 每个单位走第几条路 */
   laneOf?: Record<string, number>;
+  /** 这一队要不要寻路绕（目标直线走不通，比如隔着河）：整队一个判断，不按单个兵 */
+  detour?: boolean;
   /** 全队最慢的人赶到目标还要几回合（Infinity = 到不了）。出发条件读它 */
   eta?: number;
   /**

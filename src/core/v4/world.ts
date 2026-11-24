@@ -61,6 +61,22 @@ export interface World {
   keepClear: number[];
   /** 从某格到某格要走几回合；走不到 = Infinity */
   marchTurns(from: { x: number; y: number }, to: { x: number; y: number }): number;
+  /**
+   * 从 `p` 出发的**真实回合数距离场**（引擎的 BFS，带缓存）。
+   *
+   * 为什么需要它：`stepToward` 原来按直线距离挑落点，遇到河就全错——
+   * 直线距离说"往东一格更近"，可东边是水，得绕桥（S-005 过河 4→1 就是这么掉的）。
+   * 引擎本来就算得出真实步数，用它挑落点最省事，也不会再和规则脱节。
+   */
+  turnsFrom(p: { x: number; y: number }): Float64Array;
+  /**
+   * 从 `p` 出发的**按格计步**距离场（每格 1 步，仍然绕水/山）。
+   *
+   * 为什么不能用 `turnsFrom`：那是**回合数**（兵一回合走 2 格），一格范围内的
+   * 十几格全是同一个值，`stepToward` 的"更近"就分不出大小，选点变成随机
+   * （S-011 实测：全队漂到西北角）。
+   */
+  stepsFrom(p: { x: number; y: number }): Float64Array;
   /** 城的角色（同一份缓存） */
   roleOf(city: City): CityRole;
   /** 这座城现在能造的最便宜的 N 个战斗兵（含价钱） */
@@ -178,6 +194,17 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     return t;
   };
 
+  /* 按格计步：和 turnsFrom 同一套 BFS，只是移动力按 1 算 */
+  const stepCache = new Map<string, Float64Array>();
+  const stepFrom = (p: { x: number; y: number }): Float64Array => {
+    const key = `${p.x},${p.y}`;
+    const hit = stepCache.get(key);
+    if (hit) return hit;
+    const t = flipBfs(s, p, 1);
+    stepCache.set(key, t);
+    return t;
+  };
+
   const distToNearestFoeCity = (p: { x: number; y: number }): number => {
     let best = Infinity;
     for (const d of flipFromFoeCity) best = Math.min(best, d[idx(s, p.x, p.y)] ?? Infinity);
@@ -266,6 +293,12 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     myEcon,
     foeCombat,
     keepClear: [...new Set(keepClear)],
+    turnsFrom(p) {
+      return marchFrom(p);
+    },
+    stepsFrom(p) {
+      return stepFrom(p);
+    },
     marchTurns(from, to) {
       if (from.x === to.x && from.y === to.y) return 0;
       return marchFrom(from)[idx(s, to.x, to.y)] ?? Infinity;

@@ -16,8 +16,18 @@ import type { GameState, Unit } from '../types.ts';
 import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
 import type { World } from './world.ts';
 
+/**
+ * **曼哈顿**距离——和引擎一致（2026-11-24 修）。
+ *
+ * 这游戏里移动是四邻 BFS，斜走要**两步**，`distToCity` 也是 `|dx|+|dy|`。
+ * v4 原来一直用切比雪夫（斜走算 1 格），等于系统性地高估推进能力：
+ * "离城 4 格"在引擎眼里可能是 6 步，`stepToward` 于是选了一堆看着更近、
+ * 实际更费步的斜向落点。
+ *
+ * 唯一用欧氏的是视野（历史遗留的 bug，改成惯例了）——那一条不在这里。
+ */
 const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 /**
  * 本回合的集火点：**一张尺子，只算一次**。
@@ -225,10 +235,32 @@ function planLanes(
   const ny = ax;
 
   const offsets = k === 3 ? [-2, 0, 2] : [-1.5, 1.5];
-  const lanes = offsets.map((off) => ({
-    x: Math.round(front.x + ax * 3 + nx * off),
-    y: Math.round(front.y + ay * 3 + ny * off),
-  }));
+  /*
+   * 引导点必须**落在能站的格子上**。
+   *
+   * 算出来落在森林/水上时，引擎的 BFS 距离场在那儿是 Infinity，
+   * 于是"离目标更近"的比较全失效，兵会绕着障碍打转（S-011 实测：全队漂到西北角）。
+   */
+  const snap = (p: { x: number; y: number }): { x: number; y: number } => {
+    if (passable(s.tiles[p.y * s.w + p.x]?.terrain ?? 'wall')) return p;
+    for (let r = 1; r <= 2; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = p.x + dx;
+          const y = p.y + dy;
+          if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+          if (passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) return { x, y };
+        }
+      }
+    }
+    return p;
+  };
+  const lanes = offsets.map((off) =>
+    snap({
+      x: Math.round(front.x + ax * 3 + nx * off),
+      y: Math.round(front.y + ay * 3 + ny * off),
+    }),
+  );
 
   const sorted = [...us].sort(
     (a, b) => (a.x - front.x) * nx + (a.y - front.y) * ny - ((b.x - front.x) * nx + (b.y - front.y) * ny),
@@ -317,6 +349,17 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      * 到不了城下就永远凑不够人出发（S-000 从绿变红、S-005 过河 4→3）。
      */
     const ready = ids.length >= keepWant || eta80 <= 1;
+
+    /*
+     * 要不要绕：看**先头那个兵**到城的真实回合数和直线距离差多少。
+     * 隔河时 BFS 会明显更远（S-005 的桥），这时才用寻路挑落点；
+     * 平地上一律直线（用了反而会选斜路绕远，S-011 全队漂到西北角）。
+     */
+    const leadUnit = ids
+      .map((id) => s.units.find((x) => x.id === id))
+      .filter((u): u is NonNullable<typeof u> => !!u)
+      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city))[0];
+    const detour = leadUnit ? world.marchTurns(leadUnit, city) > cheb(leadUnit, city) + 2 : false;
     squads.push({
       id: 'main',
       order: ready ? 'march' : 'assemble',
@@ -328,6 +371,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       /* 集火点：这一手全队打同一个。出发前（assemble）也照样选，等于"边收拢边集火" */
       focusId: pickFocus(s, ids),
       /* 分路：只给推进中的队分；路数由地形宽度决定（窄道自动退回单列） */
+      detour,
       ...(ready ? planLanes(s, world, ids, city) ?? {} : {}),
     });
   } else if (decision.kind === 'defend' && city) {

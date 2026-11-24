@@ -16,8 +16,18 @@ import type { Action, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
 
+/**
+ * **曼哈顿**距离——和引擎一致（2026-11-24 修）。
+ *
+ * 这游戏里移动是四邻 BFS，斜走要**两步**，`distToCity` 也是 `|dx|+|dy|`。
+ * v4 原来一直用切比雪夫（斜走算 1 格），等于系统性地高估推进能力：
+ * "离城 4 格"在引擎眼里可能是 6 步，`stepToward` 于是选了一堆看着更近、
+ * 实际更费步的斜向落点。
+ *
+ * 唯一用欧氏的是视野（历史遗留的 bug，改成惯例了）——那一条不在这里。
+ */
 const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 function squadOf(con: Constraints, u: Unit): Squad | undefined {
   for (const sq of con.squads) if (sq.unitIds.includes(u.id)) return sq;
@@ -185,7 +195,21 @@ export function actFor(
    * 这里先用人数做近似（≥16 = 至少三四排），等有更好的几何量再换。
    */
   const hasDepth = sq.unitIds.length >= 16;
-  const spot = stepToward(s, u, to, hasDepth && !!sq.lanes && sq.lanes.length > 1);
+  /*
+   * 只有**直线走不通**时才用寻路距离场（有河、有山挡着）。
+   *
+   * 全是直线可达时用寻路反而更差：绕障碍会选出一条"看着更远"的斜路，
+   * S-011 实测全队漂到西北角。所以：`真实回合数 > 直线距离 + 2` 才算"必须绕"。
+   */
+  /* 临时：始终用按格计步的寻路 */
+  const mustDetour = true;
+  const spot = stepToward(
+    s,
+    u,
+    to,
+    hasDepth && !!sq.lanes && sq.lanes.length > 1,
+    mustDetour ? world.stepsFrom(to) : undefined,
+  );
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   return null;
 }
@@ -202,8 +226,17 @@ function stepToward(
   to: { x: number; y: number },
   /** 走廊够宽才走直线；窄道（桥/关隘）要排队，不能硬顶成一横排 */
   straight = false,
+  /** 到目标的真实回合数场（引擎 BFS）。给了就用它判远近，直线距离只在没给时兜底 */
+  field?: Float64Array,
 ): { x: number; y: number } | null {
-  const cur = cheb(u, to);
+  const dist = (x: number, y: number): number =>
+    field ? (field[y * s.w + x] ?? Infinity) : cheb({ x, y }, to);
+  const distSafe = (x: number, y: number): number => {
+    const d = dist(x, y);
+    /* 目标不可达（在障碍里/被围死）时直线距离兜底，否则比较全是 Infinity、兵会打转 */
+    return Number.isFinite(d) ? d : cheb({ x, y }, to);
+  };
+  const cur = distSafe(u.x, u.y);
   const curE = (u.x - to.x) ** 2 + (u.y - to.y) ** 2;
   let best: { x: number; y: number } | null = null;
   let bestD = cur;
@@ -219,7 +252,7 @@ function stepToward(
      * "别停"由约束层的搬迁计划负责：停在上面的单位下一手会被挪开。
      */
     if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-    const d = cheb({ x, y }, to);
+    const d = distSafe(x, y);
     if (d < bestD) {
       bestD = d;
       best = { x, y };
