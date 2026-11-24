@@ -87,7 +87,7 @@ const build = (cur: Plan): void => {
 };
 
 function run(plan: Plan): { econ: number; built: number; gold: number } {
-  let s = { ...(JSON.parse(JSON.stringify(snap)) as GameState), current: 'A' as never };
+  let s = { ...(JSON.parse(JSON.stringify(snap)) as GameState), current: 'A' } as GameState;
   let built = 0;
   for (let i = 0; i < A_TURNS; i++) {
     const r = playTurn(s, plan[i] || null);

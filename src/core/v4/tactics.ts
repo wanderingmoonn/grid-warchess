@@ -297,8 +297,15 @@ function bestYieldStep(
    * 关键格是"过道"，过道边上也是过道。
    */
   const keep = new Set(con.keepClear);
+  /*
+   * "关键格四周也不许站"**只对过道成立**（桥），不对城/产兵格成立。
+   *
+   * 原来是一刀切：keepClear 里既有桥头也有城格，于是城边那一圈全被排除——
+   * S-015 那 2 格森林正好贴着城，经济兵永远走不上去（实测三个伐木工站平原产 3）。
+   */
   const nearKeep = new Set<number>();
   for (const k of con.keepClear) {
+    if (s.tiles[k]?.terrain !== 'bridge') continue;
     const kx = k % s.w;
     const ky = Math.floor(k / s.w);
     /* 八邻域（含斜角）：斜着站在桥口一样挡人 */
@@ -431,6 +438,23 @@ export function recruitAction(s: GameState, world: World, need?: { hp: number; a
       const r = applyAction(s, a);
       if (r.ok) return a;
     }
+  }
+  return null;
+}
+
+/**
+ * 造经济兵：**位置由 `world.econPost()` 定**（它已经把"哪一格产多少"算完了）。
+ *
+ * 和战斗兵的区别是"先有位置再造人"——经济兵的价值全在脚下那一格，
+ * 没有好格子就不该造。所以这里不挑兵种、也不比价，只听 econPost。
+ */
+export function recruitEcon(s: GameState, world: World): Action | null {
+  const post = world.econPost();
+  if (!post) return null;
+  for (const info of world.cities) {
+    if (info.role === 'threatened') continue;
+    const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: post.type };
+    if (applyAction(s, a).ok) return a;
   }
   return null;
 }

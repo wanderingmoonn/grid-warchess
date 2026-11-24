@@ -21,7 +21,7 @@
  * 这里**不许有"该不该打"的判断**。那属于决定层。这里只回答"到那儿要几回合"。
  */
 import { passable } from '../config.ts';
-import { effectiveStats, recruitSpawnCells, recruitPriceOf, utype } from '../rules.ts';
+import { effectiveStats, recruitSpawnCells, recruitPriceOf, unitYieldAt, utype } from '../rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
 
 /** 一座城在这一局里的角色——**只有这一个口径** */
@@ -81,6 +81,17 @@ export interface World {
   roleOf(city: City): CityRole;
   /** 这座城现在能造的最便宜的 N 个战斗兵（含价钱） */
   affordableCombat(city: City, gold: number): Array<{ type: string; gold: number }>;
+  /**
+   * **该造哪个经济兵、让它站哪一格**（没有值得造的返回 null）。
+   *
+   * 判法是纯几何，不打分：把所有可造的经济兵 × 我方城附近的**空闲格**算一遍产出，
+   * 取 `(产出最高, 造价最便宜)` 的那一对。因此它天然会"填满稀缺地形再换兵种"——
+   * 森林只有 2 格时，第 3 个伐木工的最优格掉到平原（3 金），牧民在丘陵（8 金）就赢了。
+   *
+   * 这个口径是被 S-015 校准出来的：用户实测"复读伐木工"只得 21，
+   * 而"2 伐木 + 2 牧民"能到 40、满配 52。
+   */
+  econPost(): { type: string; gold: number; at: { x: number; y: number }; yield: number } | null;
   /**
    * 这一格会不会被敌方战斗单位"够到"。
    *
@@ -342,6 +353,40 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         if (price <= gold) out.push({ type: def.id, gold: price });
       }
       return out.sort((a, b) => a.gold - b.gold);
+    },
+
+    econPost() {
+      const gold = s.players[me]?.gold ?? 0;
+      /* 我方城附近 8 格内的空闲格（别人站着的不要） */
+      const free: Array<{ x: number; y: number }> = [];
+      for (let y = 0; y < s.h; y++) {
+        for (let x = 0; x < s.w; x++) {
+          if (!passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) continue;
+          if (s.units.some((u) => u.x === x && u.y === y)) continue;
+          if (!myCities.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= 8)) continue;
+          free.push({ x, y });
+        }
+      }
+      if (free.length === 0) return null;
+
+      let best: { type: string; gold: number; at: { x: number; y: number }; yield: number } | null = null;
+      for (const city of myCities) {
+        for (const def of Object.values(s.unitTypes)) {
+          if (def.category !== 'economy') continue;
+          if ((def.era ?? 1) > (city.era ?? 1)) continue;
+          if (recruitSpawnCells(s, city.id, undefined, def.id).length === 0) continue;
+          const price = recruitPriceOf(s, me, def).gold;
+          if (price > gold) continue;
+          for (const p of free) {
+            const g = unitYieldAt(s, { type: def.id } as never, p.x, p.y).gold ?? 0;
+            if (!best || g > best.yield || (g === best.yield && price < best.gold)) {
+              best = { type: def.id, gold: price, at: p, yield: g };
+            }
+          }
+        }
+      }
+      /* 产出太差就别造了（3 金/回合连回本都谈不上） */
+      return best && best.yield >= 4 ? best : null;
     },
   };
   return world;

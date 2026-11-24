@@ -26,7 +26,7 @@ import { playerView } from '../fog.ts';
 import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
-import { actFor, recruitAction } from './tactics.ts';
+import { actFor, recruitAction, recruitEcon } from './tactics.ts';
 import type { Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId } from '../types.ts';
 
@@ -181,7 +181,16 @@ export function aiNextActionV4(
    * 循环自然结束。**不再用一个人为数字去代替规则本身。**
    */
   {
-    const rec = recruitAction(s, world, con.need);
+    /*
+     * 发展（expand）或者根本看不见敌人时，**先补经济**；其余情况先补战力。
+     *
+     * 这条是 S-015 逼出来的：v4 原来只会 `affordableCombat`，一个经济兵都不造，
+     * 长局里经济 8 vs 对手 51，前期压着打、后期被拖死。
+     */
+    const preferEcon = view.decision.kind === 'expand' || world.foeCombat.length === 0;
+    const rec = preferEcon
+      ? recruitEcon(s, world) ?? recruitAction(s, world, con.need)
+      : recruitAction(s, world, con.need) ?? recruitEcon(s, world);
     if (usable(rec)) {
       view.recruits += 1;
       return rec;
