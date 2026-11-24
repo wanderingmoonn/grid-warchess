@@ -4,7 +4,7 @@ import type { City, GameState, Terrain, Unit } from '../core/types.ts';
 import type { BoardUi } from './board.ts';
 
 type Point = readonly [number, number];
-interface Cell { x: number; y: number }
+interface Cell { x: number; y: number; cityId?: string }
 interface Face { cell: Cell; points: readonly Point[] }
 
 export interface AngledCamera {
@@ -115,6 +115,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * 比原来的浅流略低半格（避免"水比岸高"），和深水之间不再有台阶。
    */
   const WATER_SURFACE = -3.5;
+  /** 迷雾压暗色：与正俯视 `--fog-shade` 对齐，确保视野内外边界一眼可辨 */
+  const FOG_SHADE = 'rgba(13, 20, 28, 0.54)';
+  const FOG_CITY_SHADE = 'rgba(13, 20, 28, 0.50)';
+  const FOG_PROP_TIE = 'rgba(13, 20, 28, 0.22)';
   /** 深度分档：决定水体底床可视度、边缘剖面水层厚度与深浅过渡坡 */
   const bedDepth: Partial<Record<Terrain, number>> = { shallow: 1, water: 4, deep: 9 };
   const isWaterTerrain = (t: Terrain | undefined): boolean => t === 'water' || t === 'shallow' || t === 'deep';
@@ -854,7 +858,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
     const drop = topZ - botZ;
     if (drop <= 1.5) {
-      if (dark) polygon(ctx, points, '#17232b47');
+      if (dark) polygon(ctx, points, FOG_SHADE);
       return points;
     }
 
@@ -1001,7 +1005,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.lineWidth = 0.85;
     ctx.stroke();
 
-    if (dark) polygon(ctx, points, '#17232b47');
+    if (dark) polygon(ctx, points, FOG_SHADE);
     return points;
   }
 
@@ -1962,7 +1966,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.lineWidth = 0.85;
     ctx.stroke();
 
-    if (dark) polygon(ctx, points, '#17232b47');
+    if (dark) polygon(ctx, points, FOG_SHADE);
     return points;
   }
 
@@ -2471,16 +2475,23 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       paintValleyArt(ctx, x, y, elevation, state);
     } else if (terrain === 'marsh') {
       paintMarshArt(ctx, x, y, elevation, state);
-    } else if (terrain === 'forest') {
-      paintForestArt(ctx, x, y, elevation, state);
-    } else if (terrain === 'mountain') {
-      paintMountainArt(ctx, x, y, elevation, state);
+    } else if (terrain === 'forest' || terrain === 'mountain') {
+      const canFilter = dark && typeof ctx.filter === 'string';
+      if (canFilter) {
+        ctx.save();
+        ctx.filter = 'brightness(0.56) saturate(0.72)';
+      }
+      if (terrain === 'forest') paintForestArt(ctx, x, y, elevation, state);
+      else paintMountainArt(ctx, x, y, elevation, state);
+      if (canFilter) ctx.restore();
+      if (dark) polygon(ctx, rhombus(x, y, 1, elevation), canFilter ? FOG_PROP_TIE : FOG_SHADE);
+      return;
     } else if (terrain === 'bridge') {
       paintBridgeArt(ctx, x, y, elevation, state);
     } else {
       polygon(ctx, rhombus(x, y, 1, elevation), colors[terrain] ?? colors.plain!, '#34422a27');
     }
-    if (dark) polygon(ctx, rhombus(x, y, 1, elevation), '#17232b47');
+    if (dark) polygon(ctx, rhombus(x, y, 1, elevation), FOG_SHADE);
   }
 
   const teams = { A: '#a64b40', B: '#356689', C: '#53714c', D: '#99722d' };
@@ -4418,7 +4429,13 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   }
 
   function paintCity(
-    ctx: CanvasRenderingContext2D, city: City, texture: HTMLImageElement, target: boolean, selected: boolean, dark: boolean,
+    ctx: CanvasRenderingContext2D,
+    city: City,
+    texture: HTMLImageElement,
+    target: boolean,
+    selected: boolean,
+    dark: boolean,
+    hitCell: Cell,
   ): void {
     const pad = 0.08;
     const x = city.x + pad;
@@ -4437,8 +4454,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const stage = cityDamageStage(city);
     if (stage === 3 && (city.era < 1 || city.era > 8)) {
       paintCityRuined(ctx, pt, outline);
-      if (dark) polygon(ctx, basePoly, '#17232b47');
-      faces.push({ cell: { x: city.x, y: city.y }, points: basePoly });
+      if (dark) polygon(ctx, basePoly, FOG_SHADE);
+      faces.push({ cell: hitCell, points: basePoly });
       return;
     }
 
@@ -4475,12 +4492,12 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
       if (dark) {
         const fogTop = rhombus(x, y, width, stage === 3 ? 6 : Math.min(26, city.era * 3 + 6));
-        polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], '#17232b38');
+        polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], FOG_CITY_SHADE);
       }
       // 扩大命中面覆盖 3D 建筑轮廓，点击建筑顶部也能直接选中城市
       const pickTop = rhombus(x, y, width, (stage === 3 ? 6 : 16) * hScale);
       faces.push({
-        cell: { x: city.x, y: city.y },
+        cell: hitCell,
         points: [pickTop[0]!, pickTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, pickTop[3]!],
       });
       return;
@@ -4500,11 +4517,11 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       ctx.drawImage(texture, 0, 0, width, width);
       ctx.restore();
     }
-    if (dark) polygon(ctx, roof, '#17232b47');
+    if (dark) polygon(ctx, roof, FOG_SHADE);
     ctx.lineWidth = target || selected ? 3.4 : 2.4;
     ctx.strokeStyle = outline;
     ctx.stroke();
-    faces.push({ cell: { x: city.x, y: city.y }, points: roof });
+    faces.push({ cell: hitCell, points: roof });
   }
 
   function paintUnit(
@@ -4769,6 +4786,23 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       if (group) group.push(unit);
       else units.set(key, [unit]);
     }
+    // 城市占多格：记录每座城占用的所有格与“无驻军的空格”，用于：
+    //   1) 推迟绘制城内驻军到 paintCity 之后，避免驻军被 3D 城墙遮挡或被城市命中面吞掉；
+    //   2) 点击城市建筑本身时优先返回城内空格（无驻军），防止 (city.x, city.y) 站了 1 个兵就再也点不开城！
+    const cityCellIds = new Map<number, string>();
+    const cityHitCells = new Map<string, Cell>();
+    for (const city of cities.values()) {
+      const tilesOfCity = cityTiles(city);
+      let emptyCell: Cell = { x: city.x, y: city.y };
+      for (const t of tilesOfCity) {
+        const ti = t.y * state.w + t.x;
+        cityCellIds.set(ti, city.id);
+        if (!units.has(ti) && emptyCell.x === city.x && emptyCell.y === city.y && units.has(city.y * state.w + city.x)) {
+          emptyCell = { x: t.x, y: t.y };
+        }
+      }
+      cityHitCells.set(city.id, { ...emptyCell, cityId: city.id });
+    }
 
     cachedBottom = [project(0, 0, boardFloor), project(state.w, 0, boardFloor),
       project(state.w, state.h, boardFloor), project(0, state.h, boardFloor)];
@@ -4823,13 +4857,13 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           }
           if (useLayerCache) {
             waterCells.push({ x, y, terrain: cellTerrain, dark, eastEdge, southEdge, meta });
-            if (dark) polygon(targetCtx, top, '#17232b47');
+            if (dark) polygon(targetCtx, top, FOG_SHADE);
           } else {
             if (eastEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x + 1, y, x + 1, y + 1, 'east', dark, nowSec);
             if (southEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x, y + 1, x + 1, y + 1, 'south', dark, nowSec);
             paintWaterBaseTile(targetCtx, x, y, cellTerrain, terrain, meta);
             paintWaterGridAndContours(targetCtx, x, y, cellTerrain, terrain);
-            if (dark) polygon(targetCtx, top, '#17232b47');
+            if (dark) polygon(targetCtx, top, FOG_SHADE);
           }
         } else {
           paintTerrain(targetCtx, x, y, terrain, dark);
@@ -4898,11 +4932,38 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         }
 
         const city = cities.get(index);
-        if (city) paintCity(targetCtx, city, cityTexture(city.era), sieges.has(city.id), ui?.selectedCityId === city.id, dark);
-        const group = units.get(index);
-        if (group) {
-          group.sort((a, b) => Number(isAirborne(state, a)) - Number(isAirborne(state, b)));
-          for (const unit of group) paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
+        if (city) {
+          const hitCell = cityHitCells.get(city.id) ?? { x: city.x, y: city.y };
+          paintCity(targetCtx, city, cityTexture(city.era), sieges.has(city.id), ui?.selectedCityId === city.id, dark, hitCell);
+          // 选中单位可走入城内某格时，把城内可达格的地表菱形补在城市命中面之上，确保精准走到点击的那一格
+          if (moves.size > 0) {
+            for (const ct of cityTiles(city)) {
+              const ci = ct.y * state.w + ct.x;
+              if (!moves.has(ci)) continue;
+              const subTop = rhombus(ct.x, ct.y, 1, 0.35);
+              polygon(targetCtx, subTop, '#3d8ecb45', '#2873a5cc');
+              faces.push({ cell: { x: ct.x, y: ct.y }, points: subTop });
+            }
+          }
+          // 城内驻军统一在 3D 城体之后按从远到近绘制，既不被城墙挡住，也能准确点选每个驻军
+          const garrisonUnits: Unit[] = [];
+          for (const ct of cityTiles(city)) {
+            const g = units.get(ct.y * state.w + ct.x);
+            if (g) garrisonUnits.push(...g);
+          }
+          garrisonUnits.sort(
+            (a, b) => (a.x + a.y) - (b.x + b.y) || Number(isAirborne(state, a)) - Number(isAirborne(state, b)),
+          );
+          for (const unit of garrisonUnits) {
+            paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
+          }
+        }
+        if (!cityCellIds.has(index)) {
+          const group = units.get(index);
+          if (group) {
+            group.sort((a, b) => Number(isAirborne(state, a)) - Number(isAirborne(state, b)));
+            for (const unit of group) paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
+          }
         }
       }
     }
@@ -4942,6 +5003,17 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         targetCtx.fillStyle = ratio > 0.5 ? '#55906a' : ratio > 0.25 ? '#cc8838' : '#b93831';
         targetCtx.fillRect(barX, by - 1.5, barW * ratio, 3);
       }
+      // 铭牌本身也作为城市直达热区：即使城内 4 格全满驻军，点 E1 铭牌依然能一键打开城市面板
+      const hitCell = cityHitCells.get(city.id) ?? { x: city.x, y: city.y };
+      faces.push({
+        cell: { x: hitCell.x, y: hitCell.y, cityId: city.id },
+        points: [
+          [bx - pillW / 2 - 3, by - pillH / 2 - 3],
+          [bx + pillW / 2 + 3, by - pillH / 2 - 3],
+          [bx + pillW / 2 + 3, by + pillH / 2 + 3],
+          [bx - pillW / 2 - 3, by + pillH / 2 + 3],
+        ],
+      });
     }
 
     if (useLayerCache) {

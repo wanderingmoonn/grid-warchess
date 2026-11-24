@@ -29,7 +29,7 @@ import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { actionFeedback, forecastCombat } from '../src/ui/combat-feedback.ts';
 import { unitRole } from '../src/ui/unit-insignia.ts';
-import { applyUiLayout, setUiLayout } from '../src/ui/layout.ts';
+import { applyUiLayout } from '../src/ui/layout.ts';
 import { drainDamageLedger, startDamageLedger } from '../src/core/rules.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import {
@@ -11244,20 +11244,14 @@ check('触屏攻击：首次点击仅预览，确认后才结算并显示结果'
   }
 });
 
-check('经典 UI 鼠标交锋：悬停预览，直接点击目标执行攻击', () => {
+check('退役旧布局分支：?layout=classic 自动归并至现代布局，首页与设置不再保留回滚入口', () => {
   const fresh = bootWith(combatFixture(), '?loadSave=1&layout=classic');
   try {
-    const source = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!;
-    source.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
-    const target = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
-    const before = fresh.localStorage.getItem('warchess:match:v1');
-    target.dispatchEvent(new fresh.MouseEvent('mouseover', { bubbles: true }));
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
-    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
-    target.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
-    const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
-    assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    fresh.document.querySelector<HTMLElement>('[data-act="settings"]')!.click();
+    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]'), null);
+    fresh.document.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
+    assert.equal(fresh.document.querySelector('[data-title="ui-layout"]'), null);
   } finally {
     fresh.close();
   }
@@ -11385,13 +11379,7 @@ check('首页沙盘：普通启动用已有存档画整张小地图，继续时�
     const card = home.querySelector<HTMLButtonElement>('button.title-resume')!;
     assert.match(card.getAttribute('aria-label') ?? '', /继续上一局.*回合/);
     assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
-    const layoutSwitch = home.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
-    layoutSwitch.click();
-    assert.ok(card.hidden);
-    assert.ok(home.querySelector('.title-resume-fallback[data-title="continue"]:not([hidden])'));
-    layoutSwitch.click();
-    assert.equal(card.hidden, false);
-    assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
+    assert.equal(home.querySelector('[data-title="ui-layout"]'), null);
     assert.equal(home.querySelectorAll('.hero-match-tile').length, 144);
     assert.equal(home.querySelector('.hero-match-tile')?.getAttribute('data-terrain'), 'mountain');
     assert.equal(fresh.localStorage.getItem('warchess:match:v1'), JSON.stringify(st));
@@ -11472,70 +11460,49 @@ check('首页沙盘：大地图只取局部，浓雾里的敌军和地形仍然�
   }
 });
 
-check('UI 回滚：设置立即生效、能恢复新版，不修改对局和深浅色选择', () => {
+check('Canvas-First 抽屉状态机：空闲为 idle，选兵/快捷入口切换 context，关闭回到 idle', () => {
   const fresh = bootWith(combatFixture());
   try {
-    const tap = (selector: string) => {
-      const button = fresh.document.querySelector<HTMLElement>(selector);
-      assert.ok(button, selector);
-      button.click();
-    };
-    tap('.unit[data-id="forecast-own"]');
-    const saved = fresh.localStorage.getItem('warchess:match:v1');
-    const theme = fresh.document.documentElement.dataset.ui;
-    tap('[data-act="settings"]');
-    tap('[data-act="set-ui-layout"]');
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
-    assert.equal(fresh.localStorage.getItem('warchess:ui-layout'), 'classic');
-    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]')?.textContent, '恢复新版 UI');
-    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]'), fresh.document.activeElement);
-    assert.equal(fresh.document.documentElement.dataset.ui, theme);
-    tap('[data-act="set-ui-layout"]');
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    const drawer = fresh.document.querySelector<HTMLElement>('#side-drawer')!;
+    assert.equal(drawer.dataset.context, 'idle');
+    fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!.dispatchEvent(
+      new fresh.MouseEvent('click', { bubbles: true }),
+    );
+    assert.equal(drawer.dataset.context, 'unit');
+    fresh.document.querySelector<HTMLElement>('[data-act="clear-selection"]')!.click();
+    assert.equal(drawer.dataset.context, 'idle');
+    fresh.document.querySelector<HTMLElement>('[data-act="dock-open"][data-dock="log"]')!.click();
+    assert.equal(drawer.dataset.context, 'dock');
+    fresh.document.querySelector<HTMLElement>('[data-act="clear-selection"]')!.click();
+    assert.equal(drawer.dataset.context, 'idle');
+  } finally {
+    fresh.close();
+  }
+});
+
+check('顶栏可动计数：显示可行动兵力并支持一键定位选中', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const readyBtn = fresh.document.querySelector<HTMLButtonElement>('[data-ref="battle-ready"]')!;
+    assert.equal(readyBtn.hidden, false);
+    assert.match(readyBtn.textContent ?? '', /\d+\s*可动/);
+    readyBtn.click();
     assert.ok(fresh.document.querySelector('.unit.selected[data-id="forecast-own"]'));
-    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+    assert.equal(fresh.document.querySelector<HTMLElement>('#side-drawer')!.dataset.context, 'unit');
   } finally {
     fresh.close();
   }
 });
 
-check('UI 回滚：应急链接优先、切换同步链接、存储受限也能切换', () => {
-  const fresh = new JSDOM('<!doctype html><html></html>', { url: 'http://localhost/?layout=classic&sharecode=keep#board' }).window;
-  try {
-    const root = fresh.document.documentElement;
-    fresh.localStorage.setItem('warchess:ui-layout', 'refined');
-    assert.equal(applyUiLayout(root), 'classic');
-    setUiLayout('refined', root);
-    assert.equal(new URL(fresh.location.href).searchParams.get('layout'), 'refined');
-    assert.equal(new URL(fresh.location.href).searchParams.get('sharecode'), 'keep');
-    assert.equal(fresh.location.hash, '#board');
-    fresh.history.replaceState(null, '', '/');
-    setUiLayout('classic', root);
-    delete root.dataset.uiLayout;
-    assert.equal(applyUiLayout(root), 'classic');
-    Object.defineProperty(fresh, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
-    assert.equal(applyUiLayout(root), 'refined');
-    setUiLayout('classic', root);
-    assert.equal(root.dataset.uiLayout, 'classic');
-  } finally {
-    fresh.close();
-  }
-});
-
-check('UI 回滚：首页可独立切换，不离开首页且保留主入口', () => {
+check('布局工具：已统一收敛至 refined 现代布局，保留深浅色设置且不破坏存档', () => {
   const fresh = bootWith(combatFixture());
   try {
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    assert.equal(applyUiLayout(fresh.document.documentElement), 'refined');
     fresh.document.querySelector<HTMLElement>('[data-act="settings"]')!.click();
-    fresh.document.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
-    const button = fresh.document.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
-    assert.ok(button);
-    button.click();
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
-    assert.equal(button.getAttribute('aria-pressed'), 'true');
-    assert.equal(button.textContent, '恢复新版 UI');
-    assert.ok(fresh.document.querySelector('.title-screen [data-title="new"]'));
-    button.click();
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    fresh.document.querySelector<HTMLElement>('[data-act="set-theme"][data-theme="modern"]')!.click();
+    assert.equal(fresh.document.documentElement.dataset.ui, 'modern');
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
   } finally {
     fresh.close();
   }

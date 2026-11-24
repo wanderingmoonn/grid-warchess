@@ -79,7 +79,9 @@ import {
   idx,
   incomeOf,
   isAirborne,
+  isArmed,
   isEliminated,
+  movePower,
   orderDirectiveOf,
   ordersOf,
   orderSitesOf,
@@ -91,6 +93,7 @@ import {
   siegeTargets,
   terrainWalkable,
   threatTiles,
+  underConstruction,
   unitYieldAt,
   unitsAt,
   unitsOf,
@@ -239,7 +242,8 @@ import {
 import { SKILL_PREVIEWERS, SKILL_TARGET_CELLS } from './core/skill-hooks.ts';
 import { skillTargetPicked } from './ui/skill-aim.ts';
 import { applyUiTheme, installUiConsole, setUiMode, setUiMotion } from './ui/theme.ts';
-import { applyUiLayout, currentUiLayout, setUiLayout, UI_LAYOUT_EVENT } from './ui/layout.ts';
+import { applyUiLayout, currentUiLayout, UI_LAYOUT_EVENT } from './ui/layout.ts';
+import { uiIcon } from './ui/icons.ts';
 import { initUnitArt, loadUnitArtIndex, setUiArt, uiArtOn } from './ui/unit-art.ts';
 import { initTerrainArt, setUiTerrain, uiTerrainOn } from './ui/terrain-art.ts';
 import { settingsHtml } from './ui/settings.ts';
@@ -348,16 +352,21 @@ appEl.innerHTML = `
           <div class="board" id="board"></div>
         </div>
         <div class="zoom-bar" id="zoom-bar">
-          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换正俯视 / 斜俯视（斜俯视下按住鼠标中键可拖转视角）" hidden>视角：正俯视</button>
-          <button class="zoom-btn angle-reset-btn" data-act="board-angle-reset" title="恢复斜俯视默认视角（也可双击鼠标中键）" hidden>复位视角</button>
-          <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">适应</button>
-          <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
-          <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
+          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换正俯视 / 斜俯视（斜俯视下按住鼠标中键可拖转视角）" hidden><span class="zoom-ico" data-ref="angle-ico">${uiIcon('flat')}</span><span data-label>正俯视</span></button>
+          <button class="zoom-btn angle-reset-btn" data-act="board-angle-reset" title="恢复斜俯视默认视角（也可双击鼠标中键）" hidden>${uiIcon('reset')}<span data-label>复位</span></button>
+          <span class="zoom-sep" aria-hidden="true"></span>
+          <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">${uiIcon('fit')}<span data-label>适应</span></button>
+          <button class="zoom-btn zoom-btn-icon" data-act="zoom-out" title="缩小" aria-label="缩小">${uiIcon('minus')}</button>
+          <button class="zoom-btn zoom-btn-icon" data-act="zoom-in" title="放大" aria-label="放大">${uiIcon('plus')}</button>
         </div>
         <div class="star-map" id="star-map" hidden></div>
         <div class="board-list" id="board-list"></div>
       </div>
-      <aside class="side-drawer" id="side-drawer" data-expanded="false">
+      <aside class="side-drawer" id="side-drawer" data-expanded="false" data-context="idle">
+        <div class="desktop-panel-bar">
+          <span class="desktop-panel-title" data-ref="desktop-title">战场概览</span>
+          <button type="button" class="panel-close-btn" data-act="clear-selection" title="收起右侧面板" aria-label="收起右侧面板">${uiIcon('close')}</button>
+        </div>
         <div class="mobile-drawer-head">
           <button type="button" class="drawer-toggle" data-act="drawer-toggle" aria-expanded="false" aria-controls="side">
             <span class="drawer-copy"><b data-ref="drawer-title">战场概览</b><small data-ref="drawer-caption"></small></span>
@@ -1411,6 +1420,10 @@ function showBattleStatus(): boolean {
 let opsOpen = false;
 let drawerExpanded = false;
 let logOpen = false;
+/** 桌面 Canvas-First 模式下，玩家通过右下角快捷入口主动展开右侧概况/战报/说明面板 */
+let desktopDockOpen = false;
+/** 顶栏「N 可动」轮巡索引 */
+let readyFocusIdx = -1;
 /**
  * 长列表里哪几个「还有 N 种」被点开了。
  *
@@ -2468,9 +2481,21 @@ function syncAngleControls(): void {
   const angled = boardEl.classList.contains('has-angled-view');
   const angleToggle = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle"]');
   const angleReset = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle-reset"]');
+  const sep = boardWrapEl.querySelector<HTMLElement>('.zoom-sep');
   if (angleToggle) {
     angleToggle.hidden = !canAngle;
-    angleToggle.textContent = angled ? '视角：斜俯视' : '视角：正俯视';
+    const label = angleToggle.querySelector<HTMLElement>('[data-label]');
+    const nextText = angled ? '斜俯视' : '正俯视';
+    if (label) {
+      if (label.textContent !== nextText) label.textContent = nextText;
+    } else {
+      angleToggle.textContent = nextText;
+    }
+    const ico = angleToggle.querySelector<HTMLElement>('[data-ref="angle-ico"]');
+    if (ico && ico.dataset.mode !== (angled ? 'iso' : 'flat')) {
+      ico.dataset.mode = angled ? 'iso' : 'flat';
+      ico.innerHTML = uiIcon(angled ? 'iso' : 'flat');
+    }
     angleToggle.setAttribute('aria-pressed', String(angled));
     angleToggle.title = angled
       ? '切回正俯视（按住鼠标中键可拖转视角，双击中键复位）'
@@ -2478,6 +2503,9 @@ function syncAngleControls(): void {
   }
   if (angleReset) {
     angleReset.hidden = !angled || isDefaultAngledCamera(boardEl);
+  }
+  if (sep) {
+    sep.hidden = !canAngle;
   }
 }
 
@@ -2606,7 +2634,8 @@ function fitBoard(): void {
   const width = boardWrapEl.offsetWidth;
   if (width <= 0) return;
 
-  const chrome = topbarEl.offsetHeight + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
+  const headerH = topbarEl.parentElement?.offsetHeight || topbarEl.offsetHeight;
+  const chrome = headerH + (commanderEl.hidden ? 0 : commanderEl.offsetHeight);
   /*
    * 把"顶部占了多少"写给 CSS：左上角的地图列表是 `position: fixed`，
    * 它不知道指挥官条（上帝模式 / AI 观战时会多出一条）有多高，
@@ -2621,7 +2650,7 @@ function fitBoard(): void {
 
   // 用 #app 的实际高度而不是 window.innerHeight：有的客户端里两者会差一个滚动条
   const viewportH = appEl.clientHeight || window.innerHeight;
-  const availH = currentUiLayout(document.documentElement) !== 'classic' && window.innerWidth <= 920 && boardWrapEl.clientHeight > 0
+  const availH = window.innerWidth <= 920 && boardWrapEl.clientHeight > 0
     ? Math.min(viewportH - chrome - padY, boardWrapEl.clientHeight)
     : viewportH - chrome - padY;
   /*
@@ -2646,14 +2675,12 @@ function fitBoard(): void {
   boardEl.classList.toggle('zoomed', zoomed);
   boardScrollEl.classList.toggle('zoomed', zoomed);
 
-  // 放大时把"看地图的窗口"钉在"适应屏幕"那个尺寸上：地图变大、窗口不变，
-  // 于是多出来的部分可以滚（手机上是手指拖）。
-  // 不这么做的话，窄屏单列布局里 board-wrap 是按内容撑高的，
-  // 放大之后整块会跟着长大，被 .app 的 overflow:hidden 裁掉——
-  // 表现就是"一放大就只能看见左上角，剩下的永远看不到"。
+  // 放大时让滚动视口铺满整个可用画布（而不是锁死在 1× 的 baseBoardW×baseBoardH 小框里）：
+  // 斜俯视菱形地图在竖屏手机上 1× 时高度往往只有屏幕的一半，锁死在 baseBoardH 会浪费大片上下空间；
+  // 铺满整个画布后，地图无缝铺到屏幕边缘，其余 HUD/抽屉直接浮在地图之上。
   if (zoomed) {
-    boardScrollEl.style.width = `${baseBoardW}px`;
-    boardScrollEl.style.height = `${baseBoardH}px`;
+    boardScrollEl.style.width = `${width}px`;
+    boardScrollEl.style.height = `${Math.max(1, Math.round(availH))}px`;
   } else {
     boardScrollEl.style.width = '';
     boardScrollEl.style.height = '';
@@ -2669,7 +2696,8 @@ function fitBoard(): void {
    */
   refreshCellVar(boardEl, board.w, board.h);
 
-  const label = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
+  const fitBtn = boardWrapEl.querySelector<HTMLElement>('[data-ref="zoom-fit"]');
+  const label = fitBtn?.querySelector<HTMLElement>('[data-label]') ?? fitBtn;
   if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
 
   // 这一量是有效的，下一帧不必再来一遍（除非谁把 boardDirty 重新打上）
@@ -3312,6 +3340,7 @@ function clearSelection(): void {
   selectedCityId = null;
   selectedCampId = null;
   selectedTile = null;
+  desktopDockOpen = false;
   buildPlan = null;
   spawnPlan = null;
   pendingSkill = null;
@@ -3434,6 +3463,7 @@ function selectUnit(u: Unit): void {
   selectedCityId = null;
   selectedCampId = null;
   selectedTile = null;
+  desktopDockOpen = false;
   buildPlan = null;
   loadPlan = null;
   unloadPlan = null;
@@ -3453,6 +3483,7 @@ function selectCamp(u: Unit): void {
   if (selectedCampId !== u.id) recruitQuery = '';
   selectedCityId = null;
   selectedTile = null;
+  desktopDockOpen = false;
   buildPlan = null;
   spawnPlan = null;
   selectedCampId = u.id;
@@ -3469,6 +3500,7 @@ function selectCity(cityId: string): void {
   selectedId = null;
   selectedCampId = null;
   selectedTile = null;
+  desktopDockOpen = false;
   buildPlan = null;
   spawnPlan = null;
   loadPlan = null;
@@ -4167,7 +4199,23 @@ function paintCombatCues(cues: readonly CombatCue[], phase?: 'preview' | 'result
 function updateDrawer(view: PlayerView): void {
   const unit = view.state.units.find((entry) => entry.id === selectedId || entry.id === selectedCampId);
   const city = view.state.cities.find((entry) => entry.id === selectedCityId);
-  const title = starOpen ? '星图详情' : unit ? utype(view.state, unit.type).name : city ? cityName(city) : selectedTile ? '地形详情' : godMode() ? '沙盒兵种库' : '战场概览';
+  const title = state.winner ? '战局结算' : starOpen ? '星图详情' : unit ? utype(view.state, unit.type).name : city ? cityName(city) : selectedTile ? '地形详情' : godMode() ? '沙盒兵种库' : '战场概览';
+  const context = state.winner
+    ? 'winner'
+    : godMode()
+      ? 'god'
+      : starOpen
+        ? 'star'
+        : unit
+          ? 'unit'
+          : city
+            ? 'city'
+            : selectedTile
+              ? 'tile'
+              : desktopDockOpen
+                ? 'dock'
+                : 'idle';
+  if (drawerEl.dataset.context !== context) drawerEl.dataset.context = context;
   const compactUnit = !!unit && unit.id === selectedId && unit.id !== selectedCampId &&
     unit.owner === me() && !state.config.commanderMode && !spectating() && !replay && !starOpen;
   drawerEl.dataset.compactUnit = String(compactUnit);
@@ -4177,6 +4225,8 @@ function updateDrawer(view: PlayerView): void {
     : `${showBattleStatus() ? '' : `${view.state.players[me()].gold} 金 · `}${citiesOf(view.state, me()).length} 座城市 · ${myTurn() ? '轮到你行动' : '等待对方'}`;
   drawerEl.dataset.expanded = String(drawerExpanded);
   drawerEl.querySelector('[data-act="drawer-toggle"]')?.setAttribute('aria-expanded', String(drawerExpanded));
+  const desktopTitle = drawerEl.querySelector<HTMLElement>('[data-ref="desktop-title"]');
+  if (desktopTitle && desktopTitle.textContent !== title) desktopTitle.textContent = title;
   for (const [key, value] of [['title', title], ['caption', caption], ['state', drawerExpanded ? '收起详情' : '展开详情']]) {
     const label = drawerEl.querySelector<HTMLElement>(`[data-ref="drawer-${key}"]`);
     if (label && label.textContent !== value) label.textContent = value;
@@ -4641,8 +4691,13 @@ function canRepeatSkill(unitId: string, skillId: string): boolean {
  * 而那段等待恰恰是最想点开对面那个兵、看看它射程几格、还剩多少血的时候。
  * 动词不用在这里挡：面板拿到的 myTurn 是假，产兵/升级/技能本来就是灰的。
  */
-function inspectAt(coords: { x: number; y: number } | null): void {
+function inspectAt(coords: { x: number; y: number; cityId?: string } | null): void {
   if (!coords) return;
+
+  if (coords.cityId) {
+    selectCity(coords.cityId);
+    return;
+  }
 
   const id = pickUnitId(coords, false);
   const u = id ? viewNow().state.units.find((x) => x.id === id) : undefined;
@@ -5014,7 +5069,7 @@ function onBoardClick(e: Event): void {
     return;
   }
 
-  const clickedUnitId = pickUnitId(coords, wantAttack);
+  const clickedUnitId = coords?.cityId ? null : pickUnitId(coords, wantAttack);
 
   // 1.2) 点在**可达的桥面**上：桥是"能站的地形"，不是一个等着被选中的物件。
   //
@@ -5256,6 +5311,12 @@ function onBoardClick(e: Event): void {
     return;
   }
 
+  // 3.5) 明确点中斜俯视城市主体或 E1 铭牌（且未落在可达格/单位标上）→ 直接打开城市面板
+  if (coords.cityId && city) {
+    selectCity(city.id);
+    return;
+  }
+
   // 4) 可达格 → 移动（自己的城市格也算普通可走格）
   if (selectedId && reach.includes(cell)) {
     /*
@@ -5462,6 +5523,8 @@ function handleAction(act: string, el: HTMLElement): void {
       act === 'new-game' ||
       act === 'new-match' ||
       act === 'drawer-toggle' ||
+      act === 'clear-selection' ||
+      act === 'dock-open' ||
       act === 'settings';
     if (!harmless) {
       toast('复盘里只能看，要接着下先点「退出复盘」');
@@ -5476,6 +5539,63 @@ function handleAction(act: string, el: HTMLElement): void {
       drawerExpanded = !drawerExpanded;
       boardDirty = true;
       render();
+      return;
+    }
+    case 'clear-selection': {
+      clearSelection();
+      opsOpen = false;
+      logOpen = false;
+      drawerExpanded = false;
+      render();
+      return;
+    }
+    case 'dock-open': {
+      const tab = el.dataset.dock ?? 'match';
+      clearSelection();
+      desktopDockOpen = true;
+      if (tab === 'log') {
+        logOpen = true;
+        opsOpen = false;
+      } else if (tab === 'ops') {
+        opsOpen = true;
+      }
+      render();
+      if (tab === 'match') {
+        const fold = sideEl.querySelector<HTMLDetailsElement>('[data-panel-fold="match"]');
+        if (fold) fold.open = true;
+        sideEl.scrollTop = 0;
+      } else if (tab === 'log') {
+        const node = sideEl.querySelector<HTMLElement>('.card-log');
+        if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' });
+      } else if (tab === 'ops') {
+        const node = sideEl.querySelector<HTMLElement>('.card-detail');
+        if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'nearest' });
+      }
+      return;
+    }
+    case 'focus-ready': {
+      if (!myTurn() || state.winner) return;
+      const side = me();
+      const ready = unitsOf(state, side).filter((u) => {
+        const def = state.unitTypes[u.type];
+        if (!def || def.category === 'building' || underConstruction(u)) return false;
+        return (canMove(u) && movePower(state, u) > 0) || (canAttack(u) && isArmed(state, u));
+      });
+      if (ready.length === 0) return;
+      const onBoard = ready.filter((u) => boardIdOf(u) === activeBoardId);
+      const pool = onBoard.length > 0 ? onBoard : ready;
+      readyFocusIdx = (readyFocusIdx + 1) % pool.length;
+      const target = pool[readyFocusIdx]!;
+      if (boardIdOf(target) !== activeBoardId) activeBoardId = boardIdOf(target);
+      clearSelection();
+      selectedId = target.id;
+      refreshSelection();
+      render();
+      const b = boardOf(state, activeBoardId);
+      const marker = angledBoardMarker(boardEl, target.x, target.y);
+      if (boardZoom > 1) {
+        centerBoardCamera(marker ? { x: marker[0], y: marker[1] } : { x: (target.x + 0.5) / b.w, y: (target.y + 0.5) / b.h });
+      }
       return;
     }
     case 'combat-aim': {
@@ -11398,8 +11518,9 @@ function openSettings(): void {
 
   const paint = (): void => {
     mask.innerHTML = settingsHtml({
-      uiLayout: currentUiLayout(document.documentElement),
       theme: document.documentElement.dataset.ui === 'modern' ? 'modern' : 'legacy',
+      angledBoard: preferAngledBoard,
+      canAngle: canUseAngledBoard(),
       reducedMotion: document.documentElement.dataset.motion === 'reduced',
       chime: chimeVolume,
       chimeText: chimeLabel(chimeVolume),
@@ -11442,10 +11563,22 @@ function openSettings(): void {
       paint();
       return;
     }
-    if (act === 'set-ui-layout') {
-      setUiLayout(currentUiLayout(document.documentElement) === 'classic' ? 'refined' : 'classic');
+    if (act === 'set-board-angle') {
+      const next = el!.dataset.angle === 'angled';
+      if (preferAngledBoard !== next) {
+        preferAngledBoard = next;
+        try { localStorage.setItem(ANGLED_BOARD_KEY, preferAngledBoard ? '1' : '0'); } catch {}
+        const url = new URL(location.href);
+        if (url.searchParams.has('view')) {
+          url.searchParams.set('view', preferAngledBoard ? 'angled' : 'flat');
+          history.replaceState(history.state, '', url);
+        }
+        clearCombatPreview();
+        clearActionFeedback();
+        boardDirty = true;
+        render();
+      }
       paint();
-      mask.querySelector<HTMLButtonElement>('[data-act="set-ui-layout"]')?.focus();
       return;
     }
     if (act === 'set-motion') {
