@@ -22,6 +22,7 @@
  * 只有局面真变了（单位数、金币）才重建。
  */
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../ai.ts';
+import { playerView } from '../fog.ts';
 import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
@@ -55,9 +56,20 @@ const keyOf = (s: GameState, me: PlayerId): string =>
 export function currentView(s: GameState, me: PlayerId): TurnCache {
   const key = keyOf(s, me);
   if (cache && cache.key === key) return cache;
-  const world = buildWorld(s, me);
-  const decision = decide(s, world);
-  const con = constrain(s, world, decision);
+  /*
+   * **视野在这里裁一次，然后一路用它。**
+   *
+   * v4 原来直接读原始局面（能看见全图）——那是作弊，而且会浪费动作：
+   * 引擎按 `strikeDistance` + 视野校验，AI 提一个"打视野外的敌人"会被拒
+   * （S-002 实测到过"看不见那个位置（视野外）"），那一手就白丢了。
+   *
+   * 裁完之后的局面里，看不见的敌人**根本不在**，所以所有"能打谁"的判断
+   * 自然只包含看得见的。这是"一份真相"在视野上的那一条。
+   */
+  const view = playerView(s, me).state;
+  const world = buildWorld(view, me);
+  const decision = decide(view, world);
+  const con = constrain(view, world, decision);
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
   return cache;
 }

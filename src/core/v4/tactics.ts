@@ -90,10 +90,22 @@ export function actFor(
   const sqNow = squadOf(con, u);
   if (sqNow?.order === 'hold' && sqNow.cityId) {
     const home = s.cities.find((c) => c.id === sqNow.cityId);
-    if (home && cheb(u, home) > 2) {
-      const to = { x: home.x, y: home.y };
-      const spot = stepToward(s, u, to);
-      if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+    if (home) {
+      /*
+       * 守军贴着城还不够——**不许站在产兵格上**。
+       *
+       * S-009 逼出来的：决定是"守"，5 个兵全退回城下、把产兵圈占满，
+       * `recruitSpawnCells` 返回 0，金 190 一分花不出去；
+       * 而且"回城"和"让位"会来回拉锯（一回合挪出去、下一回合拽回来）。
+       * 所以把站位写进 hold 的条件里，两条指令别打架。
+       */
+      if (con.keepClear.includes(u.y * s.w + u.x)) {
+        const spot = stepOffSpawn(s, u, home, con);
+        if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+      } else if (cheb(u, home) > 2) {
+        const spot = stepToward(s, u, { x: home.x, y: home.y });
+        if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+      }
     }
   }
 
@@ -247,6 +259,40 @@ function bestYieldStep(
    */
   if (world.harassed(u)) return safeBest ?? (cur > 0 ? null : gain);
   return gain;
+}
+
+/**
+ * 从产兵格上挪开的落点：城附近、不在关键格上、离自己最近。
+ *
+ * 为什么需要它：守军站在城下就是站在产兵圈里，"回城"和"让位"会来回拉锯
+ * （一回合挪出去、下一回合拽回来），而且产兵格占满之后再也造不出兵（S-009）。
+ */
+function stepOffSpawn(
+  s: GameState,
+  u: Unit,
+  home: { x: number; y: number; size?: number },
+  con: Constraints,
+): { x: number; y: number } | null {
+  const keep = new Set(con.keepClear);
+  const n = home.size ?? 2;
+  let best: { x: number; y: number } | null = null;
+  let bestD = 99;
+  for (const [key] of reachableTiles(s, u)) {
+    const x = key % s.w;
+    const y = Math.floor(key / s.w);
+    if (keep.has(key)) continue;
+    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+    /* 城 3 格以内：守军不跑远 */
+    const dx = Math.max(home.x - x, x - (home.x + n - 1), 0);
+    const dy = Math.max(home.y - y, y - (home.y + n - 1), 0);
+    if (Math.max(dx, dy) > 3) continue;
+    const d = cheb(u, { x, y });
+    if (d < bestD) {
+      bestD = d;
+      best = { x, y };
+    }
+  }
+  return best;
 }
 
 /** 造兵：钱够就在最近的一座城里造最便宜的兵。**不挑兵种**，先保证有兵 */

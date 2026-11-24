@@ -190,14 +190,42 @@ export function buildWorld(s: GameState, me: PlayerId): World {
 
   const roleMap = new Map(cities.map((c) => [c.city.id, c.role]));
 
-  /* 产兵格：造兵会落在这儿，所以它们必须空着——约束层的"必须"从这里来 */
-  const keepClear: number[] = [];
   /*
-   * 桥头：两侧是水的桥面格 = 过河的唯一通道，停在那儿就是把全军的门堵死（S-005）。
+   * 产兵格 = **城周围那一圈**（几何算），不用 `recruitSpawnCells`。
    *
-   * 判据用"邻格里有几片水"：一格桥夹在水中间，上下（或左右）都是水；
-   * 桥面连成一条时，中间那几格的邻格是别的桥面，不会被标——那是对的，
-   * 真正卡人的就是"进出水岸的那一格"。
+   * 这里踩过一个死循环：`recruitSpawnCells` 只返回**空着的**落点，
+   * 所以"兵把产兵格占满"这个状态它返回空数组——于是一个关键格都找不到，
+   * 也就没人被要求让开，永远造不出兵（S-009：守住之后 3 个回合 0 造兵，金 190 花不出去）。
+   *
+   * 关键格的定义不能依赖"现在有没有空位"，否则它会在最需要工作的时刻失效。
+   */
+  const keepClear: number[] = [];
+  for (const city of myCities) {
+    const n = city.size ?? 2;
+    for (let dy = -1; dy <= n; dy++) {
+      for (let dx = -1; dx <= n; dx++) {
+        /*
+         * **城格也算**（2026-11-24 修正）。
+         *
+         * 一开始我把城格排除了，理由是"新兵本来就生在城里"。错：
+         * 兵站在城格里，产兵口就被堵住——`recruitSpawnCells` 直接返回 0
+         * （S-009：守军退回城下之后金 190 一分都花不出去）。
+         * v3 的 `spawn` 类关键格也是把"被占的城格"算进去的。
+         *
+         * 新兵出生在城格上这件事，靠 ai-v4 里"本回合动过的单位跳过"来兜（不会反复派让开）。
+         */
+        const x = city.x + dx;
+        const y = city.y + dy;
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        const t = s.tiles[y * s.w + x]?.terrain;
+        if (!t || !passable(t)) continue;
+        keepClear.push(y * s.w + x);
+      }
+    }
+  }
+
+  /*
+   * 桥头：邻格有 ≥2 片水的桥面格 = 过河的唯一通道，停在那儿就是把全军的门堵死（S-005）。
    */
   for (let y = 0; y < s.h; y++) {
     for (let x = 0; x < s.w; x++) {
@@ -210,21 +238,9 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       if (water >= 2) keepClear.push(y * s.w + x);
     }
   }
-  for (const city of myCities) {
-    for (const def of Object.values(s.unitTypes)) {
-      if (def.category !== 'combat' || (def.era ?? 1) > (city.era ?? 1)) continue;
-      for (const cell of recruitSpawnCells(s, city.id, undefined, def.id).slice(0, 2)) {
-        keepClear.push(idx(s, cell.x, cell.y));
-      }
-    }
-    /* 城格**不算** keepClear：新兵本来就出生在城里，把自己家算成"必须空"会自相矛盾 */
-  }
 
-  /* 每个敌方战斗单位的"威胁半径"，只算一次 */
-  const foeReach = foeCombat.map((u) => {
-    const st = effectiveStats(s, u);
-    return Math.max(1, st.move ?? 2) + 1;
-  });
+  /* 每个敌方战斗单位的"威胁半径"，只算一次（贴脸：移动 + 1，见 harassed 的注释） */
+  const foeReach = foeCombat.map((u) => Math.max(1, effectiveStats(s, u).move ?? 2) + 1);
 
   const world: World = {
     me,
