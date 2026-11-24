@@ -32,8 +32,10 @@ function playTurn(s: GameState, want: string | null): { s: GameState; built: boo
     const city = s.cities.find((c) => c.owner === 'A');
     if (city) {
       const a: Action = { type: 'RECRUIT', cityId: city.id, unitType: want };
+      const before = s.players.A.gold;
       const r = applyAction(s, a);
-      if (r.ok) {
+      /* 对账：只有真的扣了钱才算造出来（之前把"尝试"当成了"成功"） */
+      if (r.ok && r.state.players.A.gold === before - (s.unitTypes[want]?.cost ?? 0)) {
         s = r.state;
         built = true;
       }
@@ -47,6 +49,8 @@ function playTurn(s: GameState, want: string | null): { s: GameState; built: boo
     for (const [k] of reachableTiles(s, u)) {
       const x = k % s.w;
       const y = Math.floor(k / s.w);
+      /* 被占的格不能去（原来没排掉自己人，一被拒就整轮卡住） */
+      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
       const g = unitYieldAt(s, u, x, y).gold ?? 0;
       if (g > bestG) {
         bestG = g;
@@ -96,8 +100,25 @@ function run(plan: Plan): { econ: number; built: number; gold: number } {
 build([]);
 const scored = combos.map((plan) => ({ plan, ...run(plan) })).sort((a, b) => b.econ - a.econ);
 const best = scored[0]!;
-console.log(`最优：${best.plan.filter(Boolean).join(' → ') || '（不造）'} → ${TURNS} 手后经济 ${best.econ}（造了 ${best.built} 个，剩 ${best.gold} 金）`);
-console.log('前十：');
+/* 钱多钱少各跑一遍：看"最后一个买什么"有没有变成分岔 */
+for (const g of [250]) {
+  snap.players.A.gold = g;
+  const sc = combos.map((plan) => ({ plan, ...run(plan) })).sort((a, b) => b.econ - a.econ);
+  console.log(`[金 ${g}] 最优 ${sc[0]!.econ}（${sc[0]!.plan.filter(Boolean).join('+') || '不造'}）· 次优 ${sc[1]!.econ}（${sc[1]!.plan.filter(Boolean).join('+') || '不造'}）`);
+}
+console.log(`\n最优：${best.plan.filter(Boolean).join(' → ') || '（不造）'} → ${TURNS} 手后经济 ${best.econ}（造了 ${best.built} 个，剩 ${best.gold} 金）`);
+console.log('分布：');
+const groups = new Map<string, number>();
+for (const x of scored) {
+  const key = x.plan.filter(Boolean).join('+') || '不造';
+  if (!groups.has(key)) groups.set(key, x.econ);
+}
+const uniq = [...groups].sort((a, b) => b[1] - a[1]);
+console.log(`  共 ${uniq.length} 种组合；最高 ${uniq[0]![1]}，最低 ${uniq[uniq.length-1]![1]}`);
+for (const [k, v] of uniq.slice(0, 6)) console.log(`  ${k.padEnd(30)} ${v}`);
+console.log('  …');
+for (const [k, v] of uniq.slice(-4)) console.log(`  ${k.padEnd(30)} ${v}`);
+console.log('\n前十：');
 for (const x of scored.slice(0, 10)) {
   console.log(`  ${(x.plan.filter(Boolean).join('+') || '不造').padEnd(34)} 经济 ${String(x.econ).padStart(3)} · 造 ${x.built} · 剩 ${x.gold}`);
 }
