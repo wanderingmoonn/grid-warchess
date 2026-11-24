@@ -797,24 +797,42 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
  * 目标是城时，终点是**城外可站的格**（城格站不上）；目标是集结点时，终点是它周围。
  * 半径 2 是"城下那一圈"：射程 1~2 的兵都能从这儿够到城。
  */
-function targetCells(s: GameState, sq: Squad, want: number): number[] {
+/** 一支队伍"该往哪个点聚"：集结点，或目标城的中心。 */
+function squadBase(s: GameState, sq: Squad): { x: number; y: number } | undefined {
+  if (sq.at) return sq.at;
   const city = sq.cityId ? s.cities.find((c) => c.id === sq.cityId) : undefined;
-  const base =
-    sq.at ??
-    (city
-      ? { x: city.x + Math.floor((city.size ?? 2) / 2), y: city.y + Math.floor((city.size ?? 2) / 2) }
-      : undefined);
-  if (!base) return [];
+  return city
+    ? { x: city.x + Math.floor((city.size ?? 2) / 2), y: city.y + Math.floor((city.size ?? 2) / 2) }
+    : undefined;
+}
+
+/** 队伍现在聚在哪（质心，四舍五入到格） */
+function squadCenter(s: GameState, ids: string[]): { x: number; y: number } | undefined {
+  const us = ids
+    .map((id) => s.units.find((u) => u.id === id))
+    .filter((u): u is Unit => !!u);
+  if (us.length === 0) return undefined;
+  const x = Math.round(us.reduce((n, u) => n + u.x, 0) / us.length);
+  const y = Math.round(us.reduce((n, u) => n + u.y, 0) / us.length);
+  return { x, y };
+}
+
+/**
+ * 目标城周围"该站哪些格"——**只取面向我们的那一侧**。
+ *
+ * 按"离城几环"取整圈会出事：城有正面也有后方，取整圈等于让人往城背后绕
+ * （路更长，还把自己送到对方增援的方向上）。这里按"离**我们这支队**多远"
+ * 从近到远取 `want` 个：队伍换方向时，"正面"会自己跟着换。
+ */
+function targetCells(
+  s: GameState,
+  base: { x: number; y: number },
+  from: { x: number; y: number },
+  want: number,
+): number[] {
   const seen = new Set<number>();
-  const out: number[] = [];
-  /*
-   * 从城下往外一圈一圈扩，**直到够分**。
-   *
-   * 固定半径会出事：城在角落时"城外 2 格内"只有两三格，十个人里只有一个能分到目标
-   * （S-011 实测 holes = 2）。人比攻位多时往外扩一圈，多出来的人跟在后面推进，
-   * 而不是站在原地看着。
-   */
-  for (let r = 1; r <= 6 && out.length < want; r += 1) {
+  const all: number[] = [];
+  for (let r = 1; r <= 6; r += 1) {
     for (let dy = -r; dy <= r; dy += 1) {
       for (let dx = -r; dx <= r; dx += 1) {
         if (Math.abs(dx) + Math.abs(dy) !== r) continue;
@@ -827,11 +845,16 @@ function targetCells(s: GameState, sq: Squad, want: number): number[] {
         const t = s.tiles[k];
         if (!t || !passable(t.terrain)) continue;
         if (t.terrain === 'city') continue; /* 城格站不上，只能围着 */
-        out.push(k);
+        all.push(k);
       }
     }
   }
-  return out;
+  all.sort(
+    (a, b) =>
+      Math.abs((a % s.w) - from.x) + Math.abs(Math.floor(a / s.w) - from.y) -
+        (Math.abs((b % s.w) - from.x) + Math.abs(Math.floor(b / s.w) - from.y)) || a - b,
+  );
+  return all.slice(0, Math.max(1, want));
 }
 
 /**
@@ -839,77 +862,69 @@ function targetCells(s: GameState, sq: Squad, want: number): number[] {
  *
  * ── 为什么不是每人自己 `stepToward` ────────────────────────────
  *
- * 那样每个兵只看自己：我离目标更近的那格站着人 → 我不动；他也这么想 → 谁也不动。
+ * 每个兵只看自己：我离目标更近的那格站着人 → 我不动；他也这么想 → 谁也不动。
  * 30 个兵挤成一条线时，整条线只会在原地互相等。
  *
  * ── 这一版怎么排 ──────────────────────────────────────────────
  *
- * 1. 终点 = 城外那一圈可站的格（不是城中心那一格）；
- * 2. 从**所有终点**同时出发扩散，波**穿过自己人**（他得先让开）——
- *    得到"每格离最近的终点隔着几个人"和"下一步往哪走"；
- * 3. 每个还没到位的兵顺着"下一步"走到底，走到**第一个空格**为止，得到一条链；
- * 4. 链**从短到长**成立，抢不到格的链**整条放弃**（这一手它不动）。
- *    截断不清的链会留下"半条"：前面挪了、后面没挪，空出来的格还会被别人占掉。
+ * 1. 终点 = 目标城外**面向我们**的那一圈（见 `targetCells`）；
+ * 2. 人和终点都按"到目标城的真实步数"排一遍，**同序配对**：
+ *    离城近的兵配离城近的格，离城远的配远处的格。
  *
- * 每个被排到的人拿走链上"自己前面那一格"。因为链首是空格，
- * 一步一步往里递补就永远不会两个人抢同一格——这就是"不交叉"的落地方式。
- * 两条链真的撞上时，短的先走，长的等下一手（无解时只过去一部分人）。
+ *    这一步同时管两件事：
+ *      · **不交叉**——两边同一条轴排序后配对，任何两条线交换都会让总路程变大，
+ *        所以同序就是最优且不自交的那一组；
+ *      · **链长接近**——每人要走的路约等于"两列分布之差"，是一条几乎等长的横队，
+ *        整体平移过去，而不是"最近的先冲、远的干等"（那种会一个一个送）。
+ *
+ * 3. **离城近的先走**（前排先挪开，后排才有位置），落点去重。
  */
 function planMarch(s: GameState, world: World, squads: Squad[]): Record<string, { x: number; y: number }> {
   const out: Record<string, { x: number; y: number }> = {};
   for (const sq of squads) {
     if (sq.order === 'hold') continue;
+    const base = squadBase(s, sq);
+    if (!base) continue;
     const units = sq.unitIds
       .map((id) => s.units.find((u) => u.id === id))
       .filter((u): u is Unit => !!u && u.owner === world.me);
     if (units.length === 0) continue;
-    const holes = targetCells(s, sq, units.length);
+    /* 轴：到目标城的**真实步数**（绕水绕山，不是直线） */
+    const axis = world.stepsFrom(base);
+    const axisOf = (k: number): number => axis[k] ?? Infinity;
+
+    /*
+     * "正面"用**队伍质心**定（试过用前锋，更差：整队挤到前锋那一侧，堵死，
+     * 40 手城血 0、损失 20）。质心会被后方援兵拉后，这是已知的偏差，
+     * 但至少方向是稳定的。
+     */
+    const center = squadCenter(s, sq.unitIds);
+    if (!center) continue;
+    const holes = targetCells(s, base, center, units.length);
     if (holes.length === 0) continue;
     const holeSet = new Set(holes);
     const pending = units.filter((u) => !holeSet.has(u.y * s.w + u.x));
     if (pending.length === 0) continue;
 
-    /*
-     * ① **一人配一个终点**：按真实步数从近到远贪心配。
-     *
-     * 为什么必须先配：只做一张场的话，十个人全朝"最近的那个终点"走，
-     * 路线完全重叠，谁也让不开谁（实测只有 2 个人拿到落点）。
-     * 先把终点分开，每个人才有自己的方向。
-     */
-    const fields = holes.map((h) =>
-      world.stepsFrom({ x: h % s.w, y: Math.floor(h / s.w) }),
+    const pend = [...pending].sort(
+      (a, b) => axisOf(a.y * s.w + a.x) - axisOf(b.y * s.w + b.x) || (a.id < b.id ? -1 : 1),
     );
-    const pairs: Array<{ ui: number; hi: number; d: number }> = [];
-    pending.forEach((u, ui) => {
-      const at = u.y * s.w + u.x;
-      holes.forEach((_, hi) => {
-        const d = fields[hi]![at] ?? Infinity;
-        if (Number.isFinite(d)) pairs.push({ ui, hi, d });
-      });
-    });
-    pairs.sort((a, b) => a.d - b.d || a.ui - b.ui || a.hi - b.hi);
-    const mine = new Map<number, number>();
-    const takenHole = new Set<number>();
-    for (const pr of pairs) {
-      if (mine.has(pr.ui) || takenHole.has(pr.hi)) continue;
-      mine.set(pr.ui, pr.hi);
-      takenHole.add(pr.hi);
-    }
+    const hs = [...holes].sort((a, b) => axisOf(a) - axisOf(b) || a - b);
+
+    const mine = new Map<string, number>();
+    for (let i = 0; i < pend.length && i < hs.length; i += 1) mine.set(pend[i]!.id, hs[i]!);
     if (mine.size === 0) continue;
 
-    /*
-     * ② **离自己终点最近的先走**（前排先挪开，后排才有空格）。
-     *    落点去重：这一手不会两个人踩同一格。
-     */
-    const order = [...mine.entries()].sort(
-      (a, b) =>
-        (fields[a[1]]![pending[a[0]]!.y * s.w + pending[a[0]]!.x] ?? Infinity) -
-        (fields[b[1]]![pending[b[0]]!.y * s.w + pending[b[0]]!.x] ?? Infinity),
-    );
+    const fields = new Map<number, Float64Array>();
     const used = new Set<number>();
-    for (const [ui, hi] of order) {
-      const u = pending[ui]!;
-      const field = fields[hi]!;
+    for (const u of pend) {
+      const hi = mine.get(u.id);
+      if (hi === undefined) continue;
+      let field = fields.get(hi);
+      if (!field) {
+        field = world.stepsFrom({ x: hi % s.w, y: Math.floor(hi / s.w) });
+        fields.set(hi, field);
+      }
       const here = field[u.y * s.w + u.x] ?? Infinity;
       let best: number | null = null;
       let bestD = here;
