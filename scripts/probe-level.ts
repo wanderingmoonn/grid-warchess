@@ -1201,7 +1201,7 @@ line('25. 孤城：隔河白打与一夫当关都不成立');
   const lv = levelById('level:lone-city')!;
   const s = createMatch({ ...DEFAULT_CONFIG, level: lv }, 3);
   const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
-    Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
   /*
    * 实机复盘：守方曾经把弓箭手摆在河岸，越过一格宽的河把对岸的农民和部队

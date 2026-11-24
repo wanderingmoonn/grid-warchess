@@ -437,7 +437,7 @@ const ARMOR_LANCE: MarkKindDef = {
   onTurnStart: (c) => {
     for (const t of [...c.state.units]) {
       if (t.hp <= 0) continue;
-      if (Math.max(Math.abs(t.x - c.mark.x), Math.abs(t.y - c.mark.y)) > 1) continue;
+      if (Math.abs(t.x - c.mark.x) + Math.abs(t.y - c.mark.y) > 1) continue;
       c.api.hurt(t, 156, `${c.api.utype(t.type).name} 被轨道打击命中，损失 156 点生命`);
     }
   },
@@ -500,7 +500,7 @@ export const ARMOR_ERA7: Expansion = {
      *
      * 为什么用 `modifyDamage` 而不是 `modifyArmor`：烟幕是"看不清，打偏了"，
      * 不是"甲变厚了"。走护甲那一侧会被破甲削掉、也会影响"打不打得动"的判定，
-     * 语义完全不对。贴脸打（切比雪夫距离 ≤1）不减——那已经不是视野问题了。
+     * 语义完全不对。贴脸打（曼哈顿距离 ≤1）不减——那已经不是视野问题了。
      *
      * 只保护**布设者自己那方**：烟幕挡住的是"被自己人扬起来的灰"，
      * 不是说对面站进去也能蹭到掩体（对面要能蹭，这设备就成了给敌人用的）。
@@ -515,7 +515,7 @@ export const ARMOR_ERA7: Expansion = {
      */
     modifyDamage: ({ state, attacker, defender, damage, armor, splash }) => {
       if (damage <= 0) return damage;
-      const gap = Math.max(Math.abs(attacker.x - defender.x), Math.abs(attacker.y - defender.y));
+      const gap = Math.abs(attacker.x - defender.x) + Math.abs(attacker.y - defender.y);
       const post0 = Math.max(0, damage - armor);
       let post = post0;
 
@@ -646,7 +646,7 @@ export const ARMOR_ERA7: Expansion = {
       if (victim.type !== 'armor_fusion') return;
       for (const t of [...state.units]) {
         if (t.id === victim.id || t.hp <= 0) continue;
-        if (Math.max(Math.abs(t.x - victim.x), Math.abs(t.y - victim.y)) > 1) continue;
+        if (Math.abs(t.x - victim.x) + Math.abs(t.y - victim.y) > 1) continue;
         const name = api.utype(state, t.type).name;
         api.hurt(state, t, 60, { logText: `聚变堆爆炸，${name} 损失 60 点生命` });
       }

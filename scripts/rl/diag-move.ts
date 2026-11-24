@@ -65,7 +65,7 @@ while (!s.winner && s.turn <= 150) {
       const reach = reachableTiles(s, u);
       line.push(
         `    单位 ${u.id}(${u.type}) 在 (${u.x},${u.y}) moved=${u.moved} 目标 (${picked.x},${picked.y})`,
-        `    reachable 里有？${reach.has(key)} 距离=${Math.max(Math.abs(u.x - picked.x), Math.abs(u.y - picked.y))}`,
+        `    reachable 里有？${reach.has(key)} 距离=${Math.abs(u.x - picked.x) + Math.abs(u.y - picked.y)}`,
         `    目标地形=${tileAt(s, picked.x, picked.y)?.terrain} 有人？${unitAt(s, picked.x, picked.y)?.id ?? '无'}`,
         `    预算 move=${utype(s, u.type).move} reach 可达格数=${reach.size}`,
       );

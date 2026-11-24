@@ -54,7 +54,7 @@ let s: GameState = createMatch(
 );
 
 const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 /** 敌方战斗单位（只算"能打的"，经济单位不算威胁） */
 const foeCombat = (): Unit[] =>

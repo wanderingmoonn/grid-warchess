@@ -3322,7 +3322,7 @@ function nearestEggSpot(
   let bestD = Infinity;
   for (let dy = -reach; dy <= reach; dy += 1) {
     for (let dx = -reach; dx <= reach; dx += 1) {
-      const cheb = Math.max(Math.abs(dx), Math.abs(dy));
+      const cheb = Math.abs(dx) + Math.abs(dy);
       if (cheb > reach) continue;
       /*
        * 不在自己脚下放。

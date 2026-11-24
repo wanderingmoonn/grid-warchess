@@ -100,13 +100,13 @@ function play(meAi: AiFn, foeAi: AiFn, seed: number): Sample[] {
         ? -1
         : Math.min(
             ...combat.map((u) =>
-              Math.min(...fc.map((c) => Math.max(Math.abs(u.x - c.x), Math.abs(u.y - c.y)))),
+              Math.min(...fc.map((c) => Math.abs(u.x - c.x) + Math.abs(u.y - c.y))),
             ),
           );
       const near = fc.length === 0
         ? 0
         : combat.filter((u) =>
-            fc.some((c) => Math.max(Math.abs(u.x - c.x), Math.abs(u.y - c.y)) <= 6),
+            fc.some((c) => Math.abs(u.x - c.x) + Math.abs(u.y - c.y) <= 6),
           ).length;
       const isIdle = (u: GameState['units'][number]) => !touched.has(u.id) && !u.moved && !u.acted;
       const idle = mine.filter(isIdle).length;

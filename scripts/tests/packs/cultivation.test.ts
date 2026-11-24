@@ -517,6 +517,8 @@ export function run() {
      * 2026-11-11 起防空建筑不再"回合末补一炮"，只有落位才触发反应射击。
      */
     for (let x = 6; x <= 10; x++) s.tiles[5 * s.w + x] = { terrain: 'plain', cityId: null };
+    /* 初始兵力落点由地图决定，先把靶子要走的两格腾空，别让自家兵挡路 */
+    s.units = s.units.filter((u) => !(u.y === 5 && (u.x === 9 || u.x === 10)));
     s.units.push({
       id: 't-target', type: 'militia', owner: 'B' as const,
       x: 10, y: 5, hp: 100, kills: 0, moved: true, acted: true,

@@ -19,16 +19,13 @@ import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
 import type { World } from './world.ts';
 
 /**
- * **曼哈顿**距离——和引擎一致（2026-11-24 修）。
+ * **所有距离用曼哈顿距离**（`|dx| + |dy|`）：游戏里移动是四邻，斜着走一步要花两步，
+ * 所以斜向的格子不能算"更近"。
  *
- * 这游戏里移动是四邻 BFS，斜走要**两步**，`distToCity` 也是 `|dx|+|dy|`。
- * v4 原来一直用切比雪夫（斜走算 1 格），等于系统性地高估推进能力：
- * "离城 4 格"在引擎眼里可能是 6 步，`stepToward` 于是选了一堆看着更近、
- * 实际更费步的斜向落点。
- *
- * 唯一用欧氏的是视野（历史遗留的 bug，改成惯例了）——那一条不在这里。
+ * 判"要走几步"时不要用这个——那是距离场的事（`world.stepsFrom`，绕水绕山）。
+ * 这里只用于"粗比远近"和"半径内有没有人"。
  */
-const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+const manhattan = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
   Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 /**
@@ -293,7 +290,7 @@ function planLanes(
   const us = ids.map((id) => s.units.find((u) => u.id === id)).filter((u): u is NonNullable<typeof u> => !!u);
   if (us.length < 6) return null;
 
-  const front = [...us].sort((a, b) => cheb(a, city) - cheb(b, city))[0]!;
+  const front = [...us].sort((a, b) => manhattan(a, city) - manhattan(b, city))[0]!;
   const width = world.corridorWidth(front, city);
   const k = width >= 5 ? 3 : width >= 3 ? 2 : 1;
   if (k === 1) return null;
@@ -737,7 +734,7 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
 
   const avg = units.reduce((n, u) => n + unitWorth(s, u), 0) / units.length || 1;
   const needs = cities.map((c) => {
-    const guard = world.foeCombat.filter((u) => cheb(u, c) <= 6);
+    const guard = world.foeCombat.filter((u) => manhattan(u, c) <= 6);
     const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
     return { city: c, want: Math.max(2, Math.min(12, Math.round((guardStr / avg) * 1.5))) };
   });
@@ -807,7 +804,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     if (info.role !== 'threatened' && info.role !== 'home') continue;
     const guards = world.myCombat
       .filter((u) => !held.has(u.id))
-      .sort((a, b) => cheb(a, info.city) - cheb(b, info.city))
+      .sort((a, b) => manhattan(a, info.city) - manhattan(b, info.city))
       .slice(0, 2);
     for (const g of guards) held.add(g.id);
     if (guards.length > 0) {
@@ -832,7 +829,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 八个人会一起在中间集结，两座城一起丢（实测 0/2）。
    */
   const threatened = world.cities.filter((info) =>
-    world.foeCombat.some((u) => cheb(u, info.city) <= 8),
+    world.foeCombat.some((u) => manhattan(u, info.city) <= 8),
   );
   if (threatened.length >= 2 && rest.length >= threatened.length * 2) {
     squads.push(...planMains(s, world, threatened.map((i) => i.city), rest.map((u) => u.id)));
@@ -845,7 +842,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      * 不按固定配额（v3 试过乘数，三次调参把胜局调成平局），也不按"总兵力比"
      * （v3 的注释：敌方一个兵都看不见时比值反而最大，越是空城越要凑满编）。
      */
-    const guard = world.foeCombat.filter((u) => cheb(u, city) <= 6);
+    const guard = world.foeCombat.filter((u) => manhattan(u, city) <= 6);
     /*
      * 采购门槛：从守军身上读出"要造什么样的兵"。
      * 挨不住一发（hp ≤ 敌方单发）的兵是白送；三发打不穿的兵是白来。
@@ -900,7 +897,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       .map((id) => s.units.find((x) => x.id === id))
       .filter((u): u is NonNullable<typeof u> => !!u)
       .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city))[0];
-    const detour = leadUnit ? world.marchTurns(leadUnit, city) > cheb(leadUnit, city) + 2 : false;
+    const detour = leadUnit ? world.marchTurns(leadUnit, city) > manhattan(leadUnit, city) + 2 : false;
     squads.push({
       id: 'main',
       order: ready ? 'march' : 'assemble',

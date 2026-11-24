@@ -2780,7 +2780,7 @@ function royalComboBonus(
   for (const u of mine) {
     if (u.type === KING) {
       kings += 1;
-      if (Math.max(Math.abs(u.x - src.x), Math.abs(u.y - src.y)) <= 4) kingNear = true;
+      if (Math.abs(u.x - src.x) + Math.abs(u.y - src.y) <= 4) kingNear = true;
     } else if (u.type === CAV) cavs += 1;
   }
   if (d.id === CAV) {
@@ -3806,7 +3806,7 @@ function nearestOwnDock(s: GameState, me: PlayerId, from: { x: number; y: number
   for (const u of s.units) {
     if (u.owner !== me || u.hp <= 0) continue;
     if (u.type !== 'armor_dock' && u.type !== 'armor_yard') continue;
-    const d = Math.max(Math.abs(u.x - from.x), Math.abs(u.y - from.y));
+    const d = Math.abs(u.x - from.x) + Math.abs(u.y - from.y);
     if (d < bestD) {
       bestD = d;
       best = u;
@@ -4217,8 +4217,8 @@ function unitCandidates(
       if (def.armorFrame && weaponsOf(unit).length === 0) {
         const dock = nearestOwnDock(s, me, unit);
         if (dock) {
-          const before = Math.max(Math.abs(unit.x - dock.x), Math.abs(unit.y - dock.y));
-          const after = Math.max(Math.abs(x - dock.x), Math.abs(y - dock.y));
+          const before = Math.abs(unit.x - dock.x) + Math.abs(unit.y - dock.y);
+          const after = Math.abs(x - dock.x) + Math.abs(y - dock.y);
           // 每靠近一格给 120：退回去通常要吃走位评分的大额扣分（-200 上下），
           // 定额加成压不住，按步数给才追得平。
           if (after < before) score += (before - after) * 120;
@@ -7528,7 +7528,7 @@ function isOffensive(s: GameState, me: PlayerId, a: Action): boolean {
   const myCities = citiesOf(s, me).filter((c) => !c.ruined);
   if (myCities.length === 0) return false;
   const nearHome = (x: number, y: number): boolean =>
-    myCities.some((c) => Math.hypot(c.x - x, c.y - y) <= HOLD_RADIUS);
+    myCities.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= HOLD_RADIUS);
   if (a.type === 'MOVE') return !nearHome(a.x, a.y);
   if (a.type === 'ATTACK') {
     const t = s.units.find((u) => u.id === a.targetId);

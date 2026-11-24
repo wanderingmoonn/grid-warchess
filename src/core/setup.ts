@@ -1123,7 +1123,7 @@ function freeSpotNear(
   for (let r = 2; r <= 7; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
         const x = cx + dx;
         const y = cy + dy;
         if (x < 0 || y < 0 || x >= w || y >= h) continue;

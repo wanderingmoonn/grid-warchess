@@ -5878,7 +5878,7 @@ test('塔：看不见的敌人不开火', () => {
    * 而且要保证这条用例不会因为以后调数值再红一次。
    *
    * 距离用横平竖直的那几格：`distance()` 是曼哈顿距离，斜着摆 2+2 也算 4 格，
-   * 但欧氏只有 2.83，落在视野之外——那测的就不是"看不见"了。
+   * 但实际长度只有 2.83，落在视野之外——那测的就不是"看不见"了。
    */
   const shoot = (gap: number) => {
     const s = fresh();
@@ -6220,8 +6220,12 @@ export function place(s: GameState, owner: 'A' | 'B', type: string, x: number, y
   // 拿 UNIT_TYPES 去找一律找不到。上限（hp）也从同一处读，别混用两张表。
   const def = s.unitTypes[type] ?? UNIT_TYPES[type];
   assert.ok(def, `没有 ${type} 这个兵种`);
+  /* id 必须唯一：按"长度 +1"生成时，装卸这类会让长度来回变，容易撞号（撞了之后
+     * `find(u => u.id === targetId)` 会取到另一个单位，表现为"不能攻击友军"） */
+  let n = s.units.length + 1;
+  while (s.units.some((k) => k.id === `t${n}`)) n += 1;
   const u: Unit = {
-    id: `t${s.units.length + 1}`,
+    id: `t${n}`,
     type,
     owner,
     x,
@@ -7696,6 +7700,9 @@ test('加强渡船：只免"下船罚站"，不归还移动力、不额外给攻
   const walked = place(s, 'A', 'militia', 7, 5);
   walked.moved = true; // 模拟"本回合已经走过一步，但还没出手"
   const ready = roundTrip(s, ferry.id, walked.id);
+  /* 初始兵力落点由地图决定，先把下船目标格腾空，别让自家兵挡路 */
+  ready.units = ready.units.filter((u) => !(u.x === 9 && u.y === 5));
+  refreshMemory(ready);
   const un = applyAction(ready, {
     type: 'UNLOAD',
     unitId: ferry.id,
@@ -7711,6 +7718,8 @@ test('加强渡船：只免"下船罚站"，不归还移动力、不额外给攻
   assert.equal(landed.acted, false, '还能行动一次');
 
   // 打一下：正常结算；再打一下必须被拒（加强渡船只免罚站，不改攻击次数）
+  /* 初始兵力落点由地图决定，先把这一格腾空，别让自家兵顶掉靶子 */
+  un.state.units = un.state.units.filter((u) => !(u.x === 10 && u.y === 5));
   const foe = place(un.state, 'B', 'militia', 10, 5);
   const hit1 = applyAction(un.state, { type: 'ATTACK', unitId: landed.id, targetId: foe.id });
   assert.ok(hit1.ok, hit1.ok ? '' : `第一下应该能打：${hit1.reason}`);
@@ -7729,6 +7738,9 @@ test('加强渡船：只免"下船罚站"，不归还移动力、不额外给攻
   // 到了下船这一回合，假装它本轮已经被加强过一次
   const ferryNow = ready2.units.find((u) => u.id === ferry2.id)!;
   ferryNow.cargo![0]!.ferryBoostTurn = ready2.turn;
+  /* 同上：初始兵力落点由地图决定，先清掉下船目标格 */
+  ready2.units = ready2.units.filter((u) => !(u.x === 9 && u.y === 5));
+  refreshMemory(ready2);
   const un2 = applyAction(ready2, {
     type: 'UNLOAD',
     unitId: ferry2.id,
@@ -9730,7 +9742,7 @@ test('编队模板：一屋子近战之后，AI 会去补远程和支援', () =>
   for (let ring = 2; ring <= 4 && placed < 5; ring++) {
     for (let dy = -ring; dy <= ring && placed < 5; dy++) {
       for (let dx = -ring; dx <= ring && placed < 5; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        if (Math.abs(dx) + Math.abs(dy) !== ring) continue;
         const x = home.x + dx;
         const y = home.y + dy;
         if (x < 1 || y < 1 || x >= s.w - 1 || y >= s.h - 1) continue;
@@ -13337,7 +13349,7 @@ test('等高线：哪张地貌上，高山底下都得有台地托着', () => {
       const s = createMatch({ ...BASE, size: 24, expansionIds: ['height-terrain'], mapStyle: style }, seed);
       const H = (x: number, y: number) => heightOfTerrain(s, s.tiles[y * s.w + x]!.terrain);
       const nearCity = (x: number, y: number) =>
-        s.cities.some((c) => Math.max(Math.abs(x - c.x), Math.abs(y - c.y)) <= 3);
+        s.cities.some((c) => Math.abs(x - c.x) + Math.abs(y - c.y) <= 3);
       let cliff = 0;
       let bare = 0;
       let plateau = 0;
@@ -18198,7 +18210,7 @@ test('四人图：逐格镜像对称（左右、上下、旋转都对得上）',
       for (let j = i + 1; j < 4; j++) {
         const a = spots[i]!;
         const b = spots[j]!;
-        const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+        const d = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
         assert.ok(d >= 6, `seed ${seed}：${i} 和 ${j} 的城挨太近了（${d} 格）`);
       }
     }
@@ -18437,7 +18449,7 @@ test('双城市开局（三家）：外圈八点取六个，间距达标，同�
         const gap = CITY_MIN_GAP(2);
         for (let i = 0; i < all.length; i += 1) {
           for (let j = i + 1; j < all.length; j += 1) {
-            const d = Math.max(Math.abs(all[i]!.x - all[j]!.x), Math.abs(all[i]!.y - all[j]!.y));
+            const d = Math.abs(all[i]!.x - all[j]!.x) + Math.abs(all[i]!.y - all[j]!.y);
             assert.ok(
               d >= gap,
               `${players} 人 ${size}×${size} seed ${seed}：两座城挨太近（${d} < ${gap}）`,
@@ -18495,7 +18507,7 @@ test('双城市开局（四家）：田字四区，两个基地都在自家那�
           );
         }
         const [a, b] = cities as [{ x: number; y: number }, { x: number; y: number }];
-        const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+        const d = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
         // 2×2 的城：城本体 + 城郊各一格 = 4
         assert.ok(d >= 4, `${size}×${size} seed ${seed}：第 ${i} 家两个基地贴脸了（相隔 ${d}）`);
         // 只记"摆法"本身，不把种子写进去——否则这条随机性判据永远是"通过"
@@ -19380,7 +19392,7 @@ test('补线：反向拖一样不漏，陡/缓斜线都不跳行', () => {
 
   const fwd = lineBetween({ x: 1, y: 1 }, { x: 9, y: 4 });
   const back = lineBetween({ x: 9, y: 4 }, { x: 1, y: 1 });
-  // 切比雪夫距离：8 列 3 行，最快也要走 8 步，一步都不许少
+  // 曼哈顿距离：8 列 3 行，最快也要走 8 步，一步都不许少
   assert.equal(fwd.length, 8, '缓斜线该走满 8 步');
   assert.equal(back.length, 8, '反向也一样 8 步');
   contiguous(fwd, { x: 1, y: 1 });
@@ -19883,7 +19895,8 @@ test('装甲：装载扣钱、这台本回合就算行动过，同一回合可�
   assert.ok(r2.ok, `同回合第二件也该成功：${!r2.ok ? r2.reason : ''}`);
   assert.deepEqual(anvil.modules, ['autocannon', 'coax'], '两件都装上了');
 
-  const forge = spawn(s, 'armor_forge', 'A', 5, 6);
+  /* 距离按曼哈顿算：斜角不算"旁边"，所以放在坞的正下方 */
+  const forge = spawn(s, 'armor_forge', 'A', 6, 6);
   const r2b = doMount(s, forge.id, 'coax');
   assert.ok(r2b.ok, `另一台共用同一座坞也该成功：${!r2b.ok ? r2b.reason : ''}`);
 

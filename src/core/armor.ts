@@ -906,7 +906,7 @@ function dockNextTo(s: GameState, u: Unit): Unit | undefined {
       d.owner === u.owner &&
       d.hp > 0 &&
       (d.type === ARMOR_DOCK || d.type === ARMOR_YARD) &&
-      Math.max(Math.abs(d.x - u.x), Math.abs(d.y - u.y)) <= 1,
+      Math.abs(d.x - u.x) + Math.abs(d.y - u.y) <= 1,
   );
 }
 
@@ -1326,7 +1326,7 @@ function teleportTo(s: GameState, u: Unit, target: DeviceTarget | undefined, max
   const y = target?.y;
   if (typeof x !== 'number' || typeof y !== 'number') return '要指定落点';
   if (!inBounds(s, x, y)) return '落点越界';
-  if (Math.max(Math.abs(x - u.x), Math.abs(y - u.y)) > max) return `这件设备只有 ${max} 格`;
+  if (Math.abs(x - u.x) + Math.abs(y - u.y) > max) return `这件设备只有 ${max} 格`;
   if (x === u.x && y === u.y) return '已经在那一格了';
   if (!standableFor(s, u, x, y)) return '那一格站不住';
   u.x = x;
@@ -1405,7 +1405,7 @@ export function doUseDevice(s: GameState, unitId: string, deviceId: string, targ
       const t = target?.targetId ? s.units.find((x) => x.id === target.targetId && x.hp > 0) : undefined;
       if (!t) return { ok: false, reason: '要指定一个相邻的友军' };
       if (t.owner !== u.owner) return { ok: false, reason: '只能整备己方单位' };
-      if (Math.max(Math.abs(t.x - u.x), Math.abs(t.y - u.y)) > 1) {
+      if (Math.abs(t.x - u.x) + Math.abs(t.y - u.y) > 1) {
         return { ok: false, reason: '整备臂只够得着相邻的单位' };
       }
       t.extraHpBonus = (t.extraHpBonus ?? 0) + SERVICE_BONUS_HP;
@@ -1459,7 +1459,7 @@ export function doUseDevice(s: GameState, unitId: string, deviceId: string, targ
       let n = 0;
       for (const t of s.units) {
         if (t.owner !== u.owner || t.hp <= 0) continue;
-        if (Math.max(Math.abs(t.x - u.x), Math.abs(t.y - u.y)) > 1) continue;
+        if (Math.abs(t.x - u.x) + Math.abs(t.y - u.y) > 1) continue;
         t.extraHpBonus = (t.extraHpBonus ?? 0) + SHIELD_PROJ_HP;
         t.extraHp = Math.min(extraHpCap(s, t), (t.extraHp ?? 0) + SHIELD_PROJ_HP);
         n += 1;

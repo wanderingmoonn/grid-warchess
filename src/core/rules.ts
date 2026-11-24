@@ -5,6 +5,7 @@
  *   1. 这个文件里不许出现 document、window、fetch、Date.now、Math.random。
  *   2. 每个函数要么是纯查询，要么返回一份新的 state，绝不原地修改。
  *   3. 任何非法操作都必须返回明确的失败原因，而不是抛异常或静默忽略。
+ *   4. **所有距离用曼哈顿距离**（`|dx| + |dy|`）。
  *
  * 扩展规则通过 expansions.ts 的钩子挂进来，本文件不认识任何具体扩展，
  * 只知道"在这些时机问一下所有启用的扩展"。
@@ -1988,7 +1989,7 @@ function freeSpotWithin(
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         // 只看这一圈的边，圈内更近的上一轮已经找过了
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
         const x = unit.x + dx;
         const y = unit.y + dy;
         if (canStandAt(s, x, y, type)) return { x, y };
@@ -4777,7 +4778,7 @@ function spawnFromEvent(s: GameState, owner: PlayerId, type: string, x: number, 
       const ring: Array<[number, number]> = [];
       for (let dy = -r; dy <= r; dy += 1) {
         for (let dx = -r; dx <= r; dx += 1) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          if (Math.abs(dx) + Math.abs(dy) !== r) continue;
           ring.push([x + dx, y + dy]);
         }
       }
@@ -7864,7 +7865,7 @@ SKILL_EFFECTS['ascend'] = (c) => {
 };
 
 /**
- * 陨卵能落在哪些格：切比雪夫半径 `reach` 内、棋盘里、那一格放得下蛋。
+ * 陨卵能落在哪些格：曼哈顿半径 `reach` 内、棋盘里、那一格放得下蛋。
  *
  * `blast` 给了就再多筛一层"砸得到人"——界面高亮用这个口径。
  * 一处口径给两个消费者（界面高亮 / 效果实现兜底），避免"高亮了点下去说不行"。
@@ -7883,12 +7884,12 @@ export function eggDropCells(
   const out: Array<{ x: number; y: number }> = [];
   for (let dy = -reach; dy <= reach; dy += 1) {
     for (let dx = -reach; dx <= reach; dx += 1) {
-      if (Math.max(Math.abs(dx), Math.abs(dy)) > reach) continue;
+      if (Math.abs(dx) + Math.abs(dy) > reach) continue;
       const x = self.x + dx;
       const y = self.y + dy;
       if (!canStandAt(s, x, y, eggType)) continue;
       if (blast !== undefined) {
-        const hits = foes.some((f) => Math.max(Math.abs(f.x - x), Math.abs(f.y - y)) <= blast);
+        const hits = foes.some((f) => Math.abs(f.x - x) + Math.abs(f.y - y) <= blast);
         if (!hits) continue;
       }
       out.push({ x, y });
@@ -7955,7 +7956,7 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
       c.result.ok = false;
       // 两种失败要分开说：射程外 / 那一格放不下
       const inReach =
-        Math.max(Math.abs(c.target.x - c.self.x), Math.abs(c.target.y - c.self.y)) <= reach;
+        Math.abs(c.target.x - c.self.x) + Math.abs(c.target.y - c.self.y) <= reach;
       c.result.reason = !inReach
         ? `陨卵只能落在 ${reach} 格内`
         : '那一格放不下魔龙卵';
@@ -7973,7 +7974,7 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
     for (const p of legal) {
       let score = 0;
       for (const f of foes) {
-        if (Math.max(Math.abs(f.x - p.x), Math.abs(f.y - p.y)) > blast) continue;
+        if (Math.abs(f.x - p.x) + Math.abs(f.y - p.y) > blast) continue;
         score += magicDamageOf(c.state, c.self, f);
       }
       if (score > bestScore) {
@@ -7995,7 +7996,7 @@ SKILL_EFFECTS['dragon-egg'] = (c) => {
   let hit = 0;
   let dealt = 0;
   for (const f of foes) {
-    if (Math.max(Math.abs(f.x - best.x), Math.abs(f.y - best.y)) > blast) continue;
+    if (Math.abs(f.x - best.x) + Math.abs(f.y - best.y) > blast) continue;
     const fd = utype(c.state, f.type);
     const raw = magicDamageOf(c.state, c.self, f);
     const dmg = Math.max(0, Math.round(applyElementMul(raw, 'dark', fd.weak, fd.resist)));

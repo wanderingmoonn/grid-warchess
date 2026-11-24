@@ -63,8 +63,8 @@ export function seasonOf(turn: number): Season {
 /**
  * 陆地三档 / 水域三档。
  *
- * 判定用**方形邻域**（切比雪夫距离）：说"周围 2 格内"时，人想的是
- * 以这一格为中心的一个方块，而不是曼哈顿距离画出来的菱形。
+ * 判定用**曼哈顿距离**（`|dx| + |dy|`）：斜着走一步要花两步，
+ * 所以"周围 2 格内"是以这一格为中心的菱形。
  */
 export type Coast = 'coastal' | 'nearshore' | 'inland' | 'shore' | 'shallow' | 'deep';
 

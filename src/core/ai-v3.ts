@@ -2191,7 +2191,7 @@ export function rememberedPowerOf(
   return { power, count };
 }
 
-/** @tune 目标城周围多大一圈算"守军区域"（切比雪夫距离）：5 是拍的 */
+/** @tune 目标城周围多大一圈算"守军区域"（曼哈顿距离）：5 是拍的 */
 const INTEL_RADIUS = 5;
 
 /**
@@ -2216,7 +2216,7 @@ function intelConfOf(
 ): number {
   if (!city) return 0;
   const near = (u: { x: number; y: number }): boolean =>
-    Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y)) <= INTEL_RADIUS;
+    Math.abs(u.x - city.x) + Math.abs(u.y - city.y) <= INTEL_RADIUS;
   if (view.units.some((u) => u.owner !== me && near(u))) return 1;
   let bestAge = Infinity;
   for (const g of ghosts) {
@@ -2533,7 +2533,7 @@ function crossingPointOf(
       }
       if (!onMyBank) continue;
       // 分流用：离已用的渡口太近就不算"另一个渡口"（两座桥挨着等于一座）
-      if (avoid && Math.max(Math.abs(x - avoid.x), Math.abs(y - avoid.y)) < 6) continue;
+      if (avoid && Math.abs(x - avoid.x) + Math.abs(y - avoid.y) < 6) continue;
       if (dFoe < bestScore) {
         bestScore = dFoe;
         best = { x, y };
@@ -3054,7 +3054,7 @@ function squadTick(
       lead = Math.min(
         ...sq.memberIds.map((id) => {
           const b = builders.find((x) => x.id === id);
-          return b ? Math.max(Math.abs(b.x - tp.x), Math.abs(b.y - tp.y)) : 999;
+          return b ? Math.abs(b.x - tp.x) + Math.abs(b.y - tp.y) : 999;
         }),
       );
     }
@@ -3523,7 +3523,7 @@ const CROSSING_PLAN: RankedPlan = {
       const near = unitsOf(c.view, c.me).filter(
         (u) =>
           utype(c.view, u.type).category === 'combat' &&
-          Math.max(Math.abs(u.x - site.x), Math.abs(u.y - site.y)) <= 3,
+          Math.abs(u.x - site.x) + Math.abs(u.y - site.y) <= 3,
       );
       const squads = c.view.aiFocus?.[c.me]?.squads ?? [];
       const sqNear = squads.filter((sq) =>
@@ -3618,7 +3618,7 @@ const CROSSING_PLAN: RankedPlan = {
         d: Math.min(
           ...sq.memberIds.map((id) => {
             const u = c.view.units.find((x) => x.id === id);
-            return u ? Math.max(Math.abs(u.x - alt.x), Math.abs(u.y - alt.y)) : 999;
+            return u ? Math.abs(u.x - alt.x) + Math.abs(u.y - alt.y) : 999;
           }),
         ),
       }))
@@ -3737,7 +3737,7 @@ function scoutTargetCityOf(c: PlanCtx): City | null {
   let bestD = Infinity;
   for (const city of foes) {
     for (const u of unitsOf(c.view, c.me)) {
-      const d = Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y));
+      const d = Math.abs(u.x - city.x) + Math.abs(u.y - city.y);
       if (d < bestD) {
         bestD = d;
         best = city;
@@ -3764,7 +3764,7 @@ function scoutSpotOf(
   const mine = unitsOf(view, me);
   for (let dy = -4; dy <= 4; dy += 1) {
     for (let dx = -4; dx <= 4; dx += 1) {
-      const ring = Math.max(Math.abs(dx), Math.abs(dy));
+      const ring = Math.abs(dx) + Math.abs(dy);
       if (ring < 3 || ring > 4) continue;
       const x = city.x + dx;
       const y = city.y + dy;
@@ -3776,7 +3776,7 @@ function scoutSpotOf(
       if (t.terrain === 'forest' || t.terrain === 'hill') score += 40;
       // 离自己人近一点：路上更安全，也方便被打残时撤回去
       let near = Infinity;
-      for (const u of mine) near = Math.min(near, Math.max(Math.abs(u.x - x), Math.abs(u.y - y)));
+      for (const u of mine) near = Math.min(near, Math.abs(u.x - x) + Math.abs(u.y - y));
       if (Number.isFinite(near)) score -= near * 0.5;
       if (score > bestScore) {
         bestScore = score;
@@ -3909,10 +3909,10 @@ function peekTaskOf(c: PlanCtx): { unitId: string; x: number; y: number } | null
     const def = utype(c.view, u.type);
     if (def.category !== 'combat' || def.domain === 'water') continue;
     if (u.hp / Math.max(1, def.maxHp) < 0.6) continue;
-    const d = Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y));
+    const d = Math.abs(u.x - city.x) + Math.abs(u.y - city.y);
     if (d < 5 || d > 14) continue;
     // 守家的不走：家里没人比"看清对面"重要
-    if (own.some((x) => Math.max(Math.abs(u.x - x.x), Math.abs(u.y - x.y)) <= 2)) continue;
+    if (own.some((x) => Math.abs(u.x - x.x) + Math.abs(u.y - x.y) <= 2)) continue;
     // 视野高的优先（看得远），离得近的优先（省路）
     const score = (def.vision ?? 1) * 10 - d * 0.5;
     if (score > bestScore) {
@@ -3942,7 +3942,7 @@ function peekSpotFor(
   let bestScore = -Infinity;
   for (let dy = -v; dy <= v; dy += 1) {
     for (let dx = -v; dx <= v; dx += 1) {
-      if (Math.max(Math.abs(dx), Math.abs(dy)) !== v) continue;
+      if (Math.abs(dx) + Math.abs(dy) !== v) continue;
       const x = city.x + dx;
       const y = city.y + dy;
       const t = tileAt(view, x, y);
@@ -3952,7 +3952,7 @@ function peekSpotFor(
       let score = 0;
       if (t.terrain === 'forest' || t.terrain === 'hill') score += 12;
       // 离单位近一点：少走两格就少两格风险
-      score -= Math.max(Math.abs(u.x - x), Math.abs(u.y - y)) * 0.6;
+      score -= Math.abs(u.x - x) + Math.abs(u.y - y) * 0.6;
       if (score > bestScore) {
         bestScore = score;
         best = { x, y };
@@ -5046,7 +5046,7 @@ function royalComboBonus(
   for (const u of mine) {
     if (u.type === KING) {
       kings += 1;
-      if (Math.max(Math.abs(u.x - src.x), Math.abs(u.y - src.y)) <= 4) kingNear = true;
+      if (Math.abs(u.x - src.x) + Math.abs(u.y - src.y) <= 4) kingNear = true;
     } else if (u.type === CAV) cavs += 1;
   }
   if (d.id === CAV) {
@@ -6103,7 +6103,7 @@ function nearestOwnDock(s: GameState, me: PlayerId, from: { x: number; y: number
   for (const u of s.units) {
     if (u.owner !== me || u.hp <= 0) continue;
     if (u.type !== 'armor_dock' && u.type !== 'armor_yard') continue;
-    const d = Math.max(Math.abs(u.x - from.x), Math.abs(u.y - from.y));
+    const d = Math.abs(u.x - from.x) + Math.abs(u.y - from.y);
     if (d < bestD) {
       bestD = d;
       best = u;
@@ -6706,9 +6706,9 @@ function unitCandidates(
          * 不这么写的话，到了林子还会被基础走位分拽走——一挪窝就前功尽弃。
          */
         const sp = guide;
-        const d0 = Math.max(Math.abs(unit.x - sp.x), Math.abs(unit.y - sp.y));
+        const d0 = Math.abs(unit.x - sp.x) + Math.abs(unit.y - sp.y);
         if (d0 === 0) continue;
-        const d1 = Math.max(Math.abs(x - sp.x), Math.abs(y - sp.y));
+        const d1 = Math.abs(x - sp.x) + Math.abs(y - sp.y);
         score = 120 + (d0 - d1) * 60 + (d1 === 0 ? 40 : 0);
         if (!best || score > best.score) {
           best = { action: { type: 'MOVE', unitId: unit.id, x, y }, score };
@@ -6745,8 +6745,8 @@ function unitCandidates(
       if (def.armorFrame && weaponsOf(unit).length === 0) {
         const dock = nearestOwnDock(s, me, unit);
         if (dock) {
-          const before = Math.max(Math.abs(unit.x - dock.x), Math.abs(unit.y - dock.y));
-          const after = Math.max(Math.abs(x - dock.x), Math.abs(y - dock.y));
+          const before = Math.abs(unit.x - dock.x) + Math.abs(unit.y - dock.y);
+          const after = Math.abs(x - dock.x) + Math.abs(y - dock.y);
           // 每靠近一格给 120：退回去通常要吃走位评分的大额扣分（-200 上下），
           // 定额加成压不住，按步数给才追得平。
           if (after < before) score += (before - after) * 120;
@@ -10473,7 +10473,7 @@ function isOffensive(s: GameState, me: PlayerId, a: Action): boolean {
   const myCities = citiesOf(s, me).filter((c) => !c.ruined);
   if (myCities.length === 0) return false;
   const nearHome = (x: number, y: number): boolean =>
-    myCities.some((c) => Math.hypot(c.x - x, c.y - y) <= HOLD_RADIUS);
+    myCities.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= HOLD_RADIUS);
   if (a.type === 'MOVE') return !nearHome(a.x, a.y);
   if (a.type === 'ATTACK') {
     const t = s.units.find((u) => u.id === a.targetId);

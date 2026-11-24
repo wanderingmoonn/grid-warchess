@@ -267,8 +267,14 @@ export function softenPeaks(g: Terrain[], w: number, h: number, keep?: ReadonlyS
   for (let i = 0; i < n; i += 1) {
     const d = dist[i];
     if (d !== 1 && d !== 2) continue;
-    // 城郊那一圈不能抬：出生点要能站人，城门口也不该变成台地
-    if (keep?.has(i)) continue;
+    /*
+     * 城郊那一圈**第二圈**不能抬：出生点要能站人，城门口也不该变成台地。
+     *
+     * 但紧贴山心的那一格（d === 1）要例外：城郊保护的本意是"别把平地抬成台地"，
+     * 而那一格本来就贴着高山，不抬就是一步两层的悬崖（玩家看到的是柱子）。
+     * 抬成台地反而更能走。
+     */
+    if (keep?.has(i) && d !== 1) continue;
     const t = g[i] as Terrain;
     if (t !== 'plain' && t !== 'forest' && t !== 'hill') continue;
     const height = TERRAIN_HEIGHT[t] ?? 0;

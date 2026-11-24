@@ -2977,7 +2977,7 @@ function armorBlock(s: GameState, u: Unit, canAct: boolean): string {
           t.owner === u.owner &&
           t.id !== u.id &&
           t.hp > 0 &&
-          Math.max(Math.abs(t.x - u.x), Math.abs(t.y - u.y)) <= 1,
+          Math.abs(t.x - u.x) + Math.abs(t.y - u.y) <= 1,
       );
       const rows = allies.map((t) =>
         devRow(id, `${m.name} → ${s.unitTypes[t.type]?.name ?? t.type}`, m.note ?? '', '使用', 'use-device', t.id),

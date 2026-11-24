@@ -367,7 +367,7 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
     case 'unitsNear': {
       const n = st.mine.filter(
         (u) =>
-          Math.max(Math.abs(u.x - (c.x ?? 0)), Math.abs(u.y - (c.y ?? 1))) <= (c.r ?? 1) &&
+          Math.abs(u.x - (c.x ?? 0)) + Math.abs(u.y - (c.y ?? 1)) <= (c.r ?? 1) &&
           (!c.category || u.category === c.category),
       ).length;
       return { ok: c.min === undefined || n >= c.min, got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个` };

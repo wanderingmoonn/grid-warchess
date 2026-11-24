@@ -66,7 +66,7 @@ const underThreat = (u: Unit): boolean => {
     const d = s.unitTypes[e.type];
     if (!d || d.category !== 'combat') continue;
     const reach = Math.max(1, d.move ?? 1) + Math.max(0, (d.range ?? 1) - 1);
-    if (Math.max(Math.abs(e.x - u.x), Math.abs(e.y - u.y)) <= reach) return true;
+    if (Math.abs(e.x - u.x) + Math.abs(e.y - u.y) <= reach) return true;
   }
   return false;
 };

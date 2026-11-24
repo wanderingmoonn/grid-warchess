@@ -178,7 +178,7 @@ const trapper = (): { x: number; y: number } | null => {
   const us = s.units.filter((z) => z.owner === me && s.unitTypes[z.type]?.category === 'combat');
   if (us.length === 0) return null;
   return us
-    .map((u) => ({ x: u.x, y: u.y, d: Math.max(Math.abs(u.x - city.x), Math.abs(u.y - city.y)) }))
+    .map((u) => ({ x: u.x, y: u.y, d: Math.abs(u.x - city.x) + Math.abs(u.y - city.y) }))
     .sort((a, b) => b.d - a.d)[0]!;
 };
 const distToCity = (): number => {
@@ -187,7 +187,7 @@ const distToCity = (): number => {
   let best = 99;
   for (let dy = 0; dy < 2; dy++) {
     for (let dx = 0; dx < 2; dx++) {
-      best = Math.min(best, Math.max(Math.abs(t.x - (city.x + dx)), Math.abs(t.y - (city.y + dy))));
+      best = Math.min(best, Math.abs(t.x - (city.x + dx)) + Math.abs(t.y - (city.y + dy)));
     }
   }
   return best;

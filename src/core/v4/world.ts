@@ -22,6 +22,9 @@
  *
  * ── 距离场（BFS）：全项目只有一张，别处一律不许再写 ──────────────
  *
+ * **所有距离用曼哈顿距离**（`|dx| + |dy|`）。这张场是"要走几步"的唯一答案
+ * （它绕水、绕山；曼哈顿不绕，只用来粗比远近）。
+ *
  * 2026-11-24 把原来的四张合成一张了。原来那四张其实是**同一套算法 + 三个开关**：
  *
  *   · 起点几个（1 个 / 一组）
@@ -161,20 +164,6 @@ export interface World {
    * 见文件顶部的表格：起点几个、代价怎么算、要不要前驱、限多远。
    */
   field(sources: number[], opt?: FieldOpt): { dist: Float64Array; prev: Int32Array };
-  /**
-   * 这一格会不会被敌方战斗单位"够到"。
-   *
-   * 口径是 **贴脸**：敌人一步就能走到邻格开火（`移动 + 1`）。
-   *
-   * 这中间试错过两次，都记在这里：
-   *   ① 抄 v3 的 `2 × 移动 + 射程-1`（算"两回合内"）→ 大半个图都是危险区，
-   *      经济兵全天逃命，S-006 总产 27 → 9；
-   *   ② 改成 `移动 + 射程`（这一手能开火）→ 敌人还在 5 格外就开始跑，总产 47 → 29。
-   *
-   * 教训：**经济兵不做战略判断**。它只躲"贴脸"的，远处的威胁是守军/决定层的事；
-   * 让最便宜的一类单位去算全局威胁，代价就是把产出全丢掉。
-   */
-  harassed(p: { x: number; y: number }): boolean;
   /**
    * 从 `p` 朝 `toward` 走，**横向能并排站几格**（走廊宽度）。
    *
@@ -333,8 +322,9 @@ function baseMove(s: GameState, me: PlayerId): number {
   return Math.max(1, moves[Math.floor(moves.length / 2)] ?? 2);
 }
 
+/** 所有距离用曼哈顿距离（`|dx| + |dy|`）：斜着走一步要花两步，所以斜向不算近。 */
 const near = (a: { x: number; y: number }, b: { x: number; y: number }, r: number): boolean =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= r;
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y) <= r;
 
 /**
  * 建一份 World。
@@ -393,7 +383,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     const dFoeCity = distToNearestFoeCity({ x: city.x, y: city.y });
     const dFoeArmy = foeCombat.length === 0
       ? Infinity
-      : Math.min(...foeCombat.map((u) => Math.max(0, Math.ceil(Math.hypot(u.x - city.x, u.y - city.y)))));
+      : Math.min(...foeCombat.map((u) => Math.abs(u.x - city.x) + Math.abs(u.y - city.y)));
     const defenders = myCombat.filter((u) => near(u, city, 6)).length;
     /* 角色判定：只有这一处口径。别处想问"这座城算前线吗"，一律调 roleOf。 */
     let role: CityRole;
@@ -465,7 +455,6 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   }
 
   /* 每个敌方战斗单位的"威胁半径"，只算一次（贴脸：移动 + 1，见 harassed 的注释） */
-  const foeReach = foeCombat.map((u) => Math.max(1, effectiveStats(s, u).move ?? 2) + 1);
 
   /* 认领表的原料算一次就够（一场棋里问很多遍），算完缓存 */
   let spotCache: EconSpot[] | null = null;
@@ -519,9 +508,6 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         }
       }
       return w;
-    },
-    harassed(p) {
-      return foeCombat.some((u, i) => Math.max(Math.abs(u.x - p.x), Math.abs(u.y - p.y)) <= foeReach[i]!);
     },
     affordableCombat(city, gold) {
       const out: Array<{ type: string; gold: number }> = [];

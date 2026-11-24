@@ -280,7 +280,7 @@ export function visibleMarks(
       (u) =>
         u.owner === p &&
         u.hp > 0 &&
-        Math.max(Math.abs(u.x - m.x), Math.abs(u.y - m.y)) <= r,
+        Math.abs(u.x - m.x) + Math.abs(u.y - m.y) <= r,
     );
     if (found) out.push(m);
   }

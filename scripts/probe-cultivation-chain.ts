@@ -142,7 +142,7 @@ function run(seed: number) {
     const qi = unitsOf(s, 'A').filter((u: any) => u.type === 'qi-cultivator');
     console.log('  藏经阁:', lib ? `${lib.x},${lib.y}` : '无', '| 研发:', (s.researched?.A ?? []).length);
     for (const u of qi) {
-      const near = lib ? Math.max(Math.abs(u.x - lib.x), Math.abs(u.y - lib.y)) <= 1 : false;
+      const near = lib ? Math.abs(u.x - lib.x) + Math.abs(u.y - lib.y) <= 1 : false;
       console.log(`   修士 ${u.x},${u.y} rank=${u.custom?.rank} 已学=${knownSpells(u).length} 法术位=${spellSlotsOf(u)} 邻阁=${near}`);
     }
     const dc: any = unitsOf(s, 'A').find((u: any) => u.type === 'cultivation-deacon');

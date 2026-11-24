@@ -309,7 +309,7 @@ export function isWaterTerrain(t: Terrain | undefined): boolean {
 }
 
 /**
- * 这一格离最近的陆地有几格（切比雪夫距离，只看边圈）。水格用它判"够不够外海"。
+ * 这一格离最近的陆地有几格（曼哈顿距离，只看边圈）。水格用它判"够不够外海"。
  *
  * 为什么不用 `coastClassOf` 的 deep 档：那个要求方圆 7 格没有陆地，
  * 而小地图上整片海都能在 7 格内摸到岸——于是每一格都是"沿岸"，
@@ -320,7 +320,7 @@ export function distToLandOf(s: GameState, x: number, y: number): number {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         // 只看这一圈的边：内圈上一轮已经查过了
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
         const t = tileAt(s, x + dx, y + dy);
         if (!t) continue;
         if (!isWaterTerrain(t.terrain)) return r;

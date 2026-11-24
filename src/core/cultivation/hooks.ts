@@ -1018,7 +1018,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 		/*
 		 * 斩仙飞刀：记满三回合，刀落。
 		 *
-		 * 判"挪没挪开"用**记录点**（切比雪夫 1 格内算没动）：草案里的"记录位置"
+		 * 判"挪没挪开"用**记录点**（曼哈顿 1 格内算没动）：草案里的"记录位置"
 		 * 只有在"跑得掉"时才有意义，否则它就只是一个延迟 3 回合的伤害。
 		 * 落刀用 `attrition`——这一刀没有攻方，也不该被守御阵接走。
 		 */
@@ -1033,7 +1033,7 @@ export const CULTIVATION_HOOKS: ExpansionHooks = {
 			const rest = { ...(u.custom ?? {}) };
 			delete rest['feiDao'];
 			u.custom = rest;
-			const moved = Math.max(Math.abs(u.x - mark.x), Math.abs(u.y - mark.y));
+			const moved = Math.abs(u.x - mark.x) + Math.abs(u.y - mark.y);
 			if (moved > 1) {
 				api.pushLog(state, player, `斩仙飞刀落空：${unitNameOf(state, u)} 已经不在记录的位置`);
 				continue;

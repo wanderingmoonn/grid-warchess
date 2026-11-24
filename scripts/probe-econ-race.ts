@@ -78,7 +78,7 @@ const combatUnits = (s: GameState, p: PlayerId) =>
   });
 const armyCount = (s: GameState, p: PlayerId): number => combatUnits(s, p).length;
 
-/** 前压程度：战斗单位到最近自家城的平均切比雪夫距离 */
+/** 前压程度：战斗单位到最近自家城的平均曼哈顿距离 */
 function pushOf(s: GameState, p: PlayerId): { push: number; home: number } {
   const own = s.cities.filter((c) => c.owner === p && !c.ruined);
   if (own.length === 0) return { push: 0, home: 0 };
@@ -87,7 +87,7 @@ function pushOf(s: GameState, p: PlayerId): { push: number; home: number } {
   let sum = 0;
   let home = 0;
   for (const u of list) {
-    const d = Math.min(...own.map((c) => Math.max(Math.abs(u.x - c.x), Math.abs(u.y - c.y))));
+    const d = Math.min(...own.map((c) => Math.abs(u.x - c.x) + Math.abs(u.y - c.y)));
     sum += d;
     if (d <= 3) home += 1;
   }

@@ -17,16 +17,13 @@ import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
 
 /**
- * **曼哈顿**距离——和引擎一致（2026-11-24 修）。
+ * **所有距离用曼哈顿距离**（`|dx| + |dy|`）：游戏里移动是四邻，斜着走一步要花两步，
+ * 所以斜向的格子不能算"更近"。
  *
- * 这游戏里移动是四邻 BFS，斜走要**两步**，`distToCity` 也是 `|dx|+|dy|`。
- * v4 原来一直用切比雪夫（斜走算 1 格），等于系统性地高估推进能力：
- * "离城 4 格"在引擎眼里可能是 6 步，`stepToward` 于是选了一堆看着更近、
- * 实际更费步的斜向落点。
- *
- * 唯一用欧氏的是视野（历史遗留的 bug，改成惯例了）——那一条不在这里。
+ * 判"要走几步"时不要用这个——那是距离场的事（`world.stepsFrom`，绕水绕山）。
+ * 这里只用于"粗比远近"和"半径内有没有人"。
  */
-const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+const manhattan = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
   Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 function squadOf(con: Constraints, u: Unit): Squad | undefined {
@@ -130,7 +127,7 @@ export function actFor(
       if (con.keepClear.includes(u.y * s.w + u.x)) {
         const spot = stepOffSpawn(s, u, home, con);
         if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
-      } else if (cheb(u, home) > 2) {
+      } else if (manhattan(u, home) > 2) {
         const spot = stepToward(s, u, { x: home.x, y: home.y });
         if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
       }
@@ -170,7 +167,7 @@ export function actFor(
 
   /* ③ 打人：能打谁由**引擎**回答，不自己算距离。
    *
-   * 这里踩过一次：我自己按切比雪夫距离判"射程内"，而引擎按 `strikeDistance`（含高度差、
+   * 这里踩过一次：我自己算距离判"射程内"，而引擎按 `strikeDistance`（含高度差、
    * 空中 +1）算，于是 v4 每回合都提一个必被拒的攻击（"目标超出射程"），
    * 整整 30 手一次都没打出去。**一份真相：能打谁只问引擎。** */
   const st = effectiveStats(s, u);
@@ -183,7 +180,7 @@ export function actFor(
   /* ④ 走：朝任务目标。`hold` 也不是"钉在原地"——离城还远就先走回去 */
   if (!sq) return null;
   const to = targetOf(s, sq);
-  if (sq.order === 'hold' && to && cheb(u, to) <= 2) return null;
+  if (sq.order === 'hold' && to && manhattan(u, to) <= 2) return null;
   if (!to) return null;
   /*
    * 直线只在**能并排**时才有意义：分了路的队伍（走廊够宽）走直线，
@@ -238,11 +235,10 @@ export function actFor(
  *
  * ── 两个参数的意思 ──────────────────────────────────────────
  *
- * · `field`：一张现成的距离表（世界层的 A/B/C/D 随便哪个都行，只要单位是"越小越近"）。
- *   给了就按表比远近；**不给就退回直线距离**（曼哈顿）。
- *   直线距离会把"必须绕路"的局判死——地图角落的兵要先去更远的一格才能绕出去，
- *   用直线距离它一辈子不动（实测 9 个回合）。所以凡是"路上可能有障碍"的调用，
- *   都要把表传进来。
+ * · `field`：一张现成的距离表（`world` 里的那张场，越小越近）。
+ *   给了就按表比远近；不给就退回 `manhattan`。
+ *   后者不绕障碍，会把"必须绕路"的局判死——地图角落的兵要先去更远的一格才能绕出去，
+ *   于是它一辈子不动（实测 9 个回合）。所以凡是"路上可能有障碍"的调用，都要把表传进来。
  *
  * · `straight`：只影响"同样近"时怎么选。开着 = 优先直冲目标（30 个兵挤成一列时靠它走直线）；
  *   关着 = 保持原来的遍历顺序（单排队列用，避免硬顶成一横排）。
@@ -259,21 +255,21 @@ function stepToward(
   to: { x: number; y: number },
   /** 走廊够宽才走直线；窄道（桥/关隘）要排队，不能硬顶成一横排 */
   straight = false,
-  /** 现成的距离表（越小越近）。给了就按表比，不给就退回直线距离 */
+  /** 现成的距离表（越小越近）。给了就按表比，不给就退回 `manhattan` */
   field?: Float64Array,
 ): { x: number; y: number } | null {
   const dist = (x: number, y: number): number =>
-    field ? (field[y * s.w + x] ?? Infinity) : cheb({ x, y }, to);
+    field ? (field[y * s.w + x] ?? Infinity) : manhattan({ x, y }, to);
   const distSafe = (x: number, y: number): number => {
     const d = dist(x, y);
-    /* 目标不可达（在障碍里/被围死）时直线距离兜底，否则比较全是 Infinity、兵会打转 */
-    return Number.isFinite(d) ? d : cheb({ x, y }, to);
+    /* 目标不可达（在障碍里/被围死）时用 `manhattan` 兜底，否则比较全是 Infinity、兵会打转 */
+    return Number.isFinite(d) ? d : manhattan({ x, y }, to);
   };
   const cur = distSafe(u.x, u.y);
-  const curE = (u.x - to.x) ** 2 + (u.y - to.y) ** 2;
+  const curB = Math.abs(Math.abs(u.x - to.x) - Math.abs(u.y - to.y));
   let best: { x: number; y: number } | null = null;
   let bestD = cur;
-  let bestE = curE;
+  let bestB = curB;
   /* 逐个看"这一手能踩到的格"（引擎给的，已扣掉别人占着的格） */
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
@@ -290,20 +286,22 @@ function stepToward(
     if (d < bestD) {
       bestD = d;
       best = { x, y };
-      bestE = (x - to.x) ** 2 + (y - to.y) ** 2;
+      bestB = Math.abs(Math.abs(x - to.x) - Math.abs(y - to.y));
       continue;
     }
     /*
-     * **同距离时选"更正对目标"的那一格**（欧氏距离更小）。
+     * **同距离时选"两轴差更均匀"的那一格。**
      *
-     * 不这么选的话，切比雪夫距离一样的两格（一格直着往前、一格横着往旁边）
-     * 谁先被遍历到就用谁——30 个兵各走各的，实际走出来是之字形，
-     * 净推进只有 0.6 格/手（移动力是 2）。这是 S-002 量出来的。
+     * 距离相同的两格（一格横着往前、一格斜着往前），谁先被遍历到就用谁的话，
+     * 30 个兵各走各的，实际走出来是之字形，净推进只有 0.6 格/手（移动力是 2）。
+     * 这是 S-002 量出来的。
+     *
+     * 判据只是"两个轴上的差有多接近"（`||dx| - |dy||`），不引入别的距离。
      */
     if (d === bestD && straight) {
-      const e = (x - to.x) ** 2 + (y - to.y) ** 2;
-      if (e < bestE) {
-        bestE = e;
+      const e = Math.abs(Math.abs(x - to.x) - Math.abs(y - to.y));
+      if (e < bestB) {
+        bestB = e;
         best = { x, y };
       }
     }
@@ -422,19 +420,18 @@ function stepAside(
   field?: Float64Array,
 ): { x: number; y: number } | null {
   const d = (x: number, y: number): number =>
-    field ? (field[y * s.w + x] ?? Infinity) : Math.abs(x - to.x) + Math.abs(y - to.y);
+    field ? (field[y * s.w + x] ?? Infinity) : manhattan({ x, y }, to);
   const cur = d(u.x, u.y);
-  const curE = (u.x - to.x) ** 2 + (u.y - to.y) ** 2;
   let best: { x: number; y: number } | null = null;
-  let bestE = curE;
+  let bestB = Math.abs(Math.abs(u.x - to.x) - Math.abs(u.y - to.y));
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
     const y = Math.floor(key / s.w);
     if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
     if (d(x, y) !== cur) continue; /* 只横移，不后退 */
-    const e = (x - to.x) ** 2 + (y - to.y) ** 2;
-    if (e < bestE) {
-      bestE = e;
+    const e = Math.abs(Math.abs(x - to.x) - Math.abs(y - to.y));
+    if (e < bestB) {
+      bestB = e;
       best = { x, y };
     }
   }
@@ -466,7 +463,7 @@ function stepOffSpawn(
     const dx = Math.max(home.x - x, x - (home.x + n - 1), 0);
     const dy = Math.max(home.y - y, y - (home.y + n - 1), 0);
     if (Math.max(dx, dy) > 3) continue;
-    const d = cheb(u, { x, y });
+    const d = manhattan(u, { x, y });
     if (d < bestD) {
       bestD = d;
       best = { x, y };

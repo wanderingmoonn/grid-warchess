@@ -180,7 +180,7 @@ export const CULTIVATION_AI_GOALS: AiGoal[] = [
           for (const u of ownUnits(c)) {
             const def = c.state.unitTypes[u.type];
             if (!isCultivatorDef(def)) continue;
-            const near = Math.max(Math.abs(u.x - lib.x), Math.abs(u.y - lib.y)) <= 1;
+            const near = Math.abs(u.x - lib.x) + Math.abs(u.y - lib.y) <= 1;
             if (!near) {
               /*
                * 走过去：目标是藏经阁**旁边**的空格，不是藏经阁本身
@@ -196,7 +196,7 @@ export const CULTIVATION_AI_GOALS: AiGoal[] = [
                   const py = lib.y + dy;
                   if (px < 0 || py < 0 || px >= c.state.w || py >= c.state.h) continue;
                   if (c.state.units.some((o) => o.hp > 0 && o.x === px && o.y === py)) continue;
-                  const d = Math.max(Math.abs(dx), Math.abs(dy));
+                  const d = Math.abs(dx) + Math.abs(dy);
                   if (d < bestD) {
                     bestD = d;
                     spot = { x: px, y: py };

@@ -246,7 +246,7 @@ for (let y = 1; y < W - 1; y++) {
     const t = s.tiles[y * W + x];
     if (!t || t.terrain !== 'plain') continue;
     if (x === worker.x && y === worker.y) continue;
-    const d = Math.max(Math.abs(x - site.x), Math.abs(y - site.y));
+    const d = Math.abs(x - site.x) + Math.abs(y - site.y);
     if (d > 4) continue;
     if (s.units.some((u) => u.x === x && u.y === y)) continue;
     cells.push({ x, y, d });
@@ -277,7 +277,7 @@ const inClear = (): number =>
   }).length;
 const workerDist = (): number => {
   const b = s.units.find((u) => u.owner === me && u.type === 'laborer');
-  return b ? Math.max(Math.abs(b.x - site!.x), Math.abs(b.y - site!.y)) : 999;
+  return b ? Math.abs(b.x - site!.x) + Math.abs(b.y - site!.y) : 999;
 };
 /*
  * 桥建筑按 type 名前缀认。不用 `s.unitTypes[u.type]?.bridges`：

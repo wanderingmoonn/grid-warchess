@@ -366,7 +366,7 @@ export function mirrorBlock(x: number, y: number, size: number, w: number, h: nu
   return { x: w - size - x, y: h - size - y };
 }
 
-/** 到 2×2 城市方块的距离（切比雪夫式，贴边算 0） */
+/** 到 2×2 城市方块的距离（曼哈顿，贴边算 0） */
 function blockDist(p: Pos, city: Pos, size = 2): number {
   const cx = Math.max(city.x, Math.min(p.x, city.x + size - 1));
   const cy = Math.max(city.y, Math.min(p.y, city.y + size - 1));
@@ -1338,7 +1338,7 @@ function topUpWater(
   const tiles = c.w * c.h;
   const target = Math.round(tiles * WATER_TARGET);
   const apron = (x: number, y: number): boolean => {
-    // 只护城block外一圈（切比雪夫 1）。以前护到 2 圈，12×12 上四座城加起来
+    // 只护城block外一圈（曼哈顿 1）。以前护到 2 圈，12×12 上四座城加起来
     // 能盖掉八成棋盘，补水直接找不到落点——实测有整张图只剩 2.8% 水的。
     for (const p of [...cities.A, ...cities.B]) {
       if (x >= p.x - 1 && x <= p.x + c.citySize && y >= p.y - 1 && y <= p.y + c.citySize) {
@@ -1699,7 +1699,7 @@ function spawnsAround(
   for (let r = 2; r <= 6 && out.length < count; r++) {
     for (let dy = -r; dy <= r && out.length < count; dy++) {
       for (let dx = -r; dx <= r && out.length < count; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
         const x = city.x + Math.floor(c.citySize / 2) + dx;
         const y = city.y + Math.floor(c.citySize / 2) + dy;
         const t = at(c, x, y);
@@ -2391,7 +2391,7 @@ export function twoCityMinSize(citySize = 2, players: 3 | 4 = 3): number {
 }
 
 /**
- * 同一家的两座城至少要隔几格（切比雪夫，锚点到锚点）。
+ * 同一家的两座城至少要隔几格（曼哈顿，锚点到锚点）。
  *
  * 三家（外圈环）和四家（田字四区）用的是两条不同的式子：环上要留过道给人走，
  * 田字里两座城是背靠背的自家兄弟，只要求"城郊不贴脸"。
@@ -2399,7 +2399,7 @@ export function twoCityMinSize(citySize = 2, players: 3 | 4 = 3): number {
 export const TWO_CITY_GAP = (citySize: number, players: 3 | 4 = 3): number =>
   players === 4 ? Math.max(2, Math.round(citySize)) + 2 : Math.max(2, Math.round(citySize)) + 4;
 
-/** 两座城之间至少要隔几格（切比雪夫，锚点到锚点） */
+/** 两座城之间至少要隔几格（曼哈顿，锚点到锚点） */
 export const CITY_MIN_GAP = (citySize: number): number => Math.max(2, Math.round(citySize)) + 4;
 
 export function generateMultiLayout(
@@ -2549,7 +2549,7 @@ export function generateMultiLayout(
       for (let k = 0; k < 32; k += 1) {
         const a = roll();
         const c = roll();
-        const d = Math.max(Math.abs(a.x - c.x), Math.abs(a.y - c.y));
+        const d = Math.abs(a.x - c.x) + Math.abs(a.y - c.y);
         if (d >= gap && d > bestD) {
           best = [a, c];
           bestD = d;

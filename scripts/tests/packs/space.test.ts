@@ -494,6 +494,8 @@ test('月面战斗：溅射只波及同一张图上的人', () => {
   const bystander = onMoon(s, 'B', 'militia', 5, 6);
   s.current = 'A';
   refreshMemory(s);
+  /* 这条测的是"溅射只波及同一张图"，别让视野挡在前面（视野随初始布局浮动） */
+  s.config = { ...s.config, godMode: true };
 
   const r = applyAction(s, { type: 'ATTACK', unitId: gun.id, targetId: direct.id, x: 4, y: 6 });
   assert.ok(r.ok, r.ok ? '' : r.reason);
@@ -568,6 +570,8 @@ test('发射井：建成点亮一整个敌方回合，加注期间每回合重�
   const s = fresh({ expansionIds: ['space-age'], startEra: 5 });
   flatten(s, 'plain');
   s.players.A.gold = 5000;
+  /* 初始兵力落点随地图变，会顺手把 (10,10) 看进眼里；这条测的是点亮机制，先清掉对手的视野源 */
+  s.units = s.units.filter((u) => u.owner !== 'B');
   const crew = place2(s, 'A', 'crew', 4, 4);
   const silo = place2(s, 'A', SILO_ID, 10, 10);
   silo.buildNeed = 1;

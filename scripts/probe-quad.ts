@@ -25,7 +25,7 @@ for (let seed = 1; seed <= seeds; seed += 1) {
   per.forEach((cities, qi) => {
     const [a, b] = cities as [{ x: number; y: number }, { x: number; y: number }];
     if (!a || !b) throw new Error(`seed ${seed} 第 ${qi} 家只有 ${cities.length} 座城`);
-    const d = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+    const d = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
     hist.set(d, (hist.get(d) ?? 0) + 1);
     if (d < minD) minD = d;
     keys.add(`${qi}:${a.x},${a.y}-${b.x},${b.y}`);
@@ -46,7 +46,7 @@ for (let seed = 1; seed <= seeds; seed += 1) {
 }
 
 console.log(`${size}×${size} / ${seeds} 个种子 / 4 家`);
-console.log(`  同家两城间距（切比雪夫，锚点到锚点）分布：`);
+console.log(`  同家两城间距（曼哈顿，锚点到锚点）分布：`);
 for (const d of [...hist.keys()].sort((x, y) => x - y)) {
   const n = hist.get(d)!;
   const bar = '█'.repeat(Math.round((n / (seeds * 4)) * 60));

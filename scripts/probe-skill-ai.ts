@@ -101,7 +101,7 @@ function board(foeAt: { x: number; y: number } | null): Board {
 }
 
 const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
-  Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+  Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 
 console.log('技能 AI 提示探针\n');
 

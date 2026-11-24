@@ -257,10 +257,10 @@ export function econSurvey(s: GameState, me: PlayerId): EconSurvey {
       if (!t || !passable(t.terrain)) continue;
       if (t.terrain === 'city' || cityAt(s, x, y)) continue;
       if (spawn.has(y * s.w + x)) continue;
-      const dOwn = Math.min(...own.map((c) => Math.max(Math.abs(x - c.x), Math.abs(y - c.y))));
+      const dOwn = Math.min(...own.map((c) => Math.abs(x - c.x) + Math.abs(y - c.y)));
       if (dOwn > ECON_RANGE) continue;
       const dFoe = foe.length
-        ? Math.min(...foe.map((c) => Math.max(Math.abs(x - c.x), Math.abs(y - c.y))))
+        ? Math.min(...foe.map((c) => Math.abs(x - c.x) + Math.abs(y - c.y)))
         : Infinity;
       if (dOwn > dFoe) continue;
       if (bestEconOn(s, t.terrain) < ECON_MIN_YIELD) continue;

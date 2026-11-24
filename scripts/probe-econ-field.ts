@@ -109,7 +109,7 @@ const pathExists = (sx: number, sy: number, tx: number, ty: number): boolean => 
   return false;
 };
 const distToTarget = (x: number, y: number): number =>
-  target ? Math.max(Math.abs(x - target.x), Math.abs(y - target.y)) : -1;
+  target ? Math.abs(x - target.x) + Math.abs(y - target.y) : -1;
 for (let y = 0; y < s.h; y++) {
   for (let x = 0; x < W; x++) {
     const t = s.tiles[y * W + x]!;
@@ -128,7 +128,7 @@ for (let y = 0; y < s.h; y++) {
     let plateau = true;
     for (let dy = -MOVE; dy <= MOVE && plateau; dy++) {
       for (let dx = -MOVE; dx <= MOVE; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) > MOVE) continue;
+        if (Math.abs(dx) + Math.abs(dy) > MOVE) continue;
         const nx = x + dx;
         const ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= W || ny >= s.h) continue;
@@ -143,7 +143,7 @@ for (let y = 0; y < s.h; y++) {
     let best: { x: number; y: number; p: number } | null = null;
     for (let dy = -6; dy <= 6; dy++) {
       for (let dx = -6; dx <= 6; dx++) {
-        const d = Math.max(Math.abs(dx), Math.abs(dy));
+        const d = Math.abs(dx) + Math.abs(dy);
         if (d < MOVE + 1 || d > MOVE + 3) continue;
         const nx = x + dx;
         const ny = y + dy;
@@ -231,7 +231,7 @@ console.log('—— 判定 ——');
 console.log(`${TYPE} 最终 (${fin.x},${fin.y})[${terrainAt(fin.x, fin.y)}] · 产出 ${p1.toFixed(1)}（起点 ${p0.toFixed(1)}）`);
 console.log(
   p1 > p0 + 0.5
-    ? `→ **会跋涉**：产出提高 ${(p1 - p0).toFixed(1)}，走了 ${Math.max(Math.abs(fin.x - spot.x), Math.abs(fin.y - spot.y))} 格`
+    ? `→ **会跋涉**：产出提高 ${(p1 - p0).toFixed(1)}，走了 ${Math.abs(fin.x - spot.x) + Math.abs(fin.y - spot.y)} 格`
     : '→ **停在原地**：产出没提高。这正是「走位分只看相邻一格」的典型形状——' +
       '一回合移动力够不到更好的地时，它没有理由迈第一步。',
 );

@@ -36,7 +36,7 @@ score = gain * 5 − 1.5 + 威胁项
 ### 场的定义
 
 ```
-value(格) = 产出(格) + rearBonus(到最近敌城的切比雪夫距离)
+value(格) = 产出(格) + rearBonus(到最近敌城的曼哈顿距离)
 field(p)  = max over q ( value(q) − λ × 步数(p,q) )
 走位分 += (field[目标] − field[当前]) × K
 ```

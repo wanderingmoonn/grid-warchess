@@ -1034,7 +1034,7 @@ function freeNear(state: GameState, u: Unit, type: string, api: AbilityApi): { x
   for (let r = 1; r <= 3; r += 1) {
     for (let dy = -r; dy <= r; dy += 1) {
       for (let dx = -r; dx <= r; dx += 1) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (Math.abs(dx) + Math.abs(dy) !== r) continue;
         const x = u.x + dx;
         const y = u.y + dy;
         if (api.canStandAt(state, x, y, type)) return { x, y };

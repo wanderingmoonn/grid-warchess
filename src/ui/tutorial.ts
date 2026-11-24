@@ -115,8 +115,8 @@ function allowedDestinations(s: GameState): Array<{ x: number; y: number }> {
   for (const i of reachableTiles(s, u).keys()) {
     const x = i % s.w;
     const y = Math.floor(i / s.w);
-    // 八向相邻（本游戏斜着也走一步，所以用切比雪夫距离）
-    if (Math.max(Math.abs(x - b.x), Math.abs(y - b.y)) === 1) out.push({ x, y });
+    // 相邻（四邻：斜着走一步要花两步，所以斜角不算相邻）
+    if (Math.abs(x - b.x) + Math.abs(y - b.y) === 1) out.push({ x, y });
   }
   return out;
 }
@@ -173,7 +173,7 @@ const STEPS: Step[] = [
       const u = myUnit(c.state);
       const b = bait(c.state);
       if (!u || !b) return false;
-      return Math.max(Math.abs(u.x - b.x), Math.abs(u.y - b.y)) === 1;
+      return Math.abs(u.x - b.x) + Math.abs(u.y - b.y) === 1;
     },
   },
   {
