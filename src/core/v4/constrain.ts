@@ -10,7 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats, reachableTiles } from '../rules.ts';
+import { attackableTargets, effectiveStats, reachableTiles, unitYieldAt } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -629,6 +629,119 @@ function planEconPosts(
       next = { type: p.type, x: p.x, y: p.y };
     }
   }
+  /*
+   * ════════════════════════════════════════════════════════════════
+   * **让路：被挡住的人，请挡路的那一位往自己的岗位方向让一格。**
+   *
+   * 截图里那个局面（S-015 第 8 手之后）是最典型的：
+   *
+   *     x=8 平原：6 个牧民（产 4）   ← 他们要去 x=10
+   *     x=9 丘陵：6 个牧民（产 8）   ← **已到岗，按规矩不该动**
+   *     x=10 丘陵：6 格**全空**
+   *
+   * 从 (8,y) 到 (10,y) 必须穿 (9,y)，而引擎没有"交换两人位置"这个动作。
+   * 于是一整列人 8 手不动，右边 6 格好地白白空着（实测总产 4×6 而不是 8×6）。
+   *
+   * 解法就是让 (9,y) 那位挪到 (10,y)——**两边产出一样（丘陵 8），挪了不亏**。
+   * 他一走，(9,y) 空出来，被挡的人下一手就能进来。
+   *
+   * ── 规矩（都是"算账"，没有拍的数）──────────────────────────
+   *
+   * · 只在"这个人这一手**一步都走不动**"时才请人让路（走得动就不打扰别人）；
+   * · 只请**经济兵**让（战斗兵有自己的任务，不归这里管）；
+   * · 让到的那一格必须**对这个让路人自己**不降产（同产出或更肥），否则不挪；
+   * · 一人一回合只让一次（`shifted`），免得同一个人被请两次、来回挪。
+   * ════════════════════════════════════════════════════════════════
+   */
+  const shifted = new Set<string>();
+  const takenOut = new Set<number>(); /* 这一手已经被用作"让路落点"的格，避免两个人让到同一格 */
+  const yieldOf = (u: Unit, x: number, y: number): number => unitYieldAt(s, u, x, y).gold ?? 0;
+  /* 沿"到岗位的步数图"往下走一格：四邻里挑步数更小的那个 */
+  const stepDown = (field: Float64Array, at: number): number | null => {
+    const x = at % s.w;
+    const y = (at - x) / s.w;
+    let best: number | null = null;
+    let bestD = field[at] ?? Infinity;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+      const k = ny * s.w + nx;
+      const d = field[k] ?? Infinity;
+      if (d < bestD) {
+        bestD = d;
+        best = k;
+      }
+    }
+    return best;
+  };
+
+  for (const u of econ) {
+    const p = posts[u.id];
+    if (!p || (p.x === u.x && p.y === u.y)) continue;
+    const field = world.stepsFrom(p);
+    const here = field[u.y * s.w + u.x] ?? Infinity;
+    /* 这一手走得动吗？走得动就别打扰别人 */
+    let canAdvance = false;
+    for (const [k] of reachableTiles(s, u)) {
+      const x = k % s.w;
+      const y = (k - x) / s.w;
+      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+      if ((field[k] ?? Infinity) < here) {
+        canAdvance = true;
+        break;
+      }
+    }
+    if (canAdvance) continue;
+
+    /* 沿路径找第一个"挡路的自己人" */
+    let at = u.y * s.w + u.x;
+    for (let guard = 0; guard < 8; guard++) {
+      const next = stepDown(field, at);
+      if (next === null) break;
+      const occ = s.units.find((v) => v.y * s.w + v.x === next && v.owner === world.me);
+      if (!occ) {
+        at = next;
+        continue; /* 这格空的，继续往前找（说明是别人挡的，不是这一格） */
+      }
+      if (utype(s, occ.type).category !== 'economy') break; /* 战斗兵不动 */
+      if (shifted.has(occ.id)) break;
+      /*
+       * 挑"让到哪一格"：**首选取向朝被挡那个人的岗位方向那一格**（沿步数图更小），
+       * 那一格不能用（有人/会降产）时，退一步找**任何一格不降产的相邻空格**——
+       * 横着让一格也算。
+       *
+       * 这一步很关键：只按"被挡者的路线"找，常常正好落在另一个自己人身上
+       * （一整列人时就是这样），于是谁都不让、整列不动（实测只解开 2/6）。
+       */
+      const oy = yieldOf(occ, next % s.w, Math.floor(next / s.w));
+      const occCell = occ.y * s.w + occ.x;
+      let out: number | null = null;
+      let outD = Infinity;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = occ.x + dx;
+        const ny2 = occ.y + dy;
+        if (nx < 0 || ny2 < 0 || nx >= s.w || ny2 >= s.h) continue;
+        const k2 = ny2 * s.w + nx;
+        if (k2 === u.y * s.w + u.x) continue; /* 别让到被挡那个人身上 */
+        if (s.units.some((v) => v.y * s.w + v.x === k2)) continue; /* 得是空格 */
+        if (takenOut.has(k2)) continue;
+        if (yieldOf(occ, nx, ny2) < oy) continue; /* 让了会降产 → 不考虑 */
+        const d = field[k2] ?? Infinity;
+        if (d < outD) {
+          outD = d;
+          out = k2;
+        }
+      }
+      void occCell;
+      if (out === null) break;
+      takenOut.add(out);
+      shifted.add(occ.id);
+      posts[occ.id] = { x: out % s.w, y: Math.floor(out / s.w) };
+      break;
+    }
+  }
+
   /*
    * **行动顺序：靠自己岗位近的排在前面（链条末端先动）。**
    *
