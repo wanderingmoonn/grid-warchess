@@ -73,7 +73,7 @@ console.log('\n[1] 房间图生成（200 层）');
       counts.get('shop') ?? 0
     } / 营地 ${counts.get('rest') ?? 0}`,
   );
-  check(battle + elite + siege + special === 10, '战斗房共 10 个（5 普通 + 2 精英 + 2 攻坚 + 1 守城）');
+  check(battle + elite + siege + special === 10, '战斗房共 10 个（6 普通 + 2 精英 + 1 攻坚 + 1 守城）');
   let specials = 0;
   for (let i = 0; i < 60; i += 1) {
     const plan = planLayer(((i % 3) + 1) as LayerId, makeRng(i * 31 + 5));

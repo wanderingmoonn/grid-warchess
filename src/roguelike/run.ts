@@ -147,9 +147,11 @@ function highOf(theme: LayerTheme): string {
 // ---------------------------------------------------------------- 房间图
 
 const BAG: RoomKind[] = [
-  ...Array<RoomKind>(5).fill('battle'),
+  // 6 普通 + 2 精英 + 1 攻坚 + 1 守城 = 10 场，和 FLOW 的「6:2:2」对齐
+  //（设计里的两个"特殊"= 一场攻坚 + 一场守城）
+  ...Array<RoomKind>(6).fill('battle'),
   ...Array<RoomKind>(2).fill('elite'),
-  ...Array<RoomKind>(2).fill('siege'),
+  ...Array<RoomKind>(1).fill('siege'),
   // 守城战：一层一场，位置随机。它是一层里唯一"你守别人"的仗
   ...Array<RoomKind>(1).fill('special'),
   ...Array<RoomKind>(4).fill('event'),
