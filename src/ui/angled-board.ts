@@ -2,6 +2,7 @@ import { cityTiles, isAirborne } from '../core/rules.ts';
 import type { PlayerView } from '../core/fog.ts';
 import type { City, GameState, Terrain, Unit } from '../core/types.ts';
 import type { BoardUi } from './board.ts';
+import { hasAngledUnitArt, paintAngledUnit } from './angled-units.ts';
 
 type Point = readonly [number, number];
 interface Cell { x: number; y: number; cityId?: string }
@@ -4773,6 +4774,29 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     const isMine = me !== undefined && unit.owner === me;
     const spent = unit.acted || (unit.moved && (def.atk ?? 0) <= 0);
     const dim = isMine && spent && !selected && !target;
+
+    if (hasAngledUnitArt(unit.type)) {
+      const hitPoly = paintAngledUnit(ctx, {
+        typeId: unit.type,
+        owner: unit.owner,
+        hp: unit.hp,
+        maxHp: def.maxHp,
+        extraHp: unit.extraHp,
+        selected,
+        target,
+        dim,
+        isMine,
+        spent,
+        moved: unit.moved,
+        airborne,
+        scale: pScale,
+        x,
+        y,
+        facing: unit.owner === 'B' || unit.owner === 'D' ? -1 : 1,
+      });
+      faces.push({ cell: { x: unit.x, y: unit.y }, points: hitPoly });
+      return;
+    }
 
     ctx.save();
     ctx.translate(x, y);

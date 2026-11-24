@@ -7,7 +7,7 @@ const params = new URLSearchParams(location.search);
 const size: 16 | 32 = params.get('size') === '16' ? 16 : 32;
 const rawScene = params.get('scene');
 let currentScene: BoardAngleScene =
-  rawScene === 'elevation' || rawScene === 'damage2' || rawScene === 'damage' || rawScene === 'future' || rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
+  rawScene === 'militia' || rawScene === 'elevation' || rawScene === 'damage2' || rawScene === 'damage' || rawScene === 'future' || rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
     ? rawScene
     : 'all';
 
@@ -29,6 +29,7 @@ const angleButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-angl
 const sceneButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-scene]')];
 
 const sceneLabels: Record<BoardAngleScene, string> = {
+  militia: '民兵微缩兵偶（四阵营 · 多地形 · 多状态）',
   elevation: '地形高差（台地 / 谷地 / 沼泽）',
   damage2: '六至八代四档受损（常态/受损/重创/废墟）',
   damage: '一至五代四档受损（常态/受损/重创/废墟）',
@@ -50,7 +51,19 @@ function renderScene(scene: BoardAngleScene): void {
     button.setAttribute('aria-pressed', String(button.dataset.scene === scene));
   }
   showFlat();
-  angled?.draw(currentView);
+  const ui = scene === 'militia'
+    ? {
+        selectedId: 'preview-unit-0',
+        selectedCityId: null,
+        reach: [],
+        targets: ['preview-unit-6'],
+        siegeTargets: [],
+        placeable: [],
+        threat: [],
+        me: 'A' as const,
+      }
+    : undefined;
+  angled?.draw(currentView, ui);
 }
 
 function showView(view: string): void {
