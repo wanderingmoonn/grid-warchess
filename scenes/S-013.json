@@ -31,13 +31,15 @@
       "owner": "A",
       "x": 1,
       "y": 1,
-      "era": 3
+      "era": 3,
+      "hp": 120
     },
     {
       "owner": "A",
       "x": 1,
       "y": 11,
-      "era": 3
+      "era": 3,
+      "hp": 120
     },
     {
       "owner": "B",
@@ -97,62 +99,62 @@
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 5,
+      "type": "musketeer",
+      "x": 9,
       "y": 3
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 6,
-      "y": 3
-    },
-    {
-      "owner": "B",
-      "type": "halberdier",
-      "x": 6,
+      "type": "musketeer",
+      "x": 10,
       "y": 4
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 5,
+      "type": "musketeer",
+      "x": 10,
+      "y": 5
+    },
+    {
+      "owner": "B",
+      "type": "musketeer",
+      "x": 9,
       "y": 4
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 4,
-      "y": 3
+      "type": "musketeer",
+      "x": 9,
+      "y": 5
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 5,
-      "y": 10
-    },
-    {
-      "owner": "B",
-      "type": "halberdier",
-      "x": 6,
-      "y": 10
-    },
-    {
-      "owner": "B",
-      "type": "halberdier",
-      "x": 6,
+      "type": "musketeer",
+      "x": 9,
       "y": 9
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 5,
+      "type": "musketeer",
+      "x": 10,
       "y": 9
     },
     {
       "owner": "B",
-      "type": "halberdier",
-      "x": 4,
+      "type": "musketeer",
+      "x": 10,
+      "y": 8
+    },
+    {
+      "owner": "B",
+      "type": "musketeer",
+      "x": 9,
+      "y": 8
+    },
+    {
+      "owner": "B",
+      "type": "musketeer",
+      "x": 9,
       "y": 10
     }
   ]
