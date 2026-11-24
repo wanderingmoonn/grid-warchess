@@ -14,6 +14,7 @@ import { attackableTargets, effectiveStats, unitYieldAt } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
+import { DECIDE_HORIZON } from './decide.ts';
 import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
 import type { World } from './world.ts';
 
@@ -274,72 +275,186 @@ function planLanes(
 }
 
 /**
- * 经济兵的岗位（2026-11-24）：给每个经济兵指定一格，**已经站对了就别动**。
+ * 从"这个兵现在站的格"出发，走到各格要几步（按它自己的地形消耗算）。
  *
- * 分配是两趟：
- *   ① 已经站在高产格上的**原地不动**（迟滞——不然每天换位等于白跑）；
- *   ② 剩下的兵按"离哪块空的高产格最近"认领。
- *
- * 为什么不让打分层自己算：它每步重算一次，被"让位"推走之后就丢了意图
- * （S-015 的伐木工被推到北边平原，再也回不到两格外的森林）。
+ * 为什么不能用 `world.stepsFrom()`：那个是"每格 1 步"，把森林的额外消耗拍平了，
+ * 而伐木工有穿林、别的兵没有——用同一张表会把伐木工进林的距离算远。
  */
-function planEconPosts(s: GameState, world: World, keepClear: number[]): Record<string, { x: number; y: number }> | undefined {
-  const econ = world.myEcon;
-  if (econ.length === 0) return undefined;
-  const keep = new Set(keepClear);
-  /* 每种经济兵的高产格（只要 ≥4 金，太低的不值得占） */
-  const spots: Array<{ x: number; y: number; gold: number }> = [];
-  for (let y = 0; y < s.h; y++) {
-    for (let x = 0; x < s.w; x++) {
-      if (!passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) continue;
-      if (keep.has(y * s.w + x)) continue;
-      let g = 0;
-      for (const u of econ) g = Math.max(g, unitYieldAt(s, u, x, y).gold ?? 0);
-      if (g >= 4) spots.push({ x, y, gold: g });
-    }
-  }
-  spots.sort((a, b) => b.gold - a.gold);
-
-  /*
-   * **岗位要按"这个兵"的产出选，不能按"所有经济兵里最高的那个"。**
-   *
-   * 否则伐木工会被派到丘陵（伐木工在那儿只有 5），牧民被派进森林（2）——
-   * 两个人都亏。S-015 实测：错配之后只有 1 格森林被用上，经济卡在 31。
-   */
-  const posts: Record<string, { x: number; y: number }> = {};
-  const taken = new Set<number>();
-  /* 先给"已经站在自己高产格上"的人定岗——迟滞，避免每天换位 */
-  for (const u of econ) {
-    const g = unitYieldAt(s, u, u.x, u.y).gold ?? 0;
-    const best = spots.reduce((n, p) => Math.max(n, unitYieldAt(s, u, p.x, p.y).gold ?? 0), 0);
-    if (g > 0 && g >= best && !taken.has(u.y * s.w + u.x)) {
-      posts[u.id] = { x: u.x, y: u.y };
-      taken.add(u.y * s.w + u.x);
-    }
-  }
-  /* 剩下的：每个兵挑"自己最能产"的空位（产出优先，其次近） */
-  for (const u of econ) {
-    if (posts[u.id]) continue;
-    let pick: { x: number; y: number } | null = null;
-    let pickScore = -Infinity;
-    for (const p of spots) {
-      if (taken.has(p.y * s.w + p.x)) continue;
-      if (s.units.some((v) => v.id !== u.id && v.x === p.x && v.y === p.y)) continue;
-      const g = unitYieldAt(s, u, p.x, p.y).gold ?? 0;
-      if (g <= 0) continue;
-      const d = Math.abs(p.x - u.x) + Math.abs(p.y - u.y);
-      const score = g * 10 - d;
-      if (score > pickScore) {
-        pickScore = score;
-        pick = { x: p.x, y: p.y };
+function walkFrom(s: GameState, u: Unit): Float64Array {
+  const n = s.w * s.h;
+  const best = new Float64Array(n).fill(Infinity);
+  const def = utype(s, u.type);
+  const start = u.y * s.w + u.x;
+  if (start < 0 || start >= n) return best;
+  best[start] = 0;
+  const K = 3;
+  const q: number[][] = [[], [], []];
+  q[0]!.push(start);
+  for (let d = 0; ; d++) {
+    if (q[0]!.length === 0 && q[1]!.length === 0 && q[2]!.length === 0) break;
+    const bucket = q[d % K]!;
+    while (bucket.length) {
+      const k = bucket.pop()!;
+      if (best[k] !== d) continue;
+      const x = k % s.w;
+      const y = (k - x) / s.w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+        const t = s.tiles[ny * s.w + nx]?.terrain;
+        if (!t || !passable(t)) continue;
+        const cost = t === 'forest' && !(def.abilities ?? []).includes('forest-walk') ? 2 : 1;
+        const ni = ny * s.w + nx;
+        const nd = d + cost;
+        if (nd < best[ni]!) {
+          best[ni] = nd;
+          q[nd % K]!.push(ni);
+        }
       }
     }
-    if (pick) {
-      posts[u.id] = pick;
-      taken.add(pick.y * s.w + pick.x);
+  }
+  return best;
+}
+
+/**
+ * 经济兵的岗位（2026-11-24 重写）：**认领表**，一人一格。
+ *
+ * ── 它解决的是什么 ──────────────────────────────────────────
+ *
+ * 原来这里是"给每个经济兵挑一格产出最高的空位"，而服务层另外有一个 `econPost()`
+ * 每回合重新问"现在哪格最肥"。两个口径都不记得"这块地已经许给谁了"：
+ * S-015 实测，同一格森林被连着承诺给 5 个伐木工（新兵出生在城里、旧兵还在路上，
+ * 那格一直是"空闲"）。所以要做的不是"挑得更聪明"，是**一张认领表**。
+ *
+ * ── 三条规矩（都是"算账"，没有拍的数）──────────────────────────
+ *
+ * ① **兵种是格子的属性**（`world.econSpots()` 已经算好）：森林→伐木工、丘陵→牧民、
+ *    平原→农民。所以"5 个伐木工抢 2 格森林"这种错误根本表达不出来。
+ * ② **搬不搬算净收益**：`新岗产出 × 还能产几手 > 现岗产出 × 还能产几手` 才搬。
+ *    相等就不动（净收益 0）——这一条天然防抖，不需要"迟滞"那套。
+ *    产出是**回合末按脚下地形结算**的（`settleIncome`），所以走路那几手照样产金，
+ *    搬家的代价只有"路上落点比现在少产的那点"，这里按 0 保守处理。
+ * ③ **期限**用决定层已经必须写的 `untilTurn`：到那之前一手都产不了的岗不参与。
+ *    远近不用半径挡——远处的岗"期限内产出"自己会变小。
+ */
+function planEconPosts(
+  s: GameState,
+  world: World,
+): { posts?: Record<string, { x: number; y: number }>; next?: { type: string; x: number; y: number } } {
+  const econ = world.myEcon;
+  const spots = world.econSpots();
+  if (spots.length === 0) return {};
+
+  /*
+   * 盘子有多大：用**决定层的名义期限**，不用"这个决定还剩几手"。
+   *
+   * 后者在每个周期最后几手会塌到 1 → 岗表全空 → 经济兵集体停手、钱堆着不花
+   * （实测 S-015 第 7 手：可用岗从 171 掉到 0）。
+   * 战略上"决定快到期"不等于"这块地不值得占"，下个决定大概率还是同一件事。
+   */
+  const horizon = DECIDE_HORIZON;
+  const avail = (p: { turns: number }): number => Math.max(0, horizon - p.turns);
+  /* 期限内一手都产不了的岗不算（等它到了，这个决定已经作废了） */
+  const usable = spots.filter((p) => avail(p) > 0);
+  if (usable.length === 0) return {};
+
+  const posts: Record<string, { x: number; y: number }> = {};
+  const claimed = new Set<number>();
+  const keepSet = new Set(world.keepClear);
+  /*
+   * 站在"必须空"的格子上的人，当前产出按 **0** 算。
+   *
+   * 那几格（城格 + 城墙外一圈）不是能待的地方，是产兵口和出城通道——岗表里根本没有它们。
+   * 不算 0 的话会出两个错（都实测到了）：经济兵路过城圈里的森林时"脚下 12 金"，
+   * 于是判定"搬走不划算"，钉在过道上不走；同时真正属于它的森林岗一直空着，
+   * 上层的造兵又照着那个空岗造了第三个伐木工。
+   */
+  const yieldAt = (u: Unit): number =>
+    keepSet.has(u.y * s.w + u.x) ? 0 : (unitYieldAt(s, u, u.x, u.y).gold ?? 0);
+
+  /*
+   * ① 已经站人的格先算被占：**脚下的格就是他的岗**。
+   *    不先占的话，两个同产出的人会互相"看见对方的格更肥"（其实同分），来回换。
+   */
+  for (const u of econ) claimed.add(u.y * s.w + u.x);
+
+  /*
+   * ② 按"现在产得最少"的先挑——弱的人先占好位。
+   *    搬家的门槛是净收益 > 0，所以已经站在肥格上的人不会为了让别人而搬走。
+   *
+   * ⚠️ 岗位**分兵种**：伐木工只认领森林岗（`type === 'lumberjack'` 那些），牧民只认领丘陵岗。
+   * 不分的话，站在城里（产出 0）的牧民会把森林当成"+2 金的好地"抢走，伐木工被挤到平原——
+   * 实测第二手就发生：`伐木工@(7,5) → 岗(6,4) 平原`、`牧民 → 岗(4,7) 森林`。
+   */
+  const movable = [...econ].sort((a, b) => yieldAt(a) - yieldAt(b));
+  for (const u of movable) {
+    const mine = u.type;
+    const stay = yieldAt(u) * horizon;
+    /*
+     * **走过去几回合要按"他现在在哪"算，不能按城算。**
+     *
+     * 认领表里的 `turns` 是"从城走到那格"，那是给新兵用的。已经派出去的兵离城很远，
+     * 拿城当起点会把近在眼前的岗算成 5~6 手 → 净收益变负 → 一动不动。
+     * 实测 S-006：6 个经济兵全站在离城很远的角落，一个都没挪（总产卡在 27；
+     * 判据 45，站位机器人 48）。
+     */
+    const def = utype(s, u.type);
+    const dist = walkFrom(s, u);
+    const move = Math.max(1, def.move ?? 2);
+    let best: (typeof usable)[number] | null = null;
+    let bestGain = 0;
+    for (const p of usable) {
+      if (p.type !== mine) continue; /* 这个岗不是给我这类兵的 */
+      const k = p.y * s.w + p.x;
+      if (k === u.y * s.w + u.x) continue;
+      if (claimed.has(k)) continue;
+      const raw = dist[k]!;
+      if (!Number.isFinite(raw)) continue;
+      const turns = Math.ceil(raw / move);
+      const gain = p.yield * Math.max(0, horizon - turns) - stay;
+      if (gain <= 0) continue;
+      if (gain > bestGain) {
+        bestGain = gain;
+        best = p;
+      }
+    }
+    if (best) {
+      posts[u.id] = { x: best.x, y: best.y };
+      claimed.add(best.y * s.w + best.x);
+    } else if (!keepSet.has(u.y * s.w + u.x)) {
+      /* 没有更好的岗、脚下又是能待的格 → 原地不动（净收益 0） */
+      posts[u.id] = { x: u.x, y: u.y };
+    }
+    /* 站在城圈/城格上又没有岗：不给岗，让搬迁计划把它请出去 */
+  }
+
+  /*
+   * ③ 下一个该造谁：表里还没人认领的格里，**产出最高的那一个；产出相同取近的**。
+   *
+   * 为什么不是"赚回几倍造价"（试过，实测 25 → 33 就卡住了）：
+   * 那个口径偏爱便宜兵——牧民 8 金 ÷ 45 = 1.07 倍，伐木工 12 金 ÷ 70 = 1.03 倍，
+   * 于是永远先买牧民，**两格森林一次都没用上**，总产反而低。
+   * `8.15` 那句"别用人为数字代替规则"在这里的版本是：**别用一个比值去替"哪块地肥"**。
+   * 钱的问题交给"买不起就跳过"，不掺进排序。
+   */
+  const gold = s.players[world.me]?.gold ?? 0;
+  let next: { type: string; x: number; y: number } | undefined;
+  for (const p of usable) {
+    const k = p.y * s.w + p.x;
+    if (claimed.has(k)) continue;
+    if (s.units.some((v) => v.y * s.w + v.x === k)) continue;
+    if (p.gold > gold) continue; /* 买不起就跳过，换下一个岗 */
+    if (!next) {
+      next = { type: p.type, x: p.x, y: p.y };
+      continue;
+    }
+    const cur = spots.find((q) => q.x === next!.x && q.y === next!.y)!;
+    if (p.yield > cur.yield || (p.yield === cur.yield && p.turns < cur.turns)) {
+      next = { type: p.type, x: p.x, y: p.y };
     }
   }
-  return posts;
+  return { posts, next };
 }
 
 /**
@@ -578,9 +693,11 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         }
       : undefined;
 
+  const econPlan = planEconPosts(s, world);
   return {
     need,
-    econPosts: planEconPosts(s, world, keepClear),
+    econPosts: econPlan.posts,
+    econNext: econPlan.next,
     keepClear,
     squads,
     yieldMoves: planYield(s, world, keepClear, squads),

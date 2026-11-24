@@ -27,13 +27,25 @@ function strength(s: GameState, sideUnits: GameState['units']): number {
 }
 
 /**
+ * 一个决定**名义上管几手**。
+ *
+ * 导出来给经济岗表用：它需要一个"还剩几手"的尺度来判断"这个岗值不值得占"
+ * （走 5 手才到的岗，在 6 手的盘子里就只剩 1 手产出）。
+ *
+ * 为什么不用 `untilTurn - s.turn`：那个数在每个周期的最后几手会塌到 1，
+ * 于是岗表突然全空、经济兵集体停手、钱堆着不花（实测 S-015 第 7 手）。
+ * 战略上"决定快到期了"不等于"这块地不值得占"——下个决定大概率还是同一件事。
+ */
+export const DECIDE_HORIZON = 6;
+
+/**
  * 做决定。
  *
  * 第一版只有三条规则，都很粗——这是**故意的**：先把"决定有期限、有理由、只有一个"
  * 这件事立住，细则靠题库一题一题长。v3 那六千行系数不抄。
  */
 export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
-  const horizon = 6;
+  const horizon = DECIDE_HORIZON;
 
   const myStr = strength(s, world.myCombat);
   const foeStr = strength(s, world.foeCombat);

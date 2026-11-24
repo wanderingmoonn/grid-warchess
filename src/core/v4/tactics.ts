@@ -11,8 +11,7 @@
  * v3 有一半的翻车是"编队自己挑了目标"（配对 4↑8↓）。这里目标的唯一来源是约束层：
  * 单位查不到任务，就什么都不做。
  */
-import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, unitYieldAt, utype } from '../rules.ts';
-import { passable } from '../config.ts';
+import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, utype } from '../rules.ts';
 import type { Action, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
@@ -68,9 +67,30 @@ export function actFor(
   u: Unit,
 ): Action | null {
   /*
-   * ① 让开：站在"必须空"的格子上。
+   * ① **经济兵先走**：它的目标只有一个——约束层给的岗位。
    *
-   * **只约束没有理由待在那儿的单位**（经济兵、驻守兵）。正在推进的战斗单位要过桥，
+   * 为什么排在"让开"前面：让开那套的落点来自多源 BFS 的**最近空格**，方向是随机的
+   * （北边先被扫到就往北）。经济兵一旦被推走，就从新位置重新贪心，再也想不起两格外的森林。
+   * 实测：伐木工的岗在城西 (4,7)，它站在城圈（也是关键格）上，被让位判成"该让开"，
+   * 于是被甩到东边丘陵，整局回不来。
+   *
+   * 让位仍然要管——但只在"没有岗、又确实堵在关键格上"时才用它兜底（见下）。
+   */
+  if (utype(s, u.type).category === 'economy') {
+    const step = bestYieldStep(s, world, u, con);
+    if (step) return { type: 'MOVE', unitId: u.id, x: step.x, y: step.y };
+    /* 没岗可走、又站在关键格上 → 按搬迁计划挪开（别堵产兵口） */
+    const yieldTo = con.yieldMoves.find((m) => m.unitId === u.id);
+    if (!yieldTo) return null;
+    const spot = stepToward(s, u, { x: yieldTo.x, y: yieldTo.y });
+    if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+    return null;
+  }
+
+  /*
+   * ② 让开：站在"必须空"的格子上。
+   *
+   * **只约束没有理由待在那儿的单位**（驻守兵）。正在推进的战斗单位要过桥，
    * 让它"让开"就等于不许过河——桥面那一格本来就是临时占用。
    */
   const yieldTo = con.yieldMoves.find((m) => m.unitId === u.id);
@@ -84,36 +104,8 @@ export function actFor(
      *
      * 改成：把计划落点当**方向**，用当前局面重新挑一个可达格走过去。
      */
-    /*
-     * 有岗位的经济兵：让位**朝岗位走**，别往随机方向撤。
-     *
-     * 让位的落点是多源 BFS 给的"最近空格"，方向是随机的——北边先被扫到就往北。
-     * 于是伐木工被推离产兵格之后落在北边平原，再也回不到两格外的森林。
-     * 岗位在约束层，这里只是"绕着走过去"。
-     */
-    const post = con.econPosts?.[u.id];
-    if (post) {
-      const toPost = stepToward(s, u, post);
-      if (toPost && !con.keepClear.includes(toPost.y * s.w + toPost.x))
-        return { type: 'MOVE', unitId: u.id, x: toPost.x, y: toPost.y };
-    }
     const spot = stepToward(s, u, { x: yieldTo.x, y: yieldTo.y });
     if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
-  }
-
-  /*
-   * ①.2 经济兵：按**一把尺子**挑格子——每回合净多产多少金（金/回合）。
-   *
-   * 这是打分层第一次用"钱"当唯一尺度，也是 S-006 那道题的全部内容：
-   * 伐木工站森林 12、站平原 3，牧民站丘陵 8、站森林 2。站错就是白丢钱。
-   *
-   * 取舍：只有当"目标格比脚下多产"时才动，且不踩 keepClear（产兵格要让出来）。
-   * 不做安全评估（第一版故意笨）：先证明它能算对这笔账，再谈"值不值得冒险挪"。
-   */
-  if (utype(s, u.type).category === 'economy') {
-    const spot = bestYieldStep(s, world, u, con);
-    if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
-    return null;
   }
 
   /*
@@ -304,14 +296,6 @@ function bestYieldStep(
   con: Constraints,
 ): { x: number; y: number } | null {
   /*
-   * 关键格**连同它四周**都不许去。
-   *
-   * 只禁关键格本身不够：桥头那一格两边是岸，经济兵站在岸上那一格，
-   * 军队照样得绕——S-005 实测过河从 4 掉到 3，原因就是伐木工在桥口晃。
-   * 关键格是"过道"，过道边上也是过道。
-   */
-  const keep = new Set(con.keepClear);
-  /*
    * "关键格四周也不许站"**只对过道成立**（桥），不对城/产兵格成立。
    *
    * 原来是一刀切：keepClear 里既有桥头也有城格，于是城边那一圈全被排除——
@@ -330,8 +314,6 @@ function bestYieldStep(
       nearKeep.add(y * s.w + x);
     }
   }
-  const cur = unitYieldAt(s, u, u.x, u.y).gold ?? 0;
-
   /*
    * **有岗位就朝岗位走**（约束层的指令，打分层只负责"怎么走过去"）。
    *
@@ -343,96 +325,73 @@ function bestYieldStep(
   if (post) {
     if (u.x === post.x && u.y === post.y) return null; /* 到位了就别动 */
     const toward = stepToward(s, u, post);
-    if (toward && !keep.has(toward.y * s.w + toward.x))
-      return toward;
+    /*
+     * **有岗位就只朝岗位走，走不动就等着——不许退回下面那套"本地贪心"。**
+     *
+     * 这个坑是实测出来的：伐木工的岗在城西森林 (4,7)，这一手路上被自己人挡住，
+     * 于是往下掉进"找多 2 金的格"那段，被旁边丘陵（伐木工在那儿 5 金）骗走，
+     * 一路往东漂，最后全县城的经济兵都在平原上产 4。
+     *
+     * 规矩本来就有：**打分层不许自己发明目标**（目标是约束层给的）。
+     * 走不到就当这一手不动，下一手再走。
+     */
+    /*
+     * **允许踩着关键格走过去**（8.4 的教训）：关键格是"不许停"，不是"不许过"。
+     * 这里原来写的是 `!keep.has(toward)`，结果经济兵从城里出来必须穿过城圈
+     * （城圈全是关键格），一步都迈不出去——实测 6 个兵全冻在城墙边上。
+     * "别停"由约束层的搬迁计划负责，不归这里管。
+     */
+    if (toward) return toward;
+    /*
+     * 走不动（前面全被自己人占着）时，**横着让一步**：挑"距离不变、但更直对岗位"的格。
+     *
+     * 不这么做的话，两个兵会面对面堵死：实测 2 号伐木工的岗在城西 (4,7)，
+     * 它被四个牧民夹在 (7,4)，唯一更近的格被占，于是**整局一动不动**。
+     * 和 8.11 破"人墙"是同一个道理：同距离的两格，选更正对目标的那一格。
+     */
+    return stepAside(s, u, post);
   }
 
   /*
-   * 已经贴着关键格的经济兵**不再自己找活干**：它要么正被让位计划挪开，
-   * 要么就堵在过道上——这两种情况都不该由"多赚两金"来决定它的走位。
-   */
-  if (nearKeep.has(u.y * s.w + u.x)) return null;
-
-  /*
-   * 平时：只有严格更高才动（免得在同一档格子之间横跳）。
+   * **没有岗位就不动。**
    *
-   * 但**"这一步不涨"不等于"不该动"**：森林进格费 2，从 (6,5) 到 (5,6) 要 3 步，
-   * 拿着 2 点移动力的伐木工永远跨不过去——它只能先挪到 (5,5)（不涨金），下一手再进林。
-   * 所以"够不到最好的格"时，允许朝它**挪近一格**（`approach`）。
+   * 原来这里是一大段"本地贪心"：找多 2 金的格、够不到就往最近的好格挪、
+   * 被威胁就跑安全格。它和岗位制度互相打架，而且是 S-015 那两个坑的来源：
+   *   · 岗位一时没了（比如岗被别人占了）→ 掉进这段 → 被旁边丘陵骗走，一路往东漂；
+   *   · 每次重算都从脚下重新贪心，等于"每步都在重新评估"（v3 的病）。
+   *
+   * 规矩是**打分层不许自己发明目标**（见文件头）。没有岗 = 约束层没给任务，
+   * 那就待着，别自己找活干。
    */
-  let gain: { x: number; y: number } | null = null;
-  let gainGold = cur;
-  /* 危险时：安全格里产出最高的那一个，**哪怕比现在低** */
-  let safeBest: { x: number; y: number } | null = null;
-  let safeGold = -1;
+  void world;
+  return null;
+}
 
-  /* 全图（城附近）最好的那一格——够不着时朝它挪 */
-  let target: { x: number; y: number } | null = null;
-  let targetGold = cur;
-  for (let y = 0; y < s.h; y++) {
-    for (let x = 0; x < s.w; x++) {
-      if (!passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) continue;
-      const g = unitYieldAt(s, u, x, y).gold ?? 0;
-      if (g > targetGold) {
-        targetGold = g;
-        target = { x, y };
-      }
-    }
-  }
-
+/**
+ * 横着让一步：挑"离岗位距离不变、但更直对岗位"的可达空格。
+ *
+ * 为什么只在"一条更近的格都找不到"时用：那是被自己人堵住的信号。
+ * 不这么办的话会死锁——实测 2 号伐木工的岗在城西森林，它被四个牧民夹在中间，
+ * 唯一更近的格被占，整局一步没走，第 8 手还在原地产 3。
+ */
+function stepAside(s: GameState, u: Unit, to: { x: number; y: number }): { x: number; y: number } | null {
+  const d = (x: number, y: number): number => Math.abs(x - to.x) + Math.abs(y - to.y);
+  const cur = d(u.x, u.y);
+  const curE = (u.x - to.x) ** 2 + (u.y - to.y) ** 2;
+  let best: { x: number; y: number } | null = null;
+  let bestE = curE;
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
     const y = Math.floor(key / s.w);
-    if (keep.has(key) || nearKeep.has(key)) continue;
     if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-
-    const gold = unitYieldAt(s, u, x, y).gold ?? 0;
-    /*
-     * **至少多 2 金才值得挪。**
-     * 只多 1 金就动的话，经济兵会为了零头在地图上横穿：既浪费动作预算，
-     * 又会穿过桥头/产兵格（S-005 的伐木工就是这么跑到对岸去的）。
-     */
-    if (gold >= gainGold + 2) {
-      gainGold = gold;
-      gain = { x, y };
-    }
-    if (world.harassed({ x, y })) continue;
-    if (gold > safeGold) {
-      safeGold = gold;
-      safeBest = { x, y };
+    if (d(x, y) !== cur) continue; /* 只横移，不后退 */
+    const e = (x - to.x) ** 2 + (y - to.y) ** 2;
+    if (e < bestE) {
+      bestE = e;
+      best = { x, y };
     }
   }
-
-  /*
-   * 脚下危险就只认安全格——**但仍然按产出挑**。
-   * 早先这里是"挑离敌人最远的"，结果全跑进平原：离敌人最远的地方通常也最没用
-   * （S-006 总产 47 → 21）。逃命也要算账，只是把"安全"当选格的前置条件。
-   */
-  /*
-   * 够不到产出格时朝它挪：只在"这一手没有任何涨幅"时触发，且必须挪近
-   * （不让它原地打转）。森林进格费 2，从 (6,5) 到 (5,6) 要 3 步——
-   * 拿着 2 点移动力的伐木工不这么挪就永远进不了林子。
-   */
-  if (!gain && !world.harassed(u) && target) {
-    const d0 = Math.abs(u.x - target.x) + Math.abs(u.y - target.y);
-    let closer: { x: number; y: number } | null = null;
-    let closerD = d0;
-    for (const [key] of reachableTiles(s, u)) {
-      const x = key % s.w;
-      const y = Math.floor(key / s.w);
-      if (keep.has(key) || nearKeep.has(key)) continue;
-      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-      const d = Math.abs(x - target.x) + Math.abs(y - target.y);
-      if (d < closerD) {
-        closerD = d;
-        closer = { x, y };
-      }
-    }
-    if (closer) return closer;
-  }
-
-  if (world.harassed(u)) return safeBest ?? (cur > 0 ? null : gain);
-  return gain;
+  return best;
 }
 
 /**
@@ -515,17 +474,18 @@ export function recruitAction(s: GameState, world: World, need?: { hp: number; a
 }
 
 /**
- * 造经济兵：**位置由 `world.econPost()` 定**（它已经把"哪一格产多少"算完了）。
+ * 造经济兵：**照认领表的下一个空岗造**（`Constraints.econNext`，约束层给的）。
  *
- * 和战斗兵的区别是"先有位置再造人"——经济兵的价值全在脚下那一格，
- * 没有好格子就不该造。所以这里不挑兵种、也不比价，只听 econPost。
+ * 这里不做任何比较——不选兵种、不比价、不比产出。理由：那些比较每做一次就是一份
+ * 新口径，而约束层手里才有"这块地已经被谁认领了"这个事实（S-015 那 5 个伐木工
+ * 就是打分层自己比出来的）。没有下一个空岗 = 这回合不造，不是"退回造最便宜的"。
  */
-export function recruitEcon(s: GameState, world: World): Action | null {
-  const post = world.econPost();
-  if (!post) return null;
+export function recruitEcon(s: GameState, world: World, con: Constraints): Action | null {
+  const next = con.econNext;
+  if (!next) return null;
   for (const info of world.cities) {
     if (info.role === 'threatened') continue;
-    const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: post.type };
+    const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: next.type };
     if (applyAction(s, a).ok) return a;
   }
   return null;

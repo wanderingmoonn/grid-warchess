@@ -45,6 +45,20 @@ export interface CityInfo {
   defenders: number;
 }
 
+/** 认领表里的一条：某块地、派什么兵、能产多少、走过去要几回合、多少钱 */
+export interface EconSpot {
+  /** 兵种——**是这块地的属性**（森林→伐木工、丘陵→牧民、平原→农民） */
+  type: string;
+  x: number;
+  y: number;
+  /** 站上去每回合产多少金 */
+  yield: number;
+  /** 从城走过去要几回合（按这个兵种自己的地形消耗和移动力） */
+  turns: number;
+  /** 造价 */
+  gold: number;
+}
+
 export interface World {
   me: PlayerId;
   foe: PlayerId;
@@ -82,16 +96,28 @@ export interface World {
   /** 这座城现在能造的最便宜的 N 个战斗兵（含价钱） */
   affordableCombat(city: City, gold: number): Array<{ type: string; gold: number }>;
   /**
-   * **该造哪个经济兵、让它站哪一格**（没有值得造的返回 null）。
+   * **所有能派经济兵去的地块**（"认领表"的原料；排哪一块是人/约束层的事）。
    *
-   * 判法是纯几何，不打分：把所有可造的经济兵 × 我方城附近的**空闲格**算一遍产出，
-   * 取 `(产出最高, 造价最便宜)` 的那一对。因此它天然会"填满稀缺地形再换兵种"——
-   * 森林只有 2 格时，第 3 个伐木工的最优格掉到平原（3 金），牧民在丘陵（8 金）就赢了。
+   * 一格一条，兵种是**格子的属性**（森林→伐木工、丘陵→牧民、平原→农民），
+   * 不再把"造哪种"当自由变量——所以"5 个伐木工抢 2 格森林"这种错误根本表达不出来。
    *
-   * 这个口径是被 S-015 校准出来的：用户实测"复读伐木工"只得 21，
-   * 而"2 伐木 + 2 牧民"能到 40、满配 52。
+   * 这里只交四个数：产出、走过去要几回合、造价、造价÷产出。**不排序、不筛、不做选择。**
+   *
+   * ── 为什么不是"每回合挑一个最肥的"（原来 `econPost()` 的写法）──
+   *
+   * 那样有三个死穴，S-015 全踩了：
+   *   ① **在途不算占格**：候选只排除"此刻有人站着"的格，新兵出生在城里、旧兵还在路上，
+   *      于是同一格森林连着 4 手都被判成"空闲且最肥"，连续造出 5 个伐木工；
+   *   ② **没排除 `keepClear`**：城圈里那 2 格森林永远不许站、也永远不会被占，
+   *      伐木工的需求永不饱和（约束层排了 `keep`，服务层没排——两份口径）；
+   *   ③ **`≥4 金` 是拍的**：一个魔数代替了"这块地值不值得占"。
+   *
+   * 认领表把这三件事一起解决：格子只出现一次，谁认领了就算占，口径和约束层同一份。
+   *
+   * `horizon`：这个决定还剩几手。走过去超过它的格子照样返回（上层可以自己比），
+   * 但 `turns` 已经给出，谁要按期限筛都有据可依。
    */
-  econPost(): { type: string; gold: number; at: { x: number; y: number }; yield: number } | null;
+  econSpots(): EconSpot[];
   /**
    * 这一格会不会被敌方战斗单位"够到"。
    *
@@ -157,6 +183,52 @@ function flipBfs(s: GameState, src: { x: number; y: number }, move: number): Flo
   }
   /* BFS 出来的是"格数/步"，除以移动力才是回合（向上取整，因为走不满也算一回合） */
   for (let i = 0; i < n; i++) if (Number.isFinite(dist[i])) dist[i] = Math.ceil(dist[i]! / Math.max(1, move));
+  return dist;
+}
+
+/**
+ * 一个兵种从某格出发、走到各格要**几回合**（按它自己的地形消耗和移动力）。
+ *
+ * 为什么不能用 `flipBfs`：那张表把森林的额外消耗拍平了（注释里写的已知取舍）。
+ * 经济兵恰恰靠地形吃饭——伐木工有"穿林"，进森林只花 1 步，别的兵要花 2 步，
+ * 拍平之后"伐木工进林"和"牧民进林"会被算成一样远，选岗就偏了。
+ *
+ * 代价只有 1 和 2 两种，所以用三个桶的队列（Dial），比堆简单也够快。
+ */
+function walkDist(s: GameState, from: { x: number; y: number }, def: { abilities?: string[] }): Float64Array {
+  const n = s.w * s.h;
+  const dist = new Float64Array(n).fill(Infinity);
+  const start = from.y * s.w + from.x;
+  if (start < 0 || start >= n) return dist;
+  dist[start] = 0;
+  const K = 3;
+  const q: number[][] = [[], [], []];
+  q[0]!.push(start);
+  for (let d = 0; ; d++) {
+    if (q[0]!.length === 0 && q[1]!.length === 0 && q[2]!.length === 0) break;
+    const bucket = q[d % K]!;
+    while (bucket.length) {
+      const k = bucket.pop()!;
+      if (dist[k] !== d) continue; /* 被更短的替换过了，丢掉 */
+      const x = k % s.w;
+      const y = (k - x) / s.w;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+        const t = s.tiles[ny * s.w + nx]?.terrain;
+        if (!t || !passable(t)) continue;
+        /* 森林多花一步；有"穿林"的兵种不花 */
+        const cost = t === 'forest' && !(def.abilities ?? []).includes('forest-walk') ? 2 : 1;
+        const ni = ny * s.w + nx;
+        const nd = d + cost;
+        if (nd < dist[ni]!) {
+          dist[ni] = nd;
+          q[nd % K]!.push(ni);
+        }
+      }
+    }
+  }
   return dist;
 }
 
@@ -300,6 +372,9 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   /* 每个敌方战斗单位的"威胁半径"，只算一次（贴脸：移动 + 1，见 harassed 的注释） */
   const foeReach = foeCombat.map((u) => Math.max(1, effectiveStats(s, u).move ?? 2) + 1);
 
+  /* 认领表的原料算一次就够（一场棋里问很多遍），算完缓存 */
+  let spotCache: EconSpot[] | null = null;
+
   const world: World = {
     me,
     foe,
@@ -365,38 +440,70 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       return out.sort((a, b) => a.gold - b.gold);
     },
 
-    econPost() {
-      const gold = s.players[me]?.gold ?? 0;
-      /* 我方城附近 8 格内的空闲格（别人站着的不要） */
-      const free: Array<{ x: number; y: number }> = [];
-      for (let y = 0; y < s.h; y++) {
-        for (let x = 0; x < s.w; x++) {
-          if (!passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) continue;
-          if (s.units.some((u) => u.x === x && u.y === y)) continue;
-          if (!myCities.some((c) => Math.abs(c.x - x) + Math.abs(c.y - y) <= 8)) continue;
-          free.push({ x, y });
+    econSpots() {
+      if (spotCache) return spotCache;
+      const keep = new Set(keepClear);
+      /*
+       * 桥口的八邻域也排除（沿用 `bestYieldStep` 的口径）：过道边上也是过道。
+       * 只对**桥**成立——城格那一圈不能一起排掉（S-015 那两格可用的森林贴着城墙，
+       * 一刀切会把它们也排掉，三个伐木工又只能站平原产 3）。
+       */
+      const nearBridge = new Set<number>();
+      for (const k of keepClear) {
+        if (s.tiles[k]?.terrain !== 'bridge') continue;
+        const kx = k % s.w;
+        const ky = (k - kx) / s.w;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1], [0, 0]] as const) {
+          const x = kx + dx;
+          const y = ky + dy;
+          if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+          nearBridge.add(y * s.w + x);
         }
       }
-      if (free.length === 0) return null;
 
-      let best: { type: string; gold: number; at: { x: number; y: number }; yield: number } | null = null;
+      const out: EconSpot[] = [];
+      const seen = new Set<number>();
       for (const city of myCities) {
-        for (const def of Object.values(s.unitTypes)) {
-          if (def.category !== 'economy') continue;
-          if ((def.era ?? 1) > (city.era ?? 1)) continue;
-          if (recruitSpawnCells(s, city.id, undefined, def.id).length === 0) continue;
-          const price = recruitPriceOf(s, me, def).gold;
-          if (price > gold) continue;
-          for (const p of free) {
-            const g = unitYieldAt(s, { type: def.id } as never, p.x, p.y).gold ?? 0;
-            if (!best || g > best.yield || (g === best.yield && price < best.gold)) {
-              best = { type: def.id, gold: price, at: p, yield: g };
-            }
+        const defs = Object.values(s.unitTypes).filter(
+          (d) => d.category === 'economy' && (d.era ?? 1) <= (city.era ?? 1),
+        );
+        if (defs.length === 0) continue;
+        /* 每个兵种一张"走过去要几步"的表（穿林 / 移动力都算进去） */
+        const walk = new Map(defs.map((d) => [d.id, walkDist(s, { x: city.x, y: city.y }, d)]));
+
+        for (let k = 0; k < s.w * s.h; k++) {
+          if (seen.has(k) || keep.has(k) || nearBridge.has(k)) continue;
+          const t = s.tiles[k]?.terrain;
+          if (!t || !passable(t)) continue;
+          if (s.units.some((u) => u.y * s.w + u.x === k)) continue;
+          const x = k % s.w;
+          const y = (k - x) / s.w;
+
+          let best: EconSpot | null = null;
+          for (const d of defs) {
+            const g = unitYieldAt(s, { type: d.id } as never, x, y).gold ?? 0;
+            if (g <= 0) continue;
+            const raw = walk.get(d.id)![k]!;
+            if (!Number.isFinite(raw)) continue;
+            /* 兵种是格子的属性：同一格派几回合产能最高的那个 */
+            if (best && g <= best.yield) continue;
+            best = {
+              type: d.id,
+              x,
+              y,
+              yield: g,
+              turns: Math.ceil(raw / Math.max(1, d.move ?? 2)),
+              gold: recruitPriceOf(s, me, d).gold,
+            };
+          }
+          if (best) {
+            seen.add(k);
+            out.push(best);
           }
         }
       }
-      /* 产出太差就别造了（3 金/回合连回本都谈不上） */
-      return best && best.yield >= 4 ? best : null;
+      spotCache = out;
+      return out;
     },
   };
   return world;

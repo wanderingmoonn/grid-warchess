@@ -197,9 +197,18 @@ export function aiNextActionV4(
      * 攒下的钱会在真要打的时候变成兵（那时 `foeCombat` 非空）。
      */
     const needArmy = world.foeCombat.length > 0 || view.decision.kind !== 'expand';
+    /*
+     * **买不起战斗兵就攒着，别拿去买经济兵。**
+     *
+     * 原来这里是 `recruitAction(...) ?? recruitEcon(...)`——战斗兵买不起时退而买农民。
+     * 实测 S-000（兵力 3 倍该赢的局）：钱永远不够买战斗兵，于是每回合都买一个农民，
+     * 26 手堆到 40 个兵、城一次没打下来。这就是"有钱就得花掉"的老病换了个形状。
+     *
+     * 现在：发展期才补经济；打仗期钱只买战斗兵，买不起就攒。
+     */
     const rec = preferEcon
-      ? recruitEcon(s, world) ?? (needArmy ? recruitAction(s, world, con.need) : null)
-      : recruitAction(s, world, con.need) ?? recruitEcon(s, world);
+      ? recruitEcon(s, world, con) ?? (needArmy ? recruitAction(s, world, con.need) : null)
+      : recruitAction(s, world, con.need);
     if (usable(rec)) {
       view.recruits += 1;
       return rec;
