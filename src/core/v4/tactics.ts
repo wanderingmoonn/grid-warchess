@@ -12,6 +12,7 @@
  * 单位查不到任务，就什么都不做。
  */
 import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, unitYieldAt, utype } from '../rules.ts';
+import { passable } from '../config.ts';
 import type { Action, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
@@ -324,12 +325,32 @@ function bestYieldStep(
    */
   if (nearKeep.has(u.y * s.w + u.x)) return null;
 
-  /* 平时：只有严格更高才动（免得在同一档格子之间横跳） */
+  /*
+   * 平时：只有严格更高才动（免得在同一档格子之间横跳）。
+   *
+   * 但**"这一步不涨"不等于"不该动"**：森林进格费 2，从 (6,5) 到 (5,6) 要 3 步，
+   * 拿着 2 点移动力的伐木工永远跨不过去——它只能先挪到 (5,5)（不涨金），下一手再进林。
+   * 所以"够不到最好的格"时，允许朝它**挪近一格**（`approach`）。
+   */
   let gain: { x: number; y: number } | null = null;
   let gainGold = cur;
   /* 危险时：安全格里产出最高的那一个，**哪怕比现在低** */
   let safeBest: { x: number; y: number } | null = null;
   let safeGold = -1;
+
+  /* 全图（城附近）最好的那一格——够不着时朝它挪 */
+  let target: { x: number; y: number } | null = null;
+  let targetGold = cur;
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if (!passable(s.tiles[y * s.w + x]?.terrain ?? 'wall')) continue;
+      const g = unitYieldAt(s, u, x, y).gold ?? 0;
+      if (g > targetGold) {
+        targetGold = g;
+        target = { x, y };
+      }
+    }
+  }
 
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
@@ -359,6 +380,29 @@ function bestYieldStep(
    * 早先这里是"挑离敌人最远的"，结果全跑进平原：离敌人最远的地方通常也最没用
    * （S-006 总产 47 → 21）。逃命也要算账，只是把"安全"当选格的前置条件。
    */
+  /*
+   * 够不到产出格时朝它挪：只在"这一手没有任何涨幅"时触发，且必须挪近
+   * （不让它原地打转）。森林进格费 2，从 (6,5) 到 (5,6) 要 3 步——
+   * 拿着 2 点移动力的伐木工不这么挪就永远进不了林子。
+   */
+  if (!gain && !world.harassed(u) && target) {
+    const d0 = Math.abs(u.x - target.x) + Math.abs(u.y - target.y);
+    let closer: { x: number; y: number } | null = null;
+    let closerD = d0;
+    for (const [key] of reachableTiles(s, u)) {
+      const x = key % s.w;
+      const y = Math.floor(key / s.w);
+      if (keep.has(key) || nearKeep.has(key)) continue;
+      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+      const d = Math.abs(x - target.x) + Math.abs(y - target.y);
+      if (d < closerD) {
+        closerD = d;
+        closer = { x, y };
+      }
+    }
+    if (closer) return closer;
+  }
+
   if (world.harassed(u)) return safeBest ?? (cur > 0 ? null : gain);
   return gain;
 }
