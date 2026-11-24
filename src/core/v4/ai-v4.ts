@@ -289,7 +289,18 @@ export function aiNextActionV4(
   const econOrder = [...world.myEcon].sort(
     (a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9),
   );
-  for (const u of [...world.myCombat, ...econOrder]) {
+  /*
+   * **战斗兵也按约束给的顺序走**（`stepOrder`：离自己终点近的在前）。
+   *
+   * 30 个人挤成一团时，只有前排先挪开，后排的落点才空出来。
+   * 按单位建立顺序派动作的话，后排常常先执行、把前排要去的格占了，
+   * 前排就不动了——整队每手几十个 MOVE，实际原地踏步（S-002 实测）。
+   */
+  const combatRank = new Map((con.stepOrder ?? []).map((id, i) => [id, i]));
+  const combatOrder = [...world.myCombat].sort(
+    (a, b) => (combatRank.get(a.id) ?? 1e9) - (combatRank.get(b.id) ?? 1e9),
+  );
+  for (const u of [...combatOrder, ...econOrder]) {
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.moved) continue;
     const a = actFor(s, world, con, live);

@@ -879,8 +879,13 @@ function targetCells(
  *
  * 3. **离城近的先走**（前排先挪开，后排才有位置），落点去重。
  */
-function planMarch(s: GameState, world: World, squads: Squad[]): Record<string, { x: number; y: number }> {
+function planMarch(
+  s: GameState,
+  world: World,
+  squads: Squad[],
+): { steps: Record<string, { x: number; y: number }>; order: string[] } {
   const out: Record<string, { x: number; y: number }> = {};
+  const order: string[] = [];
   for (const sq of squads) {
     if (sq.order === 'hold') continue;
     const base = squadBase(s, sq);
@@ -911,6 +916,14 @@ function planMarch(s: GameState, world: World, squads: Squad[]): Record<string, 
     );
     const hs = [...holes].sort((a, b) => axisOf(a) - axisOf(b) || a - b);
 
+    /*
+     * **接敌了就不再"每手一格"。**
+     *
+     * 一格一格是为了让行军队形不散；但真打起来，慢慢挪就是把前排喂给对面
+     * （S-001 实测：一律一格，20 个兵全灭、城没打掉）。判据是"这一手里有任何人能打到人"，
+     * 不是距离阈值。
+     */
+    const engaged = units.some((u) => attackableTargets(s, u).some((v) => v.owner !== world.me));
     const mine = new Map<string, number>();
     for (let i = 0; i < pend.length && i < hs.length; i += 1) mine.set(pend[i]!.id, hs[i]!);
     if (mine.size === 0) continue;
@@ -929,6 +942,20 @@ function planMarch(s: GameState, world: World, squads: Squad[]): Record<string, 
       let best: number | null = null;
       let bestD = here;
       for (const [k] of reachableTiles(s, u)) {
+        /*
+         * **这一手只走一格**（不是"走到能走的最远处"）。
+         *
+         * 这是"整体平移"能不能成立的关键。`reachableTiles` 给的是移动力范围，
+         * 移动力 3 的兵会一口气走 3 格、移动力 2 的走 2 格——前排第二手就甩开后排，
+         * 队形散成一条线，前面的被各个击破（S-002 实测：最前面 6 个兵第 8 手前全灭，
+         * 后面的还没到）。只走一格，快慢兵在同一手上位移相同，队形才跟得住。
+         *
+         * 代价是推进变慢（一回合 1 格）。这是有意的：接敌之后由"打人"接管，
+         * 走位只在行军段生效。
+         */
+        const kx = k % s.w;
+        const ky = Math.floor(k / s.w);
+        if (!engaged && Math.abs(kx - u.x) + Math.abs(ky - u.y) !== 1) continue;
         if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
         if (used.has(k)) continue;
         const d = field[k] ?? Infinity;
@@ -939,10 +966,11 @@ function planMarch(s: GameState, world: World, squads: Squad[]): Record<string, 
       }
       if (best === null) continue;
       out[u.id] = { x: best % s.w, y: Math.floor(best / s.w) };
+      order.push(u.id);
       used.add(best);
     }
   }
-  return out;
+  return { steps: out, order };
 }
 
 export function constrain(s: GameState, world: World, decision: Decision, mem?: V4Memory): Constraints {
@@ -1164,6 +1192,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     (q) => q.unitIds.length > 0 && (q.order === 'march' || q.order === 'siege' || q.order === 'assemble'),
   );
 
+  const marched = planMarch(s, world, squads);
   return {
     need,
     spendCap,
@@ -1174,7 +1203,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     econOrder: econPlan.order,
     keepClear,
     squads,
-    steps: planMarch(s, world, squads),
+    steps: marched.steps,
+    stepOrder: marched.order,
     yieldMoves: planYield(s, world, keepClear, squads, { spawn, exit }),
     forbid,
   };
