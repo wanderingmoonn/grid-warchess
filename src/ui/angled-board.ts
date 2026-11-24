@@ -91,9 +91,27 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     /** 邻接陆地掩码：bit0=N(y-1), bit1=E(x+1), bit2=S(y+1), bit3=W(x-1) */
     shoreMask: number;
   }
+  interface WaterBodyInfo {
+    kind: WaterBodyKind;
+    cells: Array<{ x: number; y: number; terrain: Terrain; meta: WaterCellMeta }>;
+    /** 河流：预先沿拉普拉斯流场追踪的跨格连续流线（棋盘浮点坐标） */
+    streamlines: Point[][];
+    /** 湖泊：加权深水湖心与半径 */
+    centerX: number;
+    centerY: number;
+    maxRadius: number;
+    /** 海域：整体涌浪推进方向与投影范围 */
+    swellX: number;
+    swellY: number;
+    minProj: number;
+    maxProj: number;
+    minPerp: number;
+    maxPerp: number;
+  }
   interface WaterField {
     key: string;
     meta: Array<WaterCellMeta | null>;
+    bodies: WaterBodyInfo[];
   }
   interface AnimatedWaterCell {
     x: number;
@@ -105,6 +123,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     meta: WaterCellMeta;
   }
   let cachedWaterField: WaterField | null = null;
+  let activeWaterBodies: WaterBodyInfo[] = [];
 
   /**
    * 水体拓扑分析：将连通水面自动识别为「河 (river) / 湖 (lake) / 海 (sea)」，
@@ -138,6 +157,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     if (cachedWaterField && cachedWaterField.key === sig) return cachedWaterField;
 
     const meta: Array<WaterCellMeta | null> = new Array(total).fill(null);
+    const bodies: WaterBodyInfo[] = [];
 
     // 1. 多源 BFS 计算每格水体到最近陆地的距离
     const distLand = new Float32Array(total).fill(99);
@@ -388,8 +408,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           for (const idx of nodes) phi[idx] = tmpPhi[idx]!;
         }
 
+        const riverFlowX = new Float32Array(total);
+        const riverFlowY = new Float32Array(total);
+        const bodyCells: WaterBodyInfo['cells'] = [];
         for (const idx of nodes) {
-          if (!isWater[idx]) continue;
           const cx = idx % w;
           const cy = (idx - cx) / w;
           const pHere = phi[idx]!;
@@ -407,12 +429,15 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
             gx = 0;
             gy = 1;
           }
+          riverFlowX[idx] = gx;
+          riverFlowY[idx] = gy;
+          if (!isWater[idx]) continue;
           let shoreMask = 0;
           if (cy > 0 && isLand[idx - w]) shoreMask |= 1;
           if (cx + 1 < w && isLand[idx + 1]) shoreMask |= 2;
           if (cy + 1 < h && isLand[idx + w]) shoreMask |= 4;
           if (cx > 0 && isLand[idx - 1]) shoreMask |= 8;
-          meta[idx] = {
+          const cellMeta: WaterCellMeta = {
             kind: 'river',
             flowX: gx,
             flowY: gy,
@@ -420,9 +445,110 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
             phaseCoord: pHere,
             shoreMask,
           };
+          meta[idx] = cellMeta;
+          bodyCells.push({ x: cx, y: cy, terrain: at(state, cx, cy) ?? 'water', meta: cellMeta });
         }
+
+        // 沿河道拉普拉斯流场追踪跨格连续流线（RK2 中点积分 + 最小间距排布）
+        const sampleFlow = (px: number, py: number): readonly [number, number] | null => {
+          const ix = Math.floor(px);
+          const iy = Math.floor(py);
+          if (ix < 0 || ix >= w || iy < 0 || iy >= h) return null;
+          const i0 = iy * w + ix;
+          if (compId[i0] !== cid) return null;
+          let sx = 0;
+          let sy = 0;
+          let sw = 0;
+          for (let oy = -1; oy <= 1; oy++) {
+            for (let ox = -1; ox <= 1; ox++) {
+              const nx = ix + ox;
+              const ny = iy + oy;
+              if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+              const ni = ny * w + nx;
+              if (compId[ni] !== cid) continue;
+              const dx = px - (nx + 0.5);
+              const dy = py - (ny + 0.5);
+              const wt = 1 / (0.18 + dx * dx + dy * dy);
+              sx += riverFlowX[ni]! * wt;
+              sy += riverFlowY[ni]! * wt;
+              sw += wt;
+            }
+          }
+          const l = Math.hypot(sx, sy);
+          return l > 0.001 ? [sx / l, sy / l] : null;
+        };
+
+        const occW = w * 2;
+        const occH = h * 2;
+        const occupied = new Uint8Array(occW * occH);
+        const isFree = (px: number, py: number): boolean => {
+          const ox = Math.floor(px * 2);
+          const oy = Math.floor(py * 2);
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = ox + dx;
+              const ny = oy + dy;
+              if (nx >= 0 && nx < occW && ny >= 0 && ny < occH && occupied[ny * occW + nx]) return false;
+            }
+          }
+          return true;
+        };
+        const markOcc = (px: number, py: number): void => {
+          const ox = Math.floor(px * 2);
+          const oy = Math.floor(py * 2);
+          if (ox >= 0 && ox < occW && oy >= 0 && oy < occH) occupied[oy * occW + ox] = 1;
+        };
+
+        // 优先从上游开始播种流线，其次按沿程顺序补全宽河面或分汊
+        const sortedNodes = [...nodes].sort((a, b) => phi[a]! - phi[b]!);
+        const streamlines: Point[][] = [];
+        const maxSteps = Math.max(24, (w + h) * 3);
+        for (const seedIdx of sortedNodes) {
+          if (!isWater[seedIdx]) continue;
+          const sx = (seedIdx % w) + 0.5;
+          const sy = ((seedIdx - (seedIdx % w)) / w) + 0.5;
+          if (!isFree(sx, sy)) continue;
+          const line: Point[] = [[sx, sy]];
+          let cx = sx;
+          let cy = sy;
+          for (let step = 0; step < maxSteps; step++) {
+            const v1 = sampleFlow(cx, cy);
+            if (!v1) break;
+            const mx = cx + v1[0] * 0.22;
+            const my = cy + v1[1] * 0.22;
+            const v2 = sampleFlow(mx, my) ?? v1;
+            const nx = cx + v2[0] * 0.42;
+            const ny = cy + v2[1] * 0.42;
+            const nix = Math.floor(nx);
+            const niy = Math.floor(ny);
+            if (nix < 0 || nix >= w || niy < 0 || niy >= h || compId[niy * w + nix] !== cid) break;
+            if (step > 2 && Math.hypot(nx - line[line.length - 1]![0], ny - line[line.length - 1]![1]) < 0.08) break;
+            line.push([nx, ny]);
+            cx = nx;
+            cy = ny;
+          }
+          if (line.length >= 4) {
+            for (const [lx, ly] of line) markOcc(lx, ly);
+            streamlines.push(line);
+          }
+        }
+
+        bodies.push({
+          kind: 'river',
+          cells: bodyCells,
+          streamlines,
+          centerX: (minX + maxX + 1) * 0.5,
+          centerY: (minY + maxY + 1) * 0.5,
+          maxRadius: majorSpan * 0.5,
+          swellX: 0,
+          swellY: 1,
+          minProj: 0,
+          maxProj: 1,
+          minPerp: 0,
+          maxPerp: 1,
+        });
       } else if (kind === 'lake') {
-        // 计算湖泊深水加权中心，用于安静的同心涟漪扩散
+        // 计算湖泊深水加权中心，用于安静的完整同心涟漪与镜面柔光
         let wSum = 0;
         let centerX = 0;
         let centerY = 0;
@@ -440,6 +566,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           centerX /= wSum;
           centerY /= wSum;
         }
+        const bodyCells: WaterBodyInfo['cells'] = [];
+        let maxR = 1;
         for (const idx of nodes) {
           if (!isWater[idx]) continue;
           const cx = idx % w;
@@ -447,12 +575,13 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           const rx = cx + 0.5 - centerX;
           const ry = cy + 0.5 - centerY;
           const r = Math.hypot(rx, ry);
+          if (r > maxR) maxR = r;
           let shoreMask = 0;
           if (cy > 0 && isLand[idx - w]) shoreMask |= 1;
           if (cx + 1 < w && isLand[idx + 1]) shoreMask |= 2;
           if (cy + 1 < h && isLand[idx + w]) shoreMask |= 4;
           if (cx > 0 && isLand[idx - 1]) shoreMask |= 8;
-          meta[idx] = {
+          const cellMeta: WaterCellMeta = {
             kind: 'lake',
             flowX: r > 0.05 ? rx / r : 0.707,
             flowY: r > 0.05 ? ry / r : 0.707,
@@ -460,7 +589,23 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
             phaseCoord: r,
             shoreMask,
           };
+          meta[idx] = cellMeta;
+          bodyCells.push({ x: cx, y: cy, terrain: at(state, cx, cy) ?? 'water', meta: cellMeta });
         }
+        bodies.push({
+          kind: 'lake',
+          cells: bodyCells,
+          streamlines: [],
+          centerX,
+          centerY,
+          maxRadius: maxR,
+          swellX: 0.707,
+          swellY: 0.707,
+          minProj: 0,
+          maxProj: 1,
+          minPerp: 0,
+          maxPerp: 1,
+        });
       } else {
         // 海域：计算平滑的向岸涌浪方向（近岸顺海岸折向拍岸，外海保持统一斜向涌浪）
         const smDist = new Float32Array(total);
@@ -492,6 +637,9 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         // 外海主涌浪基准方向（自东南外海向西北近岸推进，顺应斜俯视光影）
         const baseSwellX = -0.76;
         const baseSwellY = -0.65;
+        const bodyCells: WaterBodyInfo['cells'] = [];
+        let sumSx = 0;
+        let sumSy = 0;
         for (const idx of nodes) {
           if (!isWater[idx]) continue;
           const cx = idx % w;
@@ -501,22 +649,23 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           const dW = cx - 1 >= 0 ? (compId[idx - 1] === cid ? smDist[idx - 1]! : isLand[idx - 1] ? 0 : dHere) : dHere;
           const dS = cy + 1 < h ? (compId[idx + w] === cid ? smDist[idx + w]! : isLand[idx + w] ? 0 : dHere) : dHere;
           const dN = cy - 1 >= 0 ? (compId[idx - w] === cid ? smDist[idx - w]! : isLand[idx - w] ? 0 : dHere) : dHere;
-          // 负梯度指向陆地方向（涌浪拍向海岸）
           const nx = dW - dE;
           const ny = dN - dS;
           const nLen = Math.hypot(nx, ny);
-          const shoreWeight = Math.max(0, Math.min(0.68, 1.1 - dHere * 0.22));
+          const shoreWeight = Math.max(0, Math.min(0.65, 1.05 - dHere * 0.22));
           let fx = baseSwellX * (1 - shoreWeight) + (nLen > 0.01 ? (nx / nLen) * shoreWeight : baseSwellX * shoreWeight);
           let fy = baseSwellY * (1 - shoreWeight) + (nLen > 0.01 ? (ny / nLen) * shoreWeight : baseSwellY * shoreWeight);
           const fLen = Math.hypot(fx, fy) || 1;
           fx /= fLen;
           fy /= fLen;
+          sumSx += fx;
+          sumSy += fy;
           let shoreMask = 0;
           if (cy > 0 && isLand[idx - w]) shoreMask |= 1;
           if (cx + 1 < w && isLand[idx + 1]) shoreMask |= 2;
           if (cy + 1 < h && isLand[idx + w]) shoreMask |= 4;
           if (cx > 0 && isLand[idx - 1]) shoreMask |= 8;
-          meta[idx] = {
+          const cellMeta: WaterCellMeta = {
             kind: 'sea',
             flowX: fx,
             flowY: fy,
@@ -524,11 +673,44 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
             phaseCoord: cx * baseSwellX + cy * baseSwellY,
             shoreMask,
           };
+          meta[idx] = cellMeta;
+          bodyCells.push({ x: cx, y: cy, terrain: at(state, cx, cy) ?? 'water', meta: cellMeta });
         }
+        const sLen = Math.hypot(sumSx, sumSy);
+        const swellX = sLen > 0.01 ? sumSx / sLen : baseSwellX;
+        const swellY = sLen > 0.01 ? sumSy / sLen : baseSwellY;
+        const perpX = -swellY;
+        const perpY = swellX;
+        let minProj = Infinity;
+        let maxProj = -Infinity;
+        let minPerp = Infinity;
+        let maxPerp = -Infinity;
+        for (const c of bodyCells) {
+          const p = (c.x + 0.5) * swellX + (c.y + 0.5) * swellY;
+          const q = (c.x + 0.5) * perpX + (c.y + 0.5) * perpY;
+          if (p < minProj) minProj = p;
+          if (p > maxProj) maxProj = p;
+          if (q < minPerp) minPerp = q;
+          if (q > maxPerp) maxPerp = q;
+        }
+        bodies.push({
+          kind: 'sea',
+          cells: bodyCells,
+          streamlines: [],
+          centerX: (minX + maxX + 1) * 0.5,
+          centerY: (minY + maxY + 1) * 0.5,
+          maxRadius: majorSpan * 0.5,
+          swellX,
+          swellY,
+          minProj,
+          maxProj,
+          minPerp,
+          maxPerp,
+        });
       }
     }
 
-    cachedWaterField = { key: sig, meta };
+    cachedWaterField = { key: sig, meta, bodies };
     return cachedWaterField;
   }
 
@@ -1417,30 +1599,32 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
    * - 湖（lake）：自湖心轻缓外扩的宁静同心涟漪与呼吸感微光；
    * - 海（sea）：跨海域协同推进的斜向涌浪明暗带、卷涌白沫浪峰与拍岸浪花。
    */
-  function paintWaterArt(
+  /**
+   * 水体底层（每格独立）：三档清透水色、柔和水下等深坡带、浅流水下沙洲/鹅卵石与岸壁柔和落影。
+   * 刻意不在单格内画零碎短白线，表面光影与流动交由 `paintWaterBodyFlow` 在整片水体上连续绘制。
+   */
+  function paintWaterBaseTile(
     ctx: CanvasRenderingContext2D,
     x: number,
     y: number,
     terrain: Terrain,
     state: GameState,
     meta: WaterCellMeta,
-    timeSec: number,
   ): void {
     const h = tileHash(x, y, 71);
     const elevation = WATER_SURFACE;
     const pt = (u: number, v: number, dz = 0): Point => project(x + u, y + v, elevation + dz);
     const top = rhombus(x, y, 1, elevation);
 
-    // 1. 三档水体柔和跨格底色（微弱空间明度波纹，消除死板棋盘格感）
-    const wWave = Math.sin(x * 0.65 + y * 0.55) + Math.cos(x * 0.4 - y * 0.6);
+    // 1. 三档水体柔和跨格底色
+    const wWave = Math.sin(x * 0.55 + y * 0.48) + Math.cos(x * 0.36 - y * 0.52);
     const baseFill = terrain === 'shallow'
-      ? (wWave > 0.5 ? '#afd7cc' : wWave < -0.5 ? '#a5cfc4' : '#abd3c8')
+      ? (wWave > 0.55 ? '#afd6cb' : wWave < -0.55 ? '#a6cfc4' : '#abd3c8')
       : terrain === 'deep'
-        ? (wWave > 0.5 ? '#5484a6' : wWave < -0.5 ? '#4a7a9c' : '#4f7fa1')
-        : (wWave > 0.5 ? '#91bed4' : wWave < -0.5 ? '#87b4cc' : '#8cb9d0');
+        ? (wWave > 0.55 ? '#5383a5' : wWave < -0.55 ? '#4b7b9d' : '#4f7fa1')
+        : (wWave > 0.55 ? '#90bdd3' : wWave < -0.55 ? '#88b5cd' : '#8cb9d0');
     polygon(ctx, top, baseFill);
 
-    // 裁切在当前水格内绘制所有水下过渡、流带与岸浪，确保跨格连续且绝不溢界
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(...top[0]!);
@@ -1450,7 +1634,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     ctx.closePath();
     ctx.clip();
 
-    // 2. 深浅水体之间的柔和水下坡带（浅流 ↔ 水域 ↔ 深水）
+    // 2. 深浅水体之间的三层羽化过渡坡带（浅流 ↔ 水域 ↔ 深水）
     const myDepth = bedDepth[terrain] ?? 4;
     const slopeRgb = (t: Terrain): string =>
       t === 'shallow' ? '171,211,200' : t === 'deep' ? '79,127,161' : '140,185,208';
@@ -1467,297 +1651,365 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
               : [pt(0, 0), pt(w1, 0), pt(w1, 1), pt(0, 1)];
         polygon(ctx, quad, `rgba(${rgb},${alpha})`);
       };
-      band(0.24, 0.24);
-      band(0.11, 0.34);
+      band(0.30, 0.14);
+      band(0.17, 0.21);
+      band(0.08, 0.26);
     };
     paintDepthSlope('n', at(state, x, y - 1));
     paintDepthSlope('e', at(state, x + 1, y));
     paintDepthSlope('s', at(state, x, y + 1));
     paintDepthSlope('w', at(state, x - 1, y));
 
-    // 3. 水下河床/海床层次肌理
+    // 3. 浅流专属水下沙洲与隐约鹅卵石（柔和低反差，自然传达可涉水浅滩）
     if (terrain === 'shallow') {
-      // 浅流：温暖隐约的水下浅沙洲斑块 + 圆润鹅卵石，一眼辨识可涉水
       if ((h % 7) < 4) {
         const su = 0.28 + ((h >>> 3) % 34) * 0.01;
         const sv = 0.28 + ((h >>> 8) % 34) * 0.01;
-        const sr = 0.19 + ((h >>> 13) % 9) * 0.01;
+        const sr = 0.20 + ((h >>> 13) % 9) * 0.01;
         polygon(ctx, [
           pt(su - sr, sv),
           pt(su, sv - sr * 0.85),
           pt(su + sr, sv),
           pt(su, sv + sr * 0.85),
-        ], '#d2e2c848');
+        ], '#d4e4ca38');
       }
-      if ((h % 5) < 2) {
-        const pu = 0.26 + ((h >>> 5) % 44) * 0.01;
-        const pv = 0.28 + ((h >>> 10) % 42) * 0.01;
+      if ((h % 6) < 2) {
+        const pu = 0.28 + ((h >>> 5) % 42) * 0.01;
+        const pv = 0.28 + ((h >>> 10) % 40) * 0.01;
         const [px, py] = pt(pu, pv);
-        polygon(ctx, [[px - 2.6, py + 0.4], [px - 0.6, py - 1.1], [px + 1.8, py - 0.5], [px + 0.8, py + 1.2]], '#7da79d66');
-        polygon(ctx, [[px - 1.8, py - 0.2], [px - 0.4, py - 1.0], [px + 0.8, py - 0.4], [px - 0.2, py + 0.3]], '#cde3d95e');
-      }
-    } else if (terrain === 'deep') {
-      // 深水：缓慢游移的深海暗槽光影层
-      const drift = Math.sin(x * 0.55 + y * 0.45 - timeSec * 0.65);
-      if (drift < 0.15) {
-        const a = Math.max(0.04, (0.15 - drift) * 0.16);
-        polygon(ctx, [pt(0.08, 0.25), pt(0.55, 0.04), pt(0.92, 0.72), pt(0.42, 0.94)], `rgba(38,71,99,${a.toFixed(3)})`);
+        polygon(ctx, [[px - 2.4, py + 0.4], [px - 0.5, py - 1.0], [px + 1.6, py - 0.4], [px + 0.7, py + 1.1]], '#7da79d4e');
+        polygon(ctx, [[px - 1.6, py - 0.2], [px - 0.4, py - 0.9], [px + 0.7, py - 0.3], [px - 0.2, py + 0.2]], '#cde3d944');
       }
     }
 
-    // 4. 西北/东北岸壁落在水面上的柔和投影（增强水体嵌入地形的立体凹陷感）
+    // 4. 西北/东北岸壁柔和双层羽化落影（增强水体嵌入陆地的立体自然感）
     if (meta.shoreMask & 8) {
-      polygon(ctx, [pt(0, 0), pt(0.19, 0), pt(0.19, 1), pt(0, 1)], '#26495f2c');
+      polygon(ctx, [pt(0, 0), pt(0.24, 0), pt(0.24, 1), pt(0, 1)], 'rgba(35,69,91,0.10)');
+      polygon(ctx, [pt(0, 0), pt(0.11, 0), pt(0.11, 1), pt(0, 1)], 'rgba(35,69,91,0.14)');
     }
     if (meta.shoreMask & 1) {
-      polygon(ctx, [pt(0, 0), pt(1, 0), pt(1, 0.19), pt(0, 0.19)], '#26495f26');
-    }
-
-    // 5. 分型水体流动动画（河 / 湖 / 海 各具鲜明且克制优雅的动态韵律）
-    const fx = meta.flowX;
-    const fy = meta.flowY;
-    const px = -fy;
-    const py = fx;
-    const frac = (n: number): number => n - Math.floor(n);
-
-    if (meta.kind === 'river') {
-      // —— 河（River）：顺沿拉普拉斯流场跨格流动的清透丝带与细碎水光 ——
-      const speed = terrain === 'shallow' ? 0.56 : terrain === 'deep' ? 0.26 : 0.40;
-      const laneOffsets = terrain === 'shallow' ? [-0.26, 0.04, 0.30] : [-0.22, 0.22];
-      const baseAlong = x * fx + y * fy;
-      const baseAcross = x * px + y * py;
-
-      for (let li = 0; li < laneOffsets.length; li++) {
-        const laneAcross = laneOffsets[li]!;
-        const laneSeed = Math.sin((Math.round(baseAcross * 2 + li * 3.1)) * 12.9898) * 43758.5453;
-        const laneJitter = (frac(laneSeed) - 0.5) * 0.12;
-        const travel = timeSec * speed + frac(laneSeed * 1.7);
-        const phase = frac(baseAlong * 0.72 - travel);
-        // 采样错落两档，确保跨格顺滑无缝且保持清透透气感
-        for (const shift of [-0.36, 0.42]) {
-          const sCenter = phase + shift - 0.42;
-          if (sCenter < -0.58 || sCenter > 0.62) continue;
-          const halfLen = terrain === 'shallow' ? 0.20 : terrain === 'deep' ? 0.29 : 0.25;
-          const bend = Math.sin((baseAlong + sCenter) * 3.4 + timeSec * 1.8 + li) * 0.036;
-          const cu = 0.5 + fx * sCenter + px * (laneAcross + laneJitter);
-          const cv = 0.5 + fy * sCenter + py * (laneAcross + laneJitter);
-          const a = pt(cu - fx * halfLen, cv - fy * halfLen);
-          const mid = pt(cu + px * bend, cv + py * bend);
-          const b = pt(cu + fx * halfLen, cv + fy * halfLen);
-
-          // 柔和流带暗底（增加水纹厚度）
-          ctx.beginPath();
-          ctx.moveTo(a[0], a[1] + 0.8);
-          ctx.quadraticCurveTo(mid[0], mid[1] + 0.8, b[0], b[1] + 0.8);
-          ctx.strokeStyle = terrain === 'deep' ? 'rgba(37,69,96,0.24)' : 'rgba(84,132,158,0.18)';
-          ctx.lineWidth = terrain === 'deep' ? 1.45 : 1.1;
-          ctx.lineCap = 'round';
-          ctx.stroke();
-
-          // 迎光主水纹高光线
-          ctx.beginPath();
-          ctx.moveTo(a[0], a[1]);
-          ctx.quadraticCurveTo(mid[0], mid[1], b[0], b[1]);
-          ctx.strokeStyle = terrain === 'shallow'
-            ? 'rgba(245,253,250,0.58)'
-            : terrain === 'deep'
-              ? 'rgba(176,216,238,0.38)'
-              : 'rgba(235,249,254,0.48)';
-          ctx.lineWidth = terrain === 'shallow' ? 1.1 : terrain === 'deep' ? 1.3 : 1.15;
-          ctx.lineCap = 'round';
-          ctx.stroke();
-        }
-      }
-
-      // 浅流专属：灵动碎浪小波尖（凸显水流浅急清澈）
-      if (terrain === 'shallow' && (h % 3) !== 0) {
-        const spark = 0.35 + 0.65 * Math.sin(timeSec * 3.1 + (h % 19) * 0.7) ** 2;
-        const tSlide = frac((h % 13) * 0.17 + timeSec * 0.42) - 0.5;
-        const su = 0.5 + fx * tSlide * 0.55 + px * (((h >>> 4) % 5) - 2) * 0.1;
-        const sv = 0.5 + fy * tSlide * 0.55 + py * (((h >>> 4) % 5) - 2) * 0.1;
-        const [gx, gy] = pt(su, sv);
-        ctx.fillStyle = `rgba(250,255,253,${(0.45 * spark).toFixed(3)})`;
-        ctx.fillRect(gx - 1.4, gy - 0.5, 2.8, 1.0);
-      }
-    } else if (meta.kind === 'lake') {
-      // —— 湖（Lake）：宁静同心微涟漪 + 柔和镜面微光呼吸 ——
-      const rSpeed = terrain === 'shallow' ? 0.24 : terrain === 'deep' ? 0.15 : 0.19;
-      for (let ring = 0; ring < 2; ring++) {
-        const life = frac(meta.phaseCoord * 0.52 - timeSec * rSpeed + ring * 0.5);
-        const fade = Math.sin(life * Math.PI);
-        if (fade < 0.08) continue;
-        const radialShift = (life - 0.5) * 0.52;
-        const cu = 0.5 + fx * radialShift;
-        const cv = 0.5 + fy * radialShift;
-        const arcSpan = terrain === 'deep' ? 0.32 : 0.26;
-        const arcCurve = 0.07;
-        const a = pt(cu - px * arcSpan - fx * arcCurve, cv - py * arcSpan - fy * arcCurve);
-        const mid = pt(cu + fx * arcCurve * 0.6, cv + fy * arcCurve * 0.6);
-        const b = pt(cu + px * arcSpan - fx * arcCurve, cv + py * arcSpan - fy * arcCurve);
-
-        const alpha = (terrain === 'shallow' ? 0.56 : terrain === 'deep' ? 0.34 : 0.46) * fade;
-        ctx.beginPath();
-        ctx.moveTo(a[0], a[1]);
-        ctx.quadraticCurveTo(mid[0], mid[1], b[0], b[1]);
-        ctx.strokeStyle = terrain === 'deep'
-          ? `rgba(182,219,239,${alpha.toFixed(3)})`
-          : `rgba(241,252,253,${alpha.toFixed(3)})`;
-        ctx.lineWidth = terrain === 'deep' ? 1.25 : 1.05;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-      }
-
-      // 镜面天光微漾（在水平斜俯视方向柔和明灭，营造静湖诗意）
-      const shimmer = 0.5 + 0.5 * Math.sin(timeSec * 1.35 + (h % 31) * 0.45 + x * 0.7 - y * 0.5);
-      if (shimmer > 0.32) {
-        const sAlpha = (shimmer - 0.32) * (terrain === 'shallow' ? 0.52 : terrain === 'deep' ? 0.32 : 0.42);
-        const gu = 0.32 + ((h >>> 4) % 36) * 0.01;
-        const gv = 0.34 + ((h >>> 9) % 34) * 0.01;
-        const [gx, gy] = pt(gu, gv);
-        const len = 3.2 + shimmer * 3.0;
-        strokeLine(ctx, [gx - len, gy], [gx + len, gy], `rgba(246,253,255,${sAlpha.toFixed(3)})`, 1.0);
-      }
-    } else {
-      // —— 海（Sea）：宏阔斜向涌浪明暗带 + 雕塑感起伏白沫浪峰 + 近岸潮汐碎浪 ——
-      const swellSpeed = terrain === 'deep' ? 1.22 : terrain === 'water' ? 1.42 : 1.65;
-      const worldProj = (x + 0.5) * fx + (y + 0.5) * fy;
-      const swellArg = worldProj * 1.15 - timeSec * swellSpeed;
-      const swellVal = Math.sin(swellArg);
-
-      // 5a. 宏阔涌浪受光面与波谷暗带（用平滑斜向波带替代整格平涂，消除格间块感）
-      if (swellVal > 0.05) {
-        const a = swellVal * (terrain === 'deep' ? 0.21 : terrain === 'water' ? 0.19 : 0.22);
-        const bandShift = Math.cos(swellArg) * 0.16;
-        const cu = 0.5 + fx * bandShift;
-        const cv = 0.5 + fy * bandShift;
-        polygon(ctx, [
-          pt(cu - px * 0.8 - fx * 0.25, cv - py * 0.8 - fy * 0.25),
-          pt(cu + px * 0.8 - fx * 0.25, cv + py * 0.8 - fy * 0.25),
-          pt(cu + px * 0.8 + fx * 0.25, cv + py * 0.8 + fy * 0.25),
-          pt(cu - px * 0.8 + fx * 0.25, cv - py * 0.8 + fy * 0.25),
-        ], terrain === 'deep'
-          ? `rgba(148,202,232,${a.toFixed(3)})`
-          : `rgba(232,248,253,${a.toFixed(3)})`);
-      } else if (swellVal < -0.08) {
-        const a = -swellVal * (terrain === 'deep' ? 0.19 : 0.12);
-        const bandShift = -Math.cos(swellArg) * 0.16;
-        const cu = 0.5 + fx * bandShift;
-        const cv = 0.5 + fy * bandShift;
-        polygon(ctx, [
-          pt(cu - px * 0.8 - fx * 0.26, cv - py * 0.8 - fy * 0.26),
-          pt(cu + px * 0.8 - fx * 0.26, cv + py * 0.8 - fy * 0.26),
-          pt(cu + px * 0.8 + fx * 0.26, cv + py * 0.8 + fy * 0.26),
-          pt(cu - px * 0.8 + fx * 0.26, cv - py * 0.8 + fy * 0.26),
-        ], `rgba(34,67,94,${a.toFixed(3)})`);
-      }
-
-      // 5b. 雕塑感海浪白沫波峰（沿涌浪法线推进、自然疏密错落）
-      const waveCycle = frac(worldProj * 0.58 - timeSec * (swellSpeed / (Math.PI * 2)) + ((h % 7) * 0.04));
-      const crestVis = Math.sin(waveCycle * Math.PI);
-      if (crestVis > 0.22 && (h % 5) !== 0) {
-        const slide = (waveCycle - 0.5) * 0.62;
-        const lateral = (((h >>> 3) % 7) - 3) * 0.05;
-        const cu = 0.5 + fx * slide + px * lateral;
-        const cv = 0.5 + fy * slide + py * lateral;
-        const span = terrain === 'deep' ? 0.37 : terrain === 'water' ? 0.31 : 0.25;
-        const arch = 0.085;
-        const wL = pt(cu - px * span, cv - py * span);
-        const wM1 = pt(cu - px * (span * 0.35) + fx * arch, cv - py * (span * 0.35) + fy * arch);
-        const wC = pt(cu + fx * (arch * 0.35), cv + fy * (arch * 0.35));
-        const wM2 = pt(cu + px * (span * 0.35) + fx * arch, cv + py * (span * 0.35) + fy * arch);
-        const wR = pt(cu + px * span, cv + py * span);
-
-        // 浪背微阴影
-        ctx.beginPath();
-        ctx.moveTo(wL[0], wL[1] + 1.0);
-        ctx.quadraticCurveTo(wM1[0], wM1[1] + 1.0, wC[0], wC[1] + 1.0);
-        ctx.quadraticCurveTo(wM2[0], wM2[1] + 1.0, wR[0], wR[1] + 1.0);
-        ctx.strokeStyle = terrain === 'deep'
-          ? `rgba(32,63,89,${(0.42 * crestVis).toFixed(3)})`
-          : `rgba(69,115,143,${(0.28 * crestVis).toFixed(3)})`;
-        ctx.lineWidth = terrain === 'deep' ? 1.75 : 1.35;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-
-        // 迎光白沫浪脊
-        ctx.beginPath();
-        ctx.moveTo(wL[0], wL[1]);
-        ctx.quadraticCurveTo(wM1[0], wM1[1], wC[0], wC[1]);
-        ctx.quadraticCurveTo(wM2[0], wM2[1], wR[0], wR[1]);
-        ctx.strokeStyle = terrain === 'deep'
-          ? `rgba(229,245,252,${(0.72 * crestVis).toFixed(3)})`
-          : `rgba(247,253,255,${(0.66 * crestVis).toFixed(3)})`;
-        ctx.lineWidth = terrain === 'deep' ? 1.4 : 1.15;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-      }
-
-      // 5c. 近海浅滩第二道细碎拍岸涌纹
-      if (meta.distToLand <= 1.85 && terrain !== 'deep') {
-        const surf = 0.5 + 0.5 * Math.sin(meta.distToLand * 3.1 - timeSec * 2.15 + (h % 5) * 0.3);
-        if (surf > 0.35) {
-          const sa = (surf - 0.35) * 0.55;
-          const a = pt(0.5 - px * 0.28 + fx * 0.14, 0.5 - py * 0.28 + fy * 0.14);
-          const b = pt(0.5 + px * 0.28 + fx * 0.14, 0.5 + py * 0.28 + fy * 0.14);
-          strokeLine(ctx, a, b, `rgba(248,254,255,${sa.toFixed(3)})`, 1.05);
-        }
-      }
-    }
-
-    // 6. 动态岸边水花/浪边（所有邻接陆地的边沿均带对应水体节奏的柔白浪线）
-    if (meta.shoreMask) {
-      const paintShoreFoam = (bit: number, a0: [number, number], b0: [number, number], inU: number, inV: number): void => {
-        if (!(meta.shoreMask & bit)) return;
-        const shorePhase = (x * 0.9 + y * 1.1) + bit * 0.4;
-        const wave = meta.kind === 'sea'
-          ? 0.5 + 0.5 * Math.sin(timeSec * 2.15 - shorePhase * 0.6)
-          : meta.kind === 'river'
-            ? 0.5 + 0.5 * Math.sin(timeSec * 2.6 + meta.phaseCoord * 2.4)
-            : 0.5 + 0.5 * Math.sin(timeSec * 1.3 + shorePhase * 0.5);
-        const offset = meta.kind === 'sea'
-          ? 0.04 + wave * 0.075
-          : meta.kind === 'river'
-            ? 0.042 + wave * 0.022
-            : 0.04 + wave * 0.032;
-        const p1 = pt(a0[0] + inU * offset, a0[1] + inV * offset);
-        const p2 = pt(b0[0] + inU * offset, b0[1] + inV * offset);
-        const foamAlpha = meta.kind === 'sea'
-          ? 0.48 + wave * 0.36
-          : meta.kind === 'river'
-            ? 0.42 + wave * 0.22
-            : 0.34 + wave * 0.20;
-        strokeLine(ctx, p1, p2, `rgba(246,253,253,${foamAlpha.toFixed(3)})`, meta.kind === 'sea' ? 1.55 : 1.15);
-
-        // 海域独有：双层退潮白沫余韵
-        if (meta.kind === 'sea') {
-          const offset2 = offset + 0.075;
-          const q1 = pt(a0[0] + inU * offset2, a0[1] + inV * offset2);
-          const q2 = pt(b0[0] + inU * offset2, b0[1] + inV * offset2);
-          strokeLine(ctx, q1, q2, `rgba(229,246,252,${(0.32 * (1 - wave * 0.4)).toFixed(3)})`, 0.95);
-        }
-      };
-      paintShoreFoam(1, [0.05, 0], [0.95, 0], 0, 1);
-      paintShoreFoam(2, [1, 0.05], [1, 0.95], -1, 0);
-      paintShoreFoam(4, [0.05, 1], [0.95, 1], 0, -1);
-      paintShoreFoam(8, [0, 0.05], [0, 0.95], 1, 0);
+      polygon(ctx, [pt(0, 0), pt(1, 0), pt(1, 0.24), pt(0, 0.24)], 'rgba(35,69,91,0.09)');
+      polygon(ctx, [pt(0, 0), pt(1, 0), pt(1, 0.11), pt(0, 0.11)], 'rgba(35,69,91,0.12)');
     }
 
     ctx.restore();
+  }
 
-    // 7. 极淡战术格线 + 深浅水体等深分界线（保持战棋可读性）
+  /**
+   * 整片水体连续光影与流动动画（参照《陷阵之志》《筑梦颂》《三角战略》等主流作品处理方式）：
+   * 将连通水体合为单一裁切轮廓，统一绘制跨格连续的柔和光晕、顺滑流带与克制高光，
+   * 彻底告别“每格一条硬白线”的碎裂感：
+   * - 河（river）：沿平滑连续流线缓缓流淌的柔光水带 + 稀疏细柔丝光；
+   * - 湖（lake）：大面积镜面天光柔晕 + 轻盈舒缓的完整同心椭圆微涟漪；
+   * - 海（sea）：跨整片海域连续起伏的柔和涌浪明暗带 + 疏朗柔美浪脊 + 羽化拍岸潮汐。
+   */
+  function paintWaterBodyFlow(ctx: CanvasRenderingContext2D, body: WaterBodyInfo, timeSec: number): void {
+    if (body.cells.length === 0) return;
+    const elevation = WATER_SURFACE;
+
+    ctx.save();
+    // 构建整片连通水体的统一裁切轮廓（零格间截断）
+    ctx.beginPath();
+    for (const c of body.cells) {
+      const top = rhombus(c.x, c.y, 1, elevation);
+      ctx.moveTo(...top[0]!);
+      ctx.lineTo(...top[1]!);
+      ctx.lineTo(...top[2]!);
+      ctx.lineTo(...top[3]!);
+      ctx.closePath();
+    }
+    ctx.clip();
+
+    const traceSmoothPolyline = (pts: readonly Point[]): void => {
+      if (pts.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(...pts[0]!);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const [x1, y1] = pts[i]!;
+        const [x2, y2] = pts[i + 1]!;
+        ctx.quadraticCurveTo(x1, y1, (x1 + x2) * 0.5, (y1 + y2) * 0.5);
+      }
+      ctx.lineTo(...pts[pts.length - 1]!);
+    };
+
+    if (body.kind === 'river') {
+      // —— 河（River）：连续丝滑水流柔光带 + 稀疏细柔顺流高光 ——
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (let si = 0; si < body.streamlines.length; si++) {
+        const raw = body.streamlines[si]!;
+        const screenPts: Point[] = raw.map(([gx, gy], k) => {
+          // 轻微的慢速横向水波摆动，让流线像活水一样柔顺呼吸
+          const sway = Math.sin(k * 0.55 - timeSec * 1.1 + si * 1.7) * 0.045;
+          return project(gx + sway, gy - sway * 0.6, elevation);
+        });
+
+        // 1. 宽柔水下流道光晕（极低不透明度，柔和勾勒主流走势）
+        traceSmoothPolyline(screenPts);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(222,247,250,0.085)';
+        ctx.lineWidth = 5.2;
+        ctx.stroke();
+
+        // 2. 中宽顺流柔光丝带（长段、长间距、柔透明度，流畅跨格滑行）
+        traceSmoothPolyline(screenPts);
+        ctx.setLineDash([26, 44]);
+        ctx.lineDashOffset = -(timeSec * 14.5 + si * 23);
+        ctx.strokeStyle = 'rgba(234,250,253,0.165)';
+        ctx.lineWidth = 2.4;
+        ctx.stroke();
+
+        // 3. 稀疏纤细日光丝纹（克制点缀，不密集不刺眼）
+        traceSmoothPolyline(screenPts);
+        ctx.setLineDash([11, 76]);
+        ctx.lineDashOffset = -(timeSec * 18.5 + si * 39 + 17);
+        ctx.strokeStyle = 'rgba(248,254,255,0.26)';
+        ctx.lineWidth = 0.9;
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // 浅滩处极柔和的水底焦散微光斑（仅少量格、极软径向渐变）
+      for (const c of body.cells) {
+        if (c.terrain !== 'shallow') continue;
+        const h = tileHash(c.x, c.y, 97);
+        if ((h % 4) !== 0) continue;
+        const pulse = 0.5 + 0.5 * Math.sin(timeSec * 1.6 + (h % 29) * 0.5);
+        const [gx, gy] = project(
+          c.x + 0.5 + c.meta.flowX * Math.sin(timeSec * 0.9 + h) * 0.14,
+          c.y + 0.5 + c.meta.flowY * Math.sin(timeSec * 0.9 + h) * 0.14,
+          elevation,
+        );
+        const r = 8.5 + pulse * 3.0;
+        const grad = ctx.createRadialGradient(gx, gy, 0.5, gx, gy, r);
+        grad.addColorStop(0, `rgba(242,253,251,${(0.11 + pulse * 0.08).toFixed(3)})`);
+        grad.addColorStop(1, 'rgba(242,253,251,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(gx, gy, r, r * 0.58, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (body.kind === 'lake') {
+      // —— 湖（Lake）：镜面天光柔晕 + 舒缓完整的同心椭圆微涟漪 ——
+      const [scx, scy] = project(body.centerX, body.centerY, elevation);
+      const maxR = Math.max(1.8, body.maxRadius);
+
+      // 1. 湖面大尺度天光镜面柔晕（3 处缓慢呼吸的羽化椭圆光池）
+      for (let pi = 0; pi < 3; pi++) {
+        const ang = pi * 2.1 + timeSec * 0.12;
+        const dist = maxR * (pi === 0 ? 0.12 : 0.34);
+        const [px, py] = project(
+          body.centerX + Math.cos(ang) * dist,
+          body.centerY + Math.sin(ang) * dist,
+          elevation,
+        );
+        const breath = 0.5 + 0.5 * Math.sin(timeSec * 0.75 + pi * 2.2);
+        const rad = Math.max(24, maxR * halfWidth * (pi === 0 ? 0.62 : 0.44));
+        const grad = ctx.createRadialGradient(px, py, 2, px, py, rad);
+        grad.addColorStop(0, `rgba(238,250,253,${(0.09 + breath * 0.06).toFixed(3)})`);
+        grad.addColorStop(0.55, `rgba(225,245,250,${(0.04 + breath * 0.03).toFixed(3)})`);
+        grad.addColorStop(1, 'rgba(225,245,250,0)');
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.scale(1, halfHeight / halfWidth);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, rad, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // 2. 完整舒缓的同心椭圆微涟漪（由湖心极慢外扩，渐现渐隐、自然断续）
+      const ringCount = 3;
+      for (let ri = 0; ri < ringCount; ri++) {
+        const rawP = (timeSec * 0.13 + ri / ringCount) % 1;
+        const fade = Math.sin(rawP * Math.PI);
+        if (fade < 0.06) continue;
+        const tileR = 0.45 + rawP * (maxR + 0.8);
+        const rx = tileR * halfWidth * 1.15;
+        const ry = tileR * halfHeight * 1.15;
+
+        // 外围极柔光晕环
+        ctx.beginPath();
+        ctx.ellipse(scx, scy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = `rgba(232,249,253,${(0.07 * fade).toFixed(3)})`;
+        ctx.lineWidth = 3.0;
+        ctx.stroke();
+
+        // 轻盈断续的微风涟漪细弧（打破死板几何靶心感）
+        ctx.beginPath();
+        ctx.ellipse(scx, scy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.setLineDash([18, 30]);
+        ctx.lineDashOffset = ri * 17 + timeSec * 2.2;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = `rgba(246,253,255,${(0.19 * fade).toFixed(3)})`;
+        ctx.lineWidth = 0.85;
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // 3. 零星几道极淡的静湖镜面浮光（远低于单格密度，静谧自然）
+      const glintCount = Math.min(6, Math.max(2, Math.round(body.cells.length / 12)));
+      for (let gi = 0; gi < glintCount; gi++) {
+        const cell = body.cells[(gi * 11 + 3) % body.cells.length]!;
+        const pulse = 0.5 + 0.5 * Math.sin(timeSec * 1.15 + gi * 1.9);
+        if (pulse < 0.25) continue;
+        const [gx, gy] = project(cell.x + 0.5, cell.y + 0.5, elevation);
+        const len = 4.5 + pulse * 4.5;
+        const alpha = (pulse - 0.25) * 0.28;
+        strokeLine(ctx, [gx - len, gy], [gx + len, gy], `rgba(248,254,255,${alpha.toFixed(3)})`, 0.9);
+      }
+    } else {
+      // —— 海（Sea）：整海连续舒缓涌浪波带 + 疏朗柔美浪脊 ——
+      const sx = body.swellX;
+      const sy = body.swellY;
+      const px = -sy;
+      const py = sx;
+      const wavelength = 2.9;
+      const travel = (timeSec * 0.34) % wavelength;
+      const startProj = body.minProj - wavelength + travel;
+      const endProj = body.maxProj + wavelength;
+      const perpStart = body.minPerp - 1.2;
+      const perpEnd = body.maxPerp + 1.2;
+      const perpStep = 0.7;
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      let waveIdx = 0;
+      for (let proj = startProj; proj <= endProj; proj += wavelength, waveIdx++) {
+        const crestPts: Point[] = [];
+        const troughPts: Point[] = [];
+        for (let q = perpStart; q <= perpEnd; q += perpStep) {
+          const undulate = Math.sin(q * 0.62 + timeSec * 0.58 + waveIdx * 0.8) * 0.28;
+          const pCur = proj + undulate;
+          const gx = sx * pCur + px * q;
+          const gy = sy * pCur + py * q;
+          crestPts.push(project(gx, gy, elevation));
+          const pTr = pCur - wavelength * 0.46;
+          troughPts.push(project(sx * pTr + px * q, sy * pTr + py * q, elevation));
+        }
+
+        // 1. 宽幅柔和波谷暗带（无格间断层）
+        traceSmoothPolyline(troughPts);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = 'rgba(24,58,84,0.08)';
+        ctx.lineWidth = 12;
+        ctx.stroke();
+
+        // 2. 宽幅柔和迎光涌浪面（自然羽化的斜向海浪体积感）
+        traceSmoothPolyline(crestPts);
+        ctx.strokeStyle = 'rgba(222,245,253,0.085)';
+        ctx.lineWidth = 13.5;
+        ctx.stroke();
+
+        // 3. 涌浪顶部疏朗柔美的起伏白沫浪脊（非满屏白线，随波自然聚散）
+        const crestGap = 2.9;
+        const lateralShift = ((waveIdx * 1.37) % crestGap);
+        for (let q = perpStart + lateralShift; q <= perpEnd; q += crestGap) {
+          const bloom = Math.sin(q * 0.9 + timeSec * 0.85 + waveIdx * 1.6) ** 2;
+          if (bloom < 0.24) continue;
+          const vis = (bloom - 0.24) / 0.76;
+          const undulate = Math.sin(q * 0.62 + timeSec * 0.58 + waveIdx * 0.8) * 0.28;
+          const pCur = proj + undulate;
+          const halfSpan = 0.55 + vis * 0.35;
+          const pL = project(sx * (pCur - 0.08) + px * (q - halfSpan), sy * (pCur - 0.08) + py * (q - halfSpan), elevation);
+          const pM = project(sx * (pCur + 0.10) + px * q, sy * (pCur + 0.10) + py * q, elevation);
+          const pR = project(sx * (pCur - 0.08) + px * (q + halfSpan), sy * (pCur - 0.08) + py * (q + halfSpan), elevation);
+
+          // 柔光羽化底
+          ctx.beginPath();
+          ctx.moveTo(...pL);
+          ctx.quadraticCurveTo(...pM, ...pR);
+          ctx.strokeStyle = `rgba(228,246,253,${(0.13 * vis).toFixed(3)})`;
+          ctx.lineWidth = 3.0;
+          ctx.stroke();
+
+          // 轻盈浪脊亮丝
+          ctx.beginPath();
+          ctx.moveTo(...pL);
+          ctx.quadraticCurveTo(...pM, ...pR);
+          ctx.strokeStyle = `rgba(247,253,255,${(0.29 * vis).toFixed(3)})`;
+          ctx.lineWidth = 1.05;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // 统一柔和岸边浪晕（在整片水体裁切内绘制，避免硬白条框死每格）
+    ctx.lineCap = 'round';
+    for (const c of body.cells) {
+      if (!c.meta.shoreMask) continue;
+      const pt = (u: number, v: number): Point => project(c.x + u, c.y + v, elevation);
+      const paintShore = (bit: number, a0: [number, number], b0: [number, number], inU: number, inV: number): void => {
+        if (!(c.meta.shoreMask & bit)) return;
+        const shorePhase = c.x * 0.75 + c.y * 0.95 + bit * 0.35;
+        const wave = body.kind === 'sea'
+          ? 0.5 + 0.5 * Math.sin(timeSec * 1.75 - shorePhase * 0.55)
+          : body.kind === 'river'
+            ? 0.5 + 0.5 * Math.sin(timeSec * 1.9 + c.meta.phaseCoord * 2.0)
+            : 0.5 + 0.5 * Math.sin(timeSec * 1.05 + shorePhase * 0.45);
+        const offset = body.kind === 'sea'
+          ? 0.045 + wave * 0.07
+          : body.kind === 'river'
+            ? 0.045 + wave * 0.018
+            : 0.042 + wave * 0.025;
+        const p1 = pt(a0[0] + inU * offset, a0[1] + inV * offset);
+        const p2 = pt(b0[0] + inU * offset, b0[1] + inV * offset);
+
+        // 外层柔和浅水浪晕（自然晕开，消除锐利贴纸边）
+        const washAlpha = body.kind === 'sea' ? 0.11 + wave * 0.08 : 0.09 + wave * 0.04;
+        strokeLine(ctx, p1, p2, `rgba(235,250,252,${washAlpha.toFixed(3)})`, body.kind === 'sea' ? 3.4 : 2.6);
+
+        // 内层克制柔白水缘线
+        const rimAlpha = body.kind === 'sea'
+          ? 0.20 + wave * 0.18
+          : body.kind === 'river'
+            ? 0.15 + wave * 0.10
+            : 0.13 + wave * 0.09;
+        strokeLine(ctx, p1, p2, `rgba(247,253,254,${rimAlpha.toFixed(3)})`, body.kind === 'sea' ? 1.05 : 0.85);
+
+        // 海域独有：淡淡的退潮第二层水晕
+        if (body.kind === 'sea') {
+          const offset2 = offset + 0.09;
+          const q1 = pt(a0[0] + inU * offset2, a0[1] + inV * offset2);
+          const q2 = pt(b0[0] + inU * offset2, b0[1] + inV * offset2);
+          strokeLine(ctx, q1, q2, `rgba(230,247,252,${(0.14 * (1 - wave * 0.45)).toFixed(3)})`, 1.4);
+        }
+      };
+      paintShore(1, [0.02, 0], [0.98, 0], 0, 1);
+      paintShore(2, [1, 0.02], [1, 0.98], -1, 0);
+      paintShore(4, [0.02, 1], [0.98, 1], 0, -1);
+      paintShore(8, [0, 0.02], [0, 0.98], 1, 0);
+    }
+
+    ctx.restore();
+  }
+
+  /** 水体表面极淡战术格线与柔和等深分界线 */
+  function paintWaterGridAndContours(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    terrain: Terrain,
+    state: GameState,
+  ): void {
+    const elevation = WATER_SURFACE;
+    const top = rhombus(x, y, 1, elevation);
     ctx.beginPath();
     ctx.moveTo(...top[0]!);
     ctx.lineTo(...top[1]!);
     ctx.lineTo(...top[2]!);
     ctx.lineTo(...top[3]!);
     ctx.closePath();
-    ctx.strokeStyle = terrain === 'deep' ? '#d8eef81c' : '#f2fafb22';
-    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = terrain === 'deep' ? '#d8eef811' : '#f2fafb16';
+    ctx.lineWidth = 0.7;
     ctx.stroke();
 
+    const myDepth = bedDepth[terrain] ?? 4;
     const contour = (a: Point, b: Point, other: Terrain): void => {
       const deepBoundary = terrain === 'deep' || other === 'deep';
-      strokeLine(ctx, a, b, deepBoundary ? '#2f597848' : '#588d9242', 0.95);
+      strokeLine(ctx, a, b, deepBoundary ? '#2f597828' : '#588d9224', 0.85);
     };
     const eastNeighbor = at(state, x + 1, y);
     if (isWaterTerrain(eastNeighbor) && (bedDepth[eastNeighbor!] ?? 0) !== myDepth) {
@@ -1921,7 +2173,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     polygon(ctx, cachedBottom.map(([bx, by]) => [bx + 4, by + 9]), '#62564424');
     polygon(ctx, cachedBottom, '#736953');
 
-    // 2. 动态水体与外沿水柱剖面
+    // 2a. 外沿水柱剖面 + 水体底色、等深过渡坡、浅滩河床与岸壁落影
     for (const cell of waterCells) {
       if (cell.eastEdge) {
         paintWaterCutawayFace(ctx, cell.terrain, cell.x + 1, cell.y, cell.x + 1, cell.y + 1, 'east', cell.dark, timeSec);
@@ -1929,7 +2181,17 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       if (cell.southEdge) {
         paintWaterCutawayFace(ctx, cell.terrain, cell.x, cell.y + 1, cell.x + 1, cell.y + 1, 'south', cell.dark, timeSec);
       }
-      paintWaterArt(ctx, cell.x, cell.y, cell.terrain, paintedState, cell.meta, timeSec);
+      paintWaterBaseTile(ctx, cell.x, cell.y, cell.terrain, paintedState, cell.meta);
+    }
+
+    // 2b. 整片水体连续世界空间光影与流动动画（河/湖/海各自统一裁切、零碎裂感）
+    for (const body of activeWaterBodies) {
+      paintWaterBodyFlow(ctx, body, timeSec);
+    }
+
+    // 2c. 极淡战术格线与柔和等深分界
+    for (const cell of waterCells) {
+      paintWaterGridAndContours(ctx, cell.x, cell.y, cell.terrain, paintedState);
     }
 
     // 3. 一次性合成静态陆地、树冠、山峰、桥梁、城池、单位、迷雾与战术高亮
@@ -1983,6 +2245,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       : state;
     paintedState = terrain;
     const waterField = analyzeWater(terrain);
+    activeWaterBodies = waterField.bodies;
 
     const moves = new Set(ui?.reach);
     const places = new Set(ui?.placeable);
@@ -2063,7 +2326,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
           } else {
             if (eastEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x + 1, y, x + 1, y + 1, 'east', dark, nowSec);
             if (southEdge) paintWaterCutawayFace(targetCtx, cellTerrain, x, y + 1, x + 1, y + 1, 'south', dark, nowSec);
-            paintWaterArt(targetCtx, x, y, cellTerrain, terrain, meta, nowSec);
+            paintWaterBaseTile(targetCtx, x, y, cellTerrain, terrain, meta);
+            paintWaterGridAndContours(targetCtx, x, y, cellTerrain, terrain);
             if (dark) polygon(targetCtx, top, '#17232b47');
           }
         } else {
