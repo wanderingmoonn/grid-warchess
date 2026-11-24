@@ -10,7 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats, reachableTiles } from '../rules.ts';
+import { attackableTargets, effectiveStats, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -899,6 +899,42 @@ function planMarch(
        * 窄道**整队交给打分层**（`stepToward`）：桥面一次过一个人，
        * 排队的事它本来就比自己再实现一遍做得好（S-005 的过河数就是这么保住的）。
        */
+      continue;
+    }
+
+    /*
+     * **这一手能打到人，就不排阵型了。**
+     *
+     * 队形是为了"走路时不被各个击破"；一旦能开火，按阵位走反而会错过攻击位
+     * （前排被要求站到方块里，而它本来站的地方就能打到人）。
+     * `threatTiles` 给的是"这个兵这一手能打到的所有格"（可达格 + 每个落点的射程），
+     * 所以拿它跟敌人位置一比，就是"移动之后能不能打到"。
+     */
+    const engaged = units.some((u) => {
+      const t = threatTiles(s, u);
+      return world.foeCombat.some((f) => t.has(f.y * s.w + f.x));
+    });
+    if (engaged) {
+      /* 接敌：各自找最靠近敌人的位置，不排阵型 */
+      const usedF = new Set<number>();
+      for (const u of [...pending].sort((a, b) => axisOf(a) - axisOf(b) || (a.id < b.id ? -1 : 1))) {
+        const here = toBase[u.y * s.w + u.x] ?? Infinity;
+        let best: number | null = null;
+        let bestD = here;
+        for (const [k] of reachableTiles(s, u)) {
+          if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
+          if (usedF.has(k)) continue;
+          const d = toBase[k] ?? Infinity;
+          if (d < bestD) {
+            bestD = d;
+            best = k;
+          }
+        }
+        if (best === null) continue;
+        out[u.id] = { x: best % s.w, y: Math.floor(best / s.w) };
+        usedF.add(best);
+        order.push(u.id);
+      }
       continue;
     }
 
