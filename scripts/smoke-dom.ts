@@ -698,7 +698,7 @@ check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要�
    * 父元素的 padding box，而 `border-right/bottom` 在它外面。于是格心被灰盖暗了、
    * 那 1px 边线还留着地形原色（只叠了 4.5% 黑）——一暗一亮挨着，边线就成了亮线。
    *
-   * 修法：把 `.out` / `.remembered` 的边框也刷成同一个半透明灰。边框画在地形色之上，
+   * 修法：把 `.out` / `.remembered` 的边框刷成盖层用的半透明色。边框画在地形色之上，
    * 混出来的值和格心一致，网格自然消失。这条用例把"别只压 background"钉住。
    */
   const css = readFileSync('src/style.css', 'utf8');
@@ -717,14 +717,14 @@ check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要�
       .join(' ')
       .replace(/ +/g, ' ');
   assert.ok(
-    flat(outTile).includes('border-color: rgba(74, 70, 62, 0.52)'),
-    '边框色必须和盖层同一个灰，否则边框会亮成一张网格',
+    flat(outTile).includes('border-color: var(--fog-shade);'),
+    '边框色和盖层色应来自同一个变量',
   );
 
   const outAfter = ruleOf('.board.fog .tile.out::after');
   assert.ok(
-    flat(outAfter).includes('background: rgba(74, 70, 62, 0.52)'),
-    '盖层底色被改掉了',
+    flat(outAfter).includes('background: var(--fog-shade);'),
+    '盖层色和边框色应来自同一个变量',
   );
   assert.ok(
     flat(outAfter).includes('animation: none'),
@@ -732,7 +732,9 @@ check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要�
   );
 
   const memTile = ruleOf('.board.blackout .tile.remembered {');
-  assert.ok(/border-color:/.test(memTile), '记忆里的格子同样要压边框，否则记忆区也是一张亮线网格');
+  const memAfter = ruleOf('.board.blackout .tile.remembered::after');
+  assert.ok(flat(memTile).includes('border-color: var(--fog-memory-shade);'));
+  assert.ok(flat(memAfter).includes('background: var(--fog-memory-shade);'));
 
   // 老规矩：修法不能退回逐格 filter（那条路会把 64×64 的标签页压垮）
   assert.ok(
@@ -3205,6 +3207,33 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
 
   click('[data-ai="0"]');
   assert.equal(net(), null, '切回热座应该收起来');
+});
+
+check('斜俯视棋盘：没有 canvas 的环境里安静退化，不炸也不留半个画布', () => {
+  /*
+   * 2026-11-23。斜俯视是 canvas 渲染，而 jsdom 没有 CanvasRenderingContext2D。
+   * 这条守的是**降级**，不是渲染：
+   *   · 页面照常起来，DOM 棋盘还在（`.tile` 有货）；
+   *   · 不生成 `.angled-board` 画布，也不把 `has-angled-view` 挂到 .board 上；
+   *   · 视角按钮不出现（canUseAngledBoard 为假）。
+   * 真渲染由 `scripts/ui-shot.ts angled` 拍图验证——jsdom 里验不了"看得见"。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261123, {});
+  const w = bootWith(st, '?loadSave=1&view=angled');
+  const d = w.document;
+  try {
+    assert.ok(d.querySelectorAll('.tile').length > 0, 'DOM 棋盘照常渲染');
+    assert.equal(d.querySelector('.angled-board'), null, '没有 canvas 就不该造画布');
+    assert.equal(
+      d.querySelector('.board')?.classList.contains('has-angled-view'),
+      false,
+      '不该挂 has-angled-view',
+    );
+    const toggle = d.querySelector<HTMLElement>('[data-act="board-angle"]');
+    assert.ok(!toggle || toggle.hidden, '没有 canvas 时视角按钮要么不存在、要么是隐藏的');
+  } finally {
+    w.close();
+  }
 });
 
 check('AI 内核：高级档位就是 v3，不再有单独的「实验 AI」按钮', () => {

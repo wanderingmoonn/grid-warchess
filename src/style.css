@@ -569,6 +569,34 @@ body {
   user-select: none;
 }
 
+.board-scroll.orbiting,
+.board-scroll.orbiting .angled-board {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.angle-hud {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 55;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: rgba(24, 34, 42, 0.88);
+  color: #f6f8fa;
+  font-size: var(--fs-sm);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+}
+
+.angle-hud[hidden] {
+  display: none;
+}
+
 /* ---------- 缩放条 ---------- */
 /* 钉在**窗口**右下角，不参与棋盘布局，所以地图怎么滚它都不动。
    窄屏（含预览面板）里 .main 是整条竖向滚动，钉在棋盘栏里会被滚出视野——
@@ -580,7 +608,7 @@ body {
   display: flex;
   gap: 4px;
   z-index: 60;
-  opacity: 0.72;
+  opacity: 0.9;
   transition: opacity 0.15s ease;
   /*
    * 容器本身不接点击，只有按钮接（和 `.force-flag` 同一条规矩）。
@@ -604,6 +632,58 @@ body {
 .zoom-bar:hover,
 .zoom-bar:focus-within {
   opacity: 1;
+}
+
+.angle-view-toggle[hidden],
+.angle-reset-btn[hidden] {
+  display: none;
+}
+
+.angle-view-toggle {
+  font-weight: 600;
+}
+
+.angle-view-toggle[aria-pressed='true'] {
+  background: #1d4e6e;
+  border-color: #143952;
+  color: #f8fbff;
+}
+
+.angle-view-toggle[aria-pressed='true']:hover {
+  background: #245f85;
+  border-color: #143952;
+  color: #ffffff;
+}
+
+.board.has-angled-view {
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.board.has-angled-view > :not(.angled-board, .combat-cues) {
+  display: none;
+}
+
+.angled-board {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.angled-board[hidden] {
+  display: none;
+}
+
+.board.has-angled-view .combat-cues {
+  inset: 0;
+  display: block;
+}
+
+.board.has-angled-view .combat-cue {
+  position: absolute;
 }
 
 .zoom-btn {
@@ -1928,6 +2008,22 @@ html[data-terrain='on'][data-ui-layout='refined'] .tile.t-hill[data-er='1'] {
   --hill-shade-r: rgba(103, 77, 47, 0.17);
 }
 
+/* 相邻丘陵共用一张地形图。画在格子背景里，邻山的投影仍能落到坡顶。 */
+html[data-terrain='on'][data-ui-layout='refined'] .tiles.has-hill-relief .tile.t-hill {
+  background-color: #cfbb8c;
+  /* 这张地形图含坡脚色块，基础迷雾的前景盖层会统一压暗它。 */
+  background-image: var(--hill-relief) !important;
+  background-repeat: no-repeat;
+  background-size: calc(var(--cols) * var(--texture-width)) calc(var(--rows) * var(--texture-height));
+  background-position:
+    calc(var(--x, 0) * var(--texture-width) * -1)
+    calc(var(--y, 0) * var(--texture-height) * -1);
+}
+
+html[data-terrain='on'][data-ui-layout='refined'] .tiles.has-hill-relief .tile.t-hill::before {
+  display: none;
+}
+
 /*
  * 高山：同一套 `--e-*`，但**重一档**。
  *
@@ -2938,8 +3034,8 @@ html[data-terrain='on'] .tile.t-mountain {
  * 必然要放大滚动（`.board-scroll.zoomed` 开 overflow）和每帧整盘重绘，
  * 显存与合成器队列就顶穿了——表现是标签页直接崩掉，而不是变卡。
  *
- * 换成"盖一层半透明灰"：`::after` 本来就是高亮层，纯色填充只走绘制、
- * 不进合成器。混的是灰不是黑，所以除了变暗，颜色也被冲淡，观感接近原样。
+ * `::after` 叠一层半透明色。新版用较淡的冷色阴影，压暗视野外的地形，
+ * 同时保留草地、树林和水面的色差。保留纯色填充，避免逐格创建滤镜层。
  */
 /*
  * 雾里"格子边框发亮"的根因（2026-11-04）。
@@ -2951,16 +3047,26 @@ html[data-terrain='on'] .tile.t-mountain {
  * 一暗一亮挨在一起，整张雾区就变成"一张亮线织的网格"，格子越小越刺眼
  * （64×64 上是 4096 条边，看着像满屏白格）。
  *
- * 修法：把边框也刷成同一个半透明灰。边框是画在地形色**之上**的，
+ * 修法：把边框也刷成同一个半透明色。边框是画在地形色**之上**的，
  * 混出来的值和格心完全一致，网格自然消失——不用动布局、不用加元素，
  * 也没有 filter（上面那条"逐格 filter 把标签页压垮"的教训不能踩回去）。
  */
+.board.fog {
+  --fog-shade: rgba(74, 70, 62, 0.52);
+  --fog-memory-shade: rgba(70, 66, 60, 0.56);
+}
+
+html[data-ui-layout='refined'] .board.fog {
+  --fog-shade: rgba(23, 35, 43, 0.28);
+  --fog-memory-shade: rgba(23, 35, 43, 0.42);
+}
+
 .board.fog .tile.out {
-  border-color: rgba(74, 70, 62, 0.52);
+  border-color: var(--fog-shade);
 }
 
 .board.fog .tile.out::after {
-  background: rgba(74, 70, 62, 0.52);
+  background: var(--fog-shade);
   /*
    * 另外把 `.tile.placeable` 那条**无限动画**按掉：CSS 里动画的优先级高于任何
    * 普通声明，place-pulse 的琥珀色背景会把迷雾灰整个盖掉——表现为"雾里有一格
@@ -2982,11 +3088,11 @@ html[data-terrain='on'] .tile.t-mountain {
    两条规则权重一样，靠顺序压过。 */
 .board.blackout .tile.remembered {
   /* 同 `.out`：边框必须和格心一起压暗，否则记忆区也是一张亮线网格 */
-  border-color: rgba(70, 66, 60, 0.56);
+  border-color: var(--fog-memory-shade);
 }
 
 .board.blackout .tile.remembered::after {
-  background: rgba(70, 66, 60, 0.56);
+  background: var(--fog-memory-shade);
   animation: none;
 }
 .board.blackout .tile.unknown.reach,
@@ -11376,9 +11482,9 @@ a.btn {
     font-size: var(--fs-body);
   }
 
-  /* 给左边那组缩放按钮让位：底栏本身还是整条，只是主按钮不再从最左边开始 */
+  /* 给左边那组缩放与视角按钮让位：底栏本身还是整条，只是主按钮不再从最左边开始 */
   .footer-main {
-    padding-left: 132px;
+    padding-left: 236px;
   }
 
   .chat-dock {

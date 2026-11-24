@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN" data-ui-layout="refined" data-terrain="on">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>时代与回旋镖 · 棋盘视角对比</title>
+    <link rel="stylesheet" href="../../src/style.css" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="angle-preview" data-view="compare">
+      <header class="angle-header">
+        <div>
+          <p>时代与回旋镖</p>
+          <h1>棋盘视角对比</h1>
+        </div>
+        <div class="angle-toolbar">
+          <div class="angle-controls" role="group" aria-label="演示场景">
+            <button type="button" data-scene="elevation" aria-pressed="false">高差地形</button>
+            <button type="button" data-scene="damage2" aria-pressed="false">六至八受损</button>
+            <button type="button" data-scene="damage" aria-pressed="false">一至五受损</button>
+            <button type="button" data-scene="future" aria-pressed="false">六至八代</button>
+            <button type="button" data-scene="cities" aria-pressed="false">八时代城</button>
+            <button type="button" data-scene="all" aria-pressed="true">河·湖·海</button>
+            <button type="button" data-scene="river" aria-pressed="false">河流</button>
+            <button type="button" data-scene="lake" aria-pressed="false">湖泊</button>
+            <button type="button" data-scene="sea" aria-pressed="false">海域</button>
+          </div>
+          <div class="angle-controls" role="group" aria-label="显示视角">
+            <button type="button" data-angle="compare" aria-pressed="true">对照</button>
+            <button type="button" data-angle="flat" aria-pressed="false">正俯视</button>
+            <button type="button" data-angle="tilted" aria-pressed="false">斜俯视</button>
+          </div>
+        </div>
+      </header>
+      <div class="angle-panels">
+        <figure id="flat-panel">
+          <figcaption>正俯视 <span data-map-size></span></figcaption>
+          <div class="angle-scene flat-scene" role="img" aria-label="平原、丘陵、高山、浅流、水域、深水和两方城池的正俯视图">
+            <div id="flat-board" class="board"></div>
+          </div>
+        </figure>
+        <figure id="tilted-panel">
+          <figcaption>斜俯视 <span data-map-size></span></figcaption>
+          <div class="angle-scene tilted-scene">
+            <canvas id="tilted-board" role="img" aria-label="同一张地图的斜俯视图，丘陵、山体、城墙高度与河湖海动态水体清晰可见"></canvas>
+          </div>
+        </figure>
+      </div>
+      <ul class="angle-legend" aria-label="地形图例">
+        <li><i style="--swatch:#dce4c7"></i>平原</li>
+        <li><i style="--swatch:#86a866"></i>森林</li>
+        <li><i style="--swatch:#d6c08f"></i>丘陵</li>
+        <li><i style="--swatch:#ddd9c5"></i>台地</li>
+        <li><i style="--swatch:#9aa7b5"></i>高山</li>
+        <li><i style="--swatch:#bfcca4"></i>谷地</li>
+        <li><i style="--swatch:#9aa884"></i>沼泽</li>
+        <li><i style="--swatch:#abd3c8"></i>浅流</li>
+        <li><i style="--swatch:#8cb9d0"></i>水域</li>
+        <li><i style="--swatch:#4f7fa1"></i>深水</li>
+      </ul>
+    </main>
+    <script type="module" src="../../src/prototypes/board-angle.ts"></script>
+  </body>
+</html>

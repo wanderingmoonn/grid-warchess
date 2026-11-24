@@ -40,6 +40,8 @@ import { costLabel, resourceShort } from '../core/resources.ts';
 import type { ResourceCost } from '../core/resources.ts';
 import { heatStep } from '../core/heat.ts';
 import { unitArtUrl } from './unit-art.ts';
+import { hillRelief } from './hill-relief.ts';
+import { createAngledBoard, type AngledCamera } from './angled-board.ts';
 import { uiTerrainOn } from './terrain-art.ts';
 import { unitInsignia, unitRole } from './unit-insignia.ts';
 
@@ -276,6 +278,7 @@ interface TileLayer {
   cls: string[];
   /** 上一次写的角标 HTML（'' ＝ 没有角标） */
   badge: string[];
+  hillMask?: string;
 }
 
 const tileLayers = new WeakMap<HTMLElement, TileLayer>();
@@ -727,6 +730,21 @@ export function renderBoard(
       badge: new Array(nodes.length).fill(''),
     };
     tileLayers.set(tilesEl, layer);
+  }
+
+  const { terrain, uiLayout } = el.ownerDocument.documentElement.dataset;
+  if (terrain === 'on' && uiLayout !== 'classic') {
+    const hillMask = dispTerrain.map((kind) => {
+      if (kind === 'hill') return '1';
+      return kind === 'mountain' || kind === 'plateau' ? '2' : '0';
+    }).join('');
+    if (layer.hillMask !== hillMask) {
+      const relief = hillRelief(el.ownerDocument, s.w, s.h, hillMask);
+      layer.hillMask = hillMask;
+      tilesEl.classList.toggle('has-hill-relief', Boolean(relief));
+      if (relief) setVar(tilesEl, '--hill-relief', relief);
+      else tilesEl.style.removeProperty('--hill-relief');
+    }
   }
 
   for (let y = 0; y < s.h; y++) {
@@ -1438,6 +1456,74 @@ function ghostItem(
   };
 }
 
+const angledBoards = new WeakMap<HTMLElement, ReturnType<typeof createAngledBoard>>();
+
+export function syncAngledBoard(
+  board: HTMLElement,
+  view: PlayerView,
+  ui: BoardUi,
+  enabled: boolean,
+  camera?: AngledCamera,
+): void {
+  let canvas = board.querySelector<HTMLCanvasElement>('.angled-board');
+  let renderer = angledBoards.get(board);
+  if (enabled && !canvas) {
+    canvas = board.ownerDocument.createElement('canvas');
+    canvas.className = 'angled-board';
+    canvas.setAttribute('aria-label', '斜俯视棋盘');
+    renderer = createAngledBoard(canvas, board.ownerDocument.baseURI);
+    if (renderer) {
+      angledBoards.set(board, renderer);
+      board.appendChild(canvas);
+    }
+  }
+  const active = enabled && Boolean(renderer);
+  board.classList.toggle('has-angled-view', active);
+  if (canvas) canvas.hidden = !active;
+  if (!active) {
+    renderer?.setHover(null);
+    return;
+  }
+  if (renderer && camera) {
+    const cur = renderer.getCamera();
+    if (Math.abs(cur.yaw - camera.yaw) >= 0.0005 || Math.abs(cur.tilt - camera.tilt) >= 0.0005) {
+      renderer.setCamera(camera);
+    }
+  }
+  renderer?.draw(view, ui);
+}
+
+export function angledBoardCamera(board: HTMLElement): AngledCamera | null {
+  return angledBoards.get(board)?.getCamera() ?? null;
+}
+
+export function setAngledBoardCamera(
+  board: HTMLElement,
+  camera: Partial<AngledCamera>,
+): AngledCamera | null {
+  return angledBoards.get(board)?.setCamera(camera) ?? null;
+}
+
+export function resetAngledBoardCamera(board: HTMLElement): AngledCamera | null {
+  return angledBoards.get(board)?.resetCamera() ?? null;
+}
+
+export function isDefaultAngledCamera(board: HTMLElement): boolean {
+  return angledBoards.get(board)?.isDefaultCamera() ?? true;
+}
+
+export function setAngledBoardHover(
+  board: HTMLElement,
+  cell: { x: number; y: number } | null,
+): void {
+  if (!board.classList.contains('has-angled-view')) return;
+  angledBoards.get(board)?.setHover(cell);
+}
+
+export function angledBoardMarker(board: HTMLElement, x: number, y: number, span = 1, lift = 0) {
+  if (board.classList.contains('has-angled-view')) return angledBoards.get(board)?.marker(x, y, span, lift);
+}
+
 /** 从事件目标反推棋盘坐标 */
 export function coordsFromEvent(e: Event): { x: number; y: number } | null {
   const target = e.target as HTMLElement | null;
@@ -1490,6 +1576,7 @@ export function cellAtPoint(
   clientX: number,
   clientY: number,
 ): { x: number; y: number } | null {
+  if (board.classList.contains('has-angled-view')) return angledBoards.get(board)?.pick(clientX, clientY) ?? null;
   const tiles = board.querySelector<HTMLElement>('.tiles');
   if (!tiles) return null;
 
