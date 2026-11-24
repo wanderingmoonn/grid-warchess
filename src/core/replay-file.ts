@@ -50,6 +50,8 @@ export interface ReplayReport {
   actionsDropped?: number;
   config?: MatchConfig;
   fog?: boolean;
+  /** 手摆局面的开局快照：有它就不靠 config+seed 重建（见 buildReplay） */
+  initial?: unknown;
 }
 
 export interface ReplayMeta {
@@ -188,10 +190,23 @@ export function buildReplay(report: ReplayReport): ReplayBuild {
   const { config, exact, warns } = configOf(report);
 
   let initial: GameState;
-  try {
-    initial = createMatch(config, report.seed as number);
-  } catch (err) {
-    return { ok: false, reason: `按这份参数开不出局（${(err as Error).message}）。可能是自定义兵种或选卡模式的对局。` };
+  /*
+   * 局面自带的**开局快照**优先。
+   *
+   * 为什么需要：回放原来是"config + seed 重开一局"，这对种子里生成的普通对局没问题，
+   * 但**手摆的局面**（题库、关卡）根本开不出来——同一套参数重建出来是另一张图，
+   * 于是第 1 步就"走不下去"。S-013 的 v4 回放就是这么坏的（2026-11-24）。
+   *
+   * 带 `initial` 时直接从那一步开始走，`config` 只用来显示和兜底。
+   */
+  if (report.initial) {
+    initial = report.initial as GameState;
+  } else {
+    try {
+      initial = createMatch(config, report.seed as number);
+    } catch (err) {
+      return { ok: false, reason: `按这份参数开不出局（${(err as Error).message}）。可能是自定义兵种或选卡模式的对局。` };
+    }
   }
   if (report.board?.w && initial.w !== report.board.w) {
     warns.push(`报告里是 ${report.board.w}×${report.board.h}，重建出来是 ${initial.w}×${initial.h}——参数和当时不完全一样。`);

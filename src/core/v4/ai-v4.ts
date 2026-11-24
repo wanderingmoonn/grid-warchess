@@ -80,6 +80,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
   const con = constrain(view, world, decision, mem);
   writeMemory(s, me, { decision: { ...decision, since: s.turn }, squad: squadMemo(con, mem, s.turn) });
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
+  logSquads(s, world.me, decision, con);
   return cache;
 }
 
@@ -218,3 +219,34 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
 
 /** `AI_MAX_STEPS` 在这个文件里只是给探针看的常量，别在这里循环 */
 export const V4_MAX_STEPS = AI_MAX_STEPS;
+
+/**
+ * 把这一手的编队写进 `s.aiSquads`（复盘用）。
+ *
+ * 和 v3 一个路子：**只在结论变化时记**，否则 60 手的回放会塞满重复帧。
+ * 字段尽量复用 `AiSquadReport` 的语义（count/lead/spread/note），
+ * v4 特有的 `want` / `focusId` / `lanes` 顺手带上——复盘面板不认也不会坏。
+ */
+function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints): void {
+  const reps = con.squads.map((q) => ({
+    id: q.id,
+    state: q.order,
+    count: q.unitIds.length,
+    lead: q.eta ?? 0,
+    spread: 0,
+    stalled: 0,
+    lost: 0,
+    note: (q.order === 'assemble' ? 'blocked' : 'advance') as 'advance' | 'blocked',
+    want: q.want ?? 0,
+    focusId: q.focusId ?? null,
+    lanes: q.lanes?.length ?? 0,
+  }));
+  if (reps.length === 0) return;
+  const sig = reps.map((x) => `${x.id}:${x.state}:${x.count}`).join('|');
+  const log = (s.aiSquads ??= []);
+  const last = [...log].reverse().find((x) => x.me === me);
+  const lastSig = last ? last.squads.map((x) => `${x.id}:${x.state}:${x.count}`).join('|') : '';
+  if (sig === lastSig) return;
+  log.push({ turn: s.turn, me, cityId: decision.cityId ?? null, squads: reps, kind: decision.kind } as never);
+  if (log.length > 200) log.splice(0, log.length - 200);
+}

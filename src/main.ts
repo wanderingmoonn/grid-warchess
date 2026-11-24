@@ -2097,14 +2097,26 @@ function renderAiHud(): void {
       const ratio = call.myPower / Math.max(1, call.foePower);
       lines.push(`决战 ${call.call === 'attack' ? '打' : '发展'} · 投影比 ${ratio.toFixed(2)} · 行军 ${call.marchTurns}`);
     }
+    /* v4 把决定类型也记在队长上（`kind`），有就显示——它的三层链路口径和 v3 不同 */
+    const kindOfTurn = (squad as { kind?: string } | undefined)?.kind;
+    if (kindOfTurn) lines.push(`决定 ${kindOfTurn}${squad?.cityId ? ` · ${squad.cityId}` : ''}`);
     for (const sq of squad?.squads ?? []) {
-      const stateName = sq.state === 'forming' ? '组' : '走';
+      /* v4 的 `assemble`（集结）等价于 v3 的 `forming`（组队） */
+      const stateName = sq.state === 'forming' || (sq.state as string) === 'assemble' ? '组' : '走';
       /*
        * 标出编队类型：之前只显示 id（`atk-3`），建造编队 `build-120` 会被当成
        * 另一种 atk；用户 2026-11-22 要求"不同种类的编队都要能看到"。
        */
       const kind = sq.role === 'build' ? '建造' : sq.role === 'defend' ? '防守' : '进攻';
-      lines.push(`编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}`);
+      /* v4 多带的三样：要几个人、打谁、分几路（v3 的日志没有，读不到就不显示） */
+      const extra: string[] = [];
+      const q = sq as unknown as { want?: number; focusId?: string | null; lanes?: number };
+      if (typeof q.want === 'number' && q.want > 0) extra.push(`要${q.want}人`);
+      if (q.focusId) extra.push(`集火${q.focusId}`);
+      if (typeof q.lanes === 'number' && q.lanes > 1) extra.push(`${q.lanes}路`);
+      lines.push(
+        `编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}${extra.length > 0 ? ` · ${extra.join(' ')}` : ''}`,
+      );
     }
   }
   el.textContent = lines.length > 1 ? lines.join('\n') : `AI 想法 · t=${t}\n（这一帧没有 AI 记录）`;
