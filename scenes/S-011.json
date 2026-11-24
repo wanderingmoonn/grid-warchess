@@ -1,0 +1,127 @@
+{
+  "id": "S-011",
+  "ask": "敌方一门火炮（射程 5、一炮 47）守着东边的通道，你的 12 个三代兵还在它射程外。15 手之内让至少 6 个战斗单位推进到 (9,6) 附近。这一回合你会怎么做？（最多 3 步）",
+  "size": 12,
+  "startEra": 3,
+  "fog": false,
+  "me": "A",
+  "seed": 111,
+  "gold": {
+    "A": 0,
+    "B": 0
+  },
+  "map": [
+    "............",
+    "............",
+    ".....ff.....",
+    ".....ff.....",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    ".....ff.....",
+    ".....ff.....",
+    "............"
+  ],
+  "cities": [
+    {
+      "owner": "A",
+      "x": 1,
+      "y": 1,
+      "era": 3
+    },
+    {
+      "owner": "B",
+      "x": 10,
+      "y": 10,
+      "era": 3
+    }
+  ],
+  "units": [
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 2,
+      "y": 5
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 3,
+      "y": 5
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 2,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "hussar",
+      "x": 3,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 2,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 2,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "musketeer",
+      "x": 3,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 1,
+      "y": 6
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 1,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 1,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "halberdier",
+      "x": 2,
+      "y": 9
+    },
+    {
+      "owner": "B",
+      "type": "artillery",
+      "x": 8,
+      "y": 6
+    },
+    {
+      "owner": "B",
+      "type": "halberdier",
+      "x": 9,
+      "y": 6
+    }
+  ]
+}
