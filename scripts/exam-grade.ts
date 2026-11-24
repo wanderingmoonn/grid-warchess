@@ -407,6 +407,17 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
       return { ok: c.min === undefined || lostFoe >= c.min, got: `敌损失 ${lostFoe} 个` };
     case 'noCityLost':
       return { ok: st.meCities >= ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
+    /*
+     * 全程不丢城：不只是"最后还在"，而是**任何一帧都没少过**。
+     *
+     * 为什么需要：S-012 里 v4 的城被打成废墟又抢了回来，终点判定是绿的——
+     * 但丢城那一刻等于产兵格和收入一起没了，这在人类对局里是要算账的失误。
+     * 只看终点等于允许"先输后赢"。
+     */
+    case 'neverLostCity': {
+      const low = Math.min(...[...record.values()].map((r) => r.meCities));
+      return { ok: low >= ME_CITIES0, got: `最少时我城 ${low}/${ME_CITIES0}` };
+    }
     case 'capturedCity':
       return { ok: st.meCities > ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
     case 'win': {

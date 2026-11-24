@@ -188,8 +188,17 @@ export function aiNextActionV4(
      * 长局里经济 8 vs 对手 51，前期压着打、后期被拖死。
      */
     const preferEcon = view.decision.kind === 'expand' || world.foeCombat.length === 0;
+    /*
+     * **有需求才造兵**。看不见敌人、又在发展期时，攒钱是对的——
+     * "有钱就造兵"是 v1 的病：S-015（一条没人烟的题）它花 367 金造了 5 个战斗兵，
+     * 只留 45 给经济。人类不会这么干。
+     *
+     * 所以这里不再"造不了经济兵就退回造战斗兵"，而是**干脆不造**。
+     * 攒下的钱会在真要打的时候变成兵（那时 `foeCombat` 非空）。
+     */
+    const needArmy = world.foeCombat.length > 0 || view.decision.kind !== 'expand';
     const rec = preferEcon
-      ? recruitEcon(s, world) ?? recruitAction(s, world, con.need)
+      ? recruitEcon(s, world) ?? (needArmy ? recruitAction(s, world, con.need) : null)
       : recruitAction(s, world, con.need) ?? recruitEcon(s, world);
     if (usable(rec)) {
       view.recruits += 1;
