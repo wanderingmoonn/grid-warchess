@@ -324,7 +324,15 @@ function bestYieldStep(
   const post = con.econPosts?.[u.id];
   if (post) {
     if (u.x === post.x && u.y === post.y) return null; /* 到位了就别动 */
-    const toward = stepToward(s, u, post);
+    /*
+     * 用**真实路径距离**挑下一步，不用直线距离。
+     *
+     * 直线距离会锁死：地图角落的兵，去西边的岗位必须先往南绕一格，
+     * 而那一步"离目标更远"，规则不许走 → 它 9 个回合一动不动（实测长局 u11 在 (19,0)）。
+     * 用一张"从岗位出发的步数图"，绕路的那一步也是"更近"，自然就走出去了。
+     */
+    const field = world.stepsFrom(post);
+    const toward = stepToward(s, u, post, false, field);
     /*
      * **有岗位就只朝岗位走，走不动就等着——不许退回下面那套"本地贪心"。**
      *
@@ -349,7 +357,7 @@ function bestYieldStep(
      * 它被四个牧民夹在 (7,4)，唯一更近的格被占，于是**整局一动不动**。
      * 和 8.11 破"人墙"是同一个道理：同距离的两格，选更正对目标的那一格。
      */
-    return stepAside(s, u, post);
+    return stepAside(s, u, post, field);
   }
 
   /*
@@ -374,8 +382,14 @@ function bestYieldStep(
  * 不这么办的话会死锁——实测 2 号伐木工的岗在城西森林，它被四个牧民夹在中间，
  * 唯一更近的格被占，整局一步没走，第 8 手还在原地产 3。
  */
-function stepAside(s: GameState, u: Unit, to: { x: number; y: number }): { x: number; y: number } | null {
-  const d = (x: number, y: number): number => Math.abs(x - to.x) + Math.abs(y - to.y);
+function stepAside(
+  s: GameState,
+  u: Unit,
+  to: { x: number; y: number },
+  field?: Float64Array,
+): { x: number; y: number } | null {
+  const d = (x: number, y: number): number =>
+    field ? (field[y * s.w + x] ?? Infinity) : Math.abs(x - to.x) + Math.abs(y - to.y);
   const cur = d(u.x, u.y);
   const curE = (u.x - to.x) ** 2 + (u.y - to.y) ** 2;
   let best: { x: number; y: number } | null = null;

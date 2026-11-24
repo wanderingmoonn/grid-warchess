@@ -237,8 +237,21 @@ export function aiNextActionV4(
     }
   }
 
-  /* ④ 走 */
-  for (const u of [...world.myCombat, ...world.myEcon]) {
+  /*
+   * ④ 走。**经济兵按"离自己岗位多近"排队，近的先走。**
+   *
+   * 为什么顺序重要：排成一列时，只有前面的人先挪开，后面的人才看得到"更近的格"。
+   * 按建立顺序走（老兵先动）听着对，但它排序的是"谁老"，不是"谁在前面"——
+   * 前排没动，后排就整手卡死。实测：丘陵上一列牧民，最边上那个 8 手都进不去。
+   *
+   * 每调一次都按**当下**的位置重排（动作一个一个结算，前面的走完，后面的距离就变了）。
+   */
+  const toPost = (u: { id: string; x: number; y: number }): number => {
+    const p = con.econPosts?.[u.id];
+    return p ? Math.abs(p.x - u.x) + Math.abs(p.y - u.y) : 0;
+  };
+  const econOrder = [...world.myEcon].sort((a, b) => toPost(a) - toPost(b));
+  for (const u of [...world.myCombat, ...econOrder]) {
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.moved) continue;
     const a = actFor(s, world, con, live);

@@ -112,8 +112,31 @@ function planYield(
   world: World,
   keepClear: number[],
   squads: Squad[],
+  need: { spawn: boolean; exit: boolean },
 ): Array<{ unitId: string; x: number; y: number }> {
-  if (keepClear.length === 0) return [];
+  /*
+   * **只在"这一手真有人要用这格"时才赶人**（用户 2026-11-24 定）。
+   *
+   * 原来是对 `keepClear` 一刀切：只要站在城圈（城格 + 城墙外一圈）上就赶。
+   * 实测两个毛病：
+   *   ① 这一手根本不造兵、军队也不出城，赶它纯属白费一步；
+   *   ② 被赶的人本来就要往岗位走（方向正好是离开城圈），等于重复下命令，
+   *      而且落点是"最近的空格"——大概率在反方向。一步能干两件事，被拆成两步、而且第二步是错的。
+   *      实测 S-015：伐木工进森林又被甩出来，再走回去。
+   *
+   * 判据换成两类需求：
+   *   · 产兵口 = **城格**（引擎的产兵落点就是 `cityTiles`，外圈不是）；要造兵时只赶城格上的人。
+   *   · 出门通道 = 城圈 + 桥头；有队伍要出去/要过桥时，才赶挡路的。
+   */
+  const cityCells = new Set<number>();
+  for (const c of world.myCities) {
+    const n = c.size ?? 2;
+    for (let dy = 0; dy < n; dy++) for (let dx = 0; dx < n; dx++) cityCells.add((c.y + dy) * s.w + (c.x + dx));
+  }
+  const targets = keepClear.filter(
+    (k) => (need.spawn && cityCells.has(k)) || (need.exit && !cityCells.has(k)),
+  );
+  if (targets.length === 0) return [];
   const N = s.w * s.h;
   const dist = new Int32Array(N).fill(-1);
   const prev = new Int32Array(N).fill(-1);
@@ -166,7 +189,7 @@ function planYield(
   const usedCells = new Set<number>();
   const usedUnits = new Set<string>();
 
-  for (const cell of keepClear) {
+  for (const cell of targets) {
     /* 关键格自己得是被自己人占着的，否则没什么可让 */
     const blocker = s.units.find((u) => u.y * s.w + u.x === cell && u.owner === world.me);
     if (!blocker || usedUnits.has(blocker.id) || passing.has(blocker.id)) continue;
@@ -356,13 +379,33 @@ function planEconPosts(
    * "远的给老的"不损失任何产出，只是把路程摊平。
    */
   const seniority = (u: Unit): number => mem?.econSince?.[u.id] ?? 0;
+  /*
+   * 分组键 = **最近的那座城 + 兵种**。
+   *
+   * 只按兵种分会出事：两座城的经济兵会抢同一批岗，A 城出生的兵被派到 B 城去
+   * （实测长局：两个牧民的岗在 30 格外，走一辈子到不了）。
+   */
+  const nearestCity = (u: Unit): string => {
+    let bestId = world.myCities[0]?.id ?? '';
+    let bestD = Infinity;
+    for (const c of world.myCities) {
+      const d = Math.abs(u.x - c.x) + Math.abs(u.y - c.y);
+      if (d < bestD) {
+        bestD = d;
+        bestId = c.id;
+      }
+    }
+    return bestId;
+  };
   const byType = new Map<string, Unit[]>();
   for (const u of econ) {
-    const arr = byType.get(u.type) ?? [];
+    const key = `${nearestCity(u)}|${u.type}`;
+    const arr = byType.get(key) ?? [];
     arr.push(u);
-    byType.set(u.type, arr);
+    byType.set(key, arr);
   }
-  for (const [type, units] of byType) {
+  for (const [key, units] of byType) {
+    const [cityId, type] = key.split('|') as [string, string];
     /*
      * 单位：出生早的排前面（同一手出生的按 id 排，保证同一个局面每次算出来一样）。
      * 岗位：走得远到近排（`turns` 是"从城走到那儿"，也就是这个岗要花多少路程）。
@@ -376,7 +419,7 @@ function planEconPosts(
      * 走远路只在"要给新兵腾近岗"时才有意义，也就是截断之后才有的事。
      */
     const sortedSpots = usable
-      .filter((p) => p.type === type)
+      .filter((p) => p.type === type && p.cityId === cityId)
       .sort((a, b) => a.turns - b.turns || (a.y * s.w + a.x) - (b.y * s.w + b.x))
       .slice(0, sortedUnits.length)
       .reverse();
@@ -659,13 +702,31 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       : undefined;
 
   const econPlan = planEconPosts(s, world, mem);
+  /*
+   * 这一手"有没有人真要用关键格"——决定要不要赶人（见 `planYield` 顶部）。
+   *
+   * · 产兵口：这城现在买得起至少一个兵（战斗或经济），说明接下来可能要造；
+   *   被压着的城造不出来，不算。
+   * · 出门通道：有队伍**有兵**且任务是出去（收拢/推进/攻城）。空队伍（0 人）不算——
+   *   S-015 那种一条人烟的题里，"main 收拢 0 人"会让城圈一直被赶。
+   */
+  const gold = s.players[world.me]?.gold ?? 0;
+  const spawn = world.cities.some(
+    (info) =>
+      info.role !== 'threatened' &&
+      (world.affordableCombat(info.city, gold).length > 0 || !!econPlan.next),
+  );
+  const exit = squads.some(
+    (q) => q.unitIds.length > 0 && (q.order === 'march' || q.order === 'siege' || q.order === 'assemble'),
+  );
+
   return {
     need,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     keepClear,
     squads,
-    yieldMoves: planYield(s, world, keepClear, squads),
+    yieldMoves: planYield(s, world, keepClear, squads, { spawn, exit }),
     forbid,
   };
 }

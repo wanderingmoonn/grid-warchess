@@ -57,6 +57,8 @@ export interface EconSpot {
   turns: number;
   /** 造价 */
   gold: number;
+  /** 这块地离哪座城近（配岗要按城分组，不然会把 A 城的岗派给 B 城出生的兵） */
+  cityId: string;
 }
 
 export interface World {
@@ -503,6 +505,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
               yield: g,
               turns: Math.ceil(raw / Math.max(1, d.move ?? 2)),
               gold: recruitPriceOf(s, me, d).gold,
+              cityId: city.id,
             };
           }
           if (best) {
