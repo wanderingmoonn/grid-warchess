@@ -2,7 +2,7 @@ import type { FixedMap } from '../core/fixed-maps.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
-export type BoardAngleScene = 'cities' | 'all' | 'river' | 'lake' | 'sea';
+export type BoardAngleScene = 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
 
 const near = (x: number, y: number, cx: number, cy: number, rx: number, ry: number): boolean =>
   ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
@@ -169,7 +169,7 @@ function citiesTerrain(size: 16 | 32, x: number, y: number): string {
 
 export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all'): GameState {
   const cellOf = (x: number, y: number): string => {
-    if (scene === 'cities') return citiesTerrain(size, x, y);
+    if (scene === 'cities' || scene === 'future') return citiesTerrain(size, x, y);
     if (scene === 'river') return size === 16 ? riverTerrain16(x, y) : riverTerrain32(x, y);
     if (scene === 'lake') return lakeTerrain(size, x, y);
     if (scene === 'sea') return seaTerrain(size, x, y);
@@ -177,7 +177,8 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   };
 
   const sceneNames: Record<BoardAngleScene, string> = {
-    cities: '时代一至五城市',
+    future: '时代五至八（现代→未来）',
+    cities: '全八时代城市演进',
     all: '河湖海全览',
     river: '河口高地',
     lake: '青山明湖',
@@ -192,21 +193,29 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     eras16: number[];
     eras32: number[];
   }> = {
+    future: {
+      a16: [{ x: 2, y: 3 }, { x: 8, y: 2 }],
+      b16: [{ x: 3, y: 8 }, { x: 9, y: 8 }],
+      a32: [{ x: 6, y: 6 }, { x: 16, y: 5 }],
+      b32: [{ x: 8, y: 17 }, { x: 19, y: 16 }],
+      eras16: [5, 6, 7, 8],
+      eras32: [5, 6, 7, 8],
+    },
     cities: {
-      a16: [{ x: 2, y: 3 }, { x: 7, y: 2 }, { x: 3, y: 8 }],
-      b16: [{ x: 8, y: 7 }, { x: 10, y: 11 }],
-      a32: [{ x: 6, y: 6 }, { x: 15, y: 5 }, { x: 7, y: 16 }],
-      b32: [{ x: 16, y: 14 }, { x: 21, y: 21 }],
-      eras16: [1, 2, 3, 4, 5],
-      eras32: [1, 2, 3, 4, 5],
+      a16: [{ x: 1, y: 2 }, { x: 5, y: 1 }, { x: 9, y: 1 }, { x: 2, y: 6 }],
+      b16: [{ x: 6, y: 5 }, { x: 10, y: 5 }, { x: 5, y: 9 }, { x: 9, y: 9 }],
+      a32: [{ x: 3, y: 5 }, { x: 10, y: 3 }, { x: 17, y: 3 }, { x: 5, y: 13 }],
+      b32: [{ x: 12, y: 11 }, { x: 19, y: 11 }, { x: 11, y: 19 }, { x: 19, y: 19 }],
+      eras16: [1, 2, 3, 4, 5, 6, 7, 8],
+      eras32: [1, 2, 3, 4, 5, 6, 7, 8],
     },
     all: {
       a16: [{ x: 0, y: 9 }],
       b16: [{ x: 7, y: 8 }],
       a32: [{ x: 2, y: 12 }, { x: 2, y: 23 }],
       b32: [{ x: 14, y: 15 }, { x: 14, y: 10 }],
-      eras16: [2, 4],
-      eras32: [1, 3, 4, 5],
+      eras16: [2, 6],
+      eras32: [1, 4, 6, 8],
     },
     river: {
       a16: [{ x: 3, y: 10 }],
@@ -221,16 +230,16 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
       b16: [{ x: 13, y: 7 }],
       a32: [{ x: 2, y: 15 }],
       b32: [{ x: 28, y: 15 }],
-      eras16: [2, 3],
-      eras32: [2, 3],
+      eras16: [2, 6],
+      eras32: [2, 6],
     },
     sea: {
       a16: [{ x: 3, y: 5 }],
       b16: [{ x: 12, y: 3 }],
       a32: [{ x: 6, y: 10 }],
       b32: [{ x: 24, y: 7 }],
-      eras16: [4, 5],
-      eras32: [4, 5],
+      eras16: [7, 8],
+      eras32: [7, 8],
     },
   };
 
@@ -254,12 +263,15 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   });
 
   const formations: Record<BoardAngleScene, Array<[Unit['owner'], string, number, number]>> = {
-    cities: size === 16 ? [
-      ['A', 'militia', 5, 4], ['A', 'spearman', 6, 8],
-      ['B', 'knight', 11, 8], ['B', 'archer', 8, 11],
+    future: size === 16 ? [
+      ['A', 'spearman', 6, 4], ['B', 'knight', 7, 9],
     ] : [
-      ['A', 'militia', 10, 7], ['A', 'spearman', 11, 17],
-      ['B', 'knight', 20, 15], ['B', 'archer', 18, 22],
+      ['A', 'spearman', 12, 8], ['B', 'knight', 15, 18],
+    ],
+    cities: size === 16 ? [
+      ['A', 'militia', 4, 4], ['B', 'knight', 12, 9],
+    ] : [
+      ['A', 'militia', 8, 8], ['B', 'knight', 24, 18],
     ],
     all: size === 16 ? [
       ['A', 'archer', 1, 7], ['A', 'spearman', 2, 7], ['A', 'militia', 1, 11],

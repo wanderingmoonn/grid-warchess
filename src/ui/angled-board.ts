@@ -2572,6 +2572,346 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     isoBanner(ctx, pt, 0.28, 0.14, 28.4, 5.2, teamCol, lightCol, true);
   }
 
+  /** 斜俯视 3D 流线未来穹顶（珠光圆顶/椭圆穹顶，用于时代八聚变城） */
+  function isoDome(
+    ctx: CanvasRenderingContext2D,
+    pt: CityPt,
+    cu: number,
+    cv: number,
+    ru: number,
+    rv: number,
+    z0: number,
+    domeH: number,
+    litCol: string,
+    midCol: string,
+    shadeCol: string,
+    highlightCol: string,
+    edgeCol = '#7c96a855',
+  ): void {
+    // 分 3 层渐收椭圆环构建圆润流畅的立体穹顶
+    const layers: ReadonlyArray<readonly [number, number, number, number]> = [
+      [1.0, 0.88, 0, domeH * 0.38],
+      [0.88, 0.62, domeH * 0.38, domeH * 0.78],
+      [0.62, 0.24, domeH * 0.78, domeH],
+    ];
+    const segs = 10;
+    for (let li = 0; li < layers.length; li++) {
+      const [rA, rB, zA, zB] = layers[li]!;
+      const pA: Point[] = [];
+      const pB: Point[] = [];
+      for (let i = 0; i < segs; i++) {
+        const ang = (i / segs) * Math.PI * 2;
+        pA.push(pt(cu + Math.cos(ang) * ru * rA, cv + Math.sin(ang) * rv * rA, z0 + zA));
+        pB.push(pt(cu + Math.cos(ang) * ru * rB, cv + Math.sin(ang) * rv * rB, z0 + zB));
+      }
+      // 由背向前的可见面顺序
+      const order = [6, 7, 5, 8, 4, 9, 3, 0, 2, 1];
+      for (const i of order) {
+        const n = (i + 1) % segs;
+        const col = i === 4 || i === 5 || i === 6 ? litCol : i === 3 || i === 7 || i === 2 ? midCol : shadeCol;
+        polygon(ctx, [pB[i]!, pB[n]!, pA[n]!, pA[i]!], col, li === 0 ? edgeCol : undefined, 0.45);
+      }
+      if (li === layers.length - 1) {
+        polygon(ctx, pB, highlightCol);
+      }
+    }
+    // 穹顶西北迎光柔和镜面高光斑
+    const [hx, hy] = pt(cu - ru * 0.22, cv - rv * 0.22, z0 + domeH * 0.82);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, Math.max(2.2, ru * 18), Math.max(1.3, rv * 10), -0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /**
+   * 时代 6 · 信息化时代（Information Age）：
+   * 洁白流线框架 + 透亮晶蓝全玻璃幕墙大厦 + 空中玻璃连廊 + 屋顶深蓝太阳能光伏阵列 + 抛物面卫星锅 + 生态绿树，
+   * 清透高科技的蓝白晶莹质感与时代五哑光灰白水泥形成鲜明代差。
+   */
+  function paintCityInfo(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+    // 1. 洁白生态科技园区广场底座
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 4.2, '#e4ecef', '#8fa2ae', '#b4c4ce', '#566c7a77');
+    polygon(ctx, [pt(0.05, 0.05, 4.25), pt(0.95, 0.05, 4.25), pt(0.95, 0.95, 4.25), pt(0.05, 0.95, 4.25)], '#edf3f6');
+    // 园区科技灰蓝主干道与绿化带
+    polygon(ctx, [pt(0.42, 0.04, 4.3), pt(0.56, 0.04, 4.3), pt(0.56, 0.96, 4.3), pt(0.42, 0.96, 4.3)], '#768c99');
+    polygon(ctx, [pt(0.04, 0.46, 4.3), pt(0.96, 0.46, 4.3), pt(0.96, 0.58, 4.3), pt(0.04, 0.58, 4.3)], '#768c99');
+    // 园区生态绿化圆树（还原 city-info.webp 绿植簇拥的生态科技感）
+    const drawParkTree = (u: number, v: number, r = 3.1): void => {
+      const [tx, ty] = pt(u, v, 4.6);
+      ctx.fillStyle = '#3d633644';
+      ctx.beginPath();
+      ctx.ellipse(tx + 0.8, ty + 1.0, r * 1.05, r * 0.62, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#538249';
+      ctx.beginPath();
+      ctx.arc(tx, ty - r * 0.45, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#7bb268';
+      ctx.beginPath();
+      ctx.arc(tx - r * 0.25, ty - r * 0.65, r * 0.72, 0, Math.PI * 2);
+      ctx.fill();
+    };
+    drawParkTree(0.49, 0.14, 2.8);
+    drawParkTree(0.12, 0.52, 2.7);
+
+    // 2. 西北角斜顶晶蓝玻璃信息中心主大厦（标志性全玻璃斜切顶 + 抛物面卫星锅）
+    const drawGlassTower = (u0: number, v0: number, u1: number, v1: number, z0: number, z1: number, slant = 0): void => {
+      const bNE = pt(u1, v0, z0);
+      const bSE = pt(u1, v1, z0);
+      const bSW = pt(u0, v1, z0);
+      const tNW = pt(u0, v0, z1 + slant);
+      const tNE = pt(u1, v0, z1 + slant * 0.5);
+      const tSE = pt(u1, v1, z1);
+      const tSW = pt(u0, v1, z1 + slant * 0.5);
+      // 透亮青蓝玻璃幕墙立面
+      polygon(ctx, [tNE, tSE, bSE, bNE], '#4c99b2', '#e8f4f8cc', 0.8);
+      polygon(ctx, [tSW, tSE, bSE, bSW], '#72c2d8', '#eef8facc', 0.8);
+      // 玻璃对角高光反射带
+      polygon(ctx, [
+        pt(u0 + (u1 - u0) * 0.12, v1, z0 + (z1 - z0) * 0.78),
+        pt(u0 + (u1 - u0) * 0.48, v1, z0 + (z1 - z0) * 0.92),
+        pt(u0 + (u1 - u0) * 0.78, v1, z0 + (z1 - z0) * 0.26),
+        pt(u0 + (u1 - u0) * 0.42, v1, z0 + (z1 - z0) * 0.14),
+      ], 'rgba(226,251,255,0.34)');
+      // 横向白色结构层间框线
+      const floors = Math.max(2, Math.floor((z1 - z0) / 5.5));
+      for (let f = 1; f < floors; f++) {
+        const zf = z0 + ((z1 - z0) * f) / floors;
+        strokeLine(ctx, pt(u0, v1, zf), pt(u1, v1, zf), '#eaf5f8aa', 0.75);
+        strokeLine(ctx, pt(u1, v0, zf), pt(u1, v1, zf), '#cfe7f099', 0.7);
+      }
+      // 晶蓝玻璃斜天窗屋顶 + 洁白外框
+      polygon(ctx, [tNW, tNE, tSE, tSW], '#a4e6f2', '#f4f9fb', 1.0);
+      strokeLine(ctx, tNW, tSE, 'rgba(255,255,255,0.55)', 0.8);
+    };
+
+    drawGlassTower(0.06, 0.05, 0.39, 0.39, 4.2, 23.5, 4.8);
+    // 屋顶洁白抛物面卫星通讯锅 + 信号尖塔
+    const [dx, dy] = pt(0.22, 0.19, 28.4);
+    strokeLine(ctx, pt(0.22, 0.19, 25.8), [dx, dy], '#7e93a1', 1.3);
+    ctx.fillStyle = '#eff6f9';
+    ctx.strokeStyle = '#5f7e91';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.ellipse(dx, dy - 1.2, 4.6, 2.7, -0.42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    strokeLine(ctx, [dx, dy - 1.2], [dx + 2.4, dy - 4.4], '#537387', 0.9);
+    ctx.fillStyle = '#4ad7f5';
+    ctx.beginPath();
+    ctx.arc(dx + 2.5, dy - 4.5, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 3. 东北侧玻璃采光科技展馆 + 屋顶深蓝太阳能光伏板阵列
+    isoBox(ctx, pt, 0.59, 0.06, 0.94, 0.42, 4.2, 13.8, '#e8f1f5', '#6aaec4', '#8fd2e4', '#eff7fa99');
+    // 斜坡晶蓝采光天窗
+    polygon(ctx, [pt(0.62, 0.09, 13.9), pt(0.91, 0.09, 13.9), pt(0.91, 0.25, 16.0), pt(0.62, 0.25, 16.0)], '#a6e8f4', '#ffffffaa', 0.7);
+    polygon(ctx, [pt(0.62, 0.25, 16.0), pt(0.91, 0.25, 16.0), pt(0.91, 0.39, 13.9), pt(0.62, 0.39, 13.9)], '#6bbcd3', '#ffffff88', 0.7);
+    // 深蓝光伏太阳能板阵列（还原 city-info.webp 特征）
+    for (const pu of [0.64, 0.78]) {
+      polygon(ctx, [
+        pt(pu, 0.27, 15.2),
+        pt(pu + 0.11, 0.27, 15.2),
+        pt(pu + 0.11, 0.37, 14.3),
+        pt(pu, 0.37, 14.3),
+      ], '#2d4e78', '#a8d3f0aa', 0.65);
+    }
+
+    // 4. 空中玻璃连廊（连接主大厦与西南数据副楼，凸显数字互联感）
+    isoBox(ctx, pt, 0.20, 0.39, 0.31, 0.62, 10.6, 13.2, '#b4edf7', '#53a2bb', '#79cbe0', '#eff9fbaa');
+
+    // 5. 西南数据副楼（阶梯晶蓝玻璃幕墙 + 屋顶太阳能板）
+    drawGlassTower(0.08, 0.61, 0.40, 0.92, 4.2, 16.4, 2.2);
+    polygon(ctx, [pt(0.14, 0.68, 17.6), pt(0.32, 0.68, 17.6), pt(0.32, 0.84, 17.0), pt(0.14, 0.84, 17.0)], '#2c4c76', '#a8d3f0aa', 0.65);
+
+    // 6. 东南生态创新中心 + 街角绿树
+    isoBox(ctx, pt, 0.60, 0.62, 0.92, 0.92, 4.2, 11.4, '#eef5f8', '#5fa4ba', '#84c9dd', '#f2fafcaa');
+    polygon(ctx, [pt(0.64, 0.66, 11.5), pt(0.88, 0.66, 11.5), pt(0.88, 0.88, 11.5), pt(0.64, 0.88, 11.5)], '#9ce3f0', '#ffffffaa', 0.7);
+    drawParkTree(0.50, 0.86, 2.9);
+
+    // 7. 阵营全息光带与旗帜
+    strokeLine(ctx, pt(0.06, 0.39, 23.0), pt(0.39, 0.39, 23.0), teamCol, 1.5);
+    isoBanner(ctx, pt, 0.14, 0.10, 27.6, 5.4, teamCol, lightCol, true);
+  }
+
+  /**
+   * 时代 7 · 装甲时代（Armor Age）：
+   * 军绿钛灰六边形复合装甲甲板 + 重型斜壁八角防爆主堡（顶置双联炮塔）+ 标志性钢铁机甲龙门吊架 + 警示标线地堡，
+   * 厚重硬核的军工堡垒剪影，与时代六晶莹玻璃和时代八纯白聚变穹顶彻底拉开视觉跨度。
+   */
+  function paintCityArmor(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+    // 1. 厚重六边形复合装甲底座甲板（还原 city-armor.webp 标志性六边形装甲板）
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.8, '#9aa89c', '#57645b', '#768579', '#323c3699');
+    polygon(ctx, [pt(0.05, 0.05, 5.85), pt(0.95, 0.05, 5.85), pt(0.95, 0.95, 5.85), pt(0.05, 0.95, 5.85)], '#8e9d91');
+    // 刻画六边形复合装甲板块拼接沟槽
+    const drawHexPlate = (cu: number, cv: number, r: number): void => {
+      const hex: Point[] = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+        hex.push(pt(cu + Math.cos(a) * r, cv + Math.sin(a) * r, 5.9));
+      }
+      polygon(ctx, hex, '#a7b5a8', '#46544b88', 0.85);
+    };
+    drawHexPlate(0.28, 0.28, 0.21);
+    drawHexPlate(0.73, 0.28, 0.21);
+    drawHexPlate(0.28, 0.73, 0.21);
+    drawHexPlate(0.73, 0.73, 0.21);
+
+    // 2. 西北重型八角复合装甲指挥主堡 + 顶置双联装防御炮塔
+    isoCylinder(ctx, pt, 0.28, 0.27, 0.24, 0.20, 5.8, 17.6, '#b0beb1', '#88978b', '#5b6960', '#bdcabd', '#343e3899');
+    // 装甲腰带与重型防爆观察缝
+    isoCylinder(ctx, pt, 0.28, 0.27, 0.16, 0.13, 17.6, 21.0, '#9eada0', '#79887c', '#505e55', '#b1bfb2', '#343e3888');
+    // 顶部双联装自动防御炮塔（深钛铁炮座 + 双炮管）
+    isoBox(ctx, pt, 0.22, 0.21, 0.34, 0.33, 21.0, 23.8, '#7a8780', '#444e4a', '#5d6963', '#272f2c99');
+    strokeLine(ctx, pt(0.31, 0.25, 22.8), pt(0.49, 0.32, 24.0), '#2d3533', 1.8);
+    strokeLine(ctx, pt(0.29, 0.29, 22.8), pt(0.47, 0.36, 24.0), '#2d3533', 1.8);
+    // 堡身警示橙灯与阵营涂装带
+    const [lx, ly] = pt(0.32, 0.45, 13.5);
+    ctx.fillStyle = '#e5a944';
+    ctx.fillRect(lx - 1.4, ly - 0.9, 2.8, 1.8);
+
+    // 3. 东北重型钢铁机甲装配龙门吊架与起降甲板（还原 city-armor.webp 灵魂构筑物）
+    // 起降平台与战术黄黑警示标线
+    polygon(ctx, [pt(0.56, 0.12, 6.0), pt(0.90, 0.12, 6.0), pt(0.90, 0.44, 6.0), pt(0.56, 0.44, 6.0)], '#58645d', '#353e3a88', 0.75);
+    strokeLine(ctx, pt(0.60, 0.16, 6.1), pt(0.86, 0.16, 6.1), '#dfad4d', 1.2);
+    strokeLine(ctx, pt(0.60, 0.40, 6.1), pt(0.86, 0.40, 6.1), '#dfad4d', 1.2);
+    // 龙门吊后柱与前柱 + 顶部钢铁桁架横梁
+    isoBox(ctx, pt, 0.60, 0.13, 0.67, 0.20, 6.0, 17.8, '#8a9790', '#4b5651', '#68756e', '#2d363288');
+    isoBox(ctx, pt, 0.80, 0.34, 0.87, 0.41, 6.0, 17.8, '#8a9790', '#4b5651', '#68756e', '#2d363288');
+    // 龙门架斜跨主钢梁与吊车小车
+    polygon(ctx, [
+      pt(0.59, 0.14, 17.6),
+      pt(0.66, 0.14, 17.6),
+      pt(0.87, 0.39, 17.6),
+      pt(0.80, 0.39, 17.6),
+    ], '#a4b2a8', '#333d3888', 0.8);
+    polygon(ctx, [
+      pt(0.59, 0.14, 17.6),
+      pt(0.80, 0.39, 17.6),
+      pt(0.80, 0.39, 15.6),
+      pt(0.59, 0.14, 15.6),
+    ], '#5c6962', '#2f383488', 0.75);
+    // 吊臂警示黄涂装块
+    isoBox(ctx, pt, 0.70, 0.24, 0.76, 0.30, 14.5, 16.2, '#e2b254', '#a67d30', '#c79940', '#47361577');
+
+    // 4. 西南重型斜壁防爆地堡（带发射井盖与通风百叶）
+    isoBox(ctx, pt, 0.10, 0.58, 0.44, 0.88, 5.8, 12.6, '#aebbae', '#5d6b62', '#7e8d82', '#323c3688');
+    isoBox(ctx, pt, 0.15, 0.63, 0.39, 0.83, 12.6, 14.2, '#8b998d', '#505d55', '#6c7a70', '#323c3688');
+    // 重型装甲阵营条纹
+    polygon(ctx, [pt(0.14, 0.885, 8.2), pt(0.40, 0.885, 8.2), pt(0.40, 0.885, 10.2), pt(0.14, 0.885, 10.2)], teamCol);
+
+    // 5. 东南加固装甲哨堡与斜坡护裙
+    isoCylinder(ctx, pt, 0.74, 0.74, 0.19, 0.16, 5.8, 13.6, '#a9b7aa', '#819084', '#55635a', '#b6c4b7', '#323c3688');
+    // 哨堡顶部军用雷达圆罩
+    isoCylinder(ctx, pt, 0.74, 0.74, 0.08, 0.06, 13.6, 15.6, '#c8d3ca', '#97a59a', '#6d7b71', '#d9e3db');
+
+    // 6. 战术铁杆阵营军旗
+    isoBanner(ctx, pt, 0.18, 0.18, 21.0, 5.8, teamCol, lightCol, true);
+  }
+
+  /**
+   * 时代 8 · 聚变时代（Fusion Age）：
+   * 珠光纯白未来底座 + 纵横发光青蓝聚变能量导流沟槽 + 巨型光滑椭圆形珠光穹顶 + 中央托卡马克聚变光环与悬浮能量尖塔，
+   * 极具未来科幻乌托邦史诗感，与时代七冷硬军绿装甲形成终极文明跃迁对比。
+   */
+  function paintCityFusion(ctx: CanvasRenderingContext2D, pt: CityPt, teamCol: string, lightCol: string): void {
+    // 1. 珠光洁白未来底座
+    isoBox(ctx, pt, 0, 0, 1, 1, 0, 5.0, '#eef4f8', '#9eb2c0', '#c4d4df', '#657f9188');
+    polygon(ctx, [pt(0.05, 0.05, 5.05), pt(0.95, 0.05, 5.05), pt(0.95, 0.95, 5.05), pt(0.05, 0.95, 5.05)], '#f4f8fb');
+
+    // 2. 纵横交错的发光青蓝聚变能量导流光脉（还原 city-fusion.webp 灵魂视觉符号）
+    const drawConduit = (u0: number, v0: number, u1: number, v1: number): void => {
+      const a = pt(u0, v0, 5.15);
+      const b = pt(u1, v1, 5.15);
+      strokeLine(ctx, a, b, 'rgba(72,218,246,0.34)', 4.2);
+      strokeLine(ctx, a, b, '#6be7fc', 1.7);
+      strokeLine(ctx, a, b, '#dafaff', 0.75);
+    };
+    drawConduit(0.06, 0.50, 0.94, 0.50);
+    drawConduit(0.50, 0.06, 0.50, 0.94);
+    // 外环发光能量光圈
+    const ringPts: Point[] = [];
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
+      ringPts.push(pt(0.5 + Math.cos(a) * 0.42, 0.5 + Math.sin(a) * 0.42, 5.15));
+    }
+    ctx.beginPath();
+    ctx.moveTo(...ringPts[0]!);
+    for (const p of ringPts.slice(1)) ctx.lineTo(...p);
+    ctx.closePath();
+    ctx.strokeStyle = 'rgba(84,225,250,0.42)';
+    ctx.lineWidth = 2.6;
+    ctx.stroke();
+    ctx.strokeStyle = '#9cf2ff';
+    ctx.lineWidth = 1.0;
+    ctx.stroke();
+
+    // 3. 西北巨型光滑珠光纯白椭圆生态穹顶（还原 city-fusion.webp 椭圆大穹顶）
+    // 穹顶基座青蓝发光护环
+    const [d1x, d1y] = pt(0.28, 0.26, 5.2);
+    ctx.strokeStyle = 'rgba(88,228,252,0.55)';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.ellipse(d1x, d1y, 13.5, 8.0, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    isoDome(ctx, pt, 0.28, 0.26, 0.24, 0.19, 5.1, 13.2, '#f8fbfd', '#dce7ef', '#aebfce', '#ffffff', '#7e9bb055');
+
+    // 4. 东北与西南对称流线能量副穹顶
+    isoDome(ctx, pt, 0.78, 0.24, 0.14, 0.14, 5.1, 9.2, '#f7fafc', '#dae5ee', '#acc0cf', '#ffffff', '#7e9bb055');
+    isoDome(ctx, pt, 0.24, 0.76, 0.15, 0.15, 5.1, 9.6, '#f7fafc', '#dae5ee', '#acc0cf', '#ffffff', '#7e9bb055');
+
+    // 5. 中央偏东南：标志性「托卡马克聚变反应堆 + 发光等离子环 + 悬浮聚变核心尖塔」
+    isoCylinder(ctx, pt, 0.62, 0.62, 0.25, 0.21, 5.0, 10.6, '#f4f8fb', '#d6e2eb', '#a6b9c8', '#eef5f9', '#6e8ba066');
+    // 发光聚变等离子约束光环（托卡马克核心）
+    const [tx, ty] = pt(0.62, 0.62, 11.4);
+    ctx.strokeStyle = 'rgba(72,222,250,0.36)';
+    ctx.lineWidth = 5.4;
+    ctx.beginPath();
+    ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = '#6ce9fd';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = '#e5fdff';
+    ctx.lineWidth = 0.95;
+    ctx.beginPath();
+    ctx.ellipse(tx, ty, 10.8, 6.2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 反应堆内核心柱与四根弧形洁白磁约束拱臂
+    isoCylinder(ctx, pt, 0.62, 0.62, 0.10, 0.06, 10.6, 26.8, '#f8fbfd', '#dce7ef', '#aec1d0', '#ffffff', '#6d8ca155');
+    for (const [du, dv] of [[-0.17, 0], [0.17, 0], [0, -0.17], [0, 0.17]] as const) {
+      strokeLine(ctx, pt(0.62 + du, 0.62 + dv, 11.2), pt(0.62 + du * 0.35, 0.62 + dv * 0.35, 25.0), '#edf4f8', 1.6);
+      strokeLine(ctx, pt(0.62 + du, 0.62 + dv, 11.2), pt(0.62 + du * 0.35, 0.62 + dv * 0.35, 25.0), '#7a98ad66', 0.6);
+    }
+
+    // 尖塔顶部悬浮璀璨聚变光核
+    const [ox, oy] = pt(0.62, 0.62, 31.6);
+    const orbGrad = ctx.createRadialGradient(ox, oy, 0.8, ox, oy, 8.2);
+    orbGrad.addColorStop(0, 'rgba(235,254,255,0.95)');
+    orbGrad.addColorStop(0.38, 'rgba(92,230,252,0.72)');
+    orbGrad.addColorStop(1, 'rgba(92,230,252,0)');
+    ctx.fillStyle = orbGrad;
+    ctx.beginPath();
+    ctx.arc(ox, oy, 8.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f2feff';
+    ctx.beginPath();
+    ctx.arc(ox, oy, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 极简科技阵营光带与细流线旗
+    const [fx, fy] = pt(0.62, 0.62, 10.7);
+    ctx.strokeStyle = teamCol;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.ellipse(fx, fy, 13.8, 7.9, 0, 0.15, Math.PI - 0.15);
+    ctx.stroke();
+    isoBanner(ctx, pt, 0.28, 0.26, 18.0, 5.2, teamCol, lightCol, true);
+  }
+
   function paintCity(
     ctx: CanvasRenderingContext2D, city: City, texture: HTMLImageElement, target: boolean, selected: boolean, dark: boolean,
   ): void {
@@ -2596,7 +2936,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       return;
     }
 
-    if (city.era >= 1 && city.era <= 5) {
+    if (city.era >= 1 && city.era <= 8) {
       const ringZ = city.era === 1 ? 0.3 : 0.4;
       const ring = rhombus(x - 0.02, y - 0.02, width + 0.04, ringZ);
       // 先在底层绘制完整阵营框（让西北/东北后缘自然贴于城基后方，不穿插建筑）
@@ -2612,7 +2952,10 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       else if (city.era === 2) paintCityIron(ctx, pt, team, lightTeam);
       else if (city.era === 3) paintCityGunpowder(ctx, pt, team, lightTeam);
       else if (city.era === 4) paintCitySteam(ctx, pt, team, lightTeam);
-      else paintCityMechanized(ctx, pt, team, lightTeam);
+      else if (city.era === 5) paintCityMechanized(ctx, pt, team, lightTeam);
+      else if (city.era === 6) paintCityInfo(ctx, pt, team, lightTeam);
+      else if (city.era === 7) paintCityArmor(ctx, pt, team, lightTeam);
+      else paintCityFusion(ctx, pt, team, lightTeam);
 
       // 仅重描东南/西南前缘两段阵营框，干脆利落且绝不压住 3D 屋顶与高塔
       ctx.beginPath();
@@ -2624,11 +2967,11 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       ctx.stroke();
 
       if (dark) {
-        const fogTop = rhombus(x, y, width, city.era * 3 + 6);
+        const fogTop = rhombus(x, y, width, Math.min(26, city.era * 3 + 6));
         polygon(ctx, [fogTop[0]!, fogTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, fogTop[3]!], '#17232b38');
       }
       // 扩大命中面覆盖 3D 建筑轮廓，点击建筑顶部也能直接选中城市
-      const pickTop = rhombus(x, y, width, 14 * hScale);
+      const pickTop = rhombus(x, y, width, 16 * hScale);
       faces.push({
         cell: { x: city.x, y: city.y },
         points: [pickTop[0]!, pickTop[1]!, basePoly[1]!, basePoly[2]!, basePoly[3]!, pickTop[3]!],
@@ -2636,7 +2979,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       return;
     }
 
-    // 时代 6–8 暂保留原有贴图方案
+    // 兜底（超纲时代号仍保留原有贴图方案）
     const base = rhombus(x, y, width, 0);
     const roof = rhombus(x, y, width, 13);
     polygon(ctx, [roof[1]!, roof[2]!, base[2]!, base[1]!], '#625844', '#473e31');
