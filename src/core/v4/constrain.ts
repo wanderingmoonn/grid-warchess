@@ -459,31 +459,67 @@ function planEconPosts(
      * 单位：出生早的排前面（同一手出生的按 id 排，保证同一个局面每次算出来一样）。
      * 岗位：走得远到近排（`turns` 是"从城走到那儿"，也就是这个岗要花多少路程）。
      */
-    const sortedUnits = [...units].sort((a, b) => seniority(a) - seniority(b) || (a.id < b.id ? -1 : 1));
     /*
-     * 岗位先取**最近的 N 个**（N = 这个兵种的人数），再把这 N 个里**最远的给最老的**。
+     * ════════════════════════════════════════════════════════════════
+     * **配岗：按"真实路程"最少来配，不按出生序排位。**
      *
-     * 为什么必须先截断：只有一个牧民时，要是不截断，它会拿到全图最远的丘陵
-     * （实测：一个人走 6 手，产量等于 0）。同产出的岗之间没有理由走远路——
-     * 走远路只在"要给新兵腾近岗"时才有意义，也就是截断之后才有的事。
+     * 旧写法是"单位按出生序排、岗位按离城远近排、序号对序号"。
+     * 那条规则的动机是"老的走远、新的走近"，但它只用了一条排序轴（出生序），
+     * 而远近是另一条轴——两条轴排出来的配对会**交叉**，交叉就是互相挡路。
+     *
+     * 现在改成真正的最小总路程：
+     *   代价 = 这个兵走到这个岗的**真实步数**（距离场算的，绕水绕山，不算人），
+     *   然后从最便宜的那一对开始配，配过的兵和岗都划掉。
+     *
+     * 三个好处：
+     *   ① 已经在岗上的人代价是 0，天然会被配回原地 → **不会来回挪**；
+     *   ② 隔着水的"看着近"的岗，代价是 Infinity/很大 → 不会被选中（这就是用户问的
+     *      "不可通行怎么处理"：不用处理，距离场本来就不穿水和山）；
+     *   ③ 同代价时按单位 id、格号定序，保证同一个局面每次算出来一样。
+     *
+     * 出生序没有删掉，只降级成**同代价时的并列判据**（`seniority`）。
+     * ════════════════════════════════════════════════════════════════
      */
-    const sortedSpots = usable
+    /* 候选岗：同城同兵种，取"离城最近"的前 N+2 个（留两个余量给配对挑） */
+    const cands = usable
       .filter((p) => p.type === type && p.cityId === cityId)
       .sort((a, b) => a.turns - b.turns || (a.y * s.w + a.x) - (b.y * s.w + b.x))
-      .slice(0, sortedUnits.length)
-      .reverse();
-
-    sortedUnits.forEach((u, i) => {
-      const p = sortedSpots[i];
-      if (p) {
-        posts[u.id] = { x: p.x, y: p.y };
-        claimed.add(p.y * s.w + p.x);
-      } else if (!keepSet.has(u.y * s.w + u.x)) {
-        /* 岗不够分（这个兵种的好地已经占满）→ 原地不动 */
-        posts[u.id] = { x: u.x, y: u.y };
+      .slice(0, units.length);
+    if (cands.length === 0) {
+      for (const u of units) {
+        if (!keepSet.has(u.y * s.w + u.x)) posts[u.id] = { x: u.x, y: u.y };
       }
-      /* 站在城圈/城格上又没有岗：不给岗，让搬迁计划把它请出去 */
-    });
+      continue;
+    }
+
+    /* 代价表：每个候选岗一张"从它出发的步数图"，读这个兵脚下那格 */
+    const fields = cands.map((p) => world.stepsFrom({ x: p.x, y: p.y }));
+    const pairs: Array<{ u: Unit; i: number; d: number }> = [];
+    for (const u of units) {
+      const here = u.y * s.w + u.x;
+      for (let i = 0; i < cands.length; i++) {
+        const d = fields[i]![here] ?? Infinity;
+        if (Number.isFinite(d)) pairs.push({ u, i, d });
+      }
+    }
+    /* 便宜的先配；同代价时老的先挑，再按格号定序（纯粹为了结果确定） */
+    pairs.sort((a, b) => a.d - b.d || seniority(a.u) - seniority(b.u) || a.i - b.i);
+
+    const takenPost = new Set<number>();
+    const assigned = new Set<string>();
+    for (const pr of pairs) {
+      if (assigned.has(pr.u.id) || takenPost.has(pr.i)) continue;
+      assigned.add(pr.u.id);
+      takenPost.add(pr.i);
+      const p = cands[pr.i]!;
+      posts[pr.u.id] = { x: p.x, y: p.y };
+      claimed.add(p.y * s.w + p.x);
+    }
+    /* 一个岗都到不了的：原地不动（交给后面的"换空岗"兜底） */
+    for (const u of units) {
+      if (assigned.has(u.id) || posts[u.id]) continue;
+      if (!keepSet.has(u.y * s.w + u.x)) posts[u.id] = { x: u.x, y: u.y };
+    }
 
     /*
      * **分到的岗走不进去时，换一个能走进去的空岗。**
@@ -499,13 +535,13 @@ function planEconPosts(
      * 那就原地等着，不做任何"硬挤"。
      */
     /* 这一组里"现在没人站"的岗（= 距离场 C 眼里的"洞"） */
-    const freeCells = sortedSpots
+    const freeCells = cands
       .filter((p) => !s.units.some((v) => v.y * s.w + v.x === p.y * s.w + p.x))
       .map((p) => p.y * s.w + p.x);
     if (freeCells.length > 0) {
       /* 距离场 C：从这些空岗同时出发，得到"每格离最近空岗几步、往哪走" */
       const flow = world.flowFrom(freeCells);
-      for (const u of sortedUnits) {
+      for (const u of units) {
         const cur = posts[u.id];
         /* 已经站在自己岗上的不用管 */
         if (!cur || (cur.x === u.x && cur.y === u.y)) continue;
