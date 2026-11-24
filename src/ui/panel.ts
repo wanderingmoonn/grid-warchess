@@ -2682,7 +2682,6 @@ export function topbarShell(): string {
       <button class="btn btn-sm" data-act="ai-speed" data-ref="speed" hidden>速度</button>
       <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
       <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
-      <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
       <button class="btn btn-sm" data-act="toggle-show-all" data-ref="show-all">看全图</button>
       <!--
         低频入口不再是顶栏按钮（2026-11-11 第二版）。

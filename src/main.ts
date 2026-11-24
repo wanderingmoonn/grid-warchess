@@ -5666,29 +5666,6 @@ function handleAction(act: string, el: HTMLElement): void {
       render();
       return;
     }
-    case 'toggle-fog': {
-      // 上帝模式固定全图：
-      //   1. 沙盒里藏信息没有意义，盘上的兵都是自己摆的；
-      //   2. 更要紧的是 AI——它的寻路方向来自"敌城 + 视野内敌军"，
-      //      沙盒里常常一座城都没有，雾一开两边就互相看不见，谁都不动。
-      if (godMode()) {
-        toast('上帝模式固定全图：关雾不只是给你看，AI 也要看得见才打得起来');
-        return;
-      }
-      // 「浓雾蔽野」把"地图不可见"当成规则本身，这里必须拦住：
-      // 能一键关掉的话，这个扩展就只是个大号的显示选项
-      if (state.config.expansionIds.includes('blackout')) {
-        toast('「浓雾蔽野」下迷雾锁定开启，不能关闭');
-        return;
-      }
-      state.fog = !state.fog;
-      if (state.fog) refreshMemory(state);
-      saveMatch(state);
-      render();
-      toast(state.fog ? '战争迷雾已开启' : '战争迷雾已关闭（AI 仍然只看得见它视野内的东西）');
-      return;
-    }
-
     /*
      * 看全图：**只改显示**（2026-11-21）。
      *
@@ -11236,21 +11213,6 @@ function openSettings(): void {
     }
     if (act === 'chime-test') {
       playChime(chimeVolume);
-      return;
-    }
-
-    /*
-     * 迷雾开关：**不关弹窗**，原地重画。
-     * 玩家刚点的就是这一屏上的开关，把他踢出去再开一次才能确认结果，
-     * 那是把"看一眼变成了三步"。其余动作仍然走下面那条统一出口。
-     */
-    if (act === 'toggle-fog') {
-      const proxy = document.createElement('button');
-      proxy.dataset.act = act;
-      appEl.append(proxy);
-      proxy.click();
-      proxy.remove();
-      paint();
       return;
     }
 

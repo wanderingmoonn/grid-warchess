@@ -155,26 +155,12 @@ export function settingsHtml(o: SettingsOptions): string {
         /*
          * 「对局中」这一组只在窄屏出现。
          *
-         * 桌面顶栏本来就有「联机」「迷雾」两颗按钮，这里再放一份就是两处状态、
+         * 桌面顶栏本来就有「联机」这颗按钮，这里再放一份就是两处状态、
          * 两条路径；手机上顶栏放不下，它们才搬进来。
          */
         o.compact
           ? `<section class="set-group">
         <div class="set-title">对局中</div>
-        <div class="set-row">
-          <div class="set-label">迷雾
-            <span class="set-hint">${
-              o.blackout
-                ? '「浓雾蔽野」已锁定开启。'
-                : '关闭会改变双方迷雾规则。'
-            }</span>
-          </div>
-          <div class="chip-row">
-            <button class="chip${o.fog ? ' active' : ''}" data-act="toggle-fog" ${
-              o.blackout ? 'disabled' : ''
-            }>${o.fog ? '开' : '关'}</button>
-          </div>
-        </div>
         <div class="set-row">
           <div class="set-label">看全图
             <span class="set-hint">仅改变显示，不影响 AI 视野。</span>

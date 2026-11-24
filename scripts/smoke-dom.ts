@@ -2850,11 +2850,11 @@ check('B 的界面上看不到 A 后场的单位', () => {
   assert.ok(doc.querySelectorAll('.tile.out').length > 0, '盘面上应该有还没探到的格子');
 });
 
-check('关掉迷雾后双方单位全部出现', () => {
+check('按「看全图」后双方单位全部出现（迷雾规则不变）', () => {
   const before = unitsCount();
-  click('[data-act="toggle-fog"]');
-  assert.ok(unitsCount() > before, '关掉迷雾应该看到更多单位');
-  assert.equal(doc.querySelectorAll('.tile.out').length, 0, '关掉迷雾后不该再有暗格');
+  click('[data-act="toggle-show-all"]');
+  assert.ok(unitsCount() > before, '看全图应该看到更多单位');
+  assert.equal(doc.querySelectorAll('.tile.out').length, 0, '看全图后不该再有暗格');
 });
 
 check('第一次来：首页隐藏「继续上一局」（启动占位局不算打过）', () => {
@@ -5831,9 +5831,13 @@ check('手机设置里多出「对局中」：迷雾开关和联机入口', () =
     fog: true,
     roomCode: null,
   });
-  assert.ok(phone.includes('data-act="toggle-fog"'), '手机设置里要有迷雾开关');
+  assert.equal(
+    phone.includes('data-act="toggle-fog"'),
+    false,
+    '迷雾开关已移除（2026-11-24），设置里不该再有',
+  );
   assert.ok(phone.includes('data-act="online"'), '手机设置里要有联机入口');
-  assert.ok(/class="chip active" data-act="toggle-fog"/.test(phone), '迷雾开着时开关要高亮');
+  assert.ok(phone.includes('data-act="toggle-show-all"'), '「看全图」要留在设置里');
   assert.ok(phone.includes('联机'), '要有「联机」这两个字，不能只有一个图标');
 
   // 桌面版：不传 compact 就不该出现这一组
@@ -5844,9 +5848,9 @@ check('手机设置里多出「对局中」：迷雾开关和联机入口', () =
     chimeText: '铃声 60%',
   });
   assert.equal(
-    desktop.includes('data-act="toggle-fog"'),
+    desktop.includes('data-act="toggle-show-all"'),
     false,
-    '桌面顶栏本来就有迷雾按钮，设置里不该再放一份',
+    '桌面顶栏本来就有「看全图」，设置里不该再放一份',
   );
 
   // 房间码：在房间里要写出来，不然玩家不知道该点「房间」还是「联机」
@@ -8600,7 +8604,7 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
    * 搬进弹窗不能把这条规矩丢了。
    */
   const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
-  for (const act of ['toggle-ai', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+  for (const act of ['toggle-ai', 'ai-pause', 'ai-speed', 'online']) {
     assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
   }
   assert.ok(topBtn('settings'), '顶栏该留着「设置」');

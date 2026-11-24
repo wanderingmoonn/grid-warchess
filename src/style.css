@@ -11428,13 +11428,12 @@ a.btn {
 /*
  * 手机：顶栏只留「回合胶囊 · 交给 AI · 设置」。
  *
- * 「联机」「迷雾」一局里点不到一次（联机是开局前的事，迷雾基本定死在开局面板），
+ * 「联机」一局里点不到一次（它是开局前的事），
  * 却每回合都占着横向空间——360px 上正是它们把「设置」挤出了屏幕。
  * 现在这两颗搬进设置弹窗（settingsHtml 的 compact 组），顶栏一条都不用滚。
  */
 @media (max-width: 640px) {
-  .topbar-actions [data-act='online'],
-  .topbar-actions [data-act='toggle-fog'] {
+  .topbar-actions [data-act='online'] {
     display: none;
   }
 }

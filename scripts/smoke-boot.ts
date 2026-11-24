@@ -125,13 +125,17 @@ async function untilText(pred, what) {
 }
 
 {
-  const fog = window.document.querySelector('[data-act="toggle-fog"]');
-  assert.ok(fog, '顶栏缺少迷雾开关');
-  const before = /迷雾：(开|关)/.exec(text())?.[1];
-  assert.ok(before, '顶栏没写迷雾状态');
-  fog.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
-  await untilText((t) => new RegExp(`迷雾：${before === '开' ? '关' : '开'}`).test(t), '迷雾开关');
-  log(`交互：迷雾 ${before} → ${before === '开' ? '关' : '开'}`);
+  // 2026-11-24 用户定：顶栏不再有「迷雾」开关，只留「看全图」
+  assert.equal(
+    window.document.querySelector('[data-act="toggle-fog"]'),
+    null,
+    '顶栏不该再有迷雾开关',
+  );
+  assert.ok(
+    window.document.querySelector('[data-act="toggle-show-all"]'),
+    '顶栏要保留「看全图」',
+  );
+  log('顶栏：迷雾开关已移除，看全图仍在');
 }
 
 {
