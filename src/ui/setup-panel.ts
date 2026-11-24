@@ -822,7 +822,14 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             : '';
         return lockLine + warnLine;
       })();
-      const expItems = availableExpansions().map(
+      /*
+       * 2026-11-24：地形高差并进本体，不再作为可勾选项出现在这里。
+       * 它仍是注册表里的一个 pack（地形表/钩子/等高线地貌都挂在上面），
+       * 但玩家不该再看到这颗"开不开"的开关——默认就是开着的。
+       */
+      const expItems = availableExpansions()
+        .filter((e) => e.id !== 'height-terrain')
+        .map(
         (e) => {
           const lock = lockedRequire.has(e.id) ? 'on' : lockedForbid.has(e.id) ? 'off' : '';
           const on = lock === 'on' || (lock === '' && config.expansionIds.includes(e.id));

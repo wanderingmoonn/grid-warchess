@@ -2065,9 +2065,9 @@ export function generateLayout(
   } else {
     // 本体五种地貌的配方。扩展地貌走上面那条路，不会进到这里。
     /*
-     * 地形高差扩展没开时，一格新地貌都不该落下来（`height-terrain` 的契约：
-     * 勾选本身才是这套规则的开关）。开了才在**本体地貌**上也撒一点，
-     * 这样"随机"才不会永远只抽到开阔/山岭/横河/纵河这四张老脸。
+     * 2026-11-24：地形高差并进本体 —— **新对局默认带它**（见 setup 的默认配置），
+     * 但生成端仍认这个开关：老存档、沙盒与用例里显式关掉时，地图一格都不变，
+     * 这样"没开的时候和从前逐格相同"这条契约还立得住。
      */
     const heightOn = (opts.expansions ?? []).includes('height-terrain');
     const ratio: Array<{ t: Terrain; r: number }> = [

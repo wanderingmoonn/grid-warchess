@@ -9019,12 +9019,12 @@ test('新对局默认开着血战，也可以手动关掉', () => {
   // 否则"测出来的平衡"和"玩家实际开的默认规则"就是两回事。
   assert.deepEqual(
     DEFAULT_CONFIG.expansionIds,
-    ['bloodbath', 'turn-order-comp'],
-    '血战和先后手补偿应该是默认扩展',
+    ['bloodbath', 'turn-order-comp', 'height-terrain'],
+    '血战、先后手补偿、地形高差（2026-11-24 并入本体）应该是默认扩展',
   );
 
   const on = createMatch({ ...DEFAULT_CONFIG }, 31);
-  assert.deepEqual(on.config.expansionIds, ['bloodbath', 'turn-order-comp'], '开局状态要带上这两个规则');
+  assert.deepEqual(on.config.expansionIds, ['bloodbath', 'turn-order-comp', 'height-terrain'], '开局状态要带上这三个规则');
 
   const off = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 31);
   assert.equal(off.config.expansionIds.length, 0, '取消勾选之后一个扩展都不该开');
@@ -9064,7 +9064,7 @@ test('先后手补偿：12×12 补 20%、16×16 补 5%，跟着棋盘尺寸走',
   const p = startGoldFor(1);
 
   const small = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 41);
-  const smallOff = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath'] }, 41);
+  const smallOff = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath', 'height-terrain'] }, 41);
   assert.equal(
     small.players.B.gold - smallOff.players.B.gold,
     Math.round(p * 0.2),
@@ -9072,7 +9072,7 @@ test('先后手补偿：12×12 补 20%、16×16 补 5%，跟着棋盘尺寸走',
   );
 
   const big = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 41);
-  const bigOff = createMatch({ ...DEFAULT_CONFIG, size: 16, expansionIds: ['bloodbath'] }, 41);
+  const bigOff = createMatch({ ...DEFAULT_CONFIG, size: 16, expansionIds: ['bloodbath', 'height-terrain'] }, 41);
   assert.equal(
     big.players.B.gold - bigOff.players.B.gold,
     Math.round(p * 0.05),
@@ -9135,7 +9135,7 @@ test('先后手：两人局可选红/蓝先手，随机按种子抽且抽完落�
 
 test('先后手：补偿和开局收入都跟着先手方走，不看席位名', () => {
   const p = startGoldFor(1);
-  const off = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath'], firstSide: 'B' }, 41);
+  const off = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath', 'height-terrain'], firstSide: 'B' }, 41);
   const on = createMatch({ ...DEFAULT_CONFIG, size: 12, firstSide: 'B' }, 41);
 
   // 先手是 B 时，拿补偿的应该变成 A
@@ -13701,25 +13701,37 @@ test('地貌选项跟着扩展开关增减', () => {
   assert.equal(seen.has('highland'), false, '关扩展的随机地貌里抽到了高原');
 });
 
-test('地形高差可选，但默认不开：不勾就一格新地形都不会落到图上', () => {
-  // 这个包已经对玩家开放（开局界面里能勾），但**默认不勾**：
-  // 不勾就等于不存在——地图是按这一局的扩展现生成的，规则钩子也不挂。
-  assert.ok(expansionById('height-terrain'), '扩展要在注册表里');
+test('地形高差已并入本体：默认就开，显式关掉时一格新地形都不落', () => {
+  /*
+   * 2026-11-24 用户定：这套东西不再当"可选扩展"卖，直接并进本体。
+   *
+   * 两半都要守：
+   *   1. 默认对局（DEFAULT_CONFIG）就带着它 —— 台地/谷地/沼泽/沙丘会随机出现；
+   *   2. 显式传 `expansionIds: []` 时仍然逐格与从前相同 —— 沙盒、老存档和
+   *      那些"只测规则不测地图"的用例靠这条保持确定性。
+   */
+  assert.ok(expansionById('height-terrain'), '扩展还在注册表里');
   assert.ok(
-    availableExpansions().some((e) => e.id === 'height-terrain'),
-    '开放的扩展要出现在开局面板/规则书的可选列表里',
+    DEFAULT_CONFIG.expansionIds.includes('height-terrain'),
+    '默认配置要带上地形高差',
   );
 
-  const s = createMatch({ ...DEFAULT_CONFIG }, 4242);
-  // 地形表是 `readonly Terrain[]`（字符串），别再按对象取 .id
-  // 浅滩除外：2026-11-08 起它是**本体地形**——渡口一律画浅滩（不然河会被渡口切断，
-  // 船开不过去）。所以"没开高差就不该出现浅滩"这条不再成立，其余高差地形照旧。
   const heightTerrains = new Set(
     (expansionById('height-terrain')?.terrains ?? []).filter((t) => t !== 'shallow'),
   );
   assert.ok(heightTerrains.size > 0, '这条用例依赖扩展自己声明的地形表');
-  const leaked = s.tiles.filter((t) => heightTerrains.has(t.terrain));
-  assert.equal(leaked.length, 0, `没开扩展却生成了 ${leaked.length} 格高差地形`);
+
+  const off = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 4242);
+  const leaked = off.tiles.filter((t) => heightTerrains.has(t.terrain));
+  assert.equal(leaked.length, 0, `显式关掉扩展却生成了 ${leaked.length} 格高差地形`);
+
+  // 默认开着：多试几个种子，至少要有能抽到新地形的（单张图不一定四种都有）
+  let seen = 0;
+  for (const seed of [4242, 7, 31, 99, 1234]) {
+    const s = createMatch({ ...DEFAULT_CONFIG }, seed);
+    if (s.tiles.some((t) => heightTerrains.has(t.terrain))) seen += 1;
+  }
+  assert.ok(seen >= 3, `默认 5 个种子里只有 ${seen} 张图抽到新地形，随机没接上`);
 });
 
 test('上帝模式的画笔跟着扩展开关走', () => {

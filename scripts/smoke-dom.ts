@@ -3318,60 +3318,38 @@ check('能选地貌与地形对称方式', () => {
   );
 });
 
-check('地貌按钮只在勾了「地形高差」之后才出现', () => {
-  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/沼泽/群岛/大川
-  // 这五颗 chip 完全由"勾没勾那个扩展"决定（火山群已随熔岩/火山一起删掉）。
+check('地貌按钮属于本体：地形高差并进本体后六颗常驻，开关也不见了', () => {
+  /*
+   * 2026-11-24 用户定：地形高差不再当扩展卖，并进本体。
+   *   · 高原/峡谷/沼泽/群岛/大川五颗 chip 常驻，不再挂在扩展开关上；
+   *   · 开局面板里不该再有 `data-exp="height-terrain"` 那颗勾选框；
+   *   · 基础地貌照旧在（别为了并进来把整行弄丢）。
+   */
   const extra = ['highland', 'canyon', 'marsh', 'isles', 'river'];
-
-  // 默认没勾：一颗都不该有，否则玩家会选到一张"规则里没有高度"的图
   for (const id of extra) {
-    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没勾扩展不该有 ${id}`);
+    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `并进本体后 ${id} 该常驻`);
   }
-  // 但那五种之外的基础地貌要在（别为了藏而把整行都藏了）
   for (const id of ['random', 'river-h', 'ridge', 'open']) {
     assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `基础地貌 ${id} 该一直在`);
   }
+  assert.equal(
+    doc.querySelector('[data-exp="height-terrain"]'),
+    null,
+    '不该再有「地形高差」的勾选框',
+  );
 
-  // 勾上扩展：五颗当场出现（面板会整块重绘，所以要重新查节点）
-  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(box, '「地形高差」应该出现在扩展列表里（它已经对玩家开放）');
-  box.checked = true;
-  box.dispatchEvent(new window.Event('change', { bubbles: true }));
-  for (const id of extra) {
-    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `勾了扩展应该出现 ${id}`);
-  }
-
-  // 取消勾选：又消失（选了高原地貌的还要退回随机，见下一条）
-  const off = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(off, '取消勾选时节点还在');
-  off.checked = false;
-  off.dispatchEvent(new window.Event('change', { bubbles: true }));
-  for (const id of extra) {
-    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `取消勾选后 ${id} 该收起来`);
-  }
-});
-
-check('关掉扩展时，选中的高原地貌退回随机', () => {
-  // 否则存档里会留着"上次选了群岛"，下次开局画出一张规则里没有浅流的图。
-  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(box);
-  box.checked = true;
-  box.dispatchEvent(new window.Event('change', { bubbles: true }));
-  const chip = doc.querySelector<HTMLElement>('[data-mapstyle="isles"]');
-  assert.ok(chip, '勾了扩展应该有群岛');
-  chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  // 选了某个地貌之后点回随机，仍要能退回来（这条与扩展无关，别一起丢了）
+  doc.querySelector<HTMLElement>('[data-mapstyle="isles"]')!
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   assert.ok(
     doc.querySelector<HTMLElement>('[data-mapstyle="isles"]')?.classList.contains('active'),
     '点了群岛应该高亮',
   );
-
-  const off = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(off);
-  off.checked = false;
-  off.dispatchEvent(new window.Event('change', { bubbles: true }));
+  doc.querySelector<HTMLElement>('[data-mapstyle="random"]')!
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   assert.ok(
     doc.querySelector<HTMLElement>('[data-mapstyle="random"]')?.classList.contains('active'),
-    '扩展关掉之后地貌该退回随机',
+    '点随机应该退回来',
   );
 });
 
@@ -4458,7 +4436,12 @@ check('指挥官模式开局后，顶端是一条生产队列（初始 5 个空�
 });
 
 check('指挥官模式下点自己的部队能看属性，遣散按钮也在', () => {
-  const st = createMatch({ ...DEFAULT_CONFIG, commanderMode: true }, 20261028, {});
+  /*
+   * 2026-11-24：指挥官这批用例验的是"排队/执行/中断"这条链路，
+   * 不该被地图内容牵着走。地形高差并进本体后默认就有新地貌（沼泽/谷地会改步耗），
+   * 执行 5 回合的时序会变——这里显式关掉，只保留被验的那条链路。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, commanderMode: true, expansionIds: [] }, 20261028, {});
   st.fog = false;
   st.current = 'A';
   // 挑一个真兵（不是建筑），属性卡上才有射程护甲这些数字

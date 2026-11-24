@@ -79,7 +79,13 @@ export const DEFAULT_CONFIG: MatchConfig = {
   // 双 AI 对轰 720 局测出来的：不补的话先手在 12×12 能赢到 66.7%、16×16 63.0%，
   // 补完之后落到 60.0% / 50.9%。这是目前唯一一个真正把先手优势压下来的规则
   // （+5%/+20% 起始金、削首回合收入那几条都试过，只有它稳）。
-  expansionIds: ['bloodbath', 'turn-order-comp'],
+  /*
+   * 2026-11-24：地形高差并进本体 —— 新对局默认就带它。
+   *
+   * 不放进 `enabledExpansionIds` 里硬塞（那样会连带改掉血战/奇想/海军的
+   * 判定），只在默认配置里写一份；老存档由 save 的迁移补上。
+   */
+  expansionIds: ['bloodbath', 'turn-order-comp', 'height-terrain'],
   enabledUnits: Object.keys(UNIT_TYPES),
 };
 
