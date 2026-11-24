@@ -2,7 +2,7 @@
   "kind": "exam-actions",
   "exam": null,
   "seed": 515,
-  "at": "2026-11-24T07:11:39.546Z",
+  "at": "2026-11-24T07:22:05.118Z",
   "dropped": 0,
   "actions": [
     {
@@ -14,64 +14,7 @@
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
-      "by": "A"
-    },
-    {
-      "type": "END_TURN",
-      "by": "A"
-    },
-    {
-      "type": "END_TURN",
-      "by": "B"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u2",
-      "x": 4,
-      "y": 6,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u3",
-      "x": 5,
-      "y": 6,
-      "by": "A"
-    },
-    {
-      "type": "RECRUIT",
-      "cityId": "c1",
-      "unitType": "lumberjack",
-      "by": "A"
-    },
-    {
-      "type": "END_TURN",
-      "by": "A"
-    },
-    {
-      "type": "END_TURN",
-      "by": "B"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u2",
-      "x": 4,
-      "y": 5,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u3",
-      "x": 5,
-      "y": 5,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u4",
-      "x": 5,
-      "y": 6,
+      "unitType": "herder",
       "by": "A"
     },
     {
@@ -91,27 +34,62 @@
     {
       "type": "MOVE",
       "unitId": "u4",
-      "x": 4,
+      "x": 5,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 5,
       "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 9,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "herder",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 9,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u5",
-      "x": 5,
+      "x": 8,
       "y": 6,
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
@@ -124,119 +102,42 @@
     },
     {
       "type": "MOVE",
-      "unitId": "u2",
-      "x": 4,
-      "y": 4,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
       "unitId": "u3",
-      "x": 5,
-      "y": 4,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u4",
-      "x": 4,
-      "y": 5,
+      "x": 9,
+      "y": 8,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u5",
-      "x": 5,
-      "y": 5,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u6",
-      "x": 4,
-      "y": 6,
+      "x": 9,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u7",
-      "x": 5,
+      "x": 9,
       "y": 6,
-      "by": "A"
-    },
-    {
-      "type": "RECRUIT",
-      "cityId": "c1",
-      "unitType": "lumberjack",
-      "by": "A"
-    },
-    {
-      "type": "END_TURN",
-      "by": "A"
-    },
-    {
-      "type": "END_TURN",
-      "by": "B"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u2",
-      "x": 4,
-      "y": 3,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u3",
-      "x": 5,
-      "y": 3,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u4",
-      "x": 4,
-      "y": 4,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u5",
-      "x": 5,
-      "y": 4,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u6",
-      "x": 4,
-      "y": 5,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u7",
-      "x": 5,
-      "y": 5,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u8",
-      "x": 4,
+      "x": 8,
       "y": 6,
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
@@ -250,76 +151,55 @@
     {
       "type": "MOVE",
       "unitId": "u3",
-      "x": 5,
-      "y": 2,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u2",
-      "x": 4,
-      "y": 2,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u4",
-      "x": 4,
-      "y": 3,
+      "x": 9,
+      "y": 9,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u5",
-      "x": 5,
-      "y": 3,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u6",
-      "x": 4,
-      "y": 4,
+      "x": 10,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u7",
-      "x": 5,
-      "y": 4,
+      "x": 10,
+      "y": 6,
       "by": "A"
     },
     {
       "type": "MOVE",
-      "unitId": "u8",
-      "x": 4,
-      "y": 5,
+      "unitId": "u6",
+      "x": 9,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u9",
-      "x": 5,
-      "y": 5,
+      "x": 9,
+      "y": 6,
       "by": "A"
     },
     {
       "type": "MOVE",
-      "unitId": "u10",
-      "x": 5,
+      "unitId": "u8",
+      "x": 8,
       "y": 6,
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
@@ -332,91 +212,76 @@
     },
     {
       "type": "MOVE",
-      "unitId": "u2",
-      "x": 2,
-      "y": 2,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u4",
-      "x": 2,
-      "y": 3,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
       "unitId": "u3",
-      "x": 3,
-      "y": 2,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u6",
-      "x": 2,
-      "y": 4,
+      "x": 9,
+      "y": 10,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u5",
-      "x": 3,
-      "y": 3,
+      "x": 10,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 9,
+      "y": 8,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u7",
-      "x": 3,
-      "y": 4,
-      "by": "A"
-    },
-    {
-      "type": "MOVE",
-      "unitId": "u8",
-      "x": 2,
-      "y": 5,
+      "x": 10,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u9",
-      "x": 4,
-      "y": 5,
+      "x": 10,
+      "y": 6,
       "by": "A"
     },
     {
       "type": "MOVE",
-      "unitId": "u10",
-      "x": 3,
-      "y": 6,
+      "unitId": "u8",
+      "x": 9,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u11",
-      "x": 4,
+      "x": 9,
       "y": 6,
       "by": "A"
     },
     {
       "type": "MOVE",
-      "unitId": "u12",
-      "x": 5,
+      "unitId": "u10",
+      "x": 8,
       "y": 6,
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
       "by": "A"
     },
     {
       "type": "RECRUIT",
       "cityId": "c1",
-      "unitType": "lumberjack",
+      "unitType": "herder",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "herder",
       "by": "A"
     },
     {
@@ -429,44 +294,291 @@
     },
     {
       "type": "MOVE",
-      "unitId": "u10",
-      "x": 2,
-      "y": 6,
+      "unitId": "u5",
+      "x": 10,
+      "y": 9,
       "by": "A"
     },
     {
       "type": "MOVE",
-      "unitId": "u11",
-      "x": 3,
-      "y": 6,
+      "unitId": "u6",
+      "x": 9,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 9,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 10,
+      "y": 8,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u9",
-      "x": 3,
-      "y": 5,
+      "x": 10,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
-      "unitId": "u12",
-      "x": 4,
-      "y": 5,
+      "unitId": "u11",
+      "x": 10,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 9,
+      "y": 7,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u13",
-      "x": 5,
+      "x": 9,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 8,
       "y": 5,
       "by": "A"
     },
     {
       "type": "MOVE",
       "unitId": "u14",
-      "x": 5,
+      "x": 8,
       "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "farmer",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "herder",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "farmer",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u15",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 5,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 10,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 10,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 10,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 10,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 10,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 10,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 9,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 9,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 9,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "farmer",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "herder",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "farmer",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "herder",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 4,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u15",
+      "x": 4,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u20",
+      "x": 5,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 10,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 9,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 10,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 9,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 10,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 10,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u19",
+      "x": 9,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u21",
+      "x": 9,
+      "y": 7,
       "by": "A"
     }
   ]
