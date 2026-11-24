@@ -63,7 +63,19 @@ export function actFor(
    * 让它"让开"就等于不许过河——桥面那一格本来就是临时占用。
    */
   const yieldTo = con.yieldMoves.find((m) => m.unitId === u.id);
-  if (yieldTo) return { type: 'MOVE', unitId: u.id, x: yieldTo.x, y: yieldTo.y };
+  if (yieldTo) {
+    /*
+     * **不要直接照搬搬迁计划的落点。**
+     *
+     * 计划是拿"这一手开始时"的局面算的；等轮到第 8 个单位行动，前面的人已经把
+     * 它要去的那一格占了，于是引擎回一句"目标格不可达"——实测每回合被拒 20 次，
+     * 动作预算全烧在这上面（S-002 的兵就是这么原地不动的）。
+     *
+     * 改成：把计划落点当**方向**，用当前局面重新挑一个可达格走过去。
+     */
+    const spot = stepToward(s, u, { x: yieldTo.x, y: yieldTo.y });
+    if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+  }
 
   /*
    * ①.2 经济兵：按**一把尺子**挑格子——每回合净多产多少金（金/回合）。
@@ -125,6 +137,20 @@ export function actFor(
     if (canHit) return { type: 'SIEGE', unitId: u.id, cityId: canHit.id };
   }
 
+
+  /*
+   * ②.5 集火：约束层点了名就打它。
+   *
+   * 排在攻城之后、乱打之前。理由：集火是"全体打同一个"，属于约束；
+   * 但如果这一手够得着城，攻城优先级更高（去城下本来就是为了打城）。
+   * 这里只做执行——选谁不是这一步的事。
+   */
+  if (sq?.focusId) {
+    const focus = s.units.find((v) => v.id === sq.focusId && v.owner !== world.me);
+    if (focus && attackableTargets(s, u).some((v) => v.id === focus.id)) {
+      return { type: 'ATTACK', unitId: u.id, targetId: focus.id, x: focus.x, y: focus.y };
+    }
+  }
 
   /* ③ 打人：能打谁由**引擎**回答，不自己算距离。
    *

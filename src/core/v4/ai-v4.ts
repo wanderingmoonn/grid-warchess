@@ -155,10 +155,16 @@ export function aiNextActionV4(
     if (usable(a)) return a;
   }
 
-  /* ② 打 */
+  /*
+   * ② 打。**只跳过"本回合已经攻击过"的，不跳"已经走过"的。**
+   *
+   * 引擎的规则是"一回合打一次"，走过路照样能开火。这里原来把 `moved` 也跳了，
+   * 等于每个兵每回合只能走或打二选一——火力直接砍半（S-002 三十个兵挤在城下
+   * 四格，每回合只打得出 0~1 次）。
+   */
   for (const u of world.myCombat) {
     const live = s.units.find((x) => x.id === u.id);
-    if (!live || live.moved || live.acted) continue;
+    if (!live || live.acted) continue;
     const a = actFor(s, world, con, live);
     if (usable(a) && a && a.type === 'ATTACK') return a;
   }

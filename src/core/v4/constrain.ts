@@ -10,6 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
+import { attackableTargets, effectiveStats } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { GameState, Unit } from '../types.ts';
 import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
@@ -17,6 +18,44 @@ import type { World } from './world.ts';
 
 const cheb = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
   Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+
+/**
+ * 本回合的集火点：**一张尺子，只算一次**。
+ *
+ * 候选 = 全队能打到的敌方单位（引擎的 `attackableTargets`，含射程/高度/视野）。
+ * 排序只有一条：**这一手能不能打死它**——
+ *   · 能打死的里面挑血最少的（打死了就少一个输出源，而且下回合不用再挨）；
+ *   · 都打不死就挑"总伤害 / 血量"最高的（下回合最可能收掉）。
+ *
+ * 不做"威胁权重""价值系数"那种东西：那正是 v3 那张必须调参的表。
+ */
+function pickFocus(s: GameState, ids: string[]): string | undefined {
+  /* 每个敌人能被我们几个单位够到、我们一共能砸多少伤害 */
+  const reach = new Map<string, { n: number; dmg: number; hp: number }>();
+  for (const id of ids) {
+    const u = s.units.find((x) => x.id === id);
+    if (!u) continue;
+    const st = effectiveStats(s, u);
+    if ((st.atk ?? 0) <= 0) continue;
+    for (const foe of attackableTargets(s, u)) {
+      const rec = reach.get(foe.id) ?? { n: 0, dmg: 0, hp: foe.hp };
+      rec.n += 1;
+      rec.dmg += Math.max(1, (st.atk ?? 0) - 0);
+      reach.set(foe.id, rec);
+    }
+  }
+  if (reach.size === 0) return undefined;
+  const rows = [...reach.entries()];
+  const killable = rows.filter(([, r]) => r.dmg >= r.hp);
+  if (killable.length > 0) {
+    /* 能打死：挑血最少的（最省手） */
+    killable.sort((a, b) => a[1].hp - b[1].hp);
+    return killable[0]![0];
+  }
+  /* 打不死：挑"总伤害/血量"最高的，下回合最可能收掉 */
+  rows.sort((a, b) => b[1].dmg / b[1].hp - a[1].dmg / a[1].hp);
+  return rows[0]![0];
+}
 
 /** 一个单位值多少（身价）：atk + hp + 射程×4，按剩余血量打折。和决定层同一个口径 */
 function unitWorth(s: GameState, u: Unit): number {
@@ -236,6 +275,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       at: ready ? undefined : assemblePoint(s, world, city.id),
       want: keepWant,
       eta: Number.isFinite(eta) ? eta : 99,
+      /* 集火点：这一手全队打同一个。出发前（assemble）也照样选，等于"边收拢边集火" */
+      focusId: pickFocus(s, ids),
     });
   } else if (decision.kind === 'defend' && city) {
     /* 守：把外面的兵收回城下（这条和 S-004 那道题是同一件事） */
