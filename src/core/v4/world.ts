@@ -475,7 +475,16 @@ export function buildWorld(s: GameState, me: PlayerId): World {
           if (seen.has(k) || keep.has(k) || nearBridge.has(k)) continue;
           const t = s.tiles[k]?.terrain;
           if (!t || !passable(t)) continue;
-          if (s.units.some((u) => u.y * s.w + u.x === k)) continue;
+          /*
+           * **自家经济兵站着的格，仍然算候选。**
+           *
+           * 全排除会出事：兵一站上自己的岗，那格就从表里消失 → 配对整体错位 →
+           * 下一手它被判"没岗"、别人被顶到远处，来回挪（实测 S-015：两个伐木工
+           * 在 (4,6)/(4,7) 之间每手互换）。
+           * 敌人和平民以外的自家单位（战斗兵）仍然排除——那种格是真的站不上。
+           */
+          const occ = s.units.find((u) => u.y * s.w + u.x === k);
+          if (occ && (occ.owner !== me || utype(s, occ.type).category !== 'economy')) continue;
           const x = k % s.w;
           const y = (k - x) / s.w;
 

@@ -27,6 +27,7 @@ import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
+import { utype } from '../rules.ts';
 import type { Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId } from '../types.ts';
 
@@ -78,7 +79,11 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
   const mem = memoryOf(s, me);
   const decision = decide(view, world, mem);
   const con = constrain(view, world, decision, mem);
-  writeMemory(s, me, { decision: { ...decision, since: s.turn }, squad: squadMemo(con, mem, s.turn) });
+  writeMemory(s, me, {
+    decision: { ...decision, since: s.turn },
+    squad: squadMemo(con, mem, s.turn),
+    econSince: econSinceMemo(s, me, mem),
+  });
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
   logSquads(s, world.me, decision, con);
   return cache;
@@ -117,6 +122,23 @@ function squadMemo(con: Constraints, mem: V4Memory, turn: number): V4Memory['squ
     formedAt: turn,
     want: main.want ?? 6,
   };
+}
+
+/**
+ * 记"每个经济兵是第几手造的"（`unitId → 手数`）。
+ *
+ * 岗位要按"谁先出生谁走远路、把近处让给新兵"配（见 `constrain.planEconPosts`），
+ * 而引擎的单位没有出生手数。这里只记事实：第一次见到它就写上手数，死了就删掉。
+ */
+function econSinceMemo(s: GameState, me: PlayerId, mem: V4Memory): Record<string, number> {
+  const prev = mem.econSince ?? {};
+  const out: Record<string, number> = {};
+  for (const u of s.units) {
+    if (u.owner !== me) continue;
+    if (utype(s, u.type).category !== 'economy') continue;
+    out[u.id] = prev[u.id] ?? s.turn;
+  }
+  return out;
 }
 
 /** 给探针清缓存用（换局时调一次） */

@@ -10,7 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats, unitYieldAt } from '../rules.ts';
+import { attackableTargets, effectiveStats } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -275,49 +275,6 @@ function planLanes(
 }
 
 /**
- * 从"这个兵现在站的格"出发，走到各格要几步（按它自己的地形消耗算）。
- *
- * 为什么不能用 `world.stepsFrom()`：那个是"每格 1 步"，把森林的额外消耗拍平了，
- * 而伐木工有穿林、别的兵没有——用同一张表会把伐木工进林的距离算远。
- */
-function walkFrom(s: GameState, u: Unit): Float64Array {
-  const n = s.w * s.h;
-  const best = new Float64Array(n).fill(Infinity);
-  const def = utype(s, u.type);
-  const start = u.y * s.w + u.x;
-  if (start < 0 || start >= n) return best;
-  best[start] = 0;
-  const K = 3;
-  const q: number[][] = [[], [], []];
-  q[0]!.push(start);
-  for (let d = 0; ; d++) {
-    if (q[0]!.length === 0 && q[1]!.length === 0 && q[2]!.length === 0) break;
-    const bucket = q[d % K]!;
-    while (bucket.length) {
-      const k = bucket.pop()!;
-      if (best[k] !== d) continue;
-      const x = k % s.w;
-      const y = (k - x) / s.w;
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
-        const t = s.tiles[ny * s.w + nx]?.terrain;
-        if (!t || !passable(t)) continue;
-        const cost = t === 'forest' && !(def.abilities ?? []).includes('forest-walk') ? 2 : 1;
-        const ni = ny * s.w + nx;
-        const nd = d + cost;
-        if (nd < best[ni]!) {
-          best[ni] = nd;
-          q[nd % K]!.push(ni);
-        }
-      }
-    }
-  }
-  return best;
-}
-
-/**
  * 经济兵的岗位（2026-11-24 重写）：**认领表**，一人一格。
  *
  * ── 它解决的是什么 ──────────────────────────────────────────
@@ -341,6 +298,7 @@ function walkFrom(s: GameState, u: Unit): Float64Array {
 function planEconPosts(
   s: GameState,
   world: World,
+  mem?: V4Memory,
 ): { posts?: Record<string, { x: number; y: number }>; next?: { type: string; x: number; y: number } } {
   const econ = world.myEcon;
   const spots = world.econSpots();
@@ -370,8 +328,6 @@ function planEconPosts(
    * 于是判定"搬走不划算"，钉在过道上不走；同时真正属于它的森林岗一直空着，
    * 上层的造兵又照着那个空岗造了第三个伐木工。
    */
-  const yieldAt = (u: Unit): number =>
-    keepSet.has(u.y * s.w + u.x) ? 0 : (unitYieldAt(s, u, u.x, u.y).gold ?? 0);
 
   /*
    * ① 已经站人的格先算被占：**脚下的格就是他的岗**。
@@ -380,53 +336,62 @@ function planEconPosts(
   for (const u of econ) claimed.add(u.y * s.w + u.x);
 
   /*
-   * ② 按"现在产得最少"的先挑——弱的人先占好位。
-   *    搬家的门槛是净收益 > 0，所以已经站在肥格上的人不会为了让别人而搬走。
+   * ② **按出生顺序配岗：先出生的去远的，后出生的拿近的。**
    *
-   * ⚠️ 岗位**分兵种**：伐木工只认领森林岗（`type === 'lumberjack'` 那些），牧民只认领丘陵岗。
-   * 不分的话，站在城里（产出 0）的牧民会把森林当成"+2 金的好地"抢走，伐木工被挤到平原——
-   * 实测第二手就发生：`伐木工@(7,5) → 岗(6,4) 平原`、`牧民 → 岗(4,7) 森林`。
+   * 这是用户 2026-11-24 看回放时纠正的，也是人手答案的走法（action.json 里有据）：
+   * u3 是第 1 手造的，它一路往东挪（9,6 → 9,7 → 9,8 → 9,9），
+   * 新造的 u5/u7 填它让出来的格。**老的往外顶，新的从近处上来。**
+   *
+   * ── 为什么不能"谁近谁先挑"（前两版都这么写，结果都错）──
+   *
+   * 新兵出生在城里，近处的岗一定离它最近 → 近岗永远被新兵拿走，老兵被挤去远岗，
+   * 或者新兵自己走远路。看上去总产出没少（同产出的岗互换是等价的），但行为是错的：
+   *   ① 新兵走到一半遇到期限/威胁，这一手就白费了；老兵本来就在稳定产出，却被赶走；
+   *   ② 老兵剩余回合多，走远路"摊得开"；新兵剩余回合少，走远路就是纯亏。
+   * 所以配对的目标不是"当前产出最大"，是**让每个单位的到岗回合尽量一致**。
+   *
+   * ── 规矩 ──
+   *
+   * 同兵种的岗产出相同（森林给伐木工、丘陵给牧民、平原给农民），所以同兵种内
+   * "远的给老的"不损失任何产出，只是把路程摊平。
    */
-  const movable = [...econ].sort((a, b) => yieldAt(a) - yieldAt(b));
-  for (const u of movable) {
-    const mine = u.type;
-    const stay = yieldAt(u) * horizon;
+  const seniority = (u: Unit): number => mem?.econSince?.[u.id] ?? 0;
+  const byType = new Map<string, Unit[]>();
+  for (const u of econ) {
+    const arr = byType.get(u.type) ?? [];
+    arr.push(u);
+    byType.set(u.type, arr);
+  }
+  for (const [type, units] of byType) {
     /*
-     * **走过去几回合要按"他现在在哪"算，不能按城算。**
-     *
-     * 认领表里的 `turns` 是"从城走到那格"，那是给新兵用的。已经派出去的兵离城很远，
-     * 拿城当起点会把近在眼前的岗算成 5~6 手 → 净收益变负 → 一动不动。
-     * 实测 S-006：6 个经济兵全站在离城很远的角落，一个都没挪（总产卡在 27；
-     * 判据 45，站位机器人 48）。
+     * 单位：出生早的排前面（同一手出生的按 id 排，保证同一个局面每次算出来一样）。
+     * 岗位：走得远到近排（`turns` 是"从城走到那儿"，也就是这个岗要花多少路程）。
      */
-    const def = utype(s, u.type);
-    const dist = walkFrom(s, u);
-    const move = Math.max(1, def.move ?? 2);
-    let best: (typeof usable)[number] | null = null;
-    let bestGain = 0;
-    for (const p of usable) {
-      if (p.type !== mine) continue; /* 这个岗不是给我这类兵的 */
-      const k = p.y * s.w + p.x;
-      if (k === u.y * s.w + u.x) continue;
-      if (claimed.has(k)) continue;
-      const raw = dist[k]!;
-      if (!Number.isFinite(raw)) continue;
-      const turns = Math.ceil(raw / move);
-      const gain = p.yield * Math.max(0, horizon - turns) - stay;
-      if (gain <= 0) continue;
-      if (gain > bestGain) {
-        bestGain = gain;
-        best = p;
+    const sortedUnits = [...units].sort((a, b) => seniority(a) - seniority(b) || (a.id < b.id ? -1 : 1));
+    /*
+     * 岗位先取**最近的 N 个**（N = 这个兵种的人数），再把这 N 个里**最远的给最老的**。
+     *
+     * 为什么必须先截断：只有一个牧民时，要是不截断，它会拿到全图最远的丘陵
+     * （实测：一个人走 6 手，产量等于 0）。同产出的岗之间没有理由走远路——
+     * 走远路只在"要给新兵腾近岗"时才有意义，也就是截断之后才有的事。
+     */
+    const sortedSpots = usable
+      .filter((p) => p.type === type)
+      .sort((a, b) => a.turns - b.turns || (a.y * s.w + a.x) - (b.y * s.w + b.x))
+      .slice(0, sortedUnits.length)
+      .reverse();
+
+    sortedUnits.forEach((u, i) => {
+      const p = sortedSpots[i];
+      if (p) {
+        posts[u.id] = { x: p.x, y: p.y };
+        claimed.add(p.y * s.w + p.x);
+      } else if (!keepSet.has(u.y * s.w + u.x)) {
+        /* 岗不够分（这个兵种的好地已经占满）→ 原地不动 */
+        posts[u.id] = { x: u.x, y: u.y };
       }
-    }
-    if (best) {
-      posts[u.id] = { x: best.x, y: best.y };
-      claimed.add(best.y * s.w + best.x);
-    } else if (!keepSet.has(u.y * s.w + u.x)) {
-      /* 没有更好的岗、脚下又是能待的格 → 原地不动（净收益 0） */
-      posts[u.id] = { x: u.x, y: u.y };
-    }
-    /* 站在城圈/城格上又没有岗：不给岗，让搬迁计划把它请出去 */
+      /* 站在城圈/城格上又没有岗：不给岗，让搬迁计划把它请出去 */
+    });
   }
 
   /*
@@ -693,7 +658,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         }
       : undefined;
 
-  const econPlan = planEconPosts(s, world);
+  const econPlan = planEconPosts(s, world, mem);
   return {
     need,
     econPosts: econPlan.posts,

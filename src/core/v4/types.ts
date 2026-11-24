@@ -135,6 +135,13 @@ export interface V4Memory {
   decision?: Decision & { since: number } | null;
   /** 事实：这支队第几手成立、当初定下打几个人（防止 want 每回合被人一死就缩） */
   squad?: { id: string; cityId: string; formedAt: number; want: number } | null;
+  /**
+   * 事实：每个经济兵是第几手造出来的（`unitId → 手数`）。
+   *
+   * 为什么需要记：岗位要按"谁先出生谁走远路"配（见 `constrain.planEconPosts`）。
+   * 引擎的单位没有出生手数，只能自己记；只记事实，不记判断。
+   */
+  econSince?: Record<string, number>;
 }
 
 /** 结构化日志的一条。出了问题先看它，别看代码 */
