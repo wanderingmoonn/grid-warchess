@@ -77,6 +77,11 @@ type Criterion = {
   y1?: number;
   min?: number;
   max?: number;
+  /**
+   * `unitsNear` 用：取**全程最大值**（冲到过就算），而不是"判据那一手还活着几个"。
+   * 量"敢不敢冲"的题用它；量"站不站得住"的题不要用。
+   */
+  ever?: boolean;
   /** 为什么有这一条（写给人看，判分时会一起打印） */
   note?: string;
 };
@@ -365,12 +370,24 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
       return { ok: lowOk && highOk, got: `${key.split(':')[1]} ${n} 个` };
     }
     case 'unitsNear': {
-      const n = st.mine.filter(
-        (u) =>
-          Math.abs(u.x - (c.x ?? 0)) + Math.abs(u.y - (c.y ?? 1)) <= (c.r ?? 1) &&
-          (!c.category || u.category === c.category),
-      ).length;
-      return { ok: c.min === undefined || n >= c.min, got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个` };
+      const countAt = (st2: Stat): number =>
+        st2.mine.filter(
+          (u) =>
+            Math.abs(u.x - (c.x ?? 0)) + Math.abs(u.y - (c.y ?? 1)) <= (c.r ?? 1) &&
+            (!c.category || u.category === c.category),
+        ).length;
+      /*
+       * `ever: true` → 取**全程的最大值**，而不是"判据那一手此刻还活着几个"。
+       *
+       * 为什么要有这个：有些题量的是"敢不敢冲过去"，冲到之后被打死不算没冲。
+       * 按当期存活算的版本会把"冲到 6 个、当场死 2 个"判成 4（S-011 就是这样）。
+       * 默认仍是当期，别的题不受影响。
+       */
+      const n = c.ever ? Math.max(0, ...[...record.values()].map(countAt)) : countAt(st);
+      return {
+        ok: c.min === undefined || n >= c.min,
+        got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个${c.ever ? '（全程最多）' : ''}`,
+      };
     }
     case 'recruited': {
       /* "有没有把钱换成兵"。累加量，不受打死、也不被收入补回去影响。 */
