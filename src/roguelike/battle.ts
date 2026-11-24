@@ -18,7 +18,7 @@ import { UNIT_TYPES } from '../core/config.ts';
 import { applyAction } from '../core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { LevelDef } from '../core/level.ts';
-import type { Action, GameState, PlayerId, UnitTypeDef } from '../core/types.ts';
+import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import type { ArmyEntry, BattleInit, BattleResult } from './types.ts';
 import { makeRng } from './rng.ts';
 
@@ -212,6 +212,52 @@ function makeLevel(init: BattleInit): LevelDef {
 }
 
 /**
+ * 摆阵：**射程越远越靠后，跑得快的站两翼**。
+ *
+ * 只在已经分好的站位之间重新分配"谁站哪"——不重新挑格子。
+ * 这样不会踩到城/水/山，也不会把谁挤出地图，改变的只是排布。
+ *
+ * 为什么需要：`pickCells` 是"从锚点一圈圈往外撒、圈内随机"。随机的结果是远程
+ * 常常被摆在最前面、近战缩在最后一排——每次开局第一件事就是把自己人挪一遍。
+ * 阵型是玩家一眼要看懂的东西，不该掷骰子决定。
+ */
+function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1): void {
+  const units = s.units.filter((u) => u.owner === owner && u.hp > 0);
+  if (units.length < 3) return; // 两三个人怎么站都一样
+
+  const cells = units.map((u) => ({ x: u.x, y: u.y }));
+  const cx = cells.reduce((n, c) => n + c.x, 0) / cells.length;
+  const cy = cells.reduce((n, c) => n + c.y, 0) / cells.length;
+  /** 越大越靠后（远离敌人） */
+  const back = (c: { x: number; y: number }): number => (c.y - cy) * -toward;
+  /** 越大越靠边 */
+  const wing = (c: { x: number; y: number }): number => Math.abs(c.x - cx);
+
+  const want = (u: Unit): { back: number; mobile: boolean } => {
+    const def = s.unitTypes[u.type];
+    const range = def?.range ?? 1;
+    const move = def?.move ?? 3;
+    // 0 = 贴敌，1 = 中排，2 = 最后排
+    return { back: range >= 3 ? 2 : range >= 2 ? 1 : 0, mobile: range <= 1 && move >= 4 };
+  };
+
+  // 前排的格子给近战，后排的给远程；同一排里最外侧的给跑得快的
+  const bySlot = [...cells].sort((a, b) => back(a) - back(b) || wing(b) - wing(a));
+  const byUnit = [...units].sort((a, b) => {
+    const pa = want(a);
+    const pb = want(b);
+    return pa.back - pb.back || Number(pb.mobile) - Number(pa.mobile);
+  });
+
+  byUnit.forEach((u, i) => {
+    const c = bySlot[i];
+    if (!c) return;
+    u.x = c.x;
+    u.y = c.y;
+  });
+}
+
+/**
  * 造一场战斗。
  *
  * 所有"这一关长什么样"的信息都塞进 LevelDef，交给 `createMatch` 去建；
@@ -250,6 +296,22 @@ export function buildBattle(init: BattleInit): GameState {
    * 全亮反而更像"短兵相接"。
    */
   s.fog = false;
+
+  /*
+   * ---- 摆阵 ----
+   *
+   * 两边的锚点都在 `makeLevel` 里定好了（A 在下、B 在上），所以朝向按
+   * 双方的 y 均值判：谁在下面谁朝上打。判出来的方向交给 `arrangeFormation`，
+   * 它负责"近战在前、远程在后、快兵在两翼"。
+   */
+  const aUnits = s.units.filter((u) => u.owner === 'A');
+  const bUnits = s.units.filter((u) => u.owner === 'B');
+  if (aUnits.length > 0 && bUnits.length > 0) {
+    const avgY = (list: Unit[]): number => list.reduce((n, u) => n + u.y, 0) / list.length;
+    const aDown = avgY(aUnits) > avgY(bUnits);
+    arrangeFormation(s, 'A', aDown ? -1 : 1);
+    arrangeFormation(s, 'B', aDown ? 1 : -1);
+  }
 
   // ---- 我方加成（变体兵种）----
   /*

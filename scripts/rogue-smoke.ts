@@ -16,6 +16,7 @@ import {
   armyCount,
   battleFor,
   bossFor,
+  bossRewards,
   finishBattle,
   nextLayer,
   planLayer,
@@ -25,7 +26,7 @@ import {
   startRun,
   STEPS_PER_LAYER,
 } from '../src/roguelike/run.ts';
-import { isEliminated } from '../src/core/rules.ts';
+import { isEliminated, utype } from '../src/core/rules.ts';
 import { buildBattle, outcomeOf, resultOf, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
 import type { LayerId, RoomKind, RunState } from '../src/roguelike/types.ts';
@@ -90,8 +91,7 @@ console.log('\n[2] 流程推进（60 局，全部走完三层）');
           gold: init.playerGold + 100,
           turns: 20,
         });
-        const rewards = rewardOptions(run, 'boss', rng);
-        applyEffect(run, at(rewards, 0).effect, rng);
+        bossRewards(run, rng);
         if (run.layer >= 3) {
           run.over = { win: true, title: '常规结局 · 破钟', body: '' };
         } else {
@@ -226,6 +226,94 @@ console.log('\n[4] 关卡规格');
   const wipe = { ...boss, units: boss.units.filter((u) => u.owner !== 'A') };
   check(isEliminated(wipe, 'A'), '无城席位：兵打光＝出局');
   check(!isEliminated(boss, 'A'), '还有兵时不算出局');
+}
+
+// ---------------------------------------------------------------- 5. 阵型
+console.log('\n[5] 阵型：射程越远越靠后，快兵在两翼');
+{
+  const run = startRun(31415, 'skirmish');
+  const s = buildBattle(battleFor(run, { kind: 'battle', title: '遭遇战', sub: '' }, 2718));
+  const line = (owner: 'A' | 'B') => {
+    const us = s.units.filter((u) => u.owner === owner);
+    const melee = us.filter((u) => (utype(s, u.type).range ?? 1) <= 1);
+    const ranged = us.filter((u) => (utype(s, u.type).range ?? 1) >= 3);
+    const avg = (l: typeof us): number => (l.length ? l.reduce((n, u) => n + u.y, 0) / l.length : NaN);
+    return { melee: avg(melee), ranged: avg(ranged), meleeN: melee.length, rangedN: ranged.length };
+  };
+  const a = line('A');
+  check(a.meleeN > 0 && a.rangedN > 0, '我军近战与远程都在场');
+  check(a.ranged > a.melee, '我军远程站在近战后面', `近战 y=${a.melee.toFixed(1)} 远程 y=${a.ranged.toFixed(1)}`);
+
+  const scout = s.units.find((u) => u.owner === 'A' && utype(s, u.type).id === 'scout');
+  const militia = s.units.find((u) => u.owner === 'A' && utype(s, u.type).id === 'militia');
+  if (scout && militia) {
+    const cx = s.units.filter((u) => u.owner === 'A').reduce((n, u) => n + u.x, 0) / 7;
+    check(
+      Math.abs(scout.x - cx) >= Math.abs(militia.x - cx),
+      '快兵（斥候 move 4）站得比民兵靠边',
+      `斥候 ${scout.x} / 民兵 ${militia.x} / 中线 ${cx.toFixed(1)}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------- 6. 成长与奖励
+console.log('\n[6] 成长与奖励');
+{
+  // 跨层不换装
+  const run = startRun(4242, 'frontier');
+  const before = run.army.map((a) => a.type).join(',');
+  run.step = STEPS_PER_LAYER;
+  nextLayer(run, run.seed);
+  check(run.army.map((a) => a.type).join(',') === before, '跨层不自动换装（队伍原样带走）');
+
+  // 开局三房用上一代兵池
+  const run2 = startRun(515, 'frontier');
+  run2.layer = 2;
+  run2.clock = 0;
+  const init2 = battleFor(run2, { kind: 'battle', title: '', sub: '' }, 6);
+  const prev = new Set(['spearman', 'longbow', 'crossbow', 'knight']);
+  check(
+    init2.enemyTypes.every((t) => prev.has(t)),
+    'L2 开局（钟 0）敌人全是上一代（e2）',
+    init2.enemyTypes.join(','),
+  );
+  run2.clock = 4;
+  const init2b = battleFor(run2, { kind: 'battle', title: '', sub: '' }, 6);
+  check(
+    init2b.enemyTypes.some((t) => !prev.has(t)),
+    'L2 中段（钟 4）敌人换成本代（e3）',
+    init2b.enemyTypes.join(','),
+  );
+
+  // 普通战：钱 ≈ 1.15 个兵价
+  const rng = makeRng(9);
+  const run3 = startRun(99, 'frontier');
+  const opts = rewardOptions(run3, 'battle', rng);
+  const unitOpt = opts.find((o) => o.id === 'unit');
+  const goldOpt = opts.find((o) => o.id === 'gold');
+  check(!!unitOpt && !!goldOpt, '普通战奖励里有「兵」和「钱」两项');
+  if (unitOpt && goldOpt) {
+    check((unitOpt.effect.add?.count ?? 0) === 1, '普通战给 1 个兵');
+    const gold = goldOpt.effect.gold ?? 0;
+    check(gold > 25 && gold < 260, '普通战的钱在一个兵的价位上', `${gold} 金`);
+  }
+
+  // 精英：3 个兵 / 3 兵价的钱 / 1 兵 + 藏品
+  const elite = rewardOptions(run3, 'elite', makeRng(11));
+  check(elite.length === 3, '精英战给三个选项');
+  check(elite.some((o) => (o.effect.add?.count ?? 0) === 3), '精英战有「三个兵」');
+  check(elite.some((o) => (o.effect.add?.count ?? 0) === 1 && !!o.effect.relic), '精英战有「一兵 + 一藏品」');
+
+  // 层末：1 藏 + 1 本层高级兵 + 1 下层初级兵 + 高级兵价钱
+  const run4 = startRun(1234, 'frontier');
+  const relicsBefore = run4.relics.length;
+  const goldBefore = run4.gold;
+  const armyBefore = armyCount(run4.army);
+  const notes = bossRewards(run4, makeRng(21));
+  check(run4.relics.length === relicsBefore + 1, '层末必给 1 件藏品');
+  check(armyCount(run4.army) === armyBefore + 2, '层末给 2 个兵（本层高级 + 下层初级）');
+  check(run4.gold > goldBefore, '层末给一笔钱');
+  check(notes.some((n) => n.includes('下一层的兵')), '层末战利品里点明"下一层的兵"', notes.join(' / '));
 }
 
 console.log(

@@ -14,6 +14,7 @@ import {
   armyCount,
   battleFor,
   bossFor,
+  bossRewards,
   finishBattle,
   loseRun,
   nextLayer,
@@ -334,7 +335,10 @@ function openShop(root: HTMLElement): void {
       return `<div class="rg-shop-row"><h5>${title}</h5><div class="rg-shop-items">
         ${items
           .map((it) => {
-            const sold = bought.has(it.id);
+            // 兵是**按人头卖**的：有钱就能一直买（不然金币会堆成死钱）；
+            // 藏品和补给是摊子上就那一件，买完没了。
+            const repeatable = it.group === 'unit';
+            const sold = !repeatable && bought.has(it.id);
             const poor = r.gold < it.price;
             return `<button class="rg-shop-item" data-buy="${it.id}" ${sold || poor ? 'disabled' : ''}>
               <b>${escapeHtml(it.title)}</b>
@@ -365,11 +369,12 @@ function openShop(root: HTMLElement): void {
     const buyId = el?.closest<HTMLElement>('[data-buy]')?.dataset.buy;
     if (buyId) {
       const item = stock.find((it) => it.id === buyId);
-      if (!item || bought.has(item.id) || r.gold < item.price) return;
+      if (!item || r.gold < item.price) return;
+      if (item.group !== 'unit' && bought.has(item.id)) return;
       r.gold -= item.price;
       applyEffect(r, item.effect, rng);
       r.log.push(`买下 ${item.title}（${item.price} 金）`);
-      bought.add(item.id);
+      if (item.group !== 'unit') bought.add(item.id);
       paint();
       return;
     }
@@ -428,6 +433,12 @@ function onBattleDone(root: HTMLElement, node: RoomNode, result: BattleResult): 
   );
 }
 
+/**
+ * 层末结算：**战利品是一整套，不给选择**。
+ *
+ * 按设计：藏品 1 件 + 本层高级兵 1 个 + 相当于高级兵的钱 + **下一层的初级兵 1 个**。
+ * 最后那一项是给下一层开局的（不换装之后，玩家会带着一队上一代的兵进新层）。
+ */
 function onBossDone(root: HTMLElement, node: RoomNode, result: BattleResult): void {
   if (!run) return;
   const r = run;
@@ -439,26 +450,20 @@ function onBossDone(root: HTMLElement, node: RoomNode, result: BattleResult): vo
   finishBattle(r, result);
   r.bossDone = true;
   r.log.push(`破「${node.title}」`);
-  const options = rewardOptions(r, 'boss', rng);
-  openModal(
-    root,
-    `<h3>${node.title} · 已破</h3><p class="rg-body">${node.sub}</p>`,
-    options,
-    (pick) => {
-      const item = options.find((o) => o.id === pick);
-      if (item) applyEffect(run!, item.effect, rng);
-      if (run!.layer >= 3) {
-        run!.over = {
-          win: true,
-          title: '常规结局 · 破钟',
-          body: '钟楼倒了，钟声断在半途。这一代到此为止——你没有再往前走。',
-        };
-        showOver(root);
-        return;
-      }
-      nextLayer(run!, run!.seed);
-      showInterlude(root);
-    },
+
+  const notes = bossRewards(r, rng);
+  const last = r.layer >= 3;
+  if (last) {
+    r.over = {
+      win: true,
+      title: '常规结局 · 破钟',
+      body: '钟楼倒了，钟声断在半途。这一代到此为止——你没有再往前走。',
+    };
+  } else {
+    nextLayer(r, r.seed);
+  }
+  showResultThen(root, `${node.title} · 已破`, `战利品：${notes.join('；')}。`, () =>
+    last ? showOver(root) : showInterlude(root),
   );
 }
 
@@ -479,7 +484,7 @@ function showInterlude(root: HTMLElement): void {
 
 // ------------------------------------------------------------------ 通用
 
-function showResultThen(root: HTMLElement, title: string, body: string): void {
+function showResultThen(root: HTMLElement, title: string, body: string, next?: () => void): void {
   if (!run) return;
   const host = document.createElement('div');
   host.className = 'rg-mask';
@@ -493,7 +498,8 @@ function showResultThen(root: HTMLElement, title: string, body: string): void {
     const ok = (e.target as HTMLElement | null)?.closest('[data-ok]');
     if (!ok) return;
     host.remove();
-    if (run?.over) showOver(root);
+    if (next) next();
+    else if (run?.over) showOver(root);
     else showMap(root);
   };
 }
