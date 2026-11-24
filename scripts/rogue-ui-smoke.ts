@@ -98,6 +98,8 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
   let modals = 0;
   let portals = 0;
   let battles = 0;
+  let shops = 0;
+  let decisions = 0;
   let guard = 0;
   let layers = 1;
   while (guard < 400) {
@@ -107,7 +109,14 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
     const mask = doc.querySelector('.rg-mask');
     if (mask) {
       modals += 1;
-      click(mask.querySelector('.rg-choice') ?? mask.querySelector('[data-ok]'));
+      if (mask.querySelector('.rg-shop-row')) shops += 1;
+      if ((mask.textContent ?? '').includes('临战决议')) decisions += 1;
+      // 商店是三行货架（没有 .rg-choice），点「离开」；其余弹层点第一个选项
+      const pick =
+        mask.querySelector('.rg-choice') ??
+        mask.querySelector('[data-ok]') ??
+        mask.querySelector('[data-shop="leave"]');
+      click(pick);
       await wait(4);
       continue;
     }
@@ -133,7 +142,11 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
     }
     break;
   }
-  console.log(`    经过 ${modals} 个弹层、${battles} 场（自动判胜的）战斗、${portals} 次层间推进`);
+  console.log(
+    `    经过 ${modals} 个弹层（其中商店 ${shops}、临战决议 ${decisions}）、${battles} 场（自动判胜的）战斗、${portals} 次层间推进`,
+  );
+  check(shops > 0, '商店是三行货架');
+  check(decisions >= 3, '每层层末都有临战决议', `实际 ${decisions}`);
   check(layers === 3, '走到了第三层', `实际 ${layers}`);
   check(modals >= 5, '事件/商店/营地/战利品至少弹了 5 次', `实际 ${modals}`);
   check(!!root.querySelector('.rg-over'), '第三层结束后有结局画面');

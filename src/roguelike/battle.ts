@@ -31,13 +31,27 @@ function baseTypeOf(type: string): string {
 }
 
 /** 给我军注册"带加成"的兵种变体，返回变体 id */
-function variantOf(s: GameState, type: string, atk: number, move: number): string {
-  if (atk === 0 && move === 0) return type;
+function variantOf(
+  s: GameState,
+  type: string,
+  atk: number,
+  move: number,
+  armor: number,
+  hp: number,
+): string {
+  if (atk === 0 && move === 0 && armor === 0 && hp === 0) return type;
   const def = s.unitTypes[type];
   if (!def) return type;
-  const id = `${VARIANT}${type}@${atk}@${move}`;
+  const id = `${VARIANT}${type}@${atk}@${move}@${armor}@${hp}`;
   if (!s.unitTypes[id]) {
-    const clone: UnitTypeDef = { ...def, id, atk: Math.max(0, def.atk + atk), move: Math.max(0, def.move + move) };
+    const clone: UnitTypeDef = {
+      ...def,
+      id,
+      atk: Math.max(0, def.atk + atk),
+      move: Math.max(0, def.move + move),
+      armor: Math.max(0, def.armor + armor),
+      maxHp: Math.max(1, def.maxHp + hp),
+    };
     s.unitTypes[id] = clone;
   }
   return id;
@@ -158,7 +172,7 @@ function makeLevel(init: BattleInit): LevelDef {
     ? { x: (citiesB[0] as Cell).x + 1, y: (citiesB[0] as Cell).y + 3 }
     : { x: Math.floor(w / 2), y: 1 };
 
-  const playerFlat = flatten(init.playerArmy);
+  const playerFlat = flatten([...init.playerArmy, ...init.tempUnits]);
   const enemyFlat = init.enemyTypes;
   const playerCells = pickCells(w, h, grid, blocked, playerAnchor, playerFlat.length, init.seed ^ 0x1234);
   const enemyCells = pickCells(w, h, grid, blocked, enemyAnchor, enemyFlat.length, init.seed ^ 0x5678);
@@ -193,7 +207,7 @@ function makeLevel(init: BattleInit): LevelDef {
     },
     seats: { count: 2, ai: ['B'], cityless: noCity },
     deploy: { A: deployA, B: deployB },
-    setup: { startEra: init.era, firstSide: 'A' },
+    setup: { startEra: init.cityEra, firstSide: 'A' },
   };
 }
 
@@ -217,10 +231,12 @@ export function buildBattle(init: BattleInit): GameState {
       playerCount: 2,
       aiOpponent: true,
       aiLevel: 'advanced',
-      expansionIds: [],
+      expansionIds: init.expansions,
       enabledUnits: allUnits,
       disabledUnits: [],
       level,
+      aiDoctrine: init.enemyDoctrine,
+      aiDoctrineSeat: 'B',
     },
     init.seed,
     {},
@@ -236,23 +252,29 @@ export function buildBattle(init: BattleInit): GameState {
   s.fog = false;
 
   // ---- 我方加成（变体兵种）----
-  const relics = new Set(init.relics);
-  const atk = (relics.has('forge') ? 1 : 0) + init.nextAtk;
-  const moveUp = (relics.has('boots') ? 1 : 0) + (init.strategyId === 'horse' ? 1 : 0);
+  /*
+   * 我军加成：攻击 / 护甲 / 生命 / 移动。
+   *
+   * `unitTypes` 是全图共用的一张表，所以不能直接把 +1 写进去（敌人也会变强）；
+   * 给每个兵注册一个带后缀的**变体兵种**，只有我军用变体 id。
+   */
+  const moveUp = init.bonusMove;
   for (const u of s.units) {
     if (u.owner !== 'A') continue;
     const def = s.unitTypes[u.type];
-    let bonus = atk;
-    if (init.strategyId === 'skirmish' && def && def.range >= 3) bonus += 2;
-    u.type = variantOf(s, u.type, bonus, moveUp);
+    let atk = init.bonusAtk;
+    if (init.strategyId === 'skirmish' && def && def.range >= 3) atk += 2;
+    u.type = variantOf(s, u.type, atk, moveUp, init.bonusArmor, init.bonusHp);
+    const v = s.unitTypes[u.type];
+    if (v) u.hp = v.maxHp;
   }
 
-  // ---- 城的加成（目前只有敌方有城；留着这条，将来玩家有城时直接生效）----
-  const rampart = (relics.has('rampart') ? 25 : 0) + (init.strategyId === 'frontier' ? 20 : 0);
-  for (const city of s.cities) {
-    if (city.owner !== 'A') continue;
-    city.maxHp += rampart;
-    city.hp += rampart;
+  // ---- 火药桶 / 工兵破墙：敌城开场就带伤 ----
+  if (init.cityDamage > 0) {
+    for (const city of s.cities) {
+      if (city.owner === 'A') continue;
+      city.hp = Math.max(1, Math.round(city.hp * (1 - Math.min(0.8, init.cityDamage))));
+    }
   }
 
   s.players.A.gold = init.playerGold;

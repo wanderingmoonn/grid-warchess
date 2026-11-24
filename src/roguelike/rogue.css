@@ -574,3 +574,121 @@
   margin: 4px 0 0;
   font-size: 18px;
 }
+
+/* ---------- 商店（三行货架） ---------- */
+
+.rg-modal.wide {
+  width: min(720px, 100%);
+}
+.rg-shop {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 6px 0 14px;
+}
+.rg-shop-row h5 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #837b6b;
+  letter-spacing: 0.5px;
+}
+.rg-shop-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+.rg-shop-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid #d5cdbb;
+  background: #fffdf6;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.rg-shop-item:hover:not(:disabled) {
+  border-color: #2f6ea8;
+  background: #f2f7fc;
+}
+.rg-shop-item span {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-shop-item em {
+  font-style: normal;
+  color: #8a6b1f;
+  font-size: 12px;
+}
+.rg-shop-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rg-shop-foot {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* ---------- 单位属性卡（悬停） ---------- */
+
+.rg-hovercard {
+  position: fixed;
+  z-index: 6000;
+  width: 208px;
+  pointer-events: none;
+  background: #fffdf6;
+  border: 1px solid #cabfa8;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 10px 26px rgba(40, 34, 20, 0.22);
+  font-size: 12px;
+  color: #3c3a33;
+}
+.rg-hc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.rg-hc-head b {
+  font-size: 14px;
+}
+.rg-hc-head i {
+  font-style: normal;
+  color: #837b6b;
+}
+.rg-hc-hp {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  background: #e6dfd0;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.rg-hc-hp span {
+  display: block;
+  height: 100%;
+  background: #7ba7c9;
+}
+.rg-hc-hp em {
+  position: absolute;
+  inset: 0;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 12px;
+  text-align: center;
+  color: #2b2a26;
+}
+.rg-hc-stats {
+  color: #6d6659;
+  margin-bottom: 3px;
+}
+.rg-hc-line {
+  color: #837b6b;
+  line-height: 1.5;
+}
