@@ -120,8 +120,21 @@ import type { ResourceCost } from './core/resources.ts';
 import { seatsOf } from './core/types.ts';
 import type { Action, BoardId, GameState, OrderDirective, PlayerId, Terrain, Unit } from './core/types.ts';
 import { lineBetween } from './core/grid-line.ts';
-import { BOARD_PAD, angledBoardMarker, cellAtPoint, coordsFromEvent, fitBoardBox, refreshCellVar, renderBoard, syncAngledBoard } from './ui/board.ts';
-import { angledBoardSize } from './ui/angled-board.ts';
+import {
+  BOARD_PAD,
+  angledBoardMarker,
+  cellAtPoint,
+  coordsFromEvent,
+  fitBoardBox,
+  isDefaultAngledCamera,
+  refreshCellVar,
+  renderBoard,
+  resetAngledBoardCamera,
+  setAngledBoardCamera,
+  setAngledBoardHover,
+  syncAngledBoard,
+} from './ui/board.ts';
+import { DEFAULT_ANGLED_CAMERA, angledBoardSize, clampAngledCamera, type AngledCamera } from './ui/angled-board.ts';
 import { toast } from './ui/toast.ts';
 import { actionFeedback, combatCuesHtml, combatForecastHtml, combatResultCues, forecastCombat } from './ui/combat-feedback.ts';
 import type { CombatAction, CombatCue, CombatForecast } from './ui/combat-feedback.ts';
@@ -328,11 +341,13 @@ appEl.innerHTML = `
         <div class="force-flag" id="force-flag" hidden></div>
         <section class="combat-preview" id="combat-preview" hidden aria-label="攻击结果预览" aria-live="polite"></section>
         <div class="action-feedback" id="action-feedback" hidden role="status" aria-atomic="true"></div>
+        <div class="angle-hud" id="angle-hud" hidden aria-hidden="true"></div>
         <div class="board-scroll" id="board-scroll">
           <div class="board" id="board"></div>
         </div>
         <div class="zoom-bar" id="zoom-bar">
-          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换棋盘视角" hidden>斜俯视</button>
+          <button class="zoom-btn angle-view-toggle" data-act="board-angle" aria-pressed="false" title="切换正俯视 / 斜俯视（斜俯视下按住鼠标中键可拖转视角）" hidden>视角：正俯视</button>
+          <button class="zoom-btn angle-reset-btn" data-act="board-angle-reset" title="恢复斜俯视默认视角（也可双击鼠标中键）" hidden>复位视角</button>
           <button class="zoom-btn" data-act="zoom-fit" data-ref="zoom-fit" title="让整张图回到屏幕里">适应</button>
           <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
           <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
@@ -357,6 +372,7 @@ appEl.innerHTML = `
 const boardEl = pick<HTMLElement>(appEl, '#board');
 const combatPreviewEl = pick<HTMLElement>(appEl, '#combat-preview');
 const actionFeedbackEl = pick<HTMLElement>(appEl, '#action-feedback');
+const angleHudEl = pick<HTMLElement>(appEl, '#angle-hud');
 const draftEl = pick<HTMLElement>(appEl, '#draft');
 const boardWrapEl = pick<HTMLElement>(appEl, '#board-wrap');
 /**
@@ -2092,12 +2108,9 @@ function render(): void {
   renderBoard(boardEl, scopedView, scopedUi);
   const wasAngled = boardEl.classList.contains('has-angled-view');
   const canAngle = canUseAngledBoard();
-  syncAngledBoard(boardEl, scopedView, scopedUi, canAngle && preferAngledBoard);
+  syncAngledBoard(boardEl, scopedView, scopedUi, canAngle && preferAngledBoard, angledCam);
   const angled = boardEl.classList.contains('has-angled-view');
-  const angleToggle = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle"]')!;
-  angleToggle.hidden = !canAngle;
-  angleToggle.textContent = angled ? '正俯视' : '斜俯视';
-  angleToggle.setAttribute('aria-pressed', String(angled));
+  syncAngleControls();
   if (wasAngled !== angled) boardDirty = true;
   // 快路径要复用这一份：拖动刷地形时只有几格变了，没必要把上面那套重算一遍
   lastBoardUi = boardUi;
@@ -2267,15 +2280,81 @@ function render(): void {
 const ZOOM_STEPS = [1, 1.5, 2, 3];
 let boardZoom = 1;
 const ANGLED_BOARD_KEY = 'warchess:board-angle';
+const ANGLED_CAM_KEY = 'warchess:board-angle-cam';
 let preferAngledBoard = (() => {
   const view = new URLSearchParams(location.search).get('view');
   if (view === 'angled' || view === 'flat') return view === 'angled';
   try { return localStorage.getItem(ANGLED_BOARD_KEY) === '1'; } catch { return false; }
 })();
+let angledCam: AngledCamera = (() => {
+  try {
+    const raw = localStorage.getItem(ANGLED_CAM_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<AngledCamera>;
+      if (typeof parsed.yaw === 'number' && typeof parsed.tilt === 'number') {
+        return clampAngledCamera({ yaw: parsed.yaw, tilt: parsed.tilt });
+      }
+    }
+  } catch {}
+  return { ...DEFAULT_ANGLED_CAMERA };
+})();
+let angleHudTimer = 0;
+let angleHintShown = false;
+
+function saveAngledCam(): void {
+  try { localStorage.setItem(ANGLED_CAM_KEY, JSON.stringify(angledCam)); } catch {}
+}
+
+function showAngleHud(text: string, autoHideMs = 0): void {
+  angleHudEl.textContent = text;
+  angleHudEl.hidden = false;
+  window.clearTimeout(angleHudTimer);
+  if (autoHideMs > 0) {
+    angleHudTimer = window.setTimeout(() => {
+      angleHudEl.hidden = true;
+    }, autoHideMs);
+  }
+}
+
+function formatAngleHud(cam: AngledCamera): string {
+  const yawDeg = Math.round((cam.yaw * 180) / Math.PI);
+  const pitchDeg = Math.round((Math.atan(cam.tilt) * 180) / Math.PI);
+  return `旋转 ${yawDeg}° · 俯角 ${pitchDeg}° · 双击中键复位`;
+}
+
+function syncAngleControls(): void {
+  const canAngle = canUseAngledBoard();
+  const angled = boardEl.classList.contains('has-angled-view');
+  const angleToggle = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle"]');
+  const angleReset = boardWrapEl.querySelector<HTMLButtonElement>('[data-act="board-angle-reset"]');
+  if (angleToggle) {
+    angleToggle.hidden = !canAngle;
+    angleToggle.textContent = angled ? '视角：斜俯视' : '视角：正俯视';
+    angleToggle.setAttribute('aria-pressed', String(angled));
+    angleToggle.title = angled
+      ? '切回正俯视（按住鼠标中键可拖转视角，双击中键复位）'
+      : '切换至斜俯视（按住鼠标中键可自由调整视角）';
+  }
+  if (angleReset) {
+    angleReset.hidden = !angled || isDefaultAngledCamera(boardEl);
+  }
+}
 
 function canUseAngledBoard(): boolean {
   return typeof window.CanvasRenderingContext2D === 'function' && activeBoardId === EARTH &&
-    !godMode() && !tutorial.tutorialOn() && !replay && currentUiLayout(document.documentElement) !== 'classic';
+    !godMode() && !tutorial.tutorialOn();
+}
+
+function resetBoardAngle(): void {
+  if (!boardEl.classList.contains('has-angled-view')) return;
+  const previous = boardCamera();
+  angledCam = resetAngledBoardCamera(boardEl) ?? { ...DEFAULT_ANGLED_CAMERA };
+  saveAngledCam();
+  boardDirty = true;
+  fitBoard();
+  centerBoardCamera(previous);
+  syncAngleControls();
+  showAngleHud('已复位默认视角', 1400);
 }
 
 function toggleBoardAngle(): void {
@@ -2296,6 +2375,14 @@ function toggleBoardAngle(): void {
   const point = anchor && (angledBoardMarker(boardEl, anchor.x, anchor.y) ??
     [(anchor.x + 0.5) / state.w, (anchor.y + 0.5) / state.h]);
   centerBoardCamera(point ? { x: point[0], y: point[1] } : previous);
+  if (preferAngledBoard && boardEl.classList.contains('has-angled-view')) {
+    if (!angleHintShown) {
+      angleHintShown = true;
+      showAngleHud('斜俯视已开启 · 按住鼠标中键拖转视角，双击中键复位', 2600);
+    }
+  } else {
+    angleHudEl.hidden = true;
+  }
 }
 /**
  * 当前在看哪张图。
@@ -2403,7 +2490,7 @@ function fitBoard(): void {
   const board = boardOf(state, activeBoardId);
   let fit = fitBoardBox(board.w, board.h, width, availH);
   if (boardEl.classList.contains('has-angled-view')) {
-    const scene = angledBoardSize(board.w, board.h);
+    const scene = angledBoardSize(board.w, board.h, angledCam);
     const scale = Math.min(width / scene.w, Math.max(1, availH) / scene.h);
     fit = { w: Math.round(scene.w * scale), h: Math.round(scene.h * scale), cell: scale };
   }
@@ -5316,6 +5403,10 @@ function handleAction(act: string, el: HTMLElement): void {
 
     case 'board-angle':
       toggleBoardAngle();
+      return;
+
+    case 'board-angle-reset':
+      resetBoardAngle();
       return;
 
     case 'undo':
@@ -10680,12 +10771,123 @@ function previewHoveredCombat(event: MouseEvent): void {
   if (action) showCombatPreview(action, false);
   else clearCombatPreview();
 }
+// ---------- 斜俯视鼠标中键拖转视角 ----------
+let angleOrbit: {
+  id: number;
+  x: number;
+  y: number;
+  yaw: number;
+  tilt: number;
+  moved: boolean;
+} | null = null;
+let lastMiddleClickAt = 0;
+
+boardScrollEl.addEventListener('mousedown', (e) => {
+  if (e.button === 1 && boardEl.classList.contains('has-angled-view')) {
+    // 阻止浏览器原生中键四向自动滚动图标弹出
+    e.preventDefault();
+  }
+});
+
+boardScrollEl.addEventListener('auxclick', (e) => {
+  if (e.button === 1 && boardEl.classList.contains('has-angled-view')) {
+    e.preventDefault();
+  }
+});
+
+boardScrollEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== 1 || !boardEl.classList.contains('has-angled-view')) return;
+  e.preventDefault();
+  angleOrbit = {
+    id: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    yaw: angledCam.yaw,
+    tilt: angledCam.tilt,
+    moved: false,
+  };
+  boardScrollEl.setPointerCapture?.(e.pointerId);
+  boardScrollEl.classList.add('orbiting');
+  setAngledBoardHover(boardEl, null);
+  showAngleHud(formatAngleHud(angledCam));
+});
+
+boardScrollEl.addEventListener('pointermove', (e) => {
+  if (!angleOrbit || e.pointerId !== angleOrbit.id) return;
+  const dx = e.clientX - angleOrbit.x;
+  const dy = e.clientY - angleOrbit.y;
+  if (!angleOrbit.moved && Math.abs(dx) + Math.abs(dy) >= 3) angleOrbit.moved = true;
+  const center = boardZoom > 1 ? boardCamera() : null;
+  const updated = setAngledBoardCamera(boardEl, {
+    yaw: angleOrbit.yaw - dx * 0.0052,
+    tilt: angleOrbit.tilt + dy * 0.0026,
+  });
+  if (updated) {
+    angledCam = updated;
+    boardDirty = true;
+    fitBoard();
+    if (center) centerBoardCamera(center);
+    syncAngleControls();
+    showAngleHud(formatAngleHud(angledCam));
+  }
+  e.preventDefault();
+});
+
+const endAngleOrbit = (e: PointerEvent): void => {
+  if (!angleOrbit || e.pointerId !== angleOrbit.id) return;
+  const wasMoved = angleOrbit.moved;
+  angleOrbit = null;
+  boardScrollEl.classList.remove('orbiting');
+  if (boardScrollEl.hasPointerCapture?.(e.pointerId)) {
+    boardScrollEl.releasePointerCapture(e.pointerId);
+  }
+  if (wasMoved) {
+    saveAngledCam();
+    showAngleHud(formatAngleHud(angledCam), 900);
+  } else {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - lastMiddleClickAt < 380) {
+      lastMiddleClickAt = 0;
+      resetBoardAngle();
+    } else {
+      lastMiddleClickAt = now;
+      showAngleHud('按住鼠标中键拖动可旋转/俯仰 · 双击中键复位', 1500);
+    }
+  }
+};
+boardScrollEl.addEventListener('pointerup', endAngleOrbit);
+boardScrollEl.addEventListener('pointercancel', endAngleOrbit);
+
 boardEl.addEventListener('mouseover', previewHoveredCombat);
 boardEl.addEventListener('mousemove', (event) => {
-  if (boardEl.classList.contains('has-angled-view')) previewHoveredCombat(event);
+  if (!boardEl.classList.contains('has-angled-view')) return;
+  if (angleOrbit) return;
+  const coords = coordsFromEvent(event);
+  setAngledBoardHover(boardEl, coords);
+  previewHoveredCombat(event);
+  // 选点技能在斜俯视画布上同样实时预览落点
+  const pending = pendingSkill;
+  if (pending && pending.targeting === 'point' && coords) {
+    const key = `${coords.x},${coords.y}`;
+    if (key !== skillAimKey) {
+      const caster = state.units.find((u) => u.id === pending.unitId);
+      const previewer = SKILL_PREVIEWERS[pending.skillId];
+      if (caster && previewer) {
+        skillAimKey = key;
+        skillThreatTiles = previewer({
+          state,
+          view: boardStateOf(state, caster),
+          self: caster,
+          target: { x: coords.x, y: coords.y },
+        });
+        render();
+      }
+    }
+  }
 });
 
 boardWrapEl.addEventListener('mouseleave', () => {
+  setAngledBoardHover(boardEl, null);
   if (!combatAim?.pinned) clearCombatPreview();
 });
 

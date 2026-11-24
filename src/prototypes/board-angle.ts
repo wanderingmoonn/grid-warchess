@@ -66,3 +66,49 @@ for (const button of sceneButtons) {
 renderScene(currentScene);
 showView(matchMedia('(max-width: 740px)').matches ? 'tilted' : 'compare');
 new ResizeObserver(showFlat).observe(flatBoard);
+
+// 支持原型页也按住鼠标中键旋转/调节斜俯视视角，双击中键复位
+if (angled) {
+  let orbit: { id: number; x: number; y: number; yaw: number; tilt: number; moved: boolean } | null = null;
+  let lastMidAt = 0;
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 1) e.preventDefault();
+  });
+  canvas.addEventListener('auxclick', (e) => {
+    if (e.button === 1) e.preventDefault();
+  });
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    const cur = angled.getCamera();
+    orbit = { id: e.pointerId, x: e.clientX, y: e.clientY, yaw: cur.yaw, tilt: cur.tilt, moved: false };
+    canvas.setPointerCapture?.(e.pointerId);
+    canvas.style.cursor = 'grabbing';
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!orbit || e.pointerId !== orbit.id) return;
+    const dx = e.clientX - orbit.x;
+    const dy = e.clientY - orbit.y;
+    if (!orbit.moved && Math.abs(dx) + Math.abs(dy) >= 3) orbit.moved = true;
+    angled.setCamera({ yaw: orbit.yaw - dx * 0.0052, tilt: orbit.tilt + dy * 0.0026 });
+    e.preventDefault();
+  });
+  const endOrbit = (e: PointerEvent): void => {
+    if (!orbit || e.pointerId !== orbit.id) return;
+    const wasMoved = orbit.moved;
+    orbit = null;
+    canvas.style.cursor = '';
+    if (canvas.hasPointerCapture?.(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (!wasMoved) {
+      const now = performance.now();
+      if (now - lastMidAt < 380) {
+        angled.resetCamera();
+        lastMidAt = 0;
+      } else {
+        lastMidAt = now;
+      }
+    }
+  };
+  canvas.addEventListener('pointerup', endOrbit);
+  canvas.addEventListener('pointercancel', endOrbit);
+}

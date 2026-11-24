@@ -7,14 +7,47 @@ type Point = readonly [number, number];
 interface Cell { x: number; y: number }
 interface Face { cell: Cell; points: readonly Point[] }
 
+export interface AngledCamera {
+  /** 水平方位角（弧度），默认 π/4 (45°)，支持在第一象限 [8°, 82°] 内平滑旋转 */
+  yaw: number;
+  /** 俯仰压扁比（sin(pitch)），默认 11.3/19 ≈ 0.595，范围 [0.36, 0.92] */
+  tilt: number;
+}
+
 const halfWidth = 19;
 const halfHeight = 11.3;
 const topPadding = 53;
+const BASE_SCALE = Math.hypot(halfWidth, halfWidth);
+const DEFAULT_TILT = halfHeight / halfWidth;
+const DEFAULT_Z_COS = Math.sqrt(Math.max(0.1, 1 - DEFAULT_TILT * DEFAULT_TILT));
 
-export function angledBoardSize(cols: number, rows: number): { w: number; h: number } {
+export const DEFAULT_ANGLED_CAMERA: Readonly<AngledCamera> = {
+  yaw: Math.PI / 4,
+  tilt: DEFAULT_TILT,
+};
+
+export const ANGLED_YAW_MIN = 0.14; // ~8°
+export const ANGLED_YAW_MAX = Math.PI / 2 - 0.14; // ~82°
+export const ANGLED_TILT_MIN = 0.36;
+export const ANGLED_TILT_MAX = 0.92;
+
+export function clampAngledCamera(cam: Partial<AngledCamera>): AngledCamera {
+  const yaw = typeof cam.yaw === 'number' && Number.isFinite(cam.yaw)
+    ? Math.min(ANGLED_YAW_MAX, Math.max(ANGLED_YAW_MIN, cam.yaw))
+    : DEFAULT_ANGLED_CAMERA.yaw;
+  const tilt = typeof cam.tilt === 'number' && Number.isFinite(cam.tilt)
+    ? Math.min(ANGLED_TILT_MAX, Math.max(ANGLED_TILT_MIN, cam.tilt))
+    : DEFAULT_ANGLED_CAMERA.tilt;
+  return { yaw, tilt };
+}
+
+export function angledBoardSize(cols: number, rows: number, camera?: Partial<AngledCamera>): { w: number; h: number } {
+  const cam = camera ? clampAngledCamera(camera) : DEFAULT_ANGLED_CAMERA;
+  const cosY = Math.cos(cam.yaw);
+  const sinY = Math.sin(cam.yaw);
   return {
-    w: Math.ceil((cols + rows) * halfWidth + 52),
-    h: Math.ceil((cols + rows) * halfHeight + 94),
+    w: Math.ceil((cols * cosY + rows * sinY) * BASE_SCALE + 52),
+    h: Math.ceil((cols * sinY + rows * cosY) * BASE_SCALE * cam.tilt + 94),
   };
 }
 
@@ -37,13 +70,32 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   const context = canvas.getContext('2d');
   if (!context) return null;
   const ctx = context;
-  let scene = angledBoardSize(1, 1);
+  let cam: AngledCamera = { ...DEFAULT_ANGLED_CAMERA };
+  let ux = halfWidth;
+  let uy = halfHeight;
+  let vx = -halfWidth;
+  let vy = halfHeight;
+  let zScale = 1;
+  let scene = angledBoardSize(1, 1, cam);
   let originX = 26 + halfWidth;
   let paintedState: GameState | null = null;
   let latest: { view: PlayerView; ui?: BoardUi } | undefined;
+  let hoverCell: Cell | null = null;
   let faces: Face[] = [];
+
+  function syncCameraVectors(rows: number): void {
+    const cosY = Math.cos(cam.yaw);
+    const sinY = Math.sin(cam.yaw);
+    ux = cosY * BASE_SCALE;
+    uy = sinY * BASE_SCALE * cam.tilt;
+    vx = -sinY * BASE_SCALE;
+    vy = cosY * BASE_SCALE * cam.tilt;
+    zScale = Math.sqrt(Math.max(0.14, 1 - cam.tilt * cam.tilt)) / DEFAULT_Z_COS;
+    originX = rows * sinY * BASE_SCALE + 26;
+  }
+
   const project = (x: number, y: number, lift = 0): Point =>
-    [originX + (x - y) * halfWidth, topPadding + (x + y) * halfHeight - lift];
+    [originX + x * ux + y * vx, topPadding + x * uy + y * vy - lift * zScale];
 
   const boardFloor = -13;
   /*
@@ -1816,7 +1868,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         grad.addColorStop(1, 'rgba(225,245,250,0)');
         ctx.save();
         ctx.translate(px, py);
-        ctx.scale(1, halfHeight / halfWidth);
+        ctx.scale(1, cam.tilt);
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(0, 0, rad, 0, Math.PI * 2);
@@ -1832,7 +1884,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         if (fade < 0.06) continue;
         const tileR = 0.45 + rawP * (maxR + 0.8);
         const rx = tileR * halfWidth * 1.15;
-        const ry = tileR * halfHeight * 1.15;
+        const ry = tileR * halfWidth * cam.tilt * 1.15;
 
         // 外围极柔光晕环
         ctx.beginPath();
@@ -3027,7 +3079,7 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     if (texture.complete && texture.naturalWidth) {
       ctx.save();
       ctx.clip();
-      ctx.transform(halfWidth, halfHeight, -halfWidth, halfHeight, ...roof[0]!);
+      ctx.transform(ux, uy, vx, vy, ...roof[0]!);
       ctx.drawImage(texture, 0, 0, width, width);
       ctx.restore();
     }
@@ -3038,34 +3090,104 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     faces.push({ cell: { x: city.x, y: city.y }, points: roof });
   }
 
-  function paintUnit(ctx: CanvasRenderingContext2D, unit: Unit, state: GameState, selected: boolean, target: boolean): void {
+  function paintUnit(
+    ctx: CanvasRenderingContext2D,
+    unit: Unit,
+    state: GameState,
+    selected: boolean,
+    target: boolean,
+    me?: string,
+  ): void {
     const def = state.unitTypes[unit.type]!;
     const center = (def.footprint ?? 1) / 2;
+    const airborne = isAirborne(state, unit);
     const [x, y] = project(unit.x + center, unit.y + center,
-      heightAt(state, unit.x, unit.y) + (isAirborne(state, unit) ? 9 : 0));
-    ctx.fillStyle = '#352e2460';
+      heightAt(state, unit.x, unit.y) + (airborne ? 10 : 0));
+    const isMine = me !== undefined && unit.owner === me;
+    const spent = unit.acted || (unit.moved && (def.atk ?? 0) <= 0);
+    const dim = isMine && spent && !selected && !target;
+
+    ctx.save();
+    if (dim) ctx.globalAlpha = 0.72;
+
+    // 落地投影（空军投影偏下以体现悬空感）
+    ctx.fillStyle = airborne ? '#2d271e42' : '#352e2460';
     ctx.beginPath();
-    ctx.ellipse(x, y + 1, 11, 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y + (airborne ? 6 : 1), airborne ? 9 : 11, airborne ? 3.2 : 4, 0, 0, Math.PI * 2);
     ctx.fill();
+
+    // 棋子卡片主体
     ctx.beginPath();
     ctx.roundRect(x - 13, y - 28, 26, 25, 4);
-    ctx.fillStyle = selected ? '#dceff6' : target ? '#fae8df' : '#f9f3df';
+    ctx.fillStyle = selected ? '#dceff6' : target ? '#fae8df' : dim ? '#ebe5d3' : '#f9f3df';
     ctx.fill();
     ctx.strokeStyle = selected ? '#23678d' : target ? '#b93831' : teams[unit.owner];
     ctx.lineWidth = selected || target ? 3 : 2.1;
     ctx.stroke();
-    ctx.fillStyle = teams[unit.owner];
+
+    // 顶部阵营色条
+    ctx.fillStyle = dim ? '#969081' : teams[unit.owner];
     ctx.fillRect(x - 8, y - 26, 16, 2);
-    ctx.fillStyle = '#262a22';
+
+    // 己方可行动状态小圆点（绿 = 可走可打，橙 = 已走仍可打）
+    if (isMine && !spent) {
+      ctx.fillStyle = unit.moved ? '#d48b2c' : '#4a9a5e';
+      ctx.beginPath();
+      ctx.arc(x + 9.5, y - 24.5, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 兵种汉字
+    ctx.fillStyle = dim ? '#585850' : '#262a22';
     ctx.font = 'bold 17px "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(def.short, x, y - 14);
+
+    // 生命条与额外护盾条
     ctx.fillStyle = '#ddd1b5';
-    ctx.fillRect(x - 9, y - 7, 18, 2);
+    ctx.fillRect(x - 9, y - 7, 18, 2.2);
     ctx.fillStyle = unit.hp * 2 > def.maxHp ? '#55906a' : '#ba623f';
-    ctx.fillRect(x - 9, y - 7, 18 * Math.max(0, Math.min(1, unit.hp / def.maxHp)), 2);
+    ctx.fillRect(x - 9, y - 7, 18 * Math.max(0, Math.min(1, unit.hp / def.maxHp)), 2.2);
+    if (unit.extraHp && unit.extraHp > 0) {
+      ctx.fillStyle = '#43a8d8';
+      ctx.fillRect(x - 9, y - 9.4, Math.min(18, 18 * (unit.extraHp / Math.max(1, def.maxHp))), 1.6);
+    }
+
+    // 可攻击目标角标准星
+    if (target) {
+      ctx.strokeStyle = '#c4322b';
+      ctx.lineWidth = 1.6;
+      strokeLine(ctx, [x - 15, y - 24], [x - 15, y - 30], '#c4322b', 1.6);
+      strokeLine(ctx, [x - 15, y - 30], [x - 9, y - 30], '#c4322b', 1.6);
+      strokeLine(ctx, [x + 15, y - 24], [x + 15, y - 30], '#c4322b', 1.6);
+      strokeLine(ctx, [x + 15, y - 30], [x + 9, y - 30], '#c4322b', 1.6);
+    }
+
+    ctx.restore();
     faces.push({ cell: { x: unit.x, y: unit.y }, points: [[x - 13, y - 28], [x + 13, y - 28], [x + 13, y - 3], [x - 13, y - 3]] });
+  }
+
+  /** 实时悬停格高亮（直接叠在合成帧上，鼠标滑过零重建成本） */
+  function paintHoverOverlay(ctx: CanvasRenderingContext2D): void {
+    if (!hoverCell || !paintedState) return;
+    const { x, y } = hoverCell;
+    if (x < 0 || y < 0 || x >= paintedState.w || y >= paintedState.h) return;
+    const elev = heightAt(paintedState, x, y);
+    const poly = rhombus(x, y, 1, elev);
+    const idxCell = y * paintedState.w + x;
+    const isReach = Boolean(latest?.ui?.reach?.includes(idxCell));
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(...poly[0]!);
+    for (const p of poly.slice(1)) ctx.lineTo(...p);
+    ctx.closePath();
+    ctx.fillStyle = isReach ? 'rgba(61,142,203,0.22)' : 'rgba(255,253,245,0.18)';
+    ctx.fill();
+    ctx.strokeStyle = isReach ? '#1c6ca3' : 'rgba(42,50,42,0.52)';
+    ctx.lineWidth = isReach ? 1.8 : 1.25;
+    ctx.stroke();
+    ctx.restore();
   }
 
   const roofs = ['bronze', 'iron', 'gunpowder', 'steam', 'mechanized', 'info', 'armor', 'fusion'];
@@ -3146,6 +3268,9 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
 
     // 3. 一次性合成静态陆地、树冠、山峰、桥梁、城池、单位、迷雾与战术高亮
     ctx.drawImage(staticCanvas, 0, 0, scene.w, scene.h);
+
+    // 4. 实时鼠标悬停格轮廓（零静态层重建成本）
+    paintHoverOverlay(ctx);
   }
 
   function scheduleWaterTick(): void {
@@ -3166,8 +3291,8 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
   function draw(view: PlayerView, ui?: BoardUi): void {
     latest = { view, ui };
     const state = view.state;
-    originX = state.h * halfWidth + 26;
-    scene = angledBoardSize(state.w, state.h);
+    syncCameraVectors(state.h);
+    scene = angledBoardSize(state.w, state.h, cam);
     const resolution = Math.min(2, Math.sqrt(8_000_000 / (scene.w * scene.h)));
     const width = Math.ceil(scene.w * resolution);
     const height = Math.ceil(scene.h * resolution);
@@ -3198,10 +3323,19 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
     activeWaterBodies = waterField.bodies;
 
     const moves = new Set(ui?.reach);
+    const threats = new Set(ui?.threat);
     const places = new Set(ui?.placeable);
     const aims = new Set(ui?.aimTiles);
     const attacks = new Set(ui?.targets);
     const sieges = new Set(ui?.siegeTargets);
+    const marksByCell = new Map<number, Array<{ owner: string }>>();
+    for (const m of state.marks ?? []) {
+      const mi = m.y * state.w + m.x;
+      if (state.fog && !visible.has(mi)) continue;
+      const arr = marksByCell.get(mi);
+      if (arr) arr.push(m);
+      else marksByCell.set(mi, [m]);
+    }
     const cities = new Map<number, City>();
     for (const city of state.cities) {
       const known = !view.terrainHidden || cityTiles(city).some(({ x, y }) => visible.has(y * state.w + x));
@@ -3285,16 +3419,111 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
         }
 
         faces.push({ cell: { x, y }, points: top });
-        if (moves.has(index)) polygon(targetCtx, top, '#3d8ecb62', '#2873a5');
+
+        // 扩展棋盘染色视图
+        const viewTint = ui?.boardView?.get(index);
+        if (viewTint) polygon(targetCtx, top, viewTint);
+        const glyph = ui?.boardGlyph?.get(index);
+        if (glyph) {
+          const [gx, gy] = project(x + 0.5, y + 0.5, elevation);
+          targetCtx.fillStyle = '#24302a';
+          targetCtx.font = 'bold 11px system-ui, sans-serif';
+          targetCtx.textAlign = 'center';
+          targetCtx.textBaseline = 'middle';
+          targetCtx.fillText(glyph, gx, gy);
+        }
+
+        // 战术范围高亮（威胁 / 可移动 / 选点落位）
+        if (threats.has(index) && !moves.has(index)) polygon(targetCtx, top, '#c94a4236', '#b83c3577');
+        if (moves.has(index)) polygon(targetCtx, top, '#3d8ecb58', '#2873a5cc');
         if (places.has(index) || aims.has(index)) polygon(targetCtx, top, '#e7a34c66', '#ba7830');
+
+        // 经济单位移动产出预览（+金币）
+        const hint = ui?.incomeHints?.get(index);
+        if (hint && typeof hint.gold === 'number' && hint.gold > 0) {
+          const [hx, hy] = project(x + 0.5, y + 0.5, elevation + 0.5);
+          targetCtx.fillStyle = 'rgba(255,248,224,0.92)';
+          targetCtx.strokeStyle = '#9e7628';
+          targetCtx.lineWidth = 0.9;
+          targetCtx.beginPath();
+          targetCtx.roundRect(hx - 10, hy - 6, 20, 11, 3);
+          targetCtx.fill();
+          targetCtx.stroke();
+          targetCtx.fillStyle = '#6c4d14';
+          targetCtx.font = 'bold 8.5px system-ui, sans-serif';
+          targetCtx.textAlign = 'center';
+          targetCtx.textBaseline = 'middle';
+          targetCtx.fillText(`+${hint.gold}`, hx, hy - 0.3);
+        }
+
+        // 地雷/水雷等地面标记
+        const marks = marksByCell.get(index);
+        if (marks && marks.length > 0) {
+          const [mx, my] = project(x + 0.5, y + 0.5, elevation + 0.5);
+          const mine = ui?.me !== undefined && marks[0]!.owner === ui.me;
+          targetCtx.save();
+          targetCtx.beginPath();
+          targetCtx.ellipse(mx, my, 5.2, 3.2, 0, 0, Math.PI * 2);
+          if (mine) {
+            targetCtx.fillStyle = '#363b40cc';
+            targetCtx.fill();
+            targetCtx.fillStyle = '#e56847';
+            targetCtx.beginPath();
+            targetCtx.arc(mx, my - 0.5, 1.5, 0, Math.PI * 2);
+            targetCtx.fill();
+          } else {
+            targetCtx.setLineDash([2.5, 2]);
+            targetCtx.strokeStyle = '#c43b33';
+            targetCtx.lineWidth = 1.3;
+            targetCtx.stroke();
+          }
+          targetCtx.restore();
+        }
 
         const city = cities.get(index);
         if (city) paintCity(targetCtx, city, cityTexture(city.era), sieges.has(city.id), ui?.selectedCityId === city.id, dark);
         const group = units.get(index);
         if (group) {
           group.sort((a, b) => Number(isAirborne(state, a)) - Number(isAirborne(state, b)));
-          for (const unit of group) paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id));
+          for (const unit of group) paintUnit(targetCtx, unit, terrain, ui?.selectedId === unit.id, attacks.has(unit.id), ui?.me);
         }
+      }
+    }
+
+    // 前景城市信息铭牌层：统一画在所有地块、树林与建筑之后，避免被前景地格或松树截断
+    for (const city of cities.values()) {
+      if (city.ruined || city.era < 1 || city.era > 8) continue;
+      const cityIdx = city.y * state.w + city.x;
+      const cityDark = state.fog && !visible.has(cityIdx);
+      if (cityDark) continue;
+      const target = sieges.has(city.id);
+      const selected = ui?.selectedCityId === city.id;
+      const team = teams[city.owner] ?? '#6e6a60';
+      const [bx, by] = project(city.x + city.size * 0.94, city.y + city.size * 0.94, 0.5);
+      const damaged = city.maxHp > 0 && city.hp < city.maxHp;
+      const showBar = damaged || target || selected;
+      const pillW = showBar ? 38 : 20;
+      const pillH = 11;
+      targetCtx.fillStyle = 'rgba(250,247,238,0.92)';
+      targetCtx.strokeStyle = target ? '#b93831' : selected ? '#174d76' : team;
+      targetCtx.lineWidth = target || selected ? 1.5 : 1.0;
+      targetCtx.beginPath();
+      targetCtx.roundRect(bx - pillW / 2, by - pillH / 2, pillW, pillH, 3);
+      targetCtx.fill();
+      targetCtx.stroke();
+      targetCtx.fillStyle = '#2a2a24';
+      targetCtx.font = 'bold 8.5px system-ui, sans-serif';
+      targetCtx.textAlign = showBar ? 'left' : 'center';
+      targetCtx.textBaseline = 'middle';
+      targetCtx.fillText(`E${city.era}`, showBar ? bx - pillW / 2 + 3 : bx, by + 0.5);
+      if (showBar && city.maxHp > 0) {
+        const barX = bx - pillW / 2 + 16;
+        const barW = pillW - 19;
+        const ratio = Math.max(0, Math.min(1, city.hp / city.maxHp));
+        targetCtx.fillStyle = '#d7cdb8';
+        targetCtx.fillRect(barX, by - 1.5, barW, 3);
+        targetCtx.fillStyle = ratio > 0.5 ? '#55906a' : ratio > 0.25 ? '#cc8838' : '#b93831';
+        targetCtx.fillRect(barX, by - 1.5, barW * ratio, 3);
       }
     }
 
@@ -3307,11 +3536,50 @@ export function createAngledBoard(canvas: HTMLCanvasElement, assetBase: string) 
       } else {
         stopAnimation();
       }
+    } else {
+      paintHoverOverlay(targetCtx);
     }
   }
 
   return {
     draw,
+    getCamera(): AngledCamera {
+      return { ...cam };
+    },
+    isDefaultCamera(): boolean {
+      return Math.abs(cam.yaw - DEFAULT_ANGLED_CAMERA.yaw) < 0.01 &&
+        Math.abs(cam.tilt - DEFAULT_ANGLED_CAMERA.tilt) < 0.01;
+    },
+    setCamera(next: Partial<AngledCamera>): AngledCamera {
+      const clamped = clampAngledCamera({ yaw: next.yaw ?? cam.yaw, tilt: next.tilt ?? cam.tilt });
+      if (Math.abs(clamped.yaw - cam.yaw) < 0.0005 && Math.abs(clamped.tilt - cam.tilt) < 0.0005) {
+        return { ...cam };
+      }
+      cam = clamped;
+      if (latest && !canvas.hidden) draw(latest.view, latest.ui);
+      return { ...cam };
+    },
+    resetCamera(): AngledCamera {
+      cam = { ...DEFAULT_ANGLED_CAMERA };
+      if (latest && !canvas.hidden) draw(latest.view, latest.ui);
+      return { ...cam };
+    },
+    sceneSize(): { w: number; h: number } {
+      return { ...scene };
+    },
+    setHover(cell: Cell | null): void {
+      if (hoverCell?.x === cell?.x && hoverCell?.y === cell?.y) return;
+      hoverCell = cell ? { x: cell.x, y: cell.y } : null;
+      if (!paintedState || canvas.hidden) return;
+      if (staticCtx) {
+        const nowSec = canAnimateWater(paintedState) && typeof performance !== 'undefined'
+          ? (performance.now() - animOrigin) / 1000
+          : 0;
+        renderWaterFrame(nowSec);
+      } else if (latest) {
+        draw(latest.view, latest.ui);
+      }
+    },
     pick(clientX: number, clientY: number): Cell | null {
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
