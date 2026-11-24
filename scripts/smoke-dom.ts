@@ -4332,6 +4332,21 @@ check('输入法组字中按 Enter 只选词，不发送（否则对方只收到
 console.log('\n指挥官模式');
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * 等某个条件成立（最多 ms 毫秒）。
+ *
+ * 2026-11-24：指挥官那几条用例原来用固定 `wait(150)` / `wait(250)`，
+ * 执行一批 5 回合的耗时会随机器负载和地图内容浮动——CI 跑满时经常等不到，
+ * 前一条红了后面跟着全红。改成轮询，条件成立立刻往下走，最多等 4 秒。
+ */
+const until = async (pred: () => boolean, ms = 4000, step = 25): Promise<boolean> => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (pred()) return true;
+    await wait(step);
+  }
+  return pred();
+};
 
 check('普通对局不显示指挥官栏', () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
@@ -4671,7 +4686,7 @@ check('指挥官栏能定「策略」与「进攻方向」，并且落到 state 
 
 await checkAsync('点「执行 5 回合」先进进度态，可以中断', async () => {
   click('[data-cmd="run"]');
-  await wait(150);
+  await until(() => !!doc.querySelector('#commander [data-cmd="stop"]'));
 
   const running = doc.querySelector<HTMLElement>('#commander');
   assert.ok(running?.querySelector('[data-cmd="stop"]'), '执行中应该有中断按钮');
@@ -4679,7 +4694,7 @@ await checkAsync('点「执行 5 回合」先进进度态，可以中断', async
   assert.ok((running?.textContent ?? '').includes('/ 5'), `应该显示第几回合，实际：${running?.textContent}`);
 
   click('[data-cmd="stop"]');
-  await wait(250);
+  await until(() => !!doc.querySelector('#commander [data-cmd="run"]'));
 
   const back = doc.querySelector<HTMLElement>('#commander');
   assert.ok(back?.querySelector('[data-cmd="run"]'), '中断后应该回到可排计划的状态');
@@ -4687,6 +4702,7 @@ await checkAsync('点「执行 5 回合」先进进度态，可以中断', async
 });
 
 await checkAsync('每格都给出可用金币的估算', async () => {
+  await until(() => doc.querySelectorAll('#commander .cmd-chip-est').length > 0);
   const bar = doc.querySelector<HTMLElement>('#commander');
   assert.ok(bar);
   // 中断之后队列还在（单机会把计划装回去），所以估算该有内容
@@ -4699,7 +4715,9 @@ await checkAsync('每格都给出可用金币的估算', async () => {
   assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
 });
 
-check('「空过一回合」能排进队列，且和"还没排"是两种长相', () => {
+await checkAsync('「空过一回合」能排进队列，且和"还没排"是两种长相', async () => {
+  // 上一批可能还在跑：先等它回到排队态，否则队列里根本没有格子可点
+  await until(() => !doc.querySelector('#commander [data-cmd="stop"]'));
   const bar = () => doc.querySelector<HTMLElement>('#commander')!;
   // 先把上一批留下的队列清掉
   const clear = bar().querySelector<HTMLElement>('[data-cmd="clear"]');
@@ -4727,7 +4745,8 @@ check('「空过一回合」能排进队列，且和"还没排"是两种长相',
   assert.deepEqual(saved.orders?.A, ['@idle'], '空过要落成哨兵值，不是空串');
 });
 
-check('指挥官模式：推进游戏只剩「执行一批」这一条路', () => {
+await checkAsync('指挥官模式：推进游戏只剩「执行一批」这一条路', async () => {
+  await until(() => !doc.querySelector('#commander [data-cmd="stop"]'));
   // 「结束行动」只推进一个回合，而参谋部按 5 回合一批走。两个入口各推各的，
   // 玩家顺手点一下就变成"走了半批"，对面看到的回合数也对不上。
   assert.equal(
