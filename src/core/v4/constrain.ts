@@ -911,8 +911,21 @@ function planMarch(
     const pending = units.filter((u) => !holeSet.has(u.y * s.w + u.x));
     if (pending.length === 0) continue;
 
+    /*
+     * **队形按射程排：射程近的站前面，射程远的站后面。**
+     *
+     * 前排是内圈（离目标城近），后排是外圈。所以把"人"按射程升序、"格"按离城远近升序，
+     * 再同序配对——近战自然拿到内圈，远程拿到外圈。
+     *
+     * 两个键的顺序不能反：**射程是主键**（决定谁在前排），远近是次键
+     * （同射程内部仍按远近排，这一段保持不交叉）。
+     */
+    const rangeOf = (u: Unit): number => effectiveStats(s, u).range ?? 1;
     const pend = [...pending].sort(
-      (a, b) => axisOf(a.y * s.w + a.x) - axisOf(b.y * s.w + b.x) || (a.id < b.id ? -1 : 1),
+      (a, b) =>
+        rangeOf(a) - rangeOf(b) ||
+        axisOf(a.y * s.w + a.x) - axisOf(b.y * s.w + b.x) ||
+        (a.id < b.id ? -1 : 1),
     );
     const hs = [...holes].sort((a, b) => axisOf(a) - axisOf(b) || a - b);
 
@@ -928,6 +941,14 @@ function planMarch(
     for (let i = 0; i < pend.length && i < hs.length; i += 1) mine.set(pend[i]!.id, hs[i]!);
     if (mine.size === 0) continue;
 
+    /*
+     * **行军步长 = 队里最慢那个的移动力。**
+     *
+     * 快的等慢的，但不必退化到"人人一格"：队里最慢的移动力是 2，那一手就走 2 格。
+     * 一格一格挪对 8~12 格的路太慢（S-001 实测：20 个兵全灭、城没打掉）。
+     */
+    const stride = Math.max(1, Math.min(...units.map((u) => effectiveStats(s, u).move ?? 2)));
+
     const fields = new Map<number, Float64Array>();
     const used = new Set<number>();
     for (const u of pend) {
@@ -941,21 +962,15 @@ function planMarch(
       const here = field[u.y * s.w + u.x] ?? Infinity;
       let best: number | null = null;
       let bestD = here;
-      for (const [k] of reachableTiles(s, u)) {
+      const reach = reachableTiles(s, u);
+      for (const [k] of reach) {
         /*
-         * **这一手只走一格**（不是"走到能走的最远处"）。
+         * **行军段：这一手最多走 `stride` 步**（接敌之后不限，走满自己的移动力）。
          *
-         * 这是"整体平移"能不能成立的关键。`reachableTiles` 给的是移动力范围，
-         * 移动力 3 的兵会一口气走 3 格、移动力 2 的走 2 格——前排第二手就甩开后排，
-         * 队形散成一条线，前面的被各个击破（S-002 实测：最前面 6 个兵第 8 手前全灭，
-         * 后面的还没到）。只走一格，快慢兵在同一手上位移相同，队形才跟得住。
-         *
-         * 代价是推进变慢（一回合 1 格）。这是有意的：接敌之后由"打人"接管，
-         * 走位只在行军段生效。
+         * `reachableTiles` 的值是"走到这一格要花多少移动力"，拿它跟 stride 比，
+         * 而不是拿"直线格数"比——森林要花 2 步，算格数会多算一格。
          */
-        const kx = k % s.w;
-        const ky = Math.floor(k / s.w);
-        if (!engaged && Math.abs(kx - u.x) + Math.abs(ky - u.y) !== 1) continue;
+        if (!engaged && (reach.get(k) ?? Infinity) > stride) continue;
         if (s.units.some((v) => v.id !== u.id && v.y * s.w + v.x === k)) continue;
         if (used.has(k)) continue;
         const d = field[k] ?? Infinity;
