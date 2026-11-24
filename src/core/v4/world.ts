@@ -79,6 +79,16 @@ export interface World {
    * 让最便宜的一类单位去算全局威胁，代价就是把产出全丢掉。
    */
   harassed(p: { x: number; y: number }): boolean;
+  /**
+   * 从 `p` 朝 `toward` 走，**横向能并排站几格**（走廊宽度）。
+   *
+   * 一侧一格算起，连续可站（可通行、无敌人）才计数；撞到山/水/敌人就停。
+   * 桥/窄道上是 1，开阔地能到 5~9。
+   *
+   * 为什么要有它：同一个"横向展开"，开阔地是对的，窄道是灾难——
+   * S-005 在桥上试过展开，过河从 4 掉到 0。宽度是地形的事实，不该由打分层猜。
+   */
+  corridorWidth(p: { x: number; y: number }, toward: { x: number; y: number }): number;
 }
 
 const idx = (s: GameState, x: number, y: number): number => y * s.w + x;
@@ -262,6 +272,29 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     roleOf(city) {
       return roleMap.get(city.id) ?? 'safe';
+    },
+    corridorWidth(p, toward) {
+      const dx = Math.sign(toward.x - p.x);
+      const dy = Math.sign(toward.y - p.y);
+      /* 法向：把"朝目标"的向量转 90° */
+      const nx = -dy;
+      const ny = dx;
+      if (nx === 0 && ny === 0) return 1;
+      const walkable = (x: number, y: number): boolean => {
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) return false;
+        const t = s.tiles[y * s.w + x]?.terrain;
+        if (!t || !passable(t)) return false;
+        const occ = s.units.find((u) => u.x === x && u.y === y);
+        return !occ || occ.owner === me;
+      };
+      let w = 1;
+      for (const sgn of [1, -1] as const) {
+        for (let i = 1; i <= 4; i++) {
+          if (!walkable(p.x + nx * sgn * i, p.y + ny * sgn * i)) break;
+          w += 1;
+        }
+      }
+      return w;
     },
     harassed(p) {
       return foeCombat.some((u, i) => Math.max(Math.abs(u.x - p.x), Math.abs(u.y - p.y)) <= foeReach[i]!);
