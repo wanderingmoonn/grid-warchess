@@ -511,7 +511,21 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 16,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 7, forest: 3, hill: 4, city: 0 },
+    /*
+     * 地形产出（金币/回合）。
+     *
+     * 2026-11-24 补齐 `plateau / valley / marsh / dune` 四种地形：斜俯视美术上线后
+     * 这几种地形真的会出现在盘面上，但产出表里没有它们的键，站在上面收 0 金币——
+     * 那不是"贫瘠"，是漏了。
+     *
+     * 定价口径（生产单位一律按这三条推）：
+     *   · **台地**：坡陡土薄，上水难 → 农业打折，牧业加分（高处草场）；
+     *   · **谷地**：聚水、淤积肥土 → 农业最高（水车/种植园尤其），工业打折；
+     *   · **沼泽**：低洼积水 → 只有零星产出，任何单位都别指望它；
+     *   · **沙丘**：干沙 → 全场最低，只比"不能站"好一点。
+     * 值与同单位相邻档保持比例（谷地≈平原×1.15、台地≈丘陵×0.8、沼泽≈平原×0.25、沙丘≈平原×0.1）。
+     */
+    incomeByTerrain: { plain: 7, forest: 3, hill: 4, city: 0, plateau: 3, valley: 9, marsh: 2, dune: 1 },
   },
   herder: {
     id: 'herder',
@@ -526,7 +540,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 18,
     range: 1,
     vision: 3,
-    incomeByTerrain: { hill: 8, plain: 4, forest: 2, city: 0 },
+    incomeByTerrain: { hill: 8, plain: 4, forest: 2, city: 0, plateau: 10, valley: 6, marsh: 3, dune: 2 },
   },
   laborer: {
     id: 'laborer',
@@ -574,7 +588,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 24,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0 },
+    incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0, plateau: 4, valley: 9, marsh: 2, dune: 1 },
   },
 
   /*
@@ -669,7 +683,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
      * 穿上林之后森林不再减速，它就真的成了"林子里的搬运工"。
      */
     abilities: ['forest-walk'],
-    incomeByTerrain: { forest: 12, hill: 5, plain: 3, city: 0 },
+    incomeByTerrain: { forest: 12, hill: 5, plain: 3, city: 0, plateau: 2, valley: 4, marsh: 2, dune: 1 },
   },
   miller: {
     id: 'miller',
@@ -720,7 +734,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 28,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4 },
+    incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4, plateau: 3, valley: 14, marsh: 6, dune: 1 },
   },
 
   /*
@@ -857,7 +871,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 24,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 20, forest: 12, hill: 8, city: 6 },
+    incomeByTerrain: { plain: 20, forest: 12, hill: 8, city: 6, plateau: 9, valley: 24, marsh: 4, dune: 2 },
   },
   engineer: {
     id: 'engineer',
@@ -908,7 +922,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     vision: 2,
     // 城市 20 → 30（2026-11-01）：火器档唯一"城里赚钱"的建筑。
     // 180 局里它几乎没被造过——20/回合撑不起 180 金造价 + 36 点工期。
-    incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6 },
+    incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6, plateau: 7, valley: 8, marsh: 3, dune: 2 },
   },
 
   // ================= 时代 4 · 蒸汽 =================
@@ -1028,7 +1042,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     // 城市 30 → 40（2026-11-01）：和工厂同一条理由，4 代这一档更依赖它回本
-    incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9 },
+    incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9, plateau: 10, valley: 11, marsh: 4, dune: 3 },
   },
 
   // ============ 时代 5 · 机械化（第六时代在原版表里是空的） ============
@@ -1101,7 +1115,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 30,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 48, city: 32, forest: 19, hill: 16 },
+    incomeByTerrain: { plain: 48, city: 32, forest: 19, hill: 16, plateau: 20, valley: 56, marsh: 8, dune: 4 },
   },
   crew: {
     id: 'crew',
@@ -1151,7 +1165,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 60,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 34, city: 22, forest: 14, hill: 14 },
+    incomeByTerrain: { plain: 34, city: 22, forest: 14, hill: 14, plateau: 15, valley: 26, marsh: 6, dune: 5 },
   },
 
   // ================= 水上部队与桥梁 =================
