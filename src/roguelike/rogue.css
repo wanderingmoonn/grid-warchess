@@ -692,3 +692,61 @@
   color: #837b6b;
   line-height: 1.5;
 }
+
+/* ---------- 第二层的岔口：四种历史 ---------- */
+
+.rg-worlds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+.rg-world {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  border: 1px solid #d5cdbb;
+  background: #fffdf6;
+  border-radius: 10px;
+  padding: 11px 13px;
+  font: inherit;
+  cursor: pointer;
+}
+.rg-world:hover {
+  border-color: #2f6ea8;
+  background: #f2f7fc;
+}
+.rg-world b {
+  font-size: 15px;
+  color: #2b2a26;
+}
+.rg-world em {
+  align-self: flex-start;
+  font-style: normal;
+  font-size: 11px;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.rg-world span {
+  font-size: 12px;
+  color: #6d6659;
+  line-height: 1.55;
+}
+.rg-world i {
+  font-style: normal;
+  font-size: 12px;
+  color: #8a6b1f;
+}
+.rg-world-tag {
+  font-style: normal;
+  font-size: 11px;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  vertical-align: 2px;
+}

@@ -11,6 +11,7 @@ import {
   DECISIONS,
   EVENTS,
   LAYERS,
+  WORLDS,
   PLACE_NAMES,
   RELICS,
   REST_OPTIONS,
@@ -21,7 +22,7 @@ import {
   strategyById,
   unitName,
 } from './data.ts';
-import type { DecisionOption, LayerTheme } from './data.ts';
+import type { DecisionOption, LayerTheme, WorldId } from './data.ts';
 import { makeRng } from './rng.ts';
 import type { Rng } from './rng.ts';
 import type {
@@ -49,16 +50,43 @@ export const ROOMS_PER_LAYER = STEPS_PER_LAYER * 2;
  * 只查基础表的话 `costOf` 对它们返回 0，于是 `pickEnemyTypes` 会把它们全部跳过——
  * 第三层后半段的敌人会变成"一个兵都没有"。这不是平衡问题，是查表漏了一层。
  */
-const CATALOG = {
+const CATALOG: Record<string, { cost: number }> = {
   ...UNIT_TYPES,
   ...expansionUnitsFor(LAYERS[1].expansions),
-  ...expansionUnitsFor(LAYERS[2].expansions),
   ...expansionUnitsFor(LAYERS[3].expansions),
 };
+// 四种世界各自带来的兵（奇想的飞龙、修真的法器……）也要能查到造价
+for (const w of Object.values(WORLDS)) Object.assign(CATALOG, expansionUnitsFor(w.theme.expansions));
 const costOf = (id: string): number => CATALOG[id]?.cost ?? 0;
 
-export function themeOf(layer: LayerId): LayerTheme {
-  return LAYERS[layer];
+/**
+ * 某一层、某一支史下的主题。
+ *
+ * 第二层是**四种样子**（正史 / 军备 / 奇想 / 修真），由 `run.world` 决定；
+ * 第一层和第三层共用一套，第三层只把本世界的高代兵与扩展混进去
+ * （修真没有 e5 兵，所以第三层对它是「末法之世」——不是缺内容，是设定）。
+ */
+export function themeFor(world: WorldId, layer: LayerId): LayerTheme {
+  const def = WORLDS[world];
+  if (layer === 2) return def.theme;
+  if (layer !== 3) return LAYERS[layer];
+
+  const extra = def.l3Pool;
+  const expansions = [...new Set([...LAYERS[3].expansions, ...def.theme.expansions])];
+  if (extra.length === 0 && !def.l3Subtitle && expansions.length === LAYERS[3].expansions.length) {
+    return LAYERS[3];
+  }
+  return {
+    ...LAYERS[3],
+    subtitle: def.l3Subtitle ?? LAYERS[3].subtitle,
+    expansions,
+    pool: extra.length > 0 ? [...new Set([...extra, ...LAYERS[3].pool])] : LAYERS[3].pool,
+  };
+}
+
+/** 当前这一局这一层的主题 */
+export function themeOf(run: RunState): LayerTheme {
+  return themeFor(run.world, run.layer);
 }
 
 export function emptyBuffs(): Buffs {
@@ -203,6 +231,7 @@ export function startRun(seed: number, strategyId: string): RunState {
   return {
     seed,
     strategyId,
+    world: 'base',
     layer: 1,
     step: 0,
     gold: 180,
@@ -222,7 +251,7 @@ export function startRun(seed: number, strategyId: string): RunState {
 /** 应用一条效果。`random` 类的藏品在这里落地，所以需要 rng */
 export function applyEffect(run: RunState, effect: Effect, rng: Rng): string[] {
   const notes: string[] = [];
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
 
   if (typeof effect.gold === 'number' && effect.gold !== 0) {
     run.gold = Math.max(0, run.gold + effect.gold);
@@ -296,32 +325,81 @@ export function afterRoom(run: RunState): void {
  * 现在：层决定对面有多强，你的成长只带来 25% 的回响。
  */
 export const BALANCE = {
-  base: { 1: 140, 2: 370, 3: 690 } as Record<number, number>,
-  w: { battle: 1, elite: 1.5, siege: 1.3, boss: 1.7 } as Record<string, number>,
-  expect: { 1: 250, 2: 700, 3: 1300 } as Record<number, number>,
-  follow: 0.25,
+  /** 敌人人数 = 我方人数 × 这个系数（再夹在 2~我方-1 之间） */
+  countFollow: 0.7,
+  /** 每深一层，人数下限 +1（一层的遭遇战至少 3 个，三层至少 5 个） */
+  countBase: { battle: 3, elite: 3, siege: 3, boss: 4 } as Record<string, number>,
+  /**
+   * "加钱"的系数（按房型）：底钱只够买池里最便宜的兵，这一笔决定能往上抬多少。
+   * 调大 = 敌人更精锐（同人数、更好的兵）；调小 = 更多便宜兵。
+   */
+  quality: { battle: 0.54, elite: 0.63, siege: 0.6, boss: 0.69 } as Record<string, number>,
+  /** 层内进度：刚进门 ×ramp，走到底接近 1.15 */
   ramp: 0.75,
   rampStep: 0.04,
-  count: { battle: 3, elite: 4, siege: 4, boss: 5 } as Record<string, number>,
+  /**
+   * 每层的"预算系数"。
+   *
+   * 三层分开调，是因为同一套人数公式在三个价位上感受完全不同：
+   * 一代兵 25~50 一档，五代兵 215~400 一档，同一把尺子量不出同样的手感。
+   * 这一列也是**整体难度旋钮**——想更简单就整体往上抬。
+   */
+  layerPower: { 1: 0.7, 2: 0.7, 3: 0.72 } as Record<number, number>,
 };
 
-function enemyScale(layer: LayerId, kind: RoomKind, myCost: number, clock: number): { budget: number; gold: number } {
+/**
+ * 敌人这一场有多少钱：**人数 × 池子均价 × 房型系数**。
+ *
+ * 为什么不再用"每层一个基准价"：那个写法里，钱和人数是分开定的，预算不够时
+ * `pickEnemyTypes` 只能少买几个——玩家攒到十个兵的时候，场上就变成"十打三"。
+ * 现在先定人数（跟着玩家走），再把钱按人头摊下去，**人数一定凑得齐**，
+ * 每个敌人也因此自动落在"这一层该有的价位"上。
+ *
+ * 顺带保住了一条重要的激励：钱只跟**人数**走，不跟**兵的质量**走。
+ * 所以"把兵换成更高代"是纯收益，不会让对面跟着变强。
+ */
+function enemyScale(
+  layer: LayerId,
+  kind: RoomKind,
+  count: number,
+  pool: string[],
+  clock: number,
+  worldPower: number,
+): { budget: number; gold: number } {
   const ramp = BALANCE.ramp + BALANCE.rampStep * Math.min(STEPS_PER_LAYER, clock);
-  const base = BALANCE.base[layer] ?? 300;
-  const expect = BALANCE.expect[layer] ?? 600;
-  const drift = Math.max(-0.6, Math.min(1, myCost / Math.max(1, expect) - 1)) * BALANCE.follow;
-  const budget = Math.max(40, Math.round(base * (BALANCE.w[kind] ?? 1) * ramp * (1 + drift)));
-  return { budget, gold: Math.round(budget * 0.25) };
+  /*
+   * 用**池子里最便宜的那个**当尺子，而不是均价。
+   *
+   * 均价当尺子的毛病：均价被几个贵兵拉高，钱不够时只买得起最便宜的，
+   * 于是"算出来 6 个、场上只出现 3 个"。用最低价 ×1.35 保证每个位置
+   * 都买得起人，**人数一定凑得齐**，贵的兵靠"第一个位置拿一半预算"去买。
+   */
+  const costs = pool.map(costOf).filter((n) => n > 0);
+  const cheapest = Math.min(...costs);
+  const avg = costs.reduce((n, c) => n + c, 0) / Math.max(1, costs.length);
+  const q = BALANCE.quality[kind] ?? 0.9;
+  const layerK = BALANCE.layerPower[layer] ?? 0.8;
+  /*
+   * 钱分两笔：
+   *   **底钱** = 人数 × 池内最低价 —— 保证每个位置都买得起人，人数一定凑齐；
+   *   **加钱** = 人数 ×（均价 − 最低价）× 系数 —— 有钱才往上升级，
+   *              没钱就是一群便宜兵。
+   * 上一版把系数乘在全部预算上，人数跟着缩水，"算 6 个、来 3 个"。
+   */
+  const base = count * cheapest;
+  const extra = count * Math.max(0, avg - cheapest) * q * ramp * worldPower * layerK;
+  const budget = Math.max(40, Math.round(base + extra));
+  return { budget, gold: Math.round(budget * 0.2) };
 }
 
 /**
- * 敌人这一场上几个人：按房型给基数、每深一层 +1，**但永远比我方少一个以上**。
- *
- * 少一个以上是硬约束：玩家必须能靠"人多"打赢，否则成长就没有回报。
+ * 敌人这一场上几个人：按我方人数乘 0.7，加一个按层抬高的下限，
+ * 但**永远比我方少一个以上**。
  */
 function enemyHeadcount(kind: RoomKind, layer: LayerId, myCount: number): number {
-  const base = (BALANCE.count[kind] ?? 3) + (layer - 1);
-  return Math.max(2, Math.min(base, myCount - 1));
+  const floor = (BALANCE.countBase[kind] ?? 3) + (layer - 1);
+  const follow = Math.round(myCount * BALANCE.countFollow);
+  return Math.max(2, Math.min(Math.max(floor, follow), myCount - 1));
 }
 
 /** 藏品 + 方略 + 攒下的一次性加成，合成这一场的我军加成 */
@@ -361,10 +439,10 @@ export function bonusOf(run: RunState): {
 }
 
 export function battleFor(run: RunState, node: RoomNode, seed: number): BattleInit {
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   const isBoss = node.kind === 'boss';
+  const myCount = armyCount(run.army);
   const idx = isBoss ? 3 : node.kind === 'siege' ? 2 : node.kind === 'elite' ? 1 : 0;
-  const size = theme.size[idx] as number;
   /*
    * 敌人池按时代钟分三段（不再是"当代 / 高代"两段）：
    *   ① 钟 0–2：**整段用上一代**（L2 是 e2、L3 是 e4）。玩家带着上一层的兵上来，
@@ -383,18 +461,42 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
       : stage === 1
         ? theme.eraLow
         : theme.eraHigh;
+  /*
+   * 池子里**留一点上一代的兵当"填线的"**。
+   *
+   * 只放当代兵的话，预算买不起几个——一个 e3 兵要 100~150，六个就是七八百，
+   * 而这一层的预算没那么多，场上就变成"四五个精锐"。混进上一代之后，
+   * 同样的钱能铺出更多人：几个当代尖子 + 一群旧兵，这才是会战的样子。
+   */
   const pool =
     stage === 0
       ? theme.prevPool.length > 0
         ? theme.prevPool
         : theme.pool
       : stage === 1
-        ? theme.pool
-        : [...theme.poolHigh, ...theme.poolHigh, ...theme.pool];
+        ? [...theme.pool, ...theme.prevPool]
+        : [...theme.poolHigh, ...theme.poolHigh, ...theme.pool, ...theme.prevPool];
+  const headcount = enemyHeadcount(node.kind, run.layer, myCount);
+  /*
+   * 地图要跟人数一起长。
+   *
+   * 8×8 上站 6 个人是遭遇战，站 20 个人就是堵车——后排一辈子挤不上去，
+   * 攻坚还会因为走不到城下被判超时。人多的时候把图放大一点，
+   * 但只放大到 22（再大就变成"跑半天才见面"）。
+   */
+  const crowd = Math.max(0, Math.floor((myCount + headcount - 8) / 3));
+  const size = Math.min(22, (theme.size[idx] as number) + Math.min(4, crowd));
   // 遭遇/精英：双方无城；攻坚 1 座；层末 L1–L2 一座、L3 两座
   const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
-  const scale = enemyScale(run.layer, node.kind, armyCost(run.army), isBoss ? STEPS_PER_LAYER : run.clock);
-  const types = pickEnemyTypes(pool, scale.budget, costOf, enemyHeadcount(node.kind, run.layer, armyCount(run.army)));
+  const scale = enemyScale(
+    run.layer,
+    node.kind,
+    headcount,
+    pool,
+    isBoss ? STEPS_PER_LAYER : run.clock,
+    WORLDS[run.world].power ?? 1,
+  );
+  const types = pickEnemyTypes(pool, scale.budget, costOf, headcount);
   const bonus = bonusOf(run);
   // 斥候网 / 买通：从敌人里减兵（至少留 1 个）
   const cut = Math.min(Math.max(0, types.length - 1), bonus.enemyCut);
@@ -404,7 +506,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
    * 回合上限按小图重算：8×8 的遭遇战打 30 轮是不可能的，那是"两边都不想打"。
    * 有城的关卡 AI 会守，多给几轮。
    */
-  const roundLimit = isBoss ? 40 : node.kind === 'siege' ? 28 : node.kind === 'elite' ? 18 : 16;
+  const roundLimit = (isBoss ? 44 : node.kind === 'siege' ? 32 : node.kind === 'elite' ? 18 : 16) + crowd * 2;
   const tempUnits: ArmyEntry[] = bonus.tempUnits > 0 ? [{ type: cheapestOf(theme), count: bonus.tempUnits }] : [];
 
   return {
@@ -425,6 +527,8 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     enemyRecruit: isBoss ? 2 : enemyCityCount > 0 ? 1 : 0,
     enemyDoctrine: enemyCityCount > 0 ? 'boom' : 'rush',
     expansions: theme.expansions,
+    world: run.world,
+    rank: WORLDS[run.world].rankOf?.(isBoss ? STEPS_PER_LAYER : run.clock) ?? 0,
     bonusAtk: bonus.atk,
     bonusArmor: bonus.armor,
     bonusHp: bonus.hp,
@@ -439,7 +543,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
 }
 
 export function bossFor(run: RunState, seed: number): { node: RoomNode; init: BattleInit } {
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   const rng = makeRng((seed ^ 0x51ed270b) >>> 0);
   const pick = rng.pick(theme.bosses);
   const node: RoomNode = { kind: 'boss', title: pick.title, sub: pick.sub };
@@ -468,7 +572,7 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
   // 随军医官：一场战斗后返还 N 个阵亡单位（用最低级的兵补）
   const revive = run.relics.reduce((n, id) => n + (relicById(id)?.effect.revive ?? 0), 0);
   if (revive > 0 && after < before) {
-    const type = cheapestOf(themeOf(run.layer));
+    const type = cheapestOf(themeOf(run));
     const n = Math.min(revive, before - after);
     addUnits(run.army, type, n);
     notes.push(`随军医官：${unitName(type)} ×${n} 归队`);
@@ -509,7 +613,7 @@ export function rollLayerUnit(theme: LayerTheme, clock: number, rng: Rng): strin
  * 特殊战斗（还没做）预留的是"介于普通和精英之间"，这里不实现。
  */
 export function rewardOptions(run: RunState, kind: RoomKind, rng: Rng): RewardOption[] {
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   const owned = new Set(run.relics);
   const unit = rollLayerUnit(theme, run.clock, rng);
   const unitCost = costOf(unit);
@@ -564,7 +668,7 @@ export function rewardOptions(run: RunState, kind: RoomKind, rng: Rng): RewardOp
  */
 export function bossRewards(run: RunState, rng: Rng): string[] {
   const notes: string[] = [];
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   const owned = new Set(run.relics);
 
   const relicPool = RELICS.filter((r) => !owned.has(r.id));
@@ -584,7 +688,7 @@ export function bossRewards(run: RunState, rng: Rng): string[] {
   notes.push(`${costOf(high)} 金`);
 
   if (run.layer < 3) {
-    const next = themeOf((run.layer + 1) as LayerId);
+    const next = themeFor(run.world, (run.layer + 1) as LayerId);
     const first = cheapestOf(next);
     addUnits(run.army, first, 1);
     notes.push(`${unitName(first)} ×1（下一层的兵）`);
@@ -627,7 +731,7 @@ function shopDiscount(run: RunState): number {
  * 上一版一次只出一件、买完就走，等于把商店做成了三选一，那不是商店。
  */
 export function shopStock(run: RunState, rng: Rng): ShopItem[] {
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   const off = shopDiscount(run);
   /*
    * 行商按造价 1.15 倍卖兵。
@@ -676,7 +780,7 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
 
 /** 休整房：从池里抽 3 个选项 */
 export function restOptions(run: RunState, rng: Rng): RewardOption[] {
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   const opts = rng.shuffle([...REST_OPTIONS]).slice(0, 3);
   return opts.map((o) => ({
     id: o.id,
@@ -750,12 +854,12 @@ export function nextLayer(run: RunState, seed: number): boolean {
       notes.push(`军饷袋：+${e.goldPerLayer} 金`);
     }
     if (e.unitPerLayer) {
-      const type = cheapestOf(themeOf(layer));
+      const type = cheapestOf(themeOf(run));
       addUnits(run.army, type, e.unitPerLayer);
       notes.push(`军粮袋：${unitName(type)} ×${e.unitPerLayer}`);
     }
   }
-  run.log.push(`进入${themeOf(layer).name}`);
+  run.log.push(`进入${themeOf(run).name}`);
   for (const n of notes) run.log.push(n);
   return true;
 }

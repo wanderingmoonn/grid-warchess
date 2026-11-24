@@ -20,6 +20,7 @@ import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { LevelDef } from '../core/level.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import type { ArmyEntry, BattleInit, BattleResult } from './types.ts';
+import { CULTIVATORS } from './data.ts';
 import { makeRng } from './rng.ts';
 
 const VARIANT = 'rg:';
@@ -128,7 +129,22 @@ function pickCells(
         ring.push({ x, y });
       }
     }
-    rng.shuffle(ring);
+    /*
+     * 圈内排序：**先横后竖**（|dy| 小的优先，同排里 |dx| 大的优先），
+     * 再拿种子打散同分。
+     *
+     * 之前是纯随机，围出来的常常是个 3×3 的团——团里没有"最外侧"，
+     * 骑兵就只能被裹在中间。先横后竖会让阵型铺成一条宽线，
+     * 两翼才有地方站。
+     */
+    const jitter = new Map<string, number>();
+    for (const c of ring) jitter.set(`${c.x},${c.y}`, rng.next());
+    ring.sort(
+      (a, b) =>
+        Math.abs(a.y - anchor.y) - Math.abs(b.y - anchor.y) ||
+        Math.abs(b.x - anchor.x) - Math.abs(a.x - anchor.x) ||
+        (jitter.get(`${a.x},${a.y}`) ?? 0) - (jitter.get(`${b.x},${b.y}`) ?? 0),
+    );
     for (const cell of ring) {
       if (out.length >= n) break;
       blocked.add(`${cell.x},${cell.y}`);
@@ -153,7 +169,7 @@ function flatten(army: ArmyEntry[]): string[] {
  *   · 遭遇 / 精英：B 也没有城 → 双方都按"兵打光算输"；
  *   · 攻坚 / 层末：B 有 1–2 座城 → 玩家要啃城，B 丢了城才算输。
  */
-function makeLevel(init: BattleInit): LevelDef {
+function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB: Cell[] } {
   const w = init.size;
   const h = init.size;
   const grid = makeRows(w, h, init.seed).map((r) => [...r]);
@@ -162,7 +178,14 @@ function makeLevel(init: BattleInit): LevelDef {
   const citiesB: Cell[] = [];
   if (init.enemyCityCount > 0) {
     citiesB.push({ x: Math.max(0, Math.floor(w / 2) - 1), y: 0 });
-    if (init.enemyCityCount > 1) citiesB.push({ x: Math.max(0, w - 3), y: Math.max(0, h - 3) });
+    /*
+     * 第二座城也放在上边，和第一座并成一道墙。
+     *
+     * 以前放在右下角，结果它离玩家的出生点只有两三格——玩家一睁眼就站在
+     * 敌人一座城旁边，而 AI 眼里只有"第一座城"，会掉头往北走。两座城排成
+     * 一条线，才是"你要从下面打上来"的样子。
+     */
+    if (init.enemyCityCount > 1) citiesB.push({ x: Math.max(0, w - 5), y: 0 });
   }
   const blocked = blockedSet(citiesB, 2);
 
@@ -174,8 +197,16 @@ function makeLevel(init: BattleInit): LevelDef {
 
   const playerFlat = flatten([...init.playerArmy, ...init.tempUnits]);
   const enemyFlat = init.enemyTypes;
-  const playerCells = pickCells(w, h, grid, blocked, playerAnchor, playerFlat.length, init.seed ^ 0x1234);
-  const enemyCells = pickCells(w, h, grid, blocked, enemyAnchor, enemyFlat.length, init.seed ^ 0x5678);
+  /*
+   * 多要几个格子当"余量"。
+   *
+   * `pickCells` 只找够用的格子，围出来的是一个 3×3 的团；团里没有"最外侧"，
+   * 骑兵就只能被裹在中间。多要 6 个，阵型才铺得开——摆阵那一步会把用不上的
+   * 空着，代价只是多几格平地。
+   */
+  const SLACK = 6;
+  const playerCells = pickCells(w, h, grid, blocked, playerAnchor, playerFlat.length + SLACK, init.seed ^ 0x1234);
+  const enemyCells = pickCells(w, h, grid, blocked, enemyAnchor, enemyFlat.length + SLACK, init.seed ^ 0x5678);
 
   // 站人的格子一律铺平：阵型不该被一丛树卡出个缺口
   for (const c of [...playerCells, ...enemyCells]) grid[c.y]![c.x] = '.';
@@ -192,7 +223,7 @@ function makeLevel(init: BattleInit): LevelDef {
   const noCity: PlayerId[] = init.enemyCityCount > 0 ? ['A'] : ['A', 'B'];
   const id = `rogue2:${init.layer}:${init.kind}:${init.seed}`;
 
-  return {
+  const level: LevelDef = {
     id,
     version: 1,
     name: `${init.label} · ${init.sub}`.slice(0, 24),
@@ -209,6 +240,7 @@ function makeLevel(init: BattleInit): LevelDef {
     deploy: { A: deployA, B: deployB },
     setup: { startEra: init.cityEra, firstSide: 'A' },
   };
+  return { level, cellsA: playerCells, cellsB: enemyCells };
 }
 
 /**
@@ -217,44 +249,78 @@ function makeLevel(init: BattleInit): LevelDef {
  * 只在已经分好的站位之间重新分配"谁站哪"——不重新挑格子。
  * 这样不会踩到城/水/山，也不会把谁挤出地图，改变的只是排布。
  *
- * 为什么需要：`pickCells` 是"从锚点一圈圈往外撒、圈内随机"。随机的结果是远程
- * 常常被摆在最前面、近战缩在最后一排——每次开局第一件事就是把自己人挪一遍。
- * 阵型是玩家一眼要看懂的东西，不该掷骰子决定。
+ * 做法是给每个兵一个"目标位置"（离敌人多近、离中线多远），再按
+ * **远程 → 快兵 → 近战** 的顺序抢格子：远程最挑位置（只有后排那几个），
+ * 快兵要最外侧，最后剩下的给普通近战。
+ *
+ * 上一版只按"近战/远程"分两档、同一档里按 y 排，结果骑兵经常被裹在阵中间
+ * ——因为它和民兵一样都是近战，只是排得早一点，而"排得早"不等于"站边上"。
  */
-function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1): void {
+function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1, slots: Cell[]): void {
   const units = s.units.filter((u) => u.owner === owner && u.hp > 0);
   if (units.length < 3) return; // 两三个人怎么站都一样
 
-  const cells = units.map((u) => ({ x: u.x, y: u.y }));
+  // 候选格：部署时多要的那几个也算进来，阵型才铺得开
+  const cells = slots.length >= units.length ? slots : units.map((u) => ({ x: u.x, y: u.y }));
   const cx = cells.reduce((n, c) => n + c.x, 0) / cells.length;
   const cy = cells.reduce((n, c) => n + c.y, 0) / cells.length;
   /** 越大越靠后（远离敌人） */
-  const back = (c: { x: number; y: number }): number => (c.y - cy) * -toward;
+  const backOf = (c: { x: number; y: number }): number => (c.y - cy) * -toward;
   /** 越大越靠边 */
-  const wing = (c: { x: number; y: number }): number => Math.abs(c.x - cx);
+  const wingOf = (c: { x: number; y: number }): number => Math.abs(c.x - cx);
 
-  const want = (u: Unit): { back: number; mobile: boolean } => {
+  const minBack = Math.min(...cells.map(backOf));
+  const maxBack = Math.max(...cells.map(backOf));
+  const maxWing = Math.max(...cells.map(wingOf), 1);
+  /** 归一化：0 = 最靠前 / 最靠中路，1 = 最靠后 / 最靠边 */
+  const nb = (c: { x: number; y: number }): number => (backOf(c) - minBack) / Math.max(1e-6, maxBack - minBack);
+  const nw = (c: { x: number; y: number }): number => wingOf(c) / Math.max(1e-6, maxWing);
+
+  type Role = 'ranged' | 'mobile' | 'melee';
+  const roleOf = (u: Unit): Role => {
     const def = s.unitTypes[u.type];
-    const range = def?.range ?? 1;
-    const move = def?.move ?? 3;
-    // 0 = 贴敌，1 = 中排，2 = 最后排
-    return { back: range >= 3 ? 2 : range >= 2 ? 1 : 0, mobile: range <= 1 && move >= 4 };
+    if ((def?.range ?? 1) >= 3) return 'ranged';
+    // 移速 3 就是"能绕侧"的那一档（骑士是 3、骠骑/斥候/装甲车是 4~5），
+    // 线列步兵和炮是 2。用 4 当门槛会把骑士漏在阵中间。
+    if ((def?.move ?? 3) >= 3) return 'mobile';
+    return 'melee';
   };
+  /** 目标位置：远程最后排、快兵最外侧、近战最前排；三者都尽量靠中路 */
+  const target: Record<Role, { b: number; w: number }> = {
+    ranged: { b: 1, w: 0.15 },
+    mobile: { b: 0.25, w: 1 },
+    melee: { b: 0, w: 0.15 },
+  };
+  const priority: Record<Role, number> = { ranged: 0, mobile: 1, melee: 2 };
 
-  // 前排的格子给近战，后排的给远程；同一排里最外侧的给跑得快的
-  const bySlot = [...cells].sort((a, b) => back(a) - back(b) || wing(b) - wing(a));
-  const byUnit = [...units].sort((a, b) => {
-    const pa = want(a);
-    const pb = want(b);
-    return pa.back - pb.back || Number(pb.mobile) - Number(pa.mobile);
-  });
-
-  byUnit.forEach((u, i) => {
-    const c = bySlot[i];
-    if (!c) return;
+  const taken = new Set<number>();
+  const order = [...units].sort((a, b) => priority[roleOf(a)] - priority[roleOf(b)]);
+  /** 快兵左右交替：第 1 个去左翼、第 2 个去右翼，不然两个骑兵会挤在同一边 */
+  let mobileSeq = 0;
+  for (const u of order) {
+    const role = roleOf(u);
+    const t = target[role];
+    const side = role === 'mobile' ? (mobileSeq++ % 2 === 0 ? -1 : 1) : 0;
+    let best = -1;
+    let bestScore = Infinity;
+    cells.forEach((c, i) => {
+      if (taken.has(i)) return;
+      // 横向（侧翼）权重更高：它是"谁在两翼"这件事的主轴
+      const lateral = side === 0 ? nw(c) : ((c.x - cx) * side) / maxWing;
+      // 快兵对"前后"最不挑：只要在两翼，站哪一排都行
+      const wBack = role === 'mobile' ? 0.35 : 1;
+      const score = (nb(c) - t.b) ** 2 * wBack + (lateral - t.w) ** 2 * 1.6;
+      if (score < bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    });
+    if (best < 0) continue;
+    taken.add(best);
+    const c = cells[best] as { x: number; y: number };
     u.x = c.x;
     u.y = c.y;
-  });
+  }
 }
 
 /**
@@ -264,7 +330,7 @@ function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1): void {
  * 建完之后只做两件它管不了的事：套我方加成（变体兵种）与盖金币。
  */
 export function buildBattle(init: BattleInit): GameState {
-  const level = makeLevel(init);
+  const { level, cellsA, cellsB } = makeLevel(init);
   const allUnits = Object.values(UNIT_TYPES)
     .filter((d) => d.category === 'combat' && d.domain !== 'water')
     .map((d) => d.id);
@@ -298,6 +364,30 @@ export function buildBattle(init: BattleInit): GameState {
   s.fog = false;
 
   /*
+   * ---- 修真：境界加成（简化口径） ----
+   *
+   * 完整的修炼要有真元、法术、经验与突破，demo 不跑那一套；这里按时代钟
+   * 给修士一个固定的攻/血加成，等价于"开局就已经是筑基/金丹"。
+   * 只加人，不加法器（法器不是人，没有境界）。
+   *
+   * 注意加的是**本局私有的兵种表**（`createMatch` 每局复制一份），
+   * 所以两边同享、不会污染别的局。
+   */
+  if (init.rank > 0) {
+    for (const id of Object.keys(s.unitTypes)) {
+      if (!CULTIVATORS.has(id)) continue;
+      const def = s.unitTypes[id];
+      if (!def) continue;
+      def.atk += init.rank * 3;
+      def.maxHp += init.rank * 8;
+    }
+    for (const u of s.units) {
+      if (!CULTIVATORS.has(u.type)) continue;
+      u.hp = s.unitTypes[u.type]?.maxHp ?? u.hp;
+    }
+  }
+
+  /*
    * ---- 摆阵 ----
    *
    * 两边的锚点都在 `makeLevel` 里定好了（A 在下、B 在上），所以朝向按
@@ -309,8 +399,8 @@ export function buildBattle(init: BattleInit): GameState {
   if (aUnits.length > 0 && bUnits.length > 0) {
     const avgY = (list: Unit[]): number => list.reduce((n, u) => n + u.y, 0) / list.length;
     const aDown = avgY(aUnits) > avgY(bUnits);
-    arrangeFormation(s, 'A', aDown ? -1 : 1);
-    arrangeFormation(s, 'B', aDown ? 1 : -1);
+    arrangeFormation(s, 'A', aDown ? -1 : 1, cellsA);
+    arrangeFormation(s, 'B', aDown ? 1 : -1, cellsB);
   }
 
   // ---- 我方加成（变体兵种）----

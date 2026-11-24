@@ -4,7 +4,9 @@
  * 全部是一块 DOM 反复重写，不引框架。房间图、金币、军队这些状态都活在
  * `RunState` 里，这里只负责"显示它、把点击变成对它的修改"。
  */
-import { STRATEGIES, armyText, eventById, relicById, themeOf } from './run.ts';
+import { STRATEGIES, armyText, eventById, relicById, themeOf, unitName } from './run.ts';
+import { WORLDS } from './data.ts';
+import type { WorldId } from './data.ts';
 import {
   applyDecision,
   decisionOptions,
@@ -106,7 +108,7 @@ function showMap(root: HTMLElement): void {
   if (!run) return;
   cleanup();
   const r = run;
-  const theme = themeOf(r.layer);
+  const theme = themeOf(r);
   const rows = r.plan.steps
     .map((doors, i) => {
       const state = i < r.step ? 'done' : i === r.step ? 'now' : 'next';
@@ -141,7 +143,9 @@ function showMap(root: HTMLElement): void {
     <div class="rg-map">
       <header class="rg-top">
         <div class="rg-top-title">
-          <b>${theme.name}</b><span>${theme.subtitle}</span>
+          <b>${theme.name}</b>${
+            r.layer === 2 ? `<em class="rg-world-tag">${WORLDS[r.world].name}</em>` : ''
+          }<span>${theme.subtitle}</span>
         </div>
         <div class="rg-top-stats">
           <span>步 <b>${Math.min(r.step, STEPS_PER_LAYER)}</b>/${STEPS_PER_LAYER}</span>
@@ -451,25 +455,87 @@ function onBossDone(root: HTMLElement, node: RoomNode, result: BattleResult): vo
   r.bossDone = true;
   r.log.push(`破「${node.title}」`);
 
-  const notes = bossRewards(r, rng);
-  const last = r.layer >= 3;
-  if (last) {
-    r.over = {
-      win: true,
-      title: '常规结局 · 破钟',
-      body: '钟楼倒了，钟声断在半途。这一代到此为止——你没有再往前走。',
-    };
-  } else {
-    nextLayer(r, r.seed);
-  }
-  showResultThen(root, `${node.title} · 已破`, `战利品：${notes.join('；')}。`, () =>
-    last ? showOver(root) : showInterlude(root),
-  );
+  /*
+   * 结算顺序：**先选路，再发战利品**。
+   *
+   * 战利品里有一项是"下一层的初级兵"，而下一层是哪一层要等选完路才知道
+   * （奇想的下一层兵和修真的不是同一批）。所以第一层末的那次结算，
+   * 岔口必须排在发奖前面。
+   */
+  const award = (): void => {
+    if (!run) return;
+    const notes = bossRewards(run, rng);
+    const last = run.layer >= 3;
+    if (last) {
+      run.over = {
+        win: true,
+        title: '常规结局 · 破钟',
+        body: '钟楼倒了，钟声断在半途。这一代到此为止——你没有再往前走。',
+      };
+    }
+    showResultThen(root, `${node.title} · 已破`, `战利品：${notes.join('；')}。`, () => {
+      if (!run) return;
+      if (run.layer >= 3) {
+        showOver(root);
+        return;
+      }
+      nextLayer(run, run.seed);
+      showInterlude(root);
+    });
+  };
+
+  if (r.layer === 1) showWorldChoice(award);
+  else award();
+}
+
+/**
+ * 第二层的岔口：四种历史。
+ *
+ * 对应设计里"L1 末的临战决议 = 选这条历史怎么走"：
+ *   原版 / 时代军备 → 技术史，奇想 / 修真 → 神话史。
+ * 选完第二层的兵池、扩展开关、层末 boss 全部换成那一支史的样子；
+ * 第三层保持科技底色，只把这一支史的高代兵混进去（修真是例外，见「末法之世」）。
+ */
+function showWorldChoice(onPick: () => void): void {
+  if (!run) return;
+  const list = Object.values(WORLDS);
+  const cards = list
+    .map((w) => {
+      const sample = w.theme.pool.slice(0, 3).map((t) => unitName(t)).join('、');
+      return `<button class="rg-world" data-world="${w.id}">
+        <b>${w.name}</b>
+        <em>${w.history === 'myth' ? '神话史' : '技术史'}</em>
+        <span>${w.blurb}</span>
+        <i>${sample}……</i>
+      </button>`;
+    })
+    .join('');
+  const host = document.createElement('div');
+  host.className = 'rg-mask';
+  host.innerHTML = `<div class="rg-modal wide">
+    <h3>这条历史怎么走</h3>
+    <p class="rg-body">第一层打完了。往后的路不止一条——<b>第二层会变成你选的那种样子</b>：兵、敌人、层末的对手全都换。</p>
+    <div class="rg-worlds">${cards}</div>
+  </div>`;
+  document.body.appendChild(host);
+  host.onclick = (e) => {
+    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-world]')?.dataset.world as
+      | WorldId
+      | undefined;
+    if (!id) return;
+    host.remove();
+    const w = WORLDS[id];
+    if (run) {
+      run.world = id;
+      run.log.push(`选定的路：${w.name}（${w.history === 'myth' ? '神话史' : '技术史'}）`);
+    }
+    onPick();
+  };
 }
 
 function showInterlude(root: HTMLElement): void {
   if (!run) return;
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   root.innerHTML = `
     <div class="rg-inter">
       <h2>${theme.name}</h2>

@@ -24,8 +24,11 @@ import {
   rewardOptions,
   shopStock,
   startRun,
+  themeFor,
+  themeOf,
   STEPS_PER_LAYER,
 } from '../src/roguelike/run.ts';
+import { WORLDS } from '../src/roguelike/data.ts';
 import { isEliminated, utype } from '../src/core/rules.ts';
 import { buildBattle, outcomeOf, resultOf, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
@@ -314,6 +317,61 @@ console.log('\n[6] 成长与奖励');
   check(armyCount(run4.army) === armyBefore + 2, '层末给 2 个兵（本层高级 + 下层初级）');
   check(run4.gold > goldBefore, '层末给一笔钱');
   check(notes.some((n) => n.includes('下一层的兵')), '层末战利品里点明"下一层的兵"', notes.join(' / '));
+}
+
+// ---------------------------------------------------------------- 7. 第二层的四种世界
+console.log('\n[7] 第二层的四种世界（正史 / 军备 / 奇想 / 修真）');
+{
+  const ids = ['base', 'arms', 'fantasy', 'cultivation'] as const;
+  for (const id of ids) {
+    const t = themeFor(id, 2);
+    check(t.pool.length > 0 && t.poolHigh.length > 0, `「${WORLDS[id].name}」有低代与高代兵池`);
+    check(t.name.includes('第二层'), `「${WORLDS[id].name}」有自己的层名`, t.name);
+  }
+  check(themeFor('fantasy', 2).expansions.includes('fantasy'), '奇想层要开 fantasy 扩展');
+  check(themeFor('cultivation', 2).expansions.includes('cultivation'), '修真层要开 cultivation 扩展');
+
+  // 选完路之后，第二层的名字与兵池都换了
+  const run = startRun(31, 'frontier');
+  run.step = STEPS_PER_LAYER;
+  run.world = 'fantasy';
+  nextLayer(run, run.seed);
+  check(run.layer === 2 && themeOf(run).name.includes('异境'), '选奇想后第二层变成「异境」', themeOf(run).name);
+
+  const init = battleFor(run, { kind: 'battle', title: '', sub: '' }, 77);
+  check(init.expansions.includes('fantasy'), '第二层战斗里带着 fantasy 扩展');
+  const s = buildBattle(init);
+  const known = new Set(Object.keys(s.unitTypes));
+  const missing = themeFor('fantasy', 2).pool.filter((t) => !known.has(t));
+  check(missing.length === 0, '奇想的兵都能进本局兵种表', missing.join(','));
+
+  // 修真：修士按境界加攻血（demo 用固定加成代替修炼循环）
+  const r2 = startRun(32, 'frontier');
+  r2.layer = 2;
+  r2.clock = 6;
+  r2.world = 'cultivation';
+  const init2 = battleFor(r2, { kind: 'battle', title: '', sub: '' }, 78);
+  // 固定一个修士上场，专门看境界加成（随机编成不一定抽到人）
+  init2.enemyTypes = ['qi-cultivator'];
+  const s2 = buildBattle(init2);
+  const qi = s2.units.find((u) => u.type === 'qi-cultivator');
+  if (qi) {
+    const def = utype(s2, qi.type);
+    check(def.atk > 10, '修真修士吃到境界加成（基础攻 10）', `atk=${def.atk}`);
+    check(def.maxHp > 20, '修真修士的血也涨了（基础 20）', `hp=${def.maxHp}`);
+  } else {
+    check(false, '修真层派出了修士', '场上没有 qi-cultivator');
+  }
+
+  // 层末战利品里的"下一层兵"要跟着世界走
+  const r3 = startRun(33, 'frontier');
+  r3.world = 'cultivation';
+  const notes3 = bossRewards(r3, makeRng(5));
+  check(notes3.some((n) => n.includes('炼气士')), '选修真后，第一层末给的是修真的兵', notes3.join(' / '));
+
+  // 第三层的溢出与末法之世
+  check(themeFor('fantasy', 3).pool.includes('archmage'), '奇想的 e5 兵溢到第三层');
+  check(themeFor('cultivation', 3).subtitle.includes('末法'), '修真没有 e5 兵，第三层是「末法之世」');
 }
 
 console.log(

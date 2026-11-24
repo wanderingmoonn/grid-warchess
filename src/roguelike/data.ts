@@ -12,6 +12,7 @@
  *   · 加休整选项 → `REST_OPTIONS` 加一行，`run.ts` 的 `restOptions` 认 id。
  */
 import type { LayerId, EventDef, ArmyEntry } from './types.ts';
+import { expansionUnitsFor } from '../core/setup.ts';
 
 /** 兵种中文名 */
 export const UNIT_NAME: Record<string, string> = {
@@ -40,8 +41,11 @@ export const UNIT_NAME: Record<string, string> = {
   ct_recon: '装甲侦察车',
 };
 
+/** 扩展兵的显示名（奇想的飞龙、修真的法器……），在 WORLDS 定义之后填 */
+const EXPANDED_NAMES: Record<string, string> = {};
+
 export function unitName(id: string): string {
-  return UNIT_NAME[id] ?? id;
+  return UNIT_NAME[id] ?? EXPANDED_NAMES[id] ?? id;
 }
 
 /**
@@ -90,7 +94,7 @@ export const LAYERS: Record<LayerId, LayerTheme> = {
       { title: '持秤者的货栈', sub: '账本比城墙厚，也比特么城墙硬' },
       { title: '守钟人的石龛', sub: '钟还没响，他先站到了门口' },
     ],
-      },
+  },
   2: {
     id: 2,
     name: '第二层 · 商道',
@@ -126,6 +130,167 @@ export const LAYERS: Record<LayerId, LayerTheme> = {
     bosses: [{ title: '钟楼', sub: '三家共守的地方——谁都不能让你砸这口钟' }],
   },
 };
+
+/**
+ * 世界（第二层的四种样子）。
+ *
+ * 设计里 L1 末要选"这条历史怎么走"：原版（正史）/ 时代军备（加速史）走技术史，
+ * 奇想（神话史）/ 修真（修行史）走神话史；**第二层就是这一支史的样子**。
+ * 四种世界的区别不是换个名字，是**兵池、扩展开关、层末 boss、第三层的溢出**全都换。
+ *
+ * 实现方式：一局在 `RunState.world` 里记一个 id，`themeFor(world, layer)` 按它取主题。
+ * 第一层和第三层共用一套（L3 是科技层，只把本世界的高代兵混进去）。
+ */
+export type WorldId = 'base' | 'arms' | 'fantasy' | 'cultivation';
+
+export interface WorldDef {
+  id: WorldId;
+  /** 选项名 */
+  name: string;
+  /** 这一支史最后通向 L4 的哪一边 */
+  history: 'technology' | 'myth';
+  /** 选择界面上的说明 */
+  blurb: string;
+  /** 第二层的主题（层名 / 兵池 / 扩展开关 / 层末 boss） */
+  theme: LayerTheme;
+  /** 修真：修士按时代钟拿到的"境界档位"（其它世界没有） */
+  rankOf?: (clock: number) => number;
+  /**
+   * 敌方预算的折算系数（缺省 1）。
+   *
+   * 奇想和修真的兵"每块钱买到的战力"比原版高：奇想带魔法/飞行/治疗，
+   * 修真带境界。同样的预算，他们会明显更难打——所以按世界给预算打个折。
+   */
+  power?: number;
+  /** 第三层的"本世界溢出"：并进 L3 的低代池 */
+  l3Pool: string[];
+  /** 第三层层名若不是默认的科技层，在这里覆盖 */
+  l3Subtitle?: string;
+}
+
+/** 第二层的地图尺寸与"上一代"兵池：四个世界通用 */
+const L2_SIZE = [10, 12, 12, 14] as const;
+const L2_PREV = ['spearman', 'longbow', 'crossbow', 'knight'];
+
+function l2(
+  name: string,
+  subtitle: string,
+  pool: string[],
+  poolHigh: string[],
+  expansions: string[],
+  bosses: ReadonlyArray<{ title: string; sub: string }>,
+): LayerTheme {
+  return {
+    id: 2,
+    name,
+    subtitle,
+    eraLow: 3,
+    eraHigh: 4,
+    prevPool: [...L2_PREV],
+    prevEra: 2,
+    pool,
+    poolHigh,
+    expansions,
+    size: L2_SIZE,
+    bosses,
+  };
+}
+
+/** 修真里会"长境界"的单位（法器不会——它们不是人） */
+export const CULTIVATORS = new Set([
+  'qi-cultivator',
+  'sword-cultivator',
+  'body-cultivator',
+  'blood-cultivator',
+  'soul-cultivator',
+]);
+
+export const WORLDS: Record<WorldId, WorldDef> = {
+  base: {
+    id: 'base',
+    name: '正史',
+    history: 'technology',
+    blurb: '没有魔法，也没有被提前造出来的枪。一切按本来的时间表走。',
+    theme: LAYERS[2],
+    l3Pool: [],
+  },
+  arms: {
+    id: 'arms',
+    name: '时代军备',
+    history: 'technology',
+    blurb: '有人把三代以后的枪提前造了出来。线列、胸甲、加农炮，然后直接跳进堑壕与坦克。',
+    theme: l2(
+      '第二层 · 军械库',
+      '铁比人多，炮比话多',
+      ['gp_lineinfantry', 'gp_sharpshooter', 'gp_cuirassier', 'gp_dragoon', 'gp_grenadier', 'gp_siegecannon', 'gp_rocket', 'gp_culverin', 'combat-engineer'],
+      ['ind_trenchraider', 'ind_trenchmortar', 'ind_flamethrower', 'ind_gas', 'ind_howitzer', 'ind_railwaygun', 'ind_landship', 'ind_armoredtrain', 'mine-sweeper'],
+      ['era-arms'],
+      [
+        { title: '守墙人的兵工厂', sub: '墙靠人守，人靠厂养' },
+        { title: '持秤者的军械库', sub: '他连炮弹都按斤称' },
+        { title: '守钟人的试炮场', sub: '他们拿钟当靶子试射程' },
+      ],
+    ),
+    l3Pool: ['mod_paratrooper', 'mod_commando', 'mod_atgun', 'mod_katyusha', 'mod_heavytank', 'mod_spg', 'mod_flak', 'mod_heavy_mortar'],
+  },
+  fantasy: {
+    id: 'fantasy',
+    name: '奇想',
+    history: 'myth',
+    blurb: '龙、法师、精灵从故事里走了出来，站到了战场上。脆，但什么都干得出来。',
+    theme: l2(
+      '第二层 · 异境',
+      '树上挂着龙，井里游着精灵',
+      /*
+       * 池子里**不放飞行单位**（鹰身女妖、石像鬼、狮鹫骑士、龙骑兵、吸血鬼、不死鸟）。
+       *
+       * 空中层是"和地面同格但不在同一层"，地面单位打不到它；一局里只要对面
+       * 有一只会飞的，玩家又没带对空，这仗就打不完（实测：10 个兵围着 3 个敌人
+       * 打了 39 轮，城一点血没掉）。奇想的味道靠魔法、亡灵、巨兽来给，够用。
+       */
+      ['berserker', 'ghost', 'assassin', 'mage', 'elf-archer', 'treant', 'necromancer', 'paladin', 'royal-cavalry', 'cataphract'],
+      ['royal-guard', 'werewolf', 'elementalist', 'two-head-giant', 'clockwork-golem', 'holy-knight-lord', 'royal-king', 'alchemist'],
+      ['fantasy'],
+      [
+        { title: '邪龙王的巢', sub: '它不是守城，它只是睡在城里' },
+        { title: '精灵女王的庭院', sub: '每一棵树都记得你砍过谁' },
+        { title: '至尊法师的高塔', sub: '塔里没有楼梯，只有上一层的门' },
+      ],
+    ),
+    l3Pool: ['archmage', 'elf-queen'],
+    power: 1.8,
+  },
+  cultivation: {
+    id: 'cultivation',
+    name: '修真',
+    history: 'myth',
+    blurb: '有人不靠机器，靠自己往上修。人少，贵，但境界压人。',
+    theme: l2(
+      '第二层 · 山门',
+      '山门还在，灵气不多了',
+      ['qi-cultivator', 'sword-cultivator', 'body-cultivator', 'cultivation-artifact-wood', 'cultivation-artifact-stone'],
+      ['blood-cultivator', 'soul-cultivator', 'cultivation-artifact-water', 'cultivation-artifact-fire'],
+      ['cultivation'],
+      [
+        { title: '掌门与护山大阵', sub: '山门不破，是因为阵还没破' },
+        { title: '魔修的洞府', sub: '洞里没有灯，只有人在发光' },
+        { title: '魂修的祭坛', sub: '坛上摆的不是供品，是名字' },
+      ],
+    ),
+    // 境界：门口就是筑基，越往钟后越深（demo 用固定加成代替完整的修炼循环）
+    rankOf: (clock) => Math.min(5, 2 + Math.floor(clock / 3)),
+    power: 2.2,
+    l3Pool: [],
+    l3Subtitle: '末法之世——灵气被钢铁抽干了，这一层没有修士，只有机器',
+  },
+};
+
+// 四种世界的兵都有自己的名字；`unitName` 查不到基础表时会落到这张表
+for (const w of Object.values(WORLDS)) {
+  for (const [id, def] of Object.entries(expansionUnitsFor(w.theme.expansions))) {
+    EXPANDED_NAMES[id] = def.name;
+  }
+}
 
 /** 方略：开局身份 + 一条被动。被动在 battle.ts 里翻译成具体加成 */
 export interface Strategy {
@@ -391,9 +556,12 @@ export function pickEnemyTypes(
   let left = budget;
   const slots = Math.max(1, Math.min(14, count));
   for (let i = 0; i < slots; i += 1) {
-    // 每个位置分到"剩余 ÷ 剩余位置"：不这么分的话，前面几件贵货会把预算吃光，
-    // 后面的人头就落空了（实测 3 个人头只出场 2 个）
-    const cap = Math.max(1, Math.floor(left / (slots - i)));
+    /*
+     * 第一个位置单独给一半预算：编成里要有"一个尖子"。
+     * 平均分的话，钱少的局会全买成便宜兵，一个像样的都没有；
+     * 后面的位置再按"剩余 ÷ 剩余位置"平均分，保证人头凑得齐。
+     */
+    const cap = i === 0 ? Math.floor(left * 0.5) : Math.max(1, Math.floor(left / (slots - i)));
     const pick = sorted.find((id) => cost(id) <= cap) ?? cheapest;
     if (cost(pick) > left) break;
     out.push(pick);

@@ -100,6 +100,8 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
   let battles = 0;
   let shops = 0;
   let decisions = 0;
+  let worlds = 0;
+  const interludes: string[] = [];
   let guard = 0;
   let layers = 1;
   while (guard < 400) {
@@ -111,6 +113,13 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
       modals += 1;
       if (mask.querySelector('.rg-shop-row')) shops += 1;
       if ((mask.textContent ?? '').includes('临战决议')) decisions += 1;
+      // 第一层末的岔口：四个世界，挑奇想走一遍
+      if (mask.querySelector('.rg-world')) {
+        worlds += 1;
+        click(mask.querySelector('[data-world="fantasy"]') ?? mask.querySelector('.rg-world'));
+        await wait(4);
+        continue;
+      }
       // 商店是三行货架（没有 .rg-choice），点「离开」；其余弹层点第一个选项
       const pick =
         mask.querySelector('.rg-choice') ??
@@ -121,6 +130,8 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
       continue;
     }
     if (root.querySelector('.rg-inter')) {
+      const title = root.querySelector('.rg-inter h2')?.textContent?.trim() ?? '';
+      if (title) interludes.push(title);
       layers += 1;
       portals += 1;
       click(root.querySelector('[data-act="go"]'));
@@ -145,6 +156,8 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
   console.log(
     `    经过 ${modals} 个弹层（其中商店 ${shops}、临战决议 ${decisions}）、${battles} 场（自动判胜的）战斗、${portals} 次层间推进`,
   );
+  check(worlds === 1, '第一层末出现一次"四种历史"的分岔', `实际 ${worlds}`);
+  check(interludes.some((t) => t.includes('异境')), '选奇想之后进入「异境」', interludes.join(' / '));
   check(shops > 0, '商店是三行货架');
   check(decisions >= 3, '每层层末都有临战决议', `实际 ${decisions}`);
   check(layers === 3, '走到了第三层', `实际 ${layers}`);

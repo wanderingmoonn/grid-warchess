@@ -7,6 +7,8 @@
  */
 /** 试玩版只做三层；第四层按设计另做，不在本次范围内 */
 export type LayerId = 1 | 2 | 3;
+import type { WorldId } from './data.ts';
+export type { WorldId };
 
 /** 房间种类。注意 boss 不在 20 个房里，它是层末强制战 */
 export type RoomKind = 'battle' | 'elite' | 'siege' | 'event' | 'shop' | 'rest' | 'boss';
@@ -88,6 +90,8 @@ export interface RunOver {
 export interface RunState {
   seed: number;
   strategyId: string;
+  /** 这一局走的是哪一支史（第一层末选，决定第二层的四种样子） */
+  world: WorldId;
   layer: LayerId;
   /** 已完成的步数；等于 10 时该打层末 boss */
   step: number;
@@ -130,8 +134,12 @@ export interface BattleInit {
   enemyRecruit: number;
   /** 敌方的打法：遭遇/精英抢攻，攻坚/层末守城 */
   enemyDoctrine: 'rush' | 'boom';
-  /** 这一局要开的扩展（第 6 代要「信息化」） */
+  /** 这一局要开的扩展（第 6 代要「信息化」；第二层还要开该世界的包） */
   expansions: string[];
+  /** 世界（第二层主题）；第一层是 base */
+  world: WorldId;
+  /** 修真：这一场修士的境界档位（0 = 不适用） */
+  rank: number;
   /** 我军加成（已按藏品/方略/决议合好） */
   bonusAtk: number;
   bonusArmor: number;
