@@ -156,7 +156,6 @@ export interface World {
    * 两个人的"更近"都指向对方，于是谁也不动。一张共享的场里，洞有明确流向，
    * 整列会像传送带一样依次前挪（这是 v3 `buildYieldPlan` 的思路，代码不抄）。
    */
-  flowFrom(holes: number[]): { dist: Float64Array; prev: Int32Array };
   /**
    * 那张唯一距离场的通用入口（上面 A/B/C/D 四张现在都走它）。
    * 见文件顶部的表格：起点几个、代价怎么算、要不要前驱、限多远。
@@ -235,8 +234,15 @@ interface FieldOpt {
   perTurn?: number;
   /** 每格的进入代价。默认全部 1 */
   costOf?: (terrain: string) => number;
-  /** 单位怎么处理：`ignore` = 当没有（只算地形）；`friendly` = 自己人可穿、敌人挡死 */
-  units?: 'ignore' | 'friendly';
+  /**
+   * **波能不能穿过单位**——这是"正着用/反着用"的开关：
+   *
+   * · `none`：完全不看单位（只算地形）。行军距离、城的角色用它；
+   * · `units`：**穿过自己人**（敌人挡死）。这是"反着用"——洞穿过人群往外扩，
+   *   意思是"这一格的人得先让开一步"；
+   * · `empty`：只走空格，碰到人就停。这是"正着用"——这些人自己能走到哪。
+   */
+  through?: 'none' | 'units' | 'empty';
   /** 只算这么远，超出的格保持 Infinity */
   maxDist?: number;
   /** 要不要前驱指针（下一步往哪走）。要搬人时必须开 */
@@ -255,7 +261,7 @@ function distanceField(
   const prev = new Int32Array(n).fill(-1);
   const perTurn = Math.max(1, opt.perTurn ?? 1);
   const costOf = opt.costOf ?? ((): number => 1);
-  const units = opt.units ?? 'ignore';
+  const through = opt.through ?? 'none';
   /* 边代价只有 1 / 2 两种 → 三个桶够用；桶内先进先出，保证 prev 的写入顺序稳定 */
   const K = 3;
   const buckets: number[][] = [[], [], []];
@@ -291,11 +297,15 @@ function distanceField(
         if (Number.isFinite(dist[nk])) continue;
         const t = s.tiles[nk]?.terrain;
         if (!t || !passable(t)) continue;
-        /* 单位要不要挡路 */
-        if (units === 'friendly') {
+        /* 波与单位的关系（见 `through`） */
+        if (through !== 'none') {
           const occ = s.units.find((u) => u.y * s.w + u.x === nk);
-          const ally = opt.ally ?? s.current;
-          if (occ && occ.owner !== ally) continue; /* 敌人挡死；自己人可穿（算一步，他得先让开） */
+          if (occ) {
+            const ally = opt.ally ?? s.current;
+            if (occ.owner !== ally) continue; /* 敌人一律挡死 */
+            if (through === 'empty') continue; /* 正着用：只走空格 */
+            /* `units`：自己人可以穿，算一步（他得先让开） */
+          }
         }
         const nd = d + costOf(t);
         if (nd < dist[nk]!) {
@@ -459,8 +469,6 @@ export function buildWorld(s: GameState, me: PlayerId): World {
 
   /* 认领表的原料算一次就够（一场棋里问很多遍），算完缓存 */
   let spotCache: EconSpot[] | null = null;
-  /* 距离场按"洞的集合"缓存：同一手会同一条链问很多遍 */
-  const flowCache = new Map<string, { dist: Float64Array; prev: Int32Array }>();
 
   const world: World = {
     me,
@@ -609,22 +617,6 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         }
       }
       spotCache = out;
-      return out;
-    },
-
-    flowFrom(holes) {
-      /*
-       * **从"洞"出发（多源）+ 带前驱** = 原来那张单独的表。
-       * 现在只是统一距离场的一种调用：起点一组、自己人可穿、只算 10 步、要前驱。
-       *
-       * 洞 = **空出来、但应该被占的格**（现在用在"空岗"上）。
-       * 注意它不是"所有空格"——那是 `planYield` 的口径，两者种子相反、方向也相反。
-       */
-      const key = holes.slice().sort((a, b) => a - b).join(',');
-      const hit = flowCache.get(key);
-      if (hit) return hit;
-      const out = world.field(holes, { units: 'friendly', maxDist: 10, prev: true });
-      flowCache.set(key, out);
       return out;
     },
 

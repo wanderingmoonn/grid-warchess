@@ -10,7 +10,7 @@
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats, reachableTiles, unitYieldAt } from '../rules.ts';
+import { attackableTargets, effectiveStats, reachableTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -186,7 +186,7 @@ function planYield(
    *    只有种子定义不同（这里种子 = 所有空格；那边 = 空岗）。现在合成一次调用，
    *    区别只在"传哪些种子进来"。
    */
-  const { dist, prev } = world.field(seeds, { units: 'friendly', maxDist: 6, prev: true });
+  const { dist, prev } = world.field(seeds, { through: 'units', maxDist: 6, prev: true });
 
   /*
    * ④ 推进/攻城的兵不算挡路：它们有理由待在那儿（正在过桥）。
@@ -526,79 +526,102 @@ function planEconPosts(
     }
 
     /*
-     * **分到的岗走不进去时，换一个能走进去的空岗。**
+     * ════════════════════════════════════════════════════════════════
+     * **建链搬运：一张反向场 + 一条链，从洞那一端依次递补。**
      *
-     * 同一地形上的岗产出一样，本来就可以互换——重要的不是"哪一格"，
-     * 是"这块地产出有没有被占住"。所以进不去就别硬顶：挑一个这一手真能到的空岗，
-     * 原来那个继续空着，留给后面的人。
+     * ── 为什么是"反向" ──────────────────────────────────────────
      *
-     * 这正是"最后一个牧民死活进不去"的正解：它分到的岗在队伍深处、前面全站满，
-     * 而旁边另一格空岗其实一伸手就到。
+     * 起点是**洞（空岗）**，波**穿过人群**往外扩。于是每一格的"距离"读作
+     * "这格离最近的洞隔着几个人"，"前驱"读作"往洞那边退一格"。
+     * 这个方向天然就是"让人群朝洞塌陷"——一次能整列一起挪。
      *
-     * 引擎不支持两个单位换位（必须先有空格），所以**没有空岗 = 真的满了**，
-     * 那就原地等着，不做任何"硬挤"。
+     * 反过来用（起点是人、只走空格）算出来的是"这些人自己能走到哪"，
+     * 那是行军用的，搬不动人。
+     *
+     * ── 链怎么用 ────────────────────────────────────────────────
+     *
+     * 对一个"这一手走不动"的兵，从它脚下顺着前驱往洞走：
+     *
+     *     洞 ← c1 ← c2 ← … ← 这个兵
+     *
+     * 中间每一格都站着人（空的格本来就是洞，不会出现在中间）。然后**从洞那一端开始**
+     * 依次递补：c1 进洞、c2 进 c1、……、这个兵进前一格。
+     * 每次落点都是上一个人刚腾出来的格——引擎没有"交换两人位置"，只能这样。
+     *
+     * ── 三条边界 ────────────────────────────────────────────────
+     *
+     * · 只搬经济兵（战斗兵有自己的任务）；
+     * · 链上一格一人（`usedCells`），一个人一回合只被搬一次（`movedUnits`）；
+     * · **没有洞就什么都不做**——那不是"再想想办法"，是"真满了"。
+     * ════════════════════════════════════════════════════════════════
      */
-    /* 这一组里"现在没人站"的岗（= 距离场 C 眼里的"洞"） */
-    const freeCells = cands
+    const holeCells = cands
       .filter((p) => !s.units.some((v) => v.y * s.w + v.x === p.y * s.w + p.x))
       .map((p) => p.y * s.w + p.x);
-    if (freeCells.length > 0) {
-      /* 距离场 C：从这些空岗同时出发，得到"每格离最近空岗几步、往哪走" */
-      const flow = world.flowFrom(freeCells);
-      for (const u of units) {
-        const cur = posts[u.id];
-        /* 已经站在自己岗上的不用管 */
-        if (!cur || (cur.x === u.x && cur.y === u.y)) continue;
+    if (holeCells.length > 0) {
+      /* 唯一的场：多源（所有洞）、穿过人群、带前驱 */
+      const flow = world.field(holeCells, { through: 'units', prev: true });
+      const holeSet = new Set(holeCells);
+      const movedUnits = new Set<string>();
+      const usedCells = new Set<number>();
+      /* 靠洞近的先建链：近的链先成立，远的抢不走它的洞 */
+      const queued = [...units]
+        .filter((u) => posts[u.id] && !(posts[u.id]!.x === u.x && posts[u.id]!.y === u.y))
+        .sort(
+          (a, b) =>
+            (flow.dist[a.y * s.w + a.x] ?? Infinity) - (flow.dist[b.y * s.w + b.x] ?? Infinity),
+        );
 
-        /*
-         * 判"这一手到底走不走得动"：拿**自己分到的那个岗**做终点，
-         * 用距离场 A/B 那套（`stepsFrom`，不算人）看这一格离它几步；
-         * 再把"这一手能踩到的格"逐个比一遍——只要有一个更近的，就说明路是通的。
-         *
-         * 注意这里问的是"能不能朝我自己的岗挪近"，不是"能不能到空岗"。
-         * 两个问题答不上来就是两件不同的事：
-         *   · 走不动 → 才是被堵住，才需要下面换岗；
-         *   · 走得到、只是慢 → 不该换，换了反而绕远。
-         */
-        const field = world.stepsFrom({ x: cur.x, y: cur.y });
-        const here = field[u.y * s.w + u.x] ?? Infinity;
-        let canAdvance = false;
+      for (const u of queued) {
+        const from0 = u.y * s.w + u.x;
+        /* 先看这一手走不走得动：走得动就自己走，不建链 */
+        const own = world.stepsFrom(posts[u.id]!);
+        const here = own[from0] ?? Infinity;
+        let canWalk = false;
         for (const [k] of reachableTiles(s, u)) {
           const x = k % s.w;
           const y = (k - x) / s.w;
           if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-          if ((field[k] ?? Infinity) < here) {
-            canAdvance = true;
+          if ((own[k] ?? Infinity) < here) {
+            canWalk = true;
             break;
           }
         }
-        if (canAdvance) continue;
+        if (canWalk) continue;
 
         /*
-         * 被堵住了 → 改投"这一手就能踩到"的空岗。
+         * 顺着前驱往洞走，收集整条链。
          *
-         * 挑法用的是距离场 C 的 `dist`：它衡量"这格离最近的空岗群有多近"，
-         * 也就是"站上去之后，剩下的空岗是不是还在我旁边"（不至于把自己塞进死角）。
-         * 这里**不按离城远近挑**——那会又变回"按城配岗"，人还会被引到远处。
+         * 链的终点是**第一个空格**（不一定正好是空岗）：场会穿过空格继续往外，
+         * 但搬人只需要"往前挪到第一个空的地方"。原来要求"必须落到空岗上"，
+         * 结果路径上先碰到一个普通空格就整条链作废（实测只解开 1 个）。
          */
-        let pick: number | null = null;
-        let pickD = Infinity;
-        for (const [k] of reachableTiles(s, u)) {
-          const x = k % s.w;
-          const y = (k - x) / s.w;
-          if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-          if (!freeCells.includes(k)) continue;
-          const d = flow.dist[k] ?? Infinity;
-          if (d < pickD) {
-            pickD = d;
-            pick = k;
+        const chain: number[] = [];
+        let k = from0;
+        let sink = false;
+        for (let guard = 0; guard < 12; guard++) {
+          const p = flow.prev[k]!;
+          if (p < 0) break;
+          chain.push(p);
+          k = p;
+          if (!s.units.some((v) => v.y * s.w + v.x === k)) {
+            sink = true;
+            break;
           }
         }
-        if (pick !== null) {
-          const x = pick % s.w;
-          const y = (pick - x) / s.w;
-          posts[u.id] = { x, y };
-          claimed.add(pick);
+        if (!sink || chain.length === 0) continue;
+        void holeSet;
+
+        /* 从洞那一端开始递补 */
+        for (let i = chain.length - 1; i >= 0; i--) {
+          const to = chain[i]!;
+          const from = i === 0 ? from0 : chain[i - 1]!;
+          const mover = s.units.find((v) => v.y * s.w + v.x === from && v.owner === world.me);
+          if (!mover || movedUnits.has(mover.id) || usedCells.has(to)) break;
+          if (utype(s, mover.type).category !== 'economy') break;
+          posts[mover.id] = { x: to % s.w, y: Math.floor(to / s.w) };
+          movedUnits.add(mover.id);
+          usedCells.add(to);
         }
       }
     }
@@ -607,10 +630,9 @@ function planEconPosts(
   /*
    * ③ 下一个该造谁：表里还没人认领的格里，**产出最高的那一个；产出相同取近的**。
    *
-   * 为什么不是"赚回几倍造价"（试过，实测 25 → 33 就卡住了）：
-   * 那个口径偏爱便宜兵——牧民 8 金 ÷ 45 = 1.07 倍，伐木工 12 金 ÷ 70 = 1.03 倍，
-   * 于是永远先买牧民，**两格森林一次都没用上**，总产反而低。
-   * `8.15` 那句"别用人为数字代替规则"在这里的版本是：**别用一个比值去替"哪块地肥"**。
+   * 为什么不是"赚回几倍造价"（试过，卡住过）：那个口径偏爱便宜兵——
+   * 牧民 8 金 ÷ 45 比伐木工 12 金 ÷ 70 略好，于是永远先买牧民，
+   * 两格森林一次都没用上，总产反而低。
    * 钱的问题交给"买不起就跳过"，不掺进排序。
    */
   const gold = s.players[world.me]?.gold ?? 0;
@@ -627,118 +649,6 @@ function planEconPosts(
     const cur = spots.find((q) => q.x === next!.x && q.y === next!.y)!;
     if (p.yield > cur.yield || (p.yield === cur.yield && p.turns < cur.turns)) {
       next = { type: p.type, x: p.x, y: p.y };
-    }
-  }
-  /*
-   * ════════════════════════════════════════════════════════════════
-   * **让路：被挡住的人，请挡路的那一位往自己的岗位方向让一格。**
-   *
-   * 截图里那个局面（S-015 第 8 手之后）是最典型的：
-   *
-   *     x=8 平原：6 个牧民（产 4）   ← 他们要去 x=10
-   *     x=9 丘陵：6 个牧民（产 8）   ← **已到岗，按规矩不该动**
-   *     x=10 丘陵：6 格**全空**
-   *
-   * 从 (8,y) 到 (10,y) 必须穿 (9,y)，而引擎没有"交换两人位置"这个动作。
-   * 于是一整列人 8 手不动，右边 6 格好地白白空着（实测总产 4×6 而不是 8×6）。
-   *
-   * 解法就是让 (9,y) 那位挪到 (10,y)——**两边产出一样（丘陵 8），挪了不亏**。
-   * 他一走，(9,y) 空出来，被挡的人下一手就能进来。
-   *
-   * ── 规矩（都是"算账"，没有拍的数）──────────────────────────
-   *
-   * · 只在"这个人这一手**一步都走不动**"时才请人让路（走得动就不打扰别人）；
-   * · 只请**经济兵**让（战斗兵有自己的任务，不归这里管）；
-   * · 让到的那一格必须**对这个让路人自己**不降产（同产出或更肥），否则不挪；
-   * · 一人一回合只让一次（`shifted`），免得同一个人被请两次、来回挪。
-   * ════════════════════════════════════════════════════════════════
-   */
-  const shifted = new Set<string>();
-  const takenOut = new Set<number>(); /* 这一手已经被用作"让路落点"的格，避免两个人让到同一格 */
-  const yieldOf = (u: Unit, x: number, y: number): number => unitYieldAt(s, u, x, y).gold ?? 0;
-  /* 沿"到岗位的步数图"往下走一格：四邻里挑步数更小的那个 */
-  const stepDown = (field: Float64Array, at: number): number | null => {
-    const x = at % s.w;
-    const y = (at - x) / s.w;
-    let best: number | null = null;
-    let bestD = field[at] ?? Infinity;
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
-      const k = ny * s.w + nx;
-      const d = field[k] ?? Infinity;
-      if (d < bestD) {
-        bestD = d;
-        best = k;
-      }
-    }
-    return best;
-  };
-
-  for (const u of econ) {
-    const p = posts[u.id];
-    if (!p || (p.x === u.x && p.y === u.y)) continue;
-    const field = world.stepsFrom(p);
-    const here = field[u.y * s.w + u.x] ?? Infinity;
-    /* 这一手走得动吗？走得动就别打扰别人 */
-    let canAdvance = false;
-    for (const [k] of reachableTiles(s, u)) {
-      const x = k % s.w;
-      const y = (k - x) / s.w;
-      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
-      if ((field[k] ?? Infinity) < here) {
-        canAdvance = true;
-        break;
-      }
-    }
-    if (canAdvance) continue;
-
-    /* 沿路径找第一个"挡路的自己人" */
-    let at = u.y * s.w + u.x;
-    for (let guard = 0; guard < 8; guard++) {
-      const next = stepDown(field, at);
-      if (next === null) break;
-      const occ = s.units.find((v) => v.y * s.w + v.x === next && v.owner === world.me);
-      if (!occ) {
-        at = next;
-        continue; /* 这格空的，继续往前找（说明是别人挡的，不是这一格） */
-      }
-      if (utype(s, occ.type).category !== 'economy') break; /* 战斗兵不动 */
-      if (shifted.has(occ.id)) break;
-      /*
-       * 挑"让到哪一格"：**首选取向朝被挡那个人的岗位方向那一格**（沿步数图更小），
-       * 那一格不能用（有人/会降产）时，退一步找**任何一格不降产的相邻空格**——
-       * 横着让一格也算。
-       *
-       * 这一步很关键：只按"被挡者的路线"找，常常正好落在另一个自己人身上
-       * （一整列人时就是这样），于是谁都不让、整列不动（实测只解开 2/6）。
-       */
-      const oy = yieldOf(occ, next % s.w, Math.floor(next / s.w));
-      const occCell = occ.y * s.w + occ.x;
-      let out: number | null = null;
-      let outD = Infinity;
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-        const nx = occ.x + dx;
-        const ny2 = occ.y + dy;
-        if (nx < 0 || ny2 < 0 || nx >= s.w || ny2 >= s.h) continue;
-        const k2 = ny2 * s.w + nx;
-        if (k2 === u.y * s.w + u.x) continue; /* 别让到被挡那个人身上 */
-        if (s.units.some((v) => v.y * s.w + v.x === k2)) continue; /* 得是空格 */
-        if (takenOut.has(k2)) continue;
-        if (yieldOf(occ, nx, ny2) < oy) continue; /* 让了会降产 → 不考虑 */
-        const d = field[k2] ?? Infinity;
-        if (d < outD) {
-          outD = d;
-          out = k2;
-        }
-      }
-      void occCell;
-      if (out === null) break;
-      takenOut.add(out);
-      shifted.add(occ.id);
-      posts[occ.id] = { x: out % s.w, y: Math.floor(out / s.w) };
-      break;
     }
   }
 
