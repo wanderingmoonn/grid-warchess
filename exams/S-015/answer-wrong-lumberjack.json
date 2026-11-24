@@ -1,0 +1,38 @@
+{
+ "turns": [
+  [
+   {
+    "type": "RECRUIT",
+    "cityId": "c1",
+    "unitType": "lumberjack"
+   }
+  ],
+  [
+   {
+    "type": "RECRUIT",
+    "cityId": "c1",
+    "unitType": "lumberjack"
+   },
+   {
+    "type": "MOVE",
+    "unitId": "u2",
+    "x": 5,
+    "y": 6
+   }
+  ],
+  [
+   {
+    "type": "RECRUIT",
+    "cityId": "c1",
+    "unitType": "herder"
+   }
+  ],
+  [
+   {
+    "type": "RECRUIT",
+    "cityId": "c1",
+    "unitType": "herder"
+   }
+  ]
+ ]
+}

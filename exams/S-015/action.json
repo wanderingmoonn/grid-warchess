@@ -1,0 +1,473 @@
+{
+  "kind": "exam-actions",
+  "exam": null,
+  "seed": 515,
+  "at": "2026-11-24T07:11:39.546Z",
+  "dropped": 0,
+  "actions": [
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 4,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 4,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 4,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 4,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 4,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 4,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 4,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 4,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 5,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 4,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 4,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 5,
+      "y": 2,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 4,
+      "y": 2,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 4,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 5,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 4,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 5,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 4,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u2",
+      "x": 2,
+      "y": 2,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u4",
+      "x": 2,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u3",
+      "x": 3,
+      "y": 2,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 2,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 3,
+      "y": 3,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 3,
+      "y": 4,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 2,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 4,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 3,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 4,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "lumberjack",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 2,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 3,
+      "y": 6,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 3,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 4,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 5,
+      "y": 5,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 5,
+      "y": 6,
+      "by": "A"
+    }
+  ]
+}
