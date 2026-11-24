@@ -33,6 +33,13 @@ body {
   letter-spacing: -0.02em;
 }
 
+.angle-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 .angle-controls {
   display: flex;
   flex-wrap: wrap;
