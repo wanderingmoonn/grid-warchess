@@ -26,7 +26,8 @@ import { playerView } from '../fog.ts';
 import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
-import { actFor, recruitAction } from './tactics.ts';
+import { actFor, recruitAction, recruitEcon } from './tactics.ts';
+import { utype } from '../rules.ts';
 import type { Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId } from '../types.ts';
 
@@ -78,8 +79,14 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
   const mem = memoryOf(s, me);
   const decision = decide(view, world, mem);
   const con = constrain(view, world, decision, mem);
-  writeMemory(s, me, { decision: { ...decision, since: s.turn }, squad: squadMemo(con, mem, s.turn) });
+  writeMemory(s, me, {
+    decision: { ...decision, since: s.turn },
+    squad: squadMemo(con, mem, s.turn),
+    econSince: econSinceMemo(s, me, mem),
+    econHome: econHomeMemo(s, me, mem, world),
+  });
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
+  logSquads(s, world.me, decision, con);
   return cache;
 }
 
@@ -116,6 +123,43 @@ function squadMemo(con: Constraints, mem: V4Memory, turn: number): V4Memory['squ
     formedAt: turn,
     want: main.want ?? 6,
   };
+}
+
+/**
+ * 记"每个经济兵是第几手造的"（`unitId → 手数`）。
+ *
+ * 岗位要按"谁先出生谁走远路、把近处让给新兵"配（见 `constrain.planEconPosts`），
+ * 而引擎的单位没有出生手数。这里只记事实：第一次见到它就写上手数，死了就删掉。
+ */
+function econSinceMemo(s: GameState, me: PlayerId, mem: V4Memory): Record<string, number> {
+  const prev = mem.econSince ?? {};
+  const out: Record<string, number> = {};
+  for (const u of s.units) {
+    if (u.owner !== me) continue;
+    if (utype(s, u.type).category !== 'economy') continue;
+    out[u.id] = prev[u.id] ?? s.turn;
+  }
+  return out;
+}
+
+/**
+ * 记"每个经济兵出生在哪座城"（第一次见到它时，离它最近的那座城）。
+ *
+ * 出生城必须钉住：按"现在离哪座城近"算的话，人一走动最近城就翻，
+ * 分组跟着翻，岗位每回合重排，全场兵来回挪。
+ */
+function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): Record<string, string> {
+  const prev = mem.econHome ?? {};
+  const out: Record<string, string> = {};
+  for (const u of s.units) {
+    if (u.owner !== me) continue;
+    if (utype(s, u.type).category !== 'economy') continue;
+    const near = [...world.myCities].sort(
+      (a, b) => Math.abs(u.x - a.x) + Math.abs(u.y - a.y) - (Math.abs(u.x - b.x) + Math.abs(u.y - b.y)),
+    )[0];
+    out[u.id] = prev[u.id] ?? near?.id ?? '';
+  }
+  return out;
 }
 
 /** 给探针清缓存用（换局时调一次） */
@@ -155,32 +199,86 @@ export function aiNextActionV4(
     if (usable(a)) return a;
   }
 
-  /* ② 打 */
+  /*
+   * ② 打。**只跳过"本回合已经攻击过"的，不跳"已经走过"的。**
+   *
+   * 引擎的规则是"一回合打一次"，走过路照样能开火。这里原来把 `moved` 也跳了，
+   * 等于每个兵每回合只能走或打二选一——火力直接砍半（S-002 三十个兵挤在城下
+   * 四格，每回合只打得出 0~1 次）。
+   */
   for (const u of world.myCombat) {
     const live = s.units.find((x) => x.id === u.id);
-    if (!live || live.moved || live.acted) continue;
+    if (!live || live.acted) continue;
     const a = actFor(s, world, con, live);
     if (usable(a) && a && a.type === 'ATTACK') return a;
   }
 
   /*
-   * ③ 造兵：**每回合最多 2 个**。
+   * ③ 造兵：**不设人为上限**。
    *
-   * 这一条是拿 S-000 换来的：不设上限时，200 金会被一口气换成 8 个民兵，
-   * 而动作数是有预算的——钱花完了，这一步也走不动了，最后 0 城伤、一兵未动。
-   * 上限的语义是"这回合补两个人"，不是"这回合把钱花光"。
+   * 这里原来写着"每回合最多 2 个"，理由是 S-000 上不设限会把 200 金一口气换成 8 个民兵、
+   * 动作预算全花在造兵上。但那是**v1 自戴的帽子**：引擎里真正的约束是**出兵格**
+   * （城里空格 + 军营四周的格子），满了就造不出——用户 2026-11-24 指出这一点。
+   *
+   * 现在改成：能造就一直造，造不出来时引擎会拒（产兵格满），`usable` 会把它挡掉，
+   * 循环自然结束。**不再用一个人为数字去代替规则本身。**
    */
-  const cap = 2;
-  if ((_budget?.recruited ?? 0) + view.recruits < cap) {
-    const rec = recruitAction(s, world);
+  {
+    /*
+     * 发展（expand）或者根本看不见敌人时，**先补经济**；其余情况先补战力。
+     *
+     * 这条是 S-015 逼出来的：v4 原来只会 `affordableCombat`，一个经济兵都不造，
+     * 长局里经济 8 vs 对手 51，前期压着打、后期被拖死。
+     */
+    const preferEcon = view.decision.kind === 'expand' || world.foeCombat.length === 0;
+    /*
+     * **有需求才造兵**。看不见敌人、又在发展期时，攒钱是对的——
+     * "有钱就造兵"是 v1 的病：S-015（一条没人烟的题）它花 367 金造了 5 个战斗兵，
+     * 只留 45 给经济。人类不会这么干。
+     *
+     * 所以这里不再"造不了经济兵就退回造战斗兵"，而是**干脆不造**。
+     * 攒下的钱会在真要打的时候变成兵（那时 `foeCombat` 非空）。
+     */
+    const needArmy = world.foeCombat.length > 0 || view.decision.kind !== 'expand';
+    /*
+     * **买不起战斗兵就攒着，别拿去买经济兵。**
+     *
+     * 原来这里是 `recruitAction(...) ?? recruitEcon(...)`——战斗兵买不起时退而买农民。
+     * 实测 S-000（兵力 3 倍该赢的局）：钱永远不够买战斗兵，于是每回合都买一个农民，
+     * 26 手堆到 40 个兵、城一次没打下来。这就是"有钱就得花掉"的老病换了个形状。
+     *
+     * 现在：发展期才补经济；打仗期钱只买战斗兵，买不起就攒。
+     */
+    const rec = preferEcon
+      ? recruitEcon(s, world, con) ?? (needArmy ? recruitAction(s, world, con.need) : null)
+      : recruitAction(s, world, con.need);
     if (usable(rec)) {
       view.recruits += 1;
       return rec;
     }
   }
 
-  /* ④ 走 */
-  for (const u of [...world.myCombat, ...world.myEcon]) {
+  /*
+   * ④ 走。**经济兵按"离自己岗位多近"排队，近的先走。**
+   *
+   * 为什么顺序重要：排成一列时，只有前面的人先挪开，后面的人才看得到"更近的格"。
+   * 按建立顺序走（老兵先动）听着对，但它排序的是"谁老"，不是"谁在前面"——
+   * 前排没动，后排就整手卡死。实测：丘陵上一列牧民，最边上那个 8 手都进不去。
+   *
+   * 每调一次都按**当下**的位置重排（动作一个一个结算，前面的走完，后面的距离就变了）。
+   */
+  /*
+   * 顺序**由约束层给**（`con.econOrder`：靠自己岗位近的在前，按真实步数排）。
+   *
+   * 这里原来自己算"直线距离"来排——那是打分层在做微观决策，而且直线距离会把
+   * "看着近、其实要绕一大圈"的人排到前面，他先动反而堵路。
+   * 现在入口只负责**照着顺序派动作**，不再参与判断。
+   */
+  const rank = new Map((con.econOrder ?? []).map((id, i) => [id, i]));
+  const econOrder = [...world.myEcon].sort(
+    (a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9),
+  );
+  for (const u of [...world.myCombat, ...econOrder]) {
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.moved) continue;
     const a = actFor(s, world, con, live);
@@ -210,3 +308,34 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
 
 /** `AI_MAX_STEPS` 在这个文件里只是给探针看的常量，别在这里循环 */
 export const V4_MAX_STEPS = AI_MAX_STEPS;
+
+/**
+ * 把这一手的编队写进 `s.aiSquads`（复盘用）。
+ *
+ * 和 v3 一个路子：**只在结论变化时记**，否则 60 手的回放会塞满重复帧。
+ * 字段尽量复用 `AiSquadReport` 的语义（count/lead/spread/note），
+ * v4 特有的 `want` / `focusId` / `lanes` 顺手带上——复盘面板不认也不会坏。
+ */
+function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints): void {
+  const reps = con.squads.map((q) => ({
+    id: q.id,
+    state: q.order,
+    count: q.unitIds.length,
+    lead: q.eta ?? 0,
+    spread: 0,
+    stalled: 0,
+    lost: 0,
+    note: (q.order === 'assemble' ? 'blocked' : 'advance') as 'advance' | 'blocked',
+    want: q.want ?? 0,
+    focusId: q.focusId ?? null,
+    lanes: q.lanes?.length ?? 0,
+  }));
+  if (reps.length === 0) return;
+  const sig = reps.map((x) => `${x.id}:${x.state}:${x.count}`).join('|');
+  const log = (s.aiSquads ??= []);
+  const last = [...log].reverse().find((x) => x.me === me);
+  const lastSig = last ? last.squads.map((x) => `${x.id}:${x.state}:${x.count}`).join('|') : '';
+  if (sig === lastSig) return;
+  log.push({ turn: s.turn, me, cityId: decision.cityId ?? null, squads: reps, kind: decision.kind } as never);
+  if (log.length > 200) log.splice(0, log.length - 200);
+}

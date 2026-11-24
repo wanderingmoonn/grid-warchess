@@ -4,17 +4,29 @@
     "tileAt(": 13,
     "unitsAt(": 1
   },
+  "src/core/ai-strength.ts": {
+    "state.tiles": 1,
+    "tileAt(": 2
+  },
   "src/core/ai-tactics.ts": {
     "state.tiles": 2,
     "idx(": 7,
     "inBounds(": 1,
     "xyOf(": 1
   },
-  "src/core/ai.ts": {
-    "state.tiles": 20,
+  "src/core/ai-v3.ts": {
+    "state.tiles": 28,
     "idx(": 1,
-    "tileAt(": 9,
-    "inBounds(": 9,
+    "tileAt(": 12,
+    "inBounds(": 19,
+    "xyOf(": 3,
+    "unitAt(": 14
+  },
+  "src/core/ai.ts": {
+    "state.tiles": 21,
+    "idx(": 1,
+    "tileAt(": 10,
+    "inBounds(": 10,
     "xyOf(": 3,
     "unitAt(": 6
   },
@@ -56,7 +68,8 @@
     "state.tiles": 2
   },
   "src/core/fantasy-packs.ts": {
-    "state.tiles": 1
+    "state.tiles": 1,
+    "tileAt(": 2
   },
   "src/core/fog.ts": {
     "state.tiles": 6,
@@ -81,7 +94,7 @@
     "state.tiles": 1
   },
   "src/core/rules.ts": {
-    "state.tiles": 17,
+    "state.tiles": 20,
     "idx(": 11,
     "tileAt(": 14,
     "inBounds(": 8,
@@ -118,6 +131,16 @@
   "src/core/types.ts": {
     "state.tiles": 2
   },
+  "src/core/v4/constrain.ts": {
+    "state.tiles": 3
+  },
+  "src/core/v4/tactics.ts": {
+    "state.tiles": 1
+  },
+  "src/core/v4/world.ts": {
+    "state.tiles": 7,
+    "idx(": 2
+  },
   "src/main.ts": {
     "state.tiles": 7,
     "idx(": 10,
@@ -145,5 +168,12 @@
   },
   "src/ui/panel.ts": {
     "state.tiles": 3
+  },
+  "src/ui/title-match-preview.ts": {
+    "state.tiles": 1,
+    "inBounds(": 1
+  },
+  "src/ui/v4-hud.ts": {
+    "state.tiles": 1
   }
 }

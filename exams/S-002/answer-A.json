@@ -1,501 +1,557 @@
 {
   "me": "A",
-  "exam": "user:mwte0s58-a6o4",
-  "seed": 1488121699,
+  "seed": 11,
   "turns": [
     [
       {
         "type": "MOVE",
         "unitId": "u8",
         "x": 8,
-        "y": 4
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u8",
-        "targetId": "u41",
-        "x": 9,
-        "y": 4
+        "y": 7
       },
       {
         "type": "MOVE",
         "unitId": "u7",
         "x": 7,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 6,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 5,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u4",
+        "x": 8,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 7,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u2",
+        "x": 6,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u1",
+        "x": 5,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 3,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u12",
+        "x": 4,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 2,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 1,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 4,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 9,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u14",
+        "x": 8,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 10,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u22",
+        "x": 9,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u21",
+        "x": 8,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u27",
+        "x": 8,
+        "y": 11
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u20",
+        "x": 7,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u26",
+        "x": 7,
+        "y": 11
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u30",
+        "x": 7,
+        "y": 12
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 6,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u25",
+        "x": 6,
+        "y": 11
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u29",
+        "x": 6,
+        "y": 12
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 5,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u24",
+        "x": 5,
+        "y": 11
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u28",
+        "x": 5,
+        "y": 12
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 4,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 3,
+        "y": 10
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u8",
+        "x": 8,
         "y": 4
       },
       {
         "type": "MOVE",
         "unitId": "u6",
         "x": 6,
-        "y": 4
+        "y": 3
       },
       {
         "type": "MOVE",
         "unitId": "u5",
-        "x": 5,
-        "y": 4
+        "x": 7,
+        "y": 5
       },
       {
         "type": "MOVE",
-        "unitId": "u4",
+        "unitId": "u12",
         "x": 4,
-        "y": 4
+        "y": 5
       },
       {
         "type": "MOVE",
-        "unitId": "u3",
+        "unitId": "u11",
         "x": 3,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 2,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 2,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 4,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u1",
+        "x": 5,
         "y": 4
       },
       {
         "type": "MOVE",
         "unitId": "u2",
-        "x": 2,
+        "x": 6,
         "y": 4
       },
       {
         "type": "MOVE",
-        "unitId": "u1",
-        "x": 1,
-        "y": 4
+        "unitId": "u4",
+        "x": 9,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u14",
+        "x": 8,
+        "y": 7
       },
       {
         "type": "MOVE",
         "unitId": "u23",
         "x": 10,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u15",
-        "x": 8,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u14",
-        "x": 7,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u13",
-        "x": 6,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u12",
-        "x": 5,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u11",
-        "x": 4,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u10",
-        "x": 3,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u9",
-        "x": 1,
         "y": 8
       },
       {
         "type": "MOVE",
         "unitId": "u22",
         "x": 9,
-        "y": 10
+        "y": 8
       },
       {
         "type": "MOVE",
         "unitId": "u21",
         "x": 8,
-        "y": 10
+        "y": 8
       },
       {
         "type": "MOVE",
         "unitId": "u20",
         "x": 7,
-        "y": 10
+        "y": 8
       },
       {
         "type": "MOVE",
         "unitId": "u19",
         "x": 6,
-        "y": 10
+        "y": 8
       },
       {
         "type": "MOVE",
         "unitId": "u18",
         "x": 5,
-        "y": 10
+        "y": 9
       },
       {
         "type": "MOVE",
         "unitId": "u17",
         "x": 4,
-        "y": 10
+        "y": 9
       },
       {
         "type": "MOVE",
         "unitId": "u16",
         "x": 3,
-        "y": 10
+        "y": 8
       },
       {
         "type": "MOVE",
         "unitId": "u27",
         "x": 8,
-        "y": 11
+        "y": 9
       },
       {
         "type": "MOVE",
         "unitId": "u26",
         "x": 7,
-        "y": 11
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u30",
-        "x": 7,
-        "y": 12
+        "y": 9
       },
       {
         "type": "MOVE",
         "unitId": "u25",
         "x": 6,
-        "y": 11
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u29",
-        "x": 6,
-        "y": 12
+        "y": 9
       },
       {
         "type": "MOVE",
         "unitId": "u24",
-        "x": 5,
+        "x": 6,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u30",
+        "x": 7,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u29",
+        "x": 7,
         "y": 11
       },
       {
         "type": "MOVE",
         "unitId": "u28",
-        "x": 5,
-        "y": 12
-      }
-    ],
-    [
-      {
-        "type": "MOVE",
-        "unitId": "u5",
-        "x": 8,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u4",
-        "x": 8,
-        "y": 4
+        "x": 6,
+        "y": 11
       },
       {
         "type": "ATTACK",
-        "unitId": "u4",
+        "unitId": "u20",
         "targetId": "u41",
-        "x": 9,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u3",
         "x": 7,
         "y": 4
       },
       {
-        "type": "MOVE",
-        "unitId": "u2",
-        "x": 6,
+        "type": "ATTACK",
+        "unitId": "u5",
+        "targetId": "u41",
+        "x": 7,
         "y": 4
       },
       {
-        "type": "MOVE",
-        "unitId": "u1",
-        "x": 5,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u15",
+        "type": "ATTACK",
+        "unitId": "u8",
+        "targetId": "u36",
         "x": 8,
-        "y": 6
+        "y": 3
       },
       {
-        "type": "MOVE",
-        "unitId": "u14",
+        "type": "ATTACK",
+        "unitId": "u6",
+        "targetId": "u35",
         "x": 7,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u13",
-        "x": 6,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u12",
-        "x": 5,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u11",
-        "x": 4,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u10",
-        "x": 3,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u9",
-        "x": 2,
-        "y": 7
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u23",
-        "x": 10,
-        "y": 8
+        "y": 3
       },
       {
         "type": "ATTACK",
         "unitId": "u23",
-        "targetId": "u37",
-        "x": 11,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u22",
-        "x": 9,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u21",
-        "x": 8,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u20",
-        "x": 7,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u19",
-        "x": 6,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u18",
-        "x": 6,
-        "y": 9
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u17",
-        "x": 6,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u27",
-        "x": 9,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u26",
-        "x": 8,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u25",
-        "x": 7,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u16",
-        "x": 5,
-        "y": 10
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u30",
-        "x": 9,
-        "y": 12
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u29",
-        "x": 8,
-        "y": 12
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u28",
-        "x": 7,
-        "y": 12
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u24",
-        "x": 7,
-        "y": 11
+        "targetId": "u42",
+        "x": 10,
+        "y": 4
       }
     ],
     [
       {
         "type": "MOVE",
-        "unitId": "u15",
-        "x": 9,
-        "y": 5
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u15",
-        "targetId": "u35",
-        "x": 9,
-        "y": 3
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u14",
-        "x": 8,
-        "y": 5
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u14",
-        "targetId": "u33",
-        "x": 8,
-        "y": 3
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u13",
-        "x": 7,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u12",
-        "x": 6,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u11",
-        "x": 5,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u10",
-        "x": 4,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u9",
-        "x": 3,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u1",
+        "unitId": "u5",
         "x": 8,
         "y": 4
       },
       {
         "type": "ATTACK",
-        "unitId": "u1",
-        "targetId": "u33",
+        "unitId": "u5",
+        "targetId": "u36",
         "x": 8,
         "y": 3
       },
       {
         "type": "MOVE",
-        "unitId": "u23",
-        "x": 11,
-        "y": 7
+        "unitId": "u1",
+        "x": 8,
+        "y": 3
       },
       {
         "type": "ATTACK",
-        "unitId": "u23",
-        "targetId": "u37",
-        "x": 11,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u22",
-        "x": 10,
-        "y": 7
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u22",
-        "targetId": "u36",
-        "x": 10,
+        "unitId": "u1",
+        "targetId": "u35",
+        "x": 7,
         "y": 3
       },
       {
         "type": "MOVE",
-        "unitId": "u21",
+        "unitId": "u15",
         "x": 9,
-        "y": 7
+        "y": 5
       },
       {
         "type": "ATTACK",
-        "unitId": "u21",
+        "unitId": "u15",
         "targetId": "u42",
         "x": 10,
         "y": 4
       },
       {
         "type": "MOVE",
-        "unitId": "u27",
+        "unitId": "u14",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 10,
+        "y": 7
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u23",
+        "targetId": "u38",
+        "x": 10,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u22",
         "x": 9,
-        "y": 8
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u22",
+        "targetId": "u38",
+        "x": 10,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u21",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u21",
+        "targetId": "u37",
+        "x": 9,
+        "y": 3
       },
       {
         "type": "MOVE",
         "unitId": "u20",
-        "x": 8,
+        "x": 7,
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u20",
+        "targetId": "u33",
+        "x": 7,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u12",
+        "x": 6,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 5,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 4,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 6,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 4,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 3,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 4,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 5,
         "y": 7
       },
       {
         "type": "MOVE",
         "unitId": "u19",
-        "x": 7,
+        "x": 6,
         "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u27",
+        "x": 9,
+        "y": 8
       },
       {
         "type": "MOVE",
@@ -511,27 +567,9 @@
       },
       {
         "type": "MOVE",
-        "unitId": "u18",
-        "x": 6,
-        "y": 7
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u17",
-        "x": 6,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u16",
-        "x": 6,
-        "y": 9
-      },
-      {
-        "type": "MOVE",
         "unitId": "u30",
-        "x": 9,
-        "y": 10
+        "x": 8,
+        "y": 9
       },
       {
         "type": "MOVE",
@@ -542,177 +580,153 @@
       {
         "type": "MOVE",
         "unitId": "u28",
-        "x": 7,
-        "y": 10
+        "x": 6,
+        "y": 9
       },
       {
         "type": "MOVE",
         "unitId": "u29",
-        "x": 8,
+        "x": 7,
         "y": 10
       }
     ],
     [
       {
         "type": "MOVE",
-        "unitId": "u13",
-        "x": 9,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u21",
-        "x": 11,
-        "y": 7
+        "unitId": "u14",
+        "x": 8,
+        "y": 3
       },
       {
         "type": "ATTACK",
-        "unitId": "u21",
-        "targetId": "u38",
-        "x": 11,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u20",
-        "x": 10,
-        "y": 7
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u20",
-        "targetId": "u38",
-        "x": 11,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u19",
-        "x": 9,
-        "y": 7
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u19",
-        "targetId": "u42",
-        "x": 10,
-        "y": 4
+        "unitId": "u14",
+        "targetId": "u33",
+        "x": 7,
+        "y": 2
       },
       {
         "type": "MOVE",
         "unitId": "u12",
-        "x": 8,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u18",
-        "x": 8,
-        "y": 7
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u25",
-        "x": 7,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u27",
-        "x": 9,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u26",
-        "x": 8,
-        "y": 6
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u27",
-        "targetId": "u35",
-        "x": 9,
+        "x": 6,
         "y": 3
       },
       {
-        "type": "MOVE",
-        "unitId": "u17",
+        "type": "ATTACK",
+        "unitId": "u12",
+        "targetId": "u39",
         "x": 6,
-        "y": 6
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u16",
-        "x": 6,
-        "y": 7
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u24",
-        "x": 7,
-        "y": 7
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u28",
-        "x": 7,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u29",
-        "x": 8,
-        "y": 8
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u30",
-        "x": 9,
-        "y": 8
+        "y": 2
       },
       {
         "type": "MOVE",
         "unitId": "u11",
-        "x": 7,
-        "y": 5
+        "x": 6,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u11",
+        "targetId": "u39",
+        "x": 6,
+        "y": 2
       },
       {
         "type": "MOVE",
         "unitId": "u10",
-        "x": 6,
+        "x": 5,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u20",
+        "x": 7,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u20",
+        "targetId": "u31",
+        "x": 7,
+        "y": 1
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u21",
+        "x": 8,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u21",
+        "targetId": "u31",
+        "x": 7,
+        "y": 1
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 7,
         "y": 5
       },
       {
         "type": "MOVE",
         "unitId": "u9",
         "x": 4,
-        "y": 5
-      }
-    ],
-    [
+        "y": 4
+      },
       {
         "type": "MOVE",
-        "unitId": "u20",
-        "x": 10,
-        "y": 6
+        "unitId": "u16",
+        "x": 4,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 6,
+        "y": 5
       },
       {
         "type": "ATTACK",
-        "unitId": "u20",
-        "targetId": "u36",
-        "x": 10,
+        "unitId": "u19",
+        "targetId": "u39",
+        "x": 6,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 6,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 5,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u22",
+        "x": 9,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u22",
+        "targetId": "u37",
+        "x": 9,
         "y": 3
       },
       {
         "type": "MOVE",
-        "unitId": "u21",
-        "x": 11,
+        "unitId": "u23",
+        "x": 10,
         "y": 6
       },
       {
         "type": "ATTACK",
-        "unitId": "u21",
+        "unitId": "u23",
         "targetId": "u32",
         "x": 11,
         "y": 3
@@ -720,378 +734,510 @@
       {
         "type": "MOVE",
         "unitId": "u27",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u26",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u25",
+        "x": 7,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u30",
+        "x": 8,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u24",
+        "x": 7,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u28",
+        "x": 6,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u29",
+        "x": 7,
+        "y": 8
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u14",
         "x": 10,
-        "y": 5
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u23",
+        "x": 11,
+        "y": 6
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u23",
+        "targetId": "u40",
+        "x": 11,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u27",
+        "x": 10,
+        "y": 6
       },
       {
         "type": "ATTACK",
         "unitId": "u27",
+        "targetId": "u40",
+        "x": 11,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u14",
         "targetId": "u32",
         "x": 11,
         "y": 3
       },
       {
         "type": "MOVE",
-        "unitId": "u19",
+        "unitId": "u26",
         "x": 9,
         "y": 5
       },
       {
         "type": "ATTACK",
-        "unitId": "u19",
-        "targetId": "u40",
-        "x": 10,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u11",
-        "x": 7,
-        "y": 3
-      },
-      {
-        "type": "MOVE",
         "unitId": "u26",
-        "x": 8,
-        "y": 4
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u26",
-        "targetId": "u40",
-        "x": 10,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u18",
-        "x": 8,
-        "y": 5
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u18",
         "targetId": "u34",
-        "x": 9,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u30",
-        "x": 9,
-        "y": 6
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u30",
-        "targetId": "u34",
-        "x": 9,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u29",
-        "x": 8,
-        "y": 6
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u29",
-        "targetId": "u39",
-        "x": 8,
-        "y": 2
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u11",
-        "targetId": "u39",
-        "x": 8,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u25",
-        "x": 7,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u10",
-        "x": 6,
-        "y": 3
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u9",
-        "x": 5,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u17",
-        "x": 6,
-        "y": 4
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u24",
-        "x": 7,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u16",
-        "x": 6,
-        "y": 5
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u28",
-        "x": 7,
-        "y": 6
-      }
-    ],
-    [
-      {
-        "type": "MOVE",
-        "unitId": "u9",
-        "x": 5,
-        "y": 3
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u10",
-        "x": 7,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u10",
-        "x": 6,
-        "y": 1
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u10",
-        "targetId": "u31",
-        "x": 5,
-        "y": 1
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u11",
-        "x": 7,
-        "y": 1
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u11",
-        "targetId": "u31",
-        "x": 5,
-        "y": 1
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u9",
-        "targetId": "u31",
-        "x": 5,
-        "y": 1
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u27",
-        "x": 11,
-        "y": 4
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u27",
-        "targetId": "u45",
-        "x": 11,
-        "y": 1
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u19",
         "x": 10,
-        "y": 4
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u19",
-        "targetId": "u46",
-        "x": 10,
-        "y": 1
+        "y": 2
       },
       {
         "type": "MOVE",
-        "unitId": "u26",
-        "x": 10,
-        "y": 4
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u26",
-        "targetId": "u46",
-        "x": 10,
-        "y": 1
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u18",
+        "unitId": "u20",
         "x": 9,
         "y": 4
       },
       {
         "type": "ATTACK",
-        "unitId": "u18",
+        "unitId": "u20",
         "targetId": "u43",
         "x": 9,
         "y": 1
       },
       {
         "type": "MOVE",
-        "unitId": "u29",
-        "x": 8,
-        "y": 4
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u29",
-        "targetId": "u47",
-        "x": 10,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u30",
-        "x": 10,
-        "y": 5
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u30",
-        "targetId": "u47",
-        "x": 10,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u21",
-        "x": 11,
-        "y": 5
-      },
-      {
-        "type": "SIEGE",
-        "unitId": "u21",
-        "cityId": "c2",
-        "x": 11,
-        "y": 2
-      },
-      {
-        "type": "SIEGE",
-        "unitId": "u20",
-        "cityId": "c2",
-        "x": 10,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u25",
-        "x": 7,
-        "y": 2
-      },
-      {
-        "type": "SIEGE",
-        "unitId": "u25",
-        "cityId": "c2",
-        "x": 10,
-        "y": 2
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u17",
+        "unitId": "u13",
         "x": 7,
         "y": 3
       },
       {
-        "type": "SIEGE",
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 8,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 7,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 6,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u30",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u25",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 6,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u24",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 7,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
         "unitId": "u17",
+        "x": 6,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u28",
+        "x": 7,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 5,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u29",
+        "x": 8,
+        "y": 7
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 8,
+        "y": 2
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u13",
+        "targetId": "u48",
+        "x": 9,
+        "y": 2
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u14",
+        "targetId": "u48",
+        "x": 9,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u26",
+        "x": 10,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u26",
+        "targetId": "u34",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u23",
+        "targetId": "u46",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u27",
         "cityId": "c2",
         "x": 10,
         "y": 2
       },
       {
         "type": "MOVE",
-        "unitId": "u24",
-        "x": 9,
+        "unitId": "u30",
+        "x": 10,
         "y": 5
       },
       {
-        "type": "SIEGE",
-        "unitId": "u24",
-        "cityId": "c2",
+        "type": "ATTACK",
+        "unitId": "u30",
+        "targetId": "u46",
         "x": 11,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u11",
+        "cityId": "c2",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u25",
+        "x": 9,
+        "y": 4
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u25",
+        "targetId": "u46",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 7,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 6,
+        "y": 1
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u19",
+        "targetId": "u44",
+        "x": 10,
         "y": 1
       },
       {
         "type": "MOVE",
-        "unitId": "u28",
-        "x": 9,
-        "y": 6
+        "unitId": "u9",
+        "x": 8,
+        "y": 4
       },
       {
         "type": "MOVE",
         "unitId": "u16",
         "x": 7,
         "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 6,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 9,
+        "y": 5
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u18",
+        "cityId": "c2",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u24",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u28",
+        "x": 7,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u29",
+        "x": 9,
+        "y": 6
       }
     ],
     [
       {
         "type": "MOVE",
+        "unitId": "u14",
+        "x": 11,
+        "y": 3
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u14",
+        "targetId": "u47",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u26",
+        "x": 11,
+        "y": 4
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u26",
+        "cityId": "c2",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u30",
+        "x": 10,
+        "y": 4
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u30",
+        "cityId": "c2",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
         "unitId": "u11",
-        "x": 9,
-        "y": 1
+        "x": 10,
+        "y": 3
       },
       {
         "type": "ATTACK",
         "unitId": "u11",
-        "targetId": "u44",
+        "targetId": "u47",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 9,
+        "y": 1
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u13",
+        "cityId": "c2",
+        "x": 11,
+        "y": 1
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 9,
+        "y": 2
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u10",
+        "cityId": "c2",
+        "x": 11,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 8,
+        "y": 1
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u19",
+        "targetId": "u49",
+        "x": 10,
+        "y": 1
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 8,
+        "y": 3
+      },
+      {
+        "type": "ATTACK",
+        "unitId": "u17",
+        "targetId": "u49",
+        "x": 10,
+        "y": 1
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u9",
+        "cityId": "c2",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 7,
+        "y": 2
+      },
+      {
+        "type": "SIEGE",
+        "unitId": "u16",
+        "cityId": "c2",
+        "x": 10,
+        "y": 2
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 11,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u24",
+        "x": 10,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u28",
+        "x": 9,
+        "y": 5
+      }
+    ],
+    [
+      {
+        "type": "ATTACK",
+        "unitId": "u13",
+        "targetId": "u49",
         "x": 10,
         "y": 0
       },
       {
         "type": "MOVE",
         "unitId": "u10",
-        "x": 8,
-        "y": 1
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u27",
-        "x": 12,
-        "y": 3
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u27",
-        "targetId": "u48",
-        "x": 10,
-        "y": 1
-      },
-      {
-        "type": "MOVE",
-        "unitId": "u26",
         "x": 11,
-        "y": 3
-      },
-      {
-        "type": "ATTACK",
-        "unitId": "u26",
-        "targetId": "u48",
-        "x": 10,
-        "y": 1
+        "y": 2
       }
     ]
   ]

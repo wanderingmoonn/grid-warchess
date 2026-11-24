@@ -808,6 +808,14 @@ let replaySeeking = false;
  * 旧对象不会再被修改，留着引用是安全的，也省掉每步一次深拷贝。
  */
 let undoStack: GameState[] = [];
+/**
+ * 和 `undoStack` 一一对应的"动作日志长度".
+ *
+ * 撤销只恢复局面、不回退日志的话，被撤掉的那一步还留在日志里，
+ * 回放时同一个兵就会"一回合走两次"、被引擎拒——2026-11-24 用户 S-012 的回放
+ * 就是这么坏的（导出的动作里有 `该单位本回合已经移动过`）。
+ */
+let undoLogMarks: number[] = [];
 const UNDO_LIMIT = 30;
 
 /** 回合提示音的音量，存在 localStorage 里 */
@@ -2122,14 +2130,26 @@ function renderAiHud(): void {
       const ratio = call.myPower / Math.max(1, call.foePower);
       lines.push(`决战 ${call.call === 'attack' ? '打' : '发展'} · 投影比 ${ratio.toFixed(2)} · 行军 ${call.marchTurns}`);
     }
+    /* v4 把决定类型也记在队长上（`kind`），有就显示——它的三层链路口径和 v3 不同 */
+    const kindOfTurn = (squad as { kind?: string } | undefined)?.kind;
+    if (kindOfTurn) lines.push(`决定 ${kindOfTurn}${squad?.cityId ? ` · ${squad.cityId}` : ''}`);
     for (const sq of squad?.squads ?? []) {
-      const stateName = sq.state === 'forming' ? '组' : '走';
+      /* v4 的 `assemble`（集结）等价于 v3 的 `forming`（组队） */
+      const stateName = sq.state === 'forming' || (sq.state as string) === 'assemble' ? '组' : '走';
       /*
        * 标出编队类型：之前只显示 id（`atk-3`），建造编队 `build-120` 会被当成
        * 另一种 atk；用户 2026-11-22 要求"不同种类的编队都要能看到"。
        */
       const kind = sq.role === 'build' ? '建造' : sq.role === 'defend' ? '防守' : '进攻';
-      lines.push(`编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}`);
+      /* v4 多带的三样：要几个人、打谁、分几路（v3 的日志没有，读不到就不显示） */
+      const extra: string[] = [];
+      const q = sq as unknown as { want?: number; focusId?: string | null; lanes?: number };
+      if (typeof q.want === 'number' && q.want > 0) extra.push(`要${q.want}人`);
+      if (q.focusId) extra.push(`集火${q.focusId}`);
+      if (typeof q.lanes === 'number' && q.lanes > 1) extra.push(`${q.lanes}路`);
+      lines.push(
+        `编队[${kind}] ${sq.id} ${stateName} ${sq.count}人 散${sq.spread} ${sq.note}${extra.length > 0 ? ` · ${extra.join(' ')}` : ''}`,
+      );
     }
   }
   el.textContent = lines.length > 1 ? lines.join('\n') : `AI 想法 · t=${t}\n（这一帧没有 AI 记录）`;
@@ -4408,9 +4428,14 @@ function dispatch(action: Action): boolean {
     // 清空之后本回合继续走子照旧可撤，只是撤不回传送之前——够用，也不会让
     // 手滑一次就锁死整回合。
     undoStack = [];
+    undoLogMarks = [];
   } else {
     undoStack.push(state);
-    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    undoLogMarks.push(actionLog ? actionLog.length : -1);
+    if (undoStack.length > UNDO_LIMIT) {
+      undoStack.shift();
+      undoLogMarks.shift();
+    }
   }
   state = result.state;
   clearCombatPreview();
@@ -4451,6 +4476,7 @@ function dispatch(action: Action): boolean {
     clearActionFeedback();
     // 回合结束了，这个回合的走子就不许再撤——账已经结了
     undoStack = [];
+    undoLogMarks = [];
     clearSelection();
     render();
     if (room) {
@@ -4570,6 +4596,16 @@ function undoLast(): void {
     return;
   }
   state = prev;
+  /*
+   * **日志跟着退**。不退的话，被撤掉的动作还在里面，
+   * 导出给判分器时就是一个自相矛盾的序列（同一单位一回合走两次）。
+   */
+  const mark = undoLogMarks.pop();
+  if (actionLog && mark !== undefined && mark >= 0) {
+    actionLog.length = mark;
+    actionBytes = actionLog.reduce((n, a) => n + JSON.stringify(a).length + 1, 0);
+    actionDropped = 0;
+  }
   // 撤回来的这一步没有"刚刚打过"这回事：闪着的格子跟着一起撤掉
   dropHeatFlash();
   saveMatch(state);
@@ -6165,9 +6201,16 @@ function handleAction(act: string, el: HTMLElement): void {
         actions: steps,
       };
       const text = JSON.stringify(payload, null, 2);
+      /*
+       * 报**手数**，不猜"打完没打完"。
+       *
+       * 一开始想用"最后一步不是 END_TURN = 没打完"来判断，是错的：
+       * 结束回合之后对面会先走，再回到你——所以一次正常导出，最后一步几乎不可能是我方的 END_TURN。
+       * 真正该看的是"打够手数没有"，那是判分器的活（答案用完会警告空转）。
+       */
       void navigator.clipboard
         ?.writeText(text)
-        .then(() => toast(`已复制 ${steps.length} 步动作到剪贴板`))
+        .then(() => toast(`已复制 ${steps.length} 步动作（当前第 ${state.turn} 手）`))
         .catch(() => window.prompt('复制下面的内容存成文件：', text));
       return;
     }

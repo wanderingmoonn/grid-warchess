@@ -290,11 +290,27 @@ let s = structuredClone(s0);
 capture(s);
 const cap = START + window;
 let meTurnIdx = 0;
+let bookWarned = false;
 while (!s.winner && s.turn < cap) {
   const who = s.current;
   const before = s.turn;
   if (book && who === ME) {
     const acts = book.turns?.[meTurnIdx] ?? [];
+    /*
+     * 答案用完了：后面全是我方空转。
+     *
+     * 这个坑很隐蔽——2026-11-24 用户 S-012 的回放只录了 3 个回合（判据要 12 手），
+     * 判分器照常算完，给出"我负、城归对方"，看起来像 AI 打不过，其实是**答案只有三分之一**。
+     * 所以这里记一笔，跑完明确告诉人"后面是空转"。
+     */
+    if (meTurnIdx >= (book.turns?.length ?? 0) && acts.length === 0 && !bookWarned) {
+      bookWarned = true;
+      const covered = meTurnIdx; /* 已经用掉的回合数 */
+      console.warn(
+        `\n⚠️ 答案只覆盖 ${covered} 个回合（约 ${covered * 2} 手），这一手之后**我方全程空转**。` +
+          `\n   判据要 ${window} 手。如果是导出早了，回放里后面的结果不作数。\n`,
+      );
+    }
     meTurnIdx += 1;
     s = answerTurn(s, acts);
   } else {
@@ -391,6 +407,17 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
       return { ok: c.min === undefined || lostFoe >= c.min, got: `敌损失 ${lostFoe} 个` };
     case 'noCityLost':
       return { ok: st.meCities >= ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
+    /*
+     * 全程不丢城：不只是"最后还在"，而是**任何一帧都没少过**。
+     *
+     * 为什么需要：S-012 里 v4 的城被打成废墟又抢了回来，终点判定是绿的——
+     * 但丢城那一刻等于产兵格和收入一起没了，这在人类对局里是要算账的失误。
+     * 只看终点等于允许"先输后赢"。
+     */
+    case 'neverLostCity': {
+      const low = Math.min(...[...record.values()].map((r) => r.meCities));
+      return { ok: low >= ME_CITIES0, got: `最少时我城 ${low}/${ME_CITIES0}` };
+    }
     case 'capturedCity':
       return { ok: st.meCities > ME_CITIES0, got: `我城 ${st.meCities}/${ME_CITIES0}` };
     case 'win': {

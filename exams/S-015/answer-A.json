@@ -1,0 +1,460 @@
+{
+  "me": "A",
+  "seed": 515,
+  "turns": [
+    [
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "lumberjack"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "lumberjack"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u4",
+        "x": 5,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u2",
+        "x": 5,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 9,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 9,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 10,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u8",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u3",
+        "x": 9,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 10,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 9,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 10,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u8",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 10,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u6",
+        "x": 9,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u8",
+        "x": 9,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 10,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 10,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u12",
+        "x": 8,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u14",
+        "x": 8,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "farmer"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "farmer"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 5,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 5,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u5",
+        "x": 10,
+        "y": 10
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u7",
+        "x": 10,
+        "y": 9
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u9",
+        "x": 10,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 10,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 10,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u14",
+        "x": 9,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u12",
+        "x": 9,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "farmer"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "farmer"
+      },
+      {
+        "type": "RECRUIT",
+        "cityId": "c1",
+        "unitType": "herder"
+      }
+    ],
+    [
+      {
+        "type": "MOVE",
+        "unitId": "u17",
+        "x": 4,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u15",
+        "x": 4,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u18",
+        "x": 5,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u20",
+        "x": 5,
+        "y": 8
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u11",
+        "x": 10,
+        "y": 4
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u12",
+        "x": 9,
+        "y": 3
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u13",
+        "x": 10,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u16",
+        "x": 9,
+        "y": 5
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u10",
+        "x": 10,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u14",
+        "x": 10,
+        "y": 7
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u19",
+        "x": 9,
+        "y": 6
+      },
+      {
+        "type": "MOVE",
+        "unitId": "u21",
+        "x": 9,
+        "y": 7
+      }
+    ]
+  ]
+}

@@ -28,7 +28,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
  * 否则每次跑都要重新读一遍 review.md 判断它还算不算数。
  * 加题在这里加一行——这也顺手挡住了"随手多造一道题"。
  */
-const ACTIVE = ['S-000', 'S-001', 'S-002', 'S-004', 'S-005', 'S-006', 'S-009'];
+const ACTIVE = ['S-000', 'S-001', 'S-002', 'S-004', 'S-005', 'S-006', 'S-009', 'S-011', 'S-012', 'S-013', 'S-015'];
 
 /** 答题者：空壳 / v1 / v3 / v4 */
 const BRAINS = ['none', 'v1', 'v3', 'v4'] as const;
