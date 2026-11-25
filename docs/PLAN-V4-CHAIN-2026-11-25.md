@@ -102,6 +102,8 @@ upgrade?: { cityId: string; targetEra: number; why: string }  // 只由决定层
 
 ## 3. 六步
 
+> **进度（2026-11-25 23:58）**：**D1 ✅** · D2~D6 未做。
+
 每步都必须单独提交、单独回退。**判据"零变化"是指 33 道题的结论 + 记录项
 （造兵数 / 城代 / 金币 / 到城下人数）一字不变**，不是"大致一样"。
 
@@ -118,6 +120,24 @@ upgrade?: { cityId: string; targetEra: number; why: string }  // 只由决定层
 - **验收**：`v4Snapshot` 能打印出 `spend.mode / cap / why`；`grep preferEcon ai-v4.ts` 归零。
 - **风险**：决定的**沿用机制**（`mem.decision` 在 `untilTurn` 内复用）必须把 `spend` 一起带过去，
   否则会出现"沿用了决定、忘了沿用资源段"的默认值 bug。沿用分支逐一检查。
+
+**(D1 完成记录，2026-11-25 23:58)**：
+
+- 形状：`Decision.spend = { mode, cap?, untilTurn, why }`，`mode` 四个取值
+  `save / econOnly / econThenArmy / army`（`types.ts` 的 `SpendMode`）。
+  `spend` **必填**——漏一个 return 就编译不过，不用靠肉眼查"忘了抄"。
+- 判据原样搬进 `decide.ts` 的 `withSpend`（三条二值判断，一个字没改）；
+  约束层的 `spendCap` 改成 `decision.spend.mode === 'save' ? decision.spend.cap : undefined`
+  （只转发，不再自己算"金币 − 重建费"）；入口那三个局部布尔删掉。
+- **验证**：33 题 × v4 **逐字节比对全部一致**（`.tmp/d1-before` vs `.tmp/d1-after`，
+  用 `diff -rq` 而不是只看红绿）；`npx tsc --noEmit` 干净；`npm test` 21/21；
+  矩阵仍是 空壳 0 / v1 20 / v3 14 / **v4 29**。
+- 探针 `scripts/probe-v4.ts` 新增"钱："一行，四种模式都实测到了：
+  `E-2-01` econOnly、`S-013` econThenArmy、`D-1-01` army、`T-2-01` save。
+  面板（`v4-hud`）同步显示模式 + 上限 + 一句话。
+- **一个语义说明**：接管废墟的 `enter` 段（钱已经够了）也归 `save`——因为这一手的钱
+  要留给重建费、花掉就进不了城。行为与改动前一致，只是把理由写准了
+  （原来会显示"钱够了还在攒钱"）。这条留给 D4 一起想。
 
 ### D2 统一"发展期还剩几手"的口径（纯搬家，零变化）
 

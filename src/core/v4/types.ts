@@ -38,6 +38,40 @@ export type TakeoverStage = 'clear' | 'save' | 'enter';
  */
 export type PressStage = 'clear' | 'siege';
 
+/**
+ * **这一段金币怎么花**（D1，2026-11-25）。
+ *
+ * 这三个判断原来在入口 `ai-v4.ts` 里，是三个局部布尔（`saving` / `preferEcon` / `needArmy`）；
+ * 2026-11-25 搬到这里，**判据一个字没改**——所以 33 道题的读数必须一字不变
+ * （见 `docs/PLAN-V4-CHAIN-2026-11-25.md` 的 D1）。
+ *
+ * 为什么它属于决定层：它是"作战方式"的一部分。在打、在守、在发展，钱的用法不同；
+ * 这条判断放在动作选择器里的话，"这一手为什么没造兵"就只能靠翻代码行来解释。
+ *
+ * 为什么用枚举而不是"比例"或"权重"：四个取值各有**一句能被人反驳的话**，
+ * 而"经济占比 0.6"没法反驳，只能调参。
+ */
+export type SpendMode =
+  /** 一分不花：接管废墟的攒钱段，那笔钱是重建费（`cap` = 金币 − 重建费） */
+  | 'save'
+  /** 只补经济兵，**一个战斗兵都不造**：发展期且看不见敌人（攒下的钱等有敌人再变兵） */
+  | 'econOnly'
+  /** 先补经济；没有空岗/买不起再补战斗兵：看得见敌人、或这个决定不是"发展" */
+  | 'econThenArmy'
+  /** 只造战斗兵，买不起就攒：在打 / 在守 */
+  | 'army';
+
+/** 决定层交下来的"钱怎么花"。字段上限四个，不许再加分数 */
+export interface SpendPlan {
+  mode: SpendMode;
+  /** 这一段最多能花多少金币。**只有 `save` 有**（= 金币 − 重建费） */
+  cap?: number;
+  /** 和决定同一个期限：钱的花法不许比决定活得更久 */
+  untilTurn: number;
+  /** 一句话，进面板与回放——"为什么这手不造兵"要能直接读出来，不用翻代码 */
+  why: string;
+}
+
 export interface Decision {
   kind: DecisionKind;
   /** `takeover` 用 `TakeoverStage`，`press` 用 `PressStage` */
@@ -48,6 +82,13 @@ export interface Decision {
   reason: string;
   /** press / defend 指向哪座城（`expand` 没有目标城） */
   cityId?: string;
+  /**
+   * **钱怎么花**（D1）。
+   *
+   * 必填而不是可选：可选就会出现"沿用了决定、忘了沿用资源段"的默认值，
+   * 而那种 bug 只能靠回放猜。必填的话，每个 `return` 都编译不过一次，漏不掉。
+   */
+  spend: SpendPlan;
 }
 
 /** 一支部队在本回合的任务。**任务种类固定**，别用"分数"表达意图 */

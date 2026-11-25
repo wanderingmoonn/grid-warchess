@@ -20,6 +20,13 @@ import { v4Snapshot } from '../core/v4/ai-v4.ts';
 import { utype } from '../core/rules.ts';
 
 const ROLE_LABEL: Record<string, string> = { press: '推', defend: '守', expand: '发展' };
+/** 钱怎么花（D1）：四种模式各一句人话，面板上直接读 */
+const SPEND_LABEL: Record<string, string> = {
+  save: '攒钱',
+  econOnly: '只补经济',
+  econThenArmy: '经济优先',
+  army: '只造兵',
+};
 const ORDER_LABEL: Record<string, string> = {
   march: '推进',
   siege: '攻城',
@@ -102,7 +109,9 @@ export function v4HudHtml(s: GameState, me: PlayerId): string {
     </div>
     <div style="font-size:11px;color:#B4B2A9;line-height:1.5;margin-bottom:8px">
       管到第 ${d.untilTurn} 手${d.cityId ? ` · 目标 ${d.cityId}` : ''}<br>
-      <span style="color:#888780">${d.reason}</span>
+      <span style="color:#888780">${d.reason}</span><br>
+      <span style="color:#9FE1CB">钱 ${SPEND_LABEL[d.spend.mode] ?? d.spend.mode}${d.spend.cap !== undefined ? `（上限 ${d.spend.cap}）` : ''}</span>
+      <span style="color:#888780"> · ${d.spend.why}</span>
     </div>
     <div style="border-top:1px solid #3A3A38;padding-top:6px;margin-bottom:8px">
       ${rows || '<span style="font-size:11px;color:#888780">没有队伍（都闲着）</span>'}

@@ -57,6 +57,13 @@ const v = currentView(s, ME as GameState['current']);
 console.log(`\n=== ${EXAM} · 第 ${s.turn} 手 ===\n`);
 console.log('决定：', v.decision.kind, `（管到第 ${v.decision.untilTurn} 手）`);
 console.log('理由：', v.decision.reason);
+/* 钱怎么花（D1）：四种模式 + 上限 + 一句话。这一行是"为什么这手没造兵"的唯一入口 */
+console.log(
+  '钱：',
+  `${v.decision.spend.mode}${v.decision.spend.cap !== undefined ? `（上限 ${v.decision.spend.cap}）` : ''}`,
+  '·',
+  v.decision.spend.why,
+);
 console.log('目标城：', v.decision.cityId ?? '（无）');
 console.log('\n队伍：');
 for (const q of v.con.squads) {

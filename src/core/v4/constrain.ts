@@ -1668,16 +1668,20 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    */
   let captureId: string | undefined;
   let captureTarget: { x: number; y: number } | undefined;
-  let spendCap: number | undefined;
+  /*
+   * 采购上限**由决定层给**（D1，2026-11-25）：这里只往下传，不再自己算"金币 − 重建费"。
+   *
+   * 为什么挪走：那个数原来是这里算的，而"这一手一分不花"又在入口判了一次，
+   * 同一句话两个读者——改一处忘了另一处，就是"不知道哪层错"的来源。
+   * 现在决定层一次算完（`decision.spend`），这里和打分层都只是转发。
+   */
+  const spendCap = decision.spend.mode === 'save' ? decision.spend.cap : undefined;
   if (decision.kind === 'takeover' && city) {
     const center = {
       x: city.x + Math.floor((city.size ?? 2) / 2),
       y: city.y + Math.floor((city.size ?? 2) / 2),
     };
     captureTarget = center;
-    const cost = world.ruinCost(city);
-    const gold = s.players[world.me]?.gold ?? 0;
-    if (decision.stage !== 'clear') spendCap = Math.max(0, gold - cost);
     if (decision.stage === 'enter') {
       /*
        * 派**离废墟最近的那个**去，不派"最强/最贵"的。

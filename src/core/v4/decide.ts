@@ -17,6 +17,103 @@ import type { Decision, TakeoverStage, V4Memory } from './types.ts';
 import { effectiveStats, utype } from '../rules.ts';
 import type { GameState } from '../types.ts';
 
+/** 还没挂"钱怎么花"的决定（`withSpend` 的入参形状） */
+type BareDecision = Omit<Decision, 'spend'>;
+
+/**
+ * 给决定挂上"这一段钱怎么花"（D1，2026-11-25）。
+ *
+ * ── 它是搬家，不是改判据 ─────────────────────────────────────
+ *
+ * 下面三条二值判断原来写在入口 `ai-v4.ts` 的造兵那一段，判据一个字没改：
+ *
+ *   · `saving`     ：接管废墟、且不在清场段 → 一分不花（那笔钱是重建费）；
+ *   · `preferEcon` ：在攒钱之外，只要"在发展"或者"看不见敌人" → 先补经济；
+ *   · `needArmy`   ：看不见敌人 **并且** 在发展期 → 一个战斗兵都不造。
+ *
+ * 原样搬过来，所以 **33 道题的读数必须一字不变**。变了就是搬错了，不准顺手"修"。
+ *
+ * ── 为什么必须在决定层 ──────────────────────────────────────
+ *
+ * 这是"作战方式"的一部分：在打、在守、在发展，钱的用法不同。放在动作选择器里，
+ * "这一手为什么没造兵"就只能翻代码行；放在这里，它和"打谁、管到第几手"是同一句话。
+ *
+ * ── 为什么 `cap` 要在这里算 ─────────────────────────────────
+ *
+ * 重建费那份钱是**决定的一部分**（"攒够 248 再进城"），不是采购时临时想起来的数。
+ * 约束层只负责把它传给打分层，不再自己算第二遍。
+ */
+function withSpend(s: GameState, world: World, d: BareDecision): Decision {
+  const noFoe = world.foeCombat.length === 0;
+  const gold = s.players[world.me]?.gold ?? 0;
+  const keep = d.untilTurn;
+
+  /* ① 攒钱：接管废墟、还在 save 或 enter 段（clear 段要打仗，照花） */
+  if (d.kind === 'takeover' && d.stage !== 'clear') {
+    const ruin = d.cityId ? s.cities.find((c) => c.id === d.cityId) : undefined;
+    const cost = ruin ? world.ruinCost(ruin) : 0;
+    const cap = Math.max(0, gold - cost);
+    /*
+     * `enter` 段也归 `save`：钱虽然够了，但这一手的钱是**留给重建费**的，
+     * 花掉就进不了城。所以模式不改（行为一个字不动），只把理由写清楚——
+     * 面板上不该出现"钱够了还在攒钱"这种自相矛盾的话。
+     */
+    return {
+      ...d,
+      spend: {
+        mode: 'save',
+        cap,
+        untilTurn: keep,
+        why:
+          d.stage === 'enter'
+            ? `钱够了，这一手的 ${cost} 金留给重建费，不采购（现有 ${gold}）`
+            : `攒 ${cost} 金重建，这一手最多花 ${cap}（现有 ${gold}）`,
+      },
+    };
+  }
+
+  /* ② 在发展、或者根本看不见敌人 → 先补经济 */
+  if (d.kind === 'expand' || noFoe) {
+    /*
+     * 看不见敌人 + 发展期 → **连一个战斗兵都不造**。
+     *
+     * 这条是 S-015 逼出来的：不造经济兵就长不大；但"有钱就造兵"更糟
+     * （v1 在一条人烟的题上花 367 金造了 5 个战斗兵）。攒下的钱会在
+     * 真要打的时候变成兵——那时候 `mode` 就不是这个了。
+     */
+    if (noFoe && d.kind === 'expand') {
+      return {
+        ...d,
+        spend: {
+          mode: 'econOnly',
+          untilTurn: keep,
+          why: '发展期且看不见敌人：只补经济，一个战斗兵都不造',
+        },
+      };
+    }
+    return {
+      ...d,
+      spend: {
+        mode: 'econThenArmy',
+        untilTurn: keep,
+        why: noFoe
+          ? '看不见敌人，但这个决定不是"发展"（正在清场/接管）：先经济，再补战斗兵'
+          : '在发展期但看得见敌人：先经济，没有空岗再补战斗兵',
+      },
+    };
+  }
+
+  /* ③ 在打 / 在守：钱只买战斗兵，买不起就攒 */
+  return {
+    ...d,
+    spend: {
+      mode: 'army',
+      untilTurn: keep,
+      why: '在打或在守：钱只买战斗兵，买不起就攒着',
+    },
+  };
+}
+
 /** 兵力对比（按"身价"不按个数：一个四代兵不等于一个民兵） */
 function strength(s: GameState, sideUnits: GameState['units']): number {
   let n = 0;
@@ -67,7 +164,13 @@ function takeoverDecision(s: GameState, world: World, ruin: City): Decision {
       : stage === 'save'
         ? `城下清干净了，攒 ${cost} 金重建（现有 ${gold}）`
         : `钱够了（${gold} ≥ ${cost}），派兵入驻`;
-  return { kind: 'takeover', stage, untilTurn: s.turn + DECIDE_HORIZON, cityId: ruin.id, reason: why };
+  return withSpend(s, world, {
+    kind: 'takeover',
+    stage,
+    untilTurn: s.turn + DECIDE_HORIZON,
+    cityId: ruin.id,
+    reason: why,
+  });
 }
 
 export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
@@ -97,15 +200,29 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       if (ruin) return takeoverDecision(s, world, ruin);
       /* 打不动了就提前收手：兵力比跌破 1.0（原来是 1.25 才进） */
       if (cityAlive && ratio >= 1.0) {
-        return { kind: 'press', untilTurn: prev.untilTurn, cityId: prev.cityId, reason: `${prev.reason}（沿用）` };
+        return withSpend(s, world, {
+          kind: 'press',
+          untilTurn: prev.untilTurn,
+          cityId: prev.cityId,
+          reason: `${prev.reason}（沿用）`,
+        });
       }
     } else if (prev.kind === 'defend') {
       /* 威胁解除就提前转攻：对面掉到我方 0.6 以下 */
       if (foeStr >= myStr * 0.6) {
-        return { kind: 'defend', untilTurn: prev.untilTurn, cityId: prev.cityId, reason: `${prev.reason}（沿用）` };
+        return withSpend(s, world, {
+          kind: 'defend',
+          untilTurn: prev.untilTurn,
+          cityId: prev.cityId,
+          reason: `${prev.reason}（沿用）`,
+        });
       }
     } else if (ratio < 1.25) {
-      return { kind: 'expand', untilTurn: prev.untilTurn, reason: `${prev.reason}（沿用）` };
+      return withSpend(s, world, {
+        kind: 'expand',
+        untilTurn: prev.untilTurn,
+        reason: `${prev.reason}（沿用）`,
+      });
     }
   }
 
@@ -114,12 +231,12 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   if (threatened.length > 0 && foeStr > myStr * 0.9) {
     /* 离敌军最近的先救；`foeEta` 是"敌人几回合能摸到它"，越小越急 */
     const worst = threatened.sort((a, b) => a.foeEta - b.foeEta)[0]!;
-    return {
+    return withSpend(s, world, {
       kind: 'defend',
       untilTurn: s.turn + horizon,
       cityId: worst.city.id,
       reason: `对面身价 ${Math.round(foeStr)} > 我 ${Math.round(myStr)}，${worst.city.id} ${Number.isFinite(worst.foeEta) ? `${worst.foeEta} 回合内会被摸到` : '最靠前'}，先守`,
-    };
+    });
   }
 
   /* 1.5) **有打空的城 → 接管它**（在"再打下一座"之前） */
@@ -167,7 +284,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         (st.range ?? 1) + (st.move ?? 2)
       );
     });
-    return {
+    return withSpend(s, world, {
       kind: 'press',
       stage: guards.length > 0 ? 'clear' : 'siege',
       untilTurn: s.turn + horizon,
@@ -176,13 +293,13 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         guards.length > 0
           ? `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍；${target.id} 周围还有 ${guards.length} 个守军，先清场`
           : `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍；${target.id} 城下已清空，开始攻城`,
-    };
+    });
   }
 
   /* 3) 其它情况：发展 */
-  return {
+  return withSpend(s, world, {
     kind: 'expand',
     untilTurn: s.turn + horizon,
     reason: `身价 ${Math.round(myStr)} : ${Math.round(foeStr)}，不占优，先攒兵攒钱`,
-  };
+  });
 }

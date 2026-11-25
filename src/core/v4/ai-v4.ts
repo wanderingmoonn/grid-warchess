@@ -258,44 +258,25 @@ export function aiNextActionV4(
    */
   {
     /*
-     * 发展（expand）或者根本看不见敌人时，**先补经济**；其余情况先补战力。
+     * ③ 造兵：**照决定层给的"钱怎么花"发**（D1，2026-11-25）。
      *
-     * 这条是 S-015 逼出来的：v4 原来只会 `affordableCombat`，一个经济兵都不造，
-     * 长局里经济 8 vs 对手 51，前期压着打、后期被拖死。
+     * 这里原来有三个局部布尔（`saving` / `preferEcon` / `needArmy`）——它们其实是
+     * "在打 / 在守 / 在发展"的推论，却写在动作选择器里。现在它们在 `decide.ts` 的
+     * `withSpend` 里，和"打谁、管到第几手"是同一句话。
+     *
+     * 这一层只剩三件事：**照着模式发动作、`usable` 挡掉被引擎拒的、`recruits` 记账**。
+     * 四个模式各自什么意思，见 `types.ts` 的 `SpendMode`；判据一个字没改，
+     * 所以这一步 33 道题的读数必须一字不变。
      */
-    /*
-     * **攒钱接管废墟的时候，一个兵都不造**（连经济兵也不造）。
-     *
-     * 这里踩过一个坑：清场之后看不见敌人了，`foeCombat.length === 0` 让
-     * `preferEcon` 变成 true，于是每回合买经济兵——钱又漏光，40 手攒不到 248 的重建费
-     * （S-001 实测：金币在 4~111 之间来回，一次没够）。
-     * 重建费是一笔**确定的支出**，攒钱期任何采购都是在跟它抢。
-     */
-    const saving = view.decision.kind === 'takeover' && view.decision.stage !== 'clear';
-    const preferEcon = !saving && (view.decision.kind === 'expand' || world.foeCombat.length === 0);
-    /*
-     * **有需求才造兵**。看不见敌人、又在发展期时，攒钱是对的——
-     * "有钱就造兵"是 v1 的病：S-015（一条没人烟的题）它花 367 金造了 5 个战斗兵，
-     * 只留 45 给经济。人类不会这么干。
-     *
-     * 所以这里不再"造不了经济兵就退回造战斗兵"，而是**干脆不造**。
-     * 攒下的钱会在真要打的时候变成兵（那时 `foeCombat` 非空）。
-     */
-    const needArmy = world.foeCombat.length > 0 || view.decision.kind !== 'expand';
-    /*
-     * **买不起战斗兵就攒着，别拿去买经济兵。**
-     *
-     * 原来这里是 `recruitAction(...) ?? recruitEcon(...)`——战斗兵买不起时退而买农民。
-     * 实测 S-000（兵力 3 倍该赢的局）：钱永远不够买战斗兵，于是每回合都买一个农民，
-     * 26 手堆到 40 个兵、城一次没打下来。这就是"有钱就得花掉"的老病换了个形状。
-     *
-     * 现在：发展期才补经济；打仗期钱只买战斗兵，买不起就攒。
-     */
-    const rec = saving
-      ? null
-      : preferEcon
-        ? recruitEcon(s, world, con) ?? (needArmy ? recruitAction(s, world, con.need, con.spendCap) : null)
-        : recruitAction(s, world, con.need, con.spendCap);
+    const sp = view.decision.spend;
+    const rec =
+      sp.mode === 'save'
+        ? null
+        : sp.mode === 'econOnly'
+          ? recruitEcon(s, world, con)
+          : sp.mode === 'econThenArmy'
+            ? recruitEcon(s, world, con) ?? recruitAction(s, world, con.need, con.spendCap)
+            : recruitAction(s, world, con.need, con.spendCap);
     if (usable(rec)) {
       view.recruits += 1;
       return rec;
