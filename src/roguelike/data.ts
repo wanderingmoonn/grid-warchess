@@ -242,14 +242,28 @@ export const WORLDS: Record<WorldId, WorldDef> = {
       '第二层 · 异境',
       '树上挂着龙，井里游着精灵',
       /*
-       * 池子里**不放飞行单位**（鹰身女妖、石像鬼、狮鹫骑士、龙骑兵、吸血鬼、不死鸟）。
+       * 飞行单位**照常入池**（2026-11-25 按反馈改）。
        *
-       * 空中层是"和地面同格但不在同一层"，地面单位打不到它；一局里只要对面
-       * 有一只会飞的，玩家又没带对空，这仗就打不完（实测：10 个兵围着 3 个敌人
-       * 打了 39 轮，城一点血没掉）。奇想的味道靠魔法、亡灵、巨兽来给，够用。
+       * 上一版把它们剔掉了，理由是"空中层地面打不到"——但那条理由不成立：
+       * 规则层对空中目标只加一格距离（`strikeDistance`），有射程的兵照样能打；
+       * 而且剔除是**剔不干净**的，玩家照样会在别处撞见会飞的东西——说一套做一套
+       * 比平衡问题更糟。现在改用编成侧的两条约束（见 `run.ts` 的
+       * `sanitizeAir`）：一场最多一个飞行单位、且我方没有任何射程 ≥2 的兵时不给，
+       * 既保住"奇想就该有会飞的东西"，也不会出现打不完的仗。
+       *
+       * 便宜的蝙蝠/小恶魔不进池：它们会拉低池内最低价，让整套"按人头摊钱"
+       * 的编成算法把敌人换成一堆杂兵。
        */
-      ['berserker', 'ghost', 'assassin', 'mage', 'elf-archer', 'treant', 'necromancer', 'paladin', 'royal-cavalry', 'cataphract'],
-      ['royal-guard', 'werewolf', 'elementalist', 'two-head-giant', 'clockwork-golem', 'holy-knight-lord', 'royal-king', 'alchemist'],
+      [
+        'berserker', 'ghost', 'assassin', 'mage', 'elf-archer', 'treant', 'necromancer', 'paladin',
+        'royal-cavalry', 'cataphract',
+        'harpy', 'gargoyle', 'air-elemental', 'griffin-rider',
+      ],
+      [
+        'royal-guard', 'werewolf', 'elementalist', 'two-head-giant', 'clockwork-golem', 'holy-knight-lord',
+        'royal-king', 'alchemist',
+        'vampire', 'dragoon-rider', 'demon', 'bone-dragon',
+      ],
       ['fantasy'],
       [
         { title: '邪龙王的巢', sub: '它不是守城，它只是睡在城里' },
@@ -311,15 +325,40 @@ export interface DefenseSet {
   scale?: { atk: number; hp: number };
 }
 
-/** 按时代的默认防御工事（第一/三层用；第二层看世界） */
+/**
+ * 按时代的默认防御工事（第一/三层用；第二层看世界）。
+ *
+ * **墙必须是墙**：这里曾经写的是 `camp` / `camp2` / …（军营、寨垒、堡寨），
+ * 它们在本体里是 `produce: true` 的产兵建筑——玩家在肉鸽里没有产兵面板，
+ * 拿到一座军营等于拿到一块 34 血的石头，"防御工事"这件事就落空了。
+ * 现在换成时代军备包里真正的墙体（栅栏 / 城墙 / 混凝土胸墙 / 掩体墙），
+ * 它们 `atk: 0, move: 0`，价值全在血和护甲上。
+ *
+ * 这四件**不靠开整个 era-arms 包**来注册（那会把 89 个近现代兵一起塞进
+ * 招募池），而是随关卡以 `LevelDef.units` 的形式带进去——见 `battle.ts`。
+ */
 export const DEFENSE_BY_ERA: Record<number, DefenseSet> = {
-  1: { tower: 'tower', wall: 'camp' },
-  2: { tower: 'keep', wall: 'camp2' },
-  3: { tower: 'battery', wall: 'camp3' },
-  4: { tower: 'fortress', wall: 'camp4' },
-  5: { tower: 'bunker', wall: 'camp5' },
-  6: { tower: 'bunker', wall: 'camp5' },
+  1: { tower: 'tower', wall: 'anc_palisade' },
+  2: { tower: 'keep', wall: 'med_wall' },
+  3: { tower: 'battery', wall: 'ind_concrete' },
+  4: { tower: 'fortress', wall: 'ind_concrete' },
+  5: { tower: 'bunker', wall: 'mod_concretewall' },
+  6: { tower: 'bunker', wall: 'mod_concretewall' },
 };
+
+/**
+ * 关卡自带的工事兵种（`LevelDef.units`）。
+ *
+ * 只取肉鸽用得到的那几个墙体：它们不在本体的 `UNIT_TYPES` 里，也不是本项目
+ * 常开的扩展，所以必须由关卡自己登记，否则 `deploy` 会当成"不存在的兵"跳过，
+ * 场上的墙就凭空消失。
+ */
+const ERA_ARMS_UNITS = expansionUnitsFor(['era-arms']);
+export const DEFENSE_UNIT_DEFS: Record<string, import('../core/types.ts').UnitTypeDef> = Object.fromEntries(
+  ['tower', 'keep', 'battery', 'fortress', 'bunker', 'anc_palisade', 'med_wall', 'ind_concrete', 'mod_concretewall']
+    .map((id) => [id, ERA_ARMS_UNITS[id]])
+    .filter(([, def]) => Boolean(def)) as Array<[string, import('../core/types.ts').UnitTypeDef]>,
+);
 
 /** 第二层四个世界各自的工事（只换外壳，数值按 scale 对齐） */
 export const WORLD_DEFENSE: Partial<Record<WorldId, DefenseSet>> = {
@@ -414,7 +453,7 @@ export const RELICS: Relic[] = [
   { id: 'rampart', name: '壁垒图', desc: '我军全体最大生命 +6', effect: { hp: 6 } },
   { id: 'scoutnet', name: '斥候网', desc: '每场战斗敌人少 1 个兵', effect: { enemyCut: 1 } },
   { id: 'powder', name: '火药桶', desc: '攻坚与层末：敌城初始耐久 −30%', effect: { cityDamage: 0.3 } },
-  { id: 'purse', name: '军饷袋', desc: '每层开始 +90 金', effect: { goldPerLayer: 90 } },
+  { id: 'purse', name: '军饷袋', desc: '每层开始 +90 金（按层换算）', effect: { goldPerLayer: 90 } },
   { id: 'ration', name: '军粮袋', desc: '每层开始 +1 个本层基础兵', effect: { unitPerLayer: 1 } },
   { id: 'marchmap', name: '行军图', desc: '商店价格 −20%', effect: { shopOff: 0.2 } },
   { id: 'medic', name: '随军医官', desc: '战斗结束后返还 1 个阵亡单位', effect: { revive: 1 } },
@@ -441,7 +480,7 @@ export const EVENTS: EventDef[] = [
     title: '征兵令',
     body: '里正把名册摊在你面前。名字比粮多，粮比人少。他说：抽几个吧，反正明年还得抽。',
     choices: [
-      { label: '按册抽丁', hint: '民兵 ×2，−30 金', effect: { add: { type: 'militia', count: 2 }, gold: -30 } },
+      { label: '按册抽丁', hint: '本层基础兵 ×2，−30 金', effect: { add: { type: 'layer-low', count: 2 }, gold: -30 } },
       { label: '只征粮', hint: '+70 金', effect: { gold: 70 } },
       { label: '从册子里挑老兵', hint: '把 1 个最差的兵换成 1 个高级兵', effect: { promote: 1 } },
     ],
@@ -452,7 +491,7 @@ export const EVENTS: EventDef[] = [
     body: '半个村子没了，另外半个还没决定要不要没。有人在灰里翻东西，有人在门口坐着。',
     choices: [
       { label: '搜能用的', hint: '+90 金', effect: { gold: 90 } },
-      { label: '收拢散兵', hint: '弓手 ×1', effect: { add: { type: 'archer', count: 1 } } },
+      { label: '收拢散兵', hint: '本层中档兵 ×1', effect: { add: { type: 'layer-mid', count: 1 } } },
       {
         label: '在灰里挖',
         hint: '五成：得 1 件藏品；否则 +30 金',
@@ -823,6 +862,14 @@ export function pickEnemyTypes(
   budget: number,
   cost: (id: string) => number,
   count: number,
+  /**
+   * 这一支编成里**最多只能有一个英雄**（本体规则：同一方场上英雄唯一）。
+   *
+   * 不传 = 不限制（老的调用点行为不变）。传了之后，第二个英雄位置会被
+   * 同价位的普通兵顶掉——不这样做，L2 奇想的 boss 会带着两个英雄出场，
+   * 而玩家那边一个都凑不齐。
+   */
+  isHero?: (id: string) => boolean,
 ): string[] {
   const sorted = [...pool].filter((id) => cost(id) > 0).sort((a, b) => cost(b) - cost(a));
   if (sorted.length === 0) return [];
@@ -830,6 +877,7 @@ export function pickEnemyTypes(
   const cheapestCost = Math.max(1, cost(cheapest));
 
   const out: string[] = [];
+  const heroTaken = (): boolean => (isHero ? out.some((id) => isHero(id)) : false);
   let left = budget;
   const slots = Math.max(1, Math.min(14, count));
   for (let i = 0; i < slots; i += 1) {
@@ -844,8 +892,16 @@ export function pickEnemyTypes(
     const reserve = rest * cheapestCost;
     const spendable = Math.max(cheapestCost, left - reserve);
     const cap = spendable;
-    const cands = sorted.filter((id) => cost(id) <= cap);
-    let pick = cands[0] ?? cheapest;
+    const affordable = sorted.filter((id) => cost(id) <= cap);
+    /*
+     * 英雄名额：已经有一个了，就只剩下普通兵可选。
+     * 全都够不着时退回"买得起的最便宜那个"，人数优先。
+     */
+    const banned = heroTaken();
+    const cands = (banned ? affordable.filter((id) => !isHero?.(id)) : affordable);
+    const usable = cands.length > 0 ? cands : affordable.filter((id) => !isHero?.(id));
+    const pickPool = usable.length > 0 ? usable : affordable;
+    let pick = pickPool[0] ?? cheapest;
     /*
      * 别连着买四个一样的。
      *
@@ -854,7 +910,7 @@ export function pickEnemyTypes(
      * 宁可重复，也不要为了好看把编成拉垮。
      */
     if (out.length > 0 && pick === out[out.length - 1]) {
-      const alt = cands.find((id) => id !== pick && cost(id) >= cost(pick) * 0.85);
+      const alt = pickPool.find((id) => id !== pick && cost(id) >= cost(pick) * 0.85);
       if (alt) pick = alt;
     }
     if (cost(pick) > left) break;

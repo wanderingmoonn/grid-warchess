@@ -22,6 +22,7 @@ import {
   planLayer,
   restOptions,
   rewardOptions,
+  scaleGold,
   shopStock,
   specialRewards,
   startRun,
@@ -29,7 +30,7 @@ import {
   themeOf,
   STEPS_PER_LAYER,
 } from '../src/roguelike/run.ts';
-import { DECISIONS, EVENTS, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
+import { DECISIONS, DEFENSE_UNIT_DEFS, EVENTS, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
 import { isEliminated, utype } from '../src/core/rules.ts';
 import { buildBattle, outcomeOf, resultOf, spawnWave, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
@@ -517,6 +518,145 @@ console.log('\n[10] 守城报酬与编成人数');
   const picked = pickEnemyTypes(pool, budget, cost, want);
   check(picked.length === want, '编成按人头给足（不再"算 4 个来 3 个"）', picked.join(','));
   check(new Set(picked).size >= 2, '编成不会连着四个一样的', picked.join(','));
+}
+
+// ---------------------------------------------------------------- 11. 工事 / 英雄 / 价格
+console.log('\n[11] 工事、英雄与按层价格（2026-11-25 修）');
+{
+  /*
+   * 工事**不能动**：以前"骑军 +1 移动 / 急行靴 +1 移动"会套到土墙和塔上，
+   * 建筑在本体里是 move 0，到了肉鸽却能走一格。
+   */
+  const run = startRun(21, 'horse');
+  run.layer = 2;
+  run.world = 'fantasy';
+  run.army = [{ type: 'berserker', count: 3 }];
+  const node = { kind: 'special' as const, title: '守城战', sub: '', special: { faction: 0, name: '守墙人', unit: 'berserker' } };
+  const s = buildBattle(battleFor(run, node, 3011));
+  const buildings = s.units.filter((u) => s.unitTypes[u.type]?.category === 'building');
+  check(buildings.length > 0, '守城战有工事');
+  check(
+    buildings.every((u) => utype(s, u.type).move === 0),
+    '工事移动力为 0（不吃方略/藏品的 +移动）',
+    buildings.map((u) => `${utype(s, u.type).name}:${utype(s, u.type).move}`).join(','),
+  );
+  check(
+    buildings.every((u) => !utype(s, u.type).produce),
+    '工事不是产兵建筑（不再拿军营当墙）',
+    buildings.map((u) => utype(s, u.type).name).join(','),
+  );
+  const allWallsOk = Object.values(DEFENSE_UNIT_DEFS).every(
+    (d) => d.category === 'building' && d.move === 0 && (d as unknown as { produce?: boolean }).produce !== true,
+  );
+  check(allWallsOk, '关卡自带的工事兵种都是不可移动、不产兵的建筑');
+
+  /*
+   * 波次 + 召唤：**id 不能重复**。
+   *
+   * 上一次的"国王闪现到哥布林营地旁边然后消失"就是两个 u10：波次按
+   * "当前最大 id + 1"发号，没推进 `nextUnitSeq`，下一回合战营召唤的小兵
+   * 又拿到同一个号，渲染层按 id 认节点，两张牌共用一个 DOM。
+   */
+  const waveRun = startRun(22, 'frontier');
+  waveRun.layer = 2;
+  waveRun.world = 'fantasy';
+  waveRun.army = [{ type: 'berserker', count: 3 }];
+  const ws = buildBattle(battleFor(waveRun, node, 4012));
+  spawnWave(ws, ['elf-archer', 'elf-archer'], 1);
+  let wsState = ws;
+  const e1 = step(wsState, { type: 'END_TURN' });
+  if (e1.ok) wsState = e1.state;
+  const e2 = step(wsState, { type: 'END_TURN' });
+  if (e2.ok) wsState = e2.state;
+  const ids = wsState.units.map((u) => u.id);
+  check(new Set(ids).size === ids.length, '波次与召唤之后没有重复的单位 id', `${ids.length} 个单位`);
+
+  /*
+   * 英雄：一方最多一个；解锁费算进自身费用。
+   */
+  const heroRun = startRun(23, 'frontier');
+  heroRun.layer = 3;
+  heroRun.world = 'fantasy';
+  heroRun.army = [{ type: 'berserker', count: 2 }];
+  applyEffect(heroRun, { add: { type: 'elf-queen', count: 1 } }, makeRng(1));
+  applyEffect(heroRun, { add: { type: 'archmage', count: 1 } }, makeRng(1));
+  const heroes = heroRun.army.filter((a) => a.type === 'elf-queen' || a.type === 'archmage');
+  check(heroes.length === 1 && (heroes[0]?.count ?? 0) === 1, '英雄只能有一位，第二个发不出来', JSON.stringify(heroes));
+
+  const bossHeroRun = startRun(24, 'frontier');
+  bossHeroRun.layer = 2;
+  bossHeroRun.world = 'fantasy';
+  bossHeroRun.army = [{ type: 'berserker', count: 6 }];
+  const bossInit = bossFor(bossHeroRun, 77).init;
+  const bossHeroes = bossInit.enemyTypes.filter((t) => ['holy-knight-lord', 'royal-king', 'elf-queen', 'archmage'].includes(t));
+  check(bossHeroes.length <= 1, '敌方编成最多一个英雄', bossHeroes.join(','));
+
+  const stock = shopStock(bossHeroRun, makeRng(2));
+  const heroItem = stock.find((it) => it.effect.add && ['holy-knight-lord', 'royal-king'].includes(it.effect.add.type));
+  check(!heroItem || heroItem.price > (heroItem.effect.add ? 470 : 0), '英雄的标价含解锁费', heroItem ? `${heroItem.title} ${heroItem.price}` : '本批没上架');
+
+  /*
+   * 价格水位：第一层的 30 金，到第三层应该是 270 金（×9），而不是还是 30。
+   */
+  const p1 = startRun(25, 'frontier');
+  const p3 = startRun(26, 'frontier');
+  p3.layer = 3;
+  check(scaleGold(-30, p1) === -30 && scaleGold(-30, p3) === -270, '花销按层换算（L1 −30 / L3 −270）');
+  const g3 = p3.gold;
+  applyEffect(p3, { gold: -30 }, makeRng(1), { scaleGold: true });
+  check(p3.gold === Math.max(0, g3 - 270), '事件扣钱走的是换算后的数', `${g3}→${p3.gold}`);
+
+  /*
+   * 四种世界 × 三层：守城战的工事都必须是"真墙 / 真塔"。
+   *
+   * 这条是给第 2 条兜底的：只要哪个世界又拿军营当墙（`produce: true`），
+   * 这里就会红，不用等人玩到那一层才发现"给我一座产兵建筑我又不能产兵"。
+   */
+  let workBad = '';
+  for (const w of ['base', 'arms', 'fantasy', 'cultivation'] as const) {
+    for (const layer of [1, 2, 3] as const) {
+      const rr = startRun(31 + layer, 'frontier');
+      rr.layer = layer;
+      rr.world = w;
+      rr.army = [{ type: 'ge', count: 3 }];
+      const st = buildBattle(battleFor(rr, node, 700 + layer));
+      for (const u of st.units.filter((x) => st.unitTypes[x.type]?.category === 'building')) {
+        const d = st.unitTypes[u.type] as { name: string; move: number; produce?: unknown };
+        if (d.move !== 0 || d.produce) workBad += `${w}L${layer}:${d.name};`;
+      }
+    }
+  }
+  check(workBad === '', '四种世界各层的工事都 move 0、不产兵', workBad);
+
+  /*
+   * 两座城：工事与兵都要分开，不能一座满一座空。
+   */
+  const twoRun = startRun(27, 'frontier');
+  twoRun.layer = 3;
+  twoRun.army = [{ type: 'hmg', count: 4 }, { type: 'tank', count: 3 }];
+  const twoInit = bossFor(twoRun, 991).init;
+  check(twoInit.enemyCityCount === 2, 'L3 层末有两座城');
+  const twoState = buildBattle(twoInit);
+  const enemyCities = twoState.cities.filter((c) => c.owner === 'B');
+  const structs = twoState.units.filter((u) => u.owner === 'B' && twoState.unitTypes[u.type]?.category === 'building');
+  const combat = twoState.units.filter((u) => u.owner === 'B' && twoState.unitTypes[u.type]?.category === 'combat');
+  const nearOf = (list: typeof structs, c: (typeof enemyCities)[number]): number =>
+    list.filter((u) => Math.abs(u.x - c.x) <= 3 && u.y <= c.y + 4).length;
+  check(structs.length >= 4, 'L3 层末至少四件工事', `${structs.length} 件`);
+  check(enemyCities.every((c) => nearOf(structs, c) >= 1), '两座城都有工事', enemyCities.map((c) => nearOf(structs, c)).join('/'));
+  check(enemyCities.every((c) => nearOf(combat, c) >= 1), '两座城都有守军', enemyCities.map((c) => nearOf(combat, c)).join('/'));
+
+  /*
+   * 守城战的 AI：无城的一方必须往前压（引擎的 `level.ai.pressure`）。
+   */
+  const lvl = twoState.config.level;
+  const specRun = startRun(28, 'frontier');
+  specRun.layer = 2;
+  specRun.world = 'fantasy';
+  const specState = buildBattle(battleFor(specRun, node, 5013));
+  const pressure = specState.config.level?.ai?.pressure ?? 0;
+  check(pressure > 0, '守城战的攻方带"僵局压力"（不会聚在出兵点不动）', `pressure=${pressure}`);
+  void lvl;
 }
 
 console.log(

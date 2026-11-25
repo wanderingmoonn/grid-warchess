@@ -167,5 +167,48 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
   check(overText.includes('钟'), '结局文案提到了钟', overText.slice(0, 60));
 }
 
+console.log('\n[5] 战斗屏的技能栏');
+{
+  /*
+   * 英雄技能：以前战斗屏只接了"走 / 打 / 攻城 / 结束回合"，英雄带进来
+   * 却放不出技能。这一节直接挂一场带英雄的战斗，点一下技能按钮，
+   * 确认它真的被规则层接住了（按钮从"可用"变"不可用"）。
+   */
+  const { startRun, battleFor } = await import('../src/roguelike/run.ts');
+  const { mountBattle } = await import('../src/roguelike/battle-screen.ts');
+  const run = startRun(31, 'frontier');
+  run.layer = 2;
+  run.world = 'fantasy';
+  run.army = [{ type: 'elf-queen', count: 1 }, { type: 'berserker', count: 3 }];
+  const node = { kind: 'battle' as const, title: '遭遇战', sub: '' };
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  let done = false;
+  const stop = mountBattle(host, battleFor(run, node, 606), { onDone: () => { done = true; } });
+  const skillCard = host.querySelector('#rg-skills');
+  check(!!skillCard, '战斗屏有"技能"栏');
+  const heroRow = [...host.querySelectorAll<HTMLElement>('.rg-unitrow')].find((el) =>
+    (el.textContent ?? '').includes('精灵女王'),
+  );
+  check(!!heroRow, '我军列表里有英雄');
+  click(heroRow ?? null);
+  await wait(4);
+  const btns = [...host.querySelectorAll<HTMLButtonElement>('[data-skill]')];
+  check(btns.length > 0, '选中英雄后列出技能', `${btns.length} 个`);
+  check(btns.some((b) => !b.disabled), '刚开局至少有一个技能可用');
+  const before = btns.find((b) => !b.disabled);
+  if (before) click(before);
+  await wait(10);
+  const after = [...host.querySelectorAll<HTMLButtonElement>('[data-skill]')];
+  check(
+    after.length > 0 && after.every((b) => b.disabled),
+    '放过技能之后按钮变灰（这一回合不能连放）',
+    after.map((b) => `${b.textContent?.slice(0, 6)}:${b.disabled}`).join(','),
+  );
+  check(!done, '放技能不会直接结束战斗');
+  stop();
+  host.remove();
+}
+
 console.log(failures === 0 ? '\n全部通过。' : `\n有 ${failures} 项没通过。`);
 if (failures > 0) process.exitCode = 1;

@@ -24,12 +24,14 @@ import {
   rewardOptions,
   shopStock,
   specialRewards,
+  isHeroUnit,
+  effectiveGold,
   startRun,
   STEPS_PER_LAYER,
 } from './run.ts';
 import { makeRng, randomSeed } from './rng.ts';
 import type { Rng } from './rng.ts';
-import type { BattleResult, RewardOption, RoomNode, RunState } from './types.ts';
+import type { BattleResult, Effect, RewardOption, RoomNode, RunState } from './types.ts';
 
 let run: RunState | null = null;
 /** 退出回标题（由 mount.ts 传进来；地址直开时也有） */
@@ -212,6 +214,19 @@ function doorTitle(d: RoomNode): string {
 
 // ------------------------------------------------------------------ 房间
 
+/**
+ * 把选项里的"N 金"换成**实际会进账/扣掉**的数（只改显示，不改效果）。
+ *
+ * 数据里写的是**第一层的钱**（−30 / +70），效果结算时 `applyEffect` 会按同一张
+ * 水位表换算；这里让玩家看到的数字和真正扣的钱一致。休整与决议的文案
+ * 在生成时已经算好了，不走这里。
+ */
+function priceHint(hint: string, effect: Effect, r: RunState): string {
+  const gold = effectiveGold(effect, r);
+  if (gold === 0) return hint;
+  return hint.replace(/[+−-]?\d+ 金/, `${gold > 0 ? '+' : '−'}${Math.abs(gold)} 金`);
+}
+
 function enterRoom(root: HTMLElement, node: RoomNode): void {
   if (!run) return;
   if (node.kind === 'battle' || node.kind === 'elite' || node.kind === 'siege' || node.kind === 'special') {
@@ -220,14 +235,32 @@ function enterRoom(root: HTMLElement, node: RoomNode): void {
   }
   if (node.kind === 'event') {
     const def = eventById(node.eventId ?? '');
+    /*
+     * 掏不起钱的选项**不出现**。
+     *
+     * 以前钱是写死的 30/50，几乎总掏得起；按层换算之后第三层一个选项要
+     * 几百金，"点了照样给"就变成了白嫖。过滤掉比事后扣成负数干净。
+     * 全掏不起时退回全部选项（至少让人有得选）。
+     */
+    const r = run;
+    const indexed = def.choices.map((c, i) => ({ c, i }));
+    const affordable = indexed.filter(({ c }) => {
+      const g = effectiveGold(c.effect, r);
+      return g >= 0 || r.gold >= Math.abs(g);
+    });
+    const choices = affordable.length > 0 ? affordable : indexed;
     openModal(
       root,
       `<h3>${def.title}</h3><p class="rg-body">${def.body}</p>`,
-      def.choices.map((c, i) => ({ id: String(i), title: c.label, sub: c.hint ?? '' })),
+      choices.map(({ c, i }) => ({
+        id: String(i),
+        title: c.label,
+        sub: priceHint(c.hint ?? '', c.effect, r),
+      })),
       (pick) => {
         const choice = def.choices[Number(pick)];
         if (!choice) return;
-        const notes = applyEffect(run!, choice.effect, rng);
+        const notes = applyEffect(run!, choice.effect, rng, { scaleGold: true });
         run!.log.push(`事件「${def.title}」：${choice.label}`);
         afterRoom(run!);
         showResultThen(root, `事件 · ${def.title}`, notes.length ? notes.join('，') : '什么都没发生');
@@ -335,6 +368,7 @@ function openShop(root: HTMLElement): void {
   document.body.appendChild(host);
 
   const paint = (): void => {
+    const heroLocked = r.army.some((a) => isHeroUnit(a.type));
     const row = (group: 'unit' | 'relic' | 'supply', title: string): string => {
       const items = stock.filter((it) => it.group === group);
       if (items.length === 0) return '';
@@ -344,12 +378,16 @@ function openShop(root: HTMLElement): void {
             // 兵是**按人头卖**的：有钱就能一直买（不然金币会堆成死钱）；
             // 藏品和补给是摊子上就那一件，买完没了。
             const repeatable = it.group === 'unit';
+            const addType = it.effect.add?.type;
+            const heroBlocked = !!addType && isHeroUnit(addType) && heroLocked;
             const sold = !repeatable && bought.has(it.id);
             const poor = r.gold < it.price;
-            return `<button class="rg-shop-item" data-buy="${it.id}" ${sold || poor ? 'disabled' : ''}>
+            return `<button class="rg-shop-item" data-buy="${it.id}" ${
+              sold || poor || heroBlocked ? 'disabled' : ''
+            }>
               <b>${escapeHtml(it.title)}</b>
               <span>${escapeHtml(it.sub)}</span>
-              <em>${sold ? '已售' : poor ? '钱不够' : `${it.price} 金`}</em>
+              <em>${heroBlocked ? '队里已有英雄' : sold ? '已售' : poor ? '钱不够' : `${it.price} 金`}</em>
             </button>`;
           })
           .join('')}
@@ -364,7 +402,7 @@ function openShop(root: HTMLElement): void {
         ${row('supply', '补给')}
       </div>
       <div class="rg-shop-foot">
-        <button class="rg-btn ghost" data-shop="refresh">刷新（${refreshCost()} 金）</button>
+        <button class="rg-btn ghost" data-shop="refresh">刷新（${refreshCost(r)} 金）</button>
         <button class="rg-btn" data-shop="leave">离开</button>
       </div>
     </div>`;
@@ -377,6 +415,12 @@ function openShop(root: HTMLElement): void {
       const item = stock.find((it) => it.id === buyId);
       if (!item || r.gold < item.price) return;
       if (item.group !== 'unit' && bought.has(item.id)) return;
+      const addType = item.effect.add?.type;
+      if (addType && isHeroUnit(addType) && r.army.some((a) => isHeroUnit(a.type))) {
+        r.log.push('队里只能有一位英雄，这一件没有买');
+        paint();
+        return;
+      }
       r.gold -= item.price;
       applyEffect(r, item.effect, rng);
       r.log.push(`买下 ${item.title}（${item.price} 金）`);
@@ -386,7 +430,7 @@ function openShop(root: HTMLElement): void {
     }
     const act = el?.closest<HTMLElement>('[data-shop]')?.dataset.shop;
     if (act === 'refresh') {
-      const cost = refreshCost();
+      const cost = refreshCost(r);
       if (r.gold < cost) return;
       r.gold -= cost;
       stock = shopStock(r, rng);

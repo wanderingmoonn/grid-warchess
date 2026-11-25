@@ -13,7 +13,7 @@
  */
 import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../core/ai.ts';
 import { DEFAULT_BUDGET } from '../core/ai-meta.ts';
-import { attackableTargets, maxHpOf, reachableTiles, siegeTargets, unitById, unitsOf, utype } from '../core/rules.ts';
+import { attackableTargets, heroSkillsOf, maxHpOf, reachableTiles, siegeTargets, unitById, unitsOf, utype } from '../core/rules.ts';
 import { describeUnit, unitStatLine } from '../core/info.ts';
 import { playerView } from '../core/fog.ts';
 import { cellAtPoint, renderBoard } from '../ui/board.ts';
@@ -46,6 +46,17 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   let enemyRecruited = 0;
   /** 守城战：下一波还没到的那一波 */
   let waveIdx = 0;
+  /**
+   * 正在等落点的技能。
+   *
+   * 本体的施法流程是两步（点技能 → 点地图），这里照搬同一个节奏：
+   * 方向型只认施法者四邻，选点型认任意格（自己脚下算取消）。
+   * 我们的英雄技能目前全是 `targeting: 'none'`（战吼、圣旗、招魂……），
+   * 所以绝大多数情况下点一下就放；把选点这条路留着，是为了别让
+   * 以后加进来的法术在肉鸽里变成"点了没反应"。
+   */
+  let pendingSkill: { unitId: string; skillId: string; targeting: 'point' | 'direction' } | null = null;
+  let skillAim: number[] = [];
 
   host.innerHTML = `
     <div class="rg-battle">
@@ -75,6 +86,10 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
             <h4>战况</h4>
             <div id="rg-foes" class="rg-foes"></div>
           </div>
+          <div class="rg-side-card">
+            <h4>技能</h4>
+            <div id="rg-skills" class="rg-skills"></div>
+          </div>
           <div class="rg-side-card grow">
             <h4>操作</h4>
             <div id="rg-tip" class="rg-tip"></div>
@@ -88,9 +103,10 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   const hudEl = host.querySelector<HTMLElement>('#rg-hud');
   const armyEl = host.querySelector<HTMLElement>('#rg-army');
   const foeEl = host.querySelector<HTMLElement>('#rg-foes');
+  const skillEl = host.querySelector<HTMLElement>('#rg-skills');
   const tipEl = host.querySelector<HTMLElement>('#rg-tip');
   const undoBtn = host.querySelector<HTMLButtonElement>('#rg-undo');
-  if (!boardEl || !hudEl || !armyEl || !foeEl || !tipEl || !undoBtn || !hoverEl) {
+  if (!boardEl || !hudEl || !armyEl || !foeEl || !tipEl || !undoBtn || !hoverEl || !skillEl) {
     throw new Error('战斗界面结构缺失');
   }
 
@@ -138,11 +154,46 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       reach = [];
       targets = [];
       sieges = [];
+      pendingSkill = null;
+      skillAim = [];
       return;
     }
-    reach = unit.moved ? [] : [...reachableTiles(state, unit).keys()];
+    const isWork = utype(state, unit.type).category === 'building';
+    // 工事永远不给"可达格"：本体里它们 move 0，肉鸽的加成也不该落到它们身上。
+    reach = unit.moved || isWork ? [] : [...reachableTiles(state, unit).keys()];
     targets = unit.acted ? [] : attackableTargets(state, unit).map((u) => u.id);
     sieges = unit.acted ? [] : siegeTargets(state, unit).map((c) => c.id);
+  }
+
+  /**
+   * 技能栏：只列**当前选中那个兵**的主动技能。
+   *
+   * 本体那边是一整块指挥官面板（产兵、升级、装备、技能），肉鸽只留技能这一格：
+   * 前三层玩家没有城，其余按钮在这里都没有意义。按钮的"灰"和规则层
+   * （`heroSkillsOf.ready`）走同一个判据，不会出现"按钮亮着、点下去被拒"。
+   */
+  function renderSkills(): void {
+    const unit = selected();
+    const list = unit && state.current === 'A' && unit.owner === 'A' ? heroSkillsOf(state, unit) : [];
+    if (!unit) {
+      skillEl!.innerHTML = '<p class="rg-dim">选中一个兵，看它会不会技能。</p>';
+      return;
+    }
+    if (list.length === 0) {
+      skillEl!.innerHTML = `<p class="rg-dim">${escapeHtml(utype(state, unit.type).name)} 没有主动技能。</p>`;
+      return;
+    }
+    skillEl!.innerHTML = list
+      .map((k) => {
+        const why = k.notReadyReason ?? (k.toNext > 0 ? `${k.toNext} 回合` : '冷却中');
+        return `<button class="rg-skill" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'} title="${escapeHtml(
+          k.def.summary,
+        )}">
+          <b>${escapeHtml(k.def.name)}</b>
+          <span>${escapeHtml(k.ready ? k.def.summary : why)}</span>
+        </button>`;
+      })
+      .join('');
   }
 
   function render(): void {
@@ -153,6 +204,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       reach,
       targets,
       siegeTargets: sieges,
+      aimTiles: skillAim,
       selectedCityId: null,
       placeable: [],
       threat: [],
@@ -211,11 +263,13 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
           }。</p>`;
 
     tipEl!.innerHTML = hintText();
+    renderSkills();
     undoBtn!.disabled = busy || state.current !== 'A' || undoStack.length === 0;
   }
 
   function hintText(): string {
     if (finished) return '这一战已经结束。';
+    if (pendingSkill) return '正在选技能落点：点高亮格施法，点别处取消。';
     if (busy || state.current !== 'A') return '对面在想。';
     const unit = selected();
     if (!unit) {
@@ -226,6 +280,9 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       return `${head}点自己的兵 → 点空格移动 / 点敌人（含塔）开火 / 点敌城攻城。<br>走完还能接着打，不用重新选。`;
     }
     const name = escapeHtml(utype(state, unit.type).name);
+    if (utype(state, unit.type).category === 'building') {
+      return `${name} 是工事：不能移动${targets.length > 0 ? '，但可以开火（红框）' : '，这一回合也打不到人'}。`;
+    }
     if (unit.moved && unit.acted) return `${name} 这一回合已经动完了。`;
     if (unit.moved) return `${name} 已经走过了，现在可以开火（红框是目标）。`;
     if (unit.acted) return `${name} 已经打过了，还能走（绿点是可达格）。`;
@@ -259,7 +316,51 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     }
     state = prev;
     selectedId = null;
+    pendingSkill = null;
+    skillAim = [];
     render();
+  }
+
+  /** 点技能按钮：不需要落点的直接放，需要落点的进"瞄准"状态 */
+  function castSkill(skillId: string): void {
+    if (busy || finished || state.current !== 'A') return;
+    const unit = selected();
+    if (!unit) return;
+    const info = heroSkillsOf(state, unit).find((k) => k.def.id === skillId);
+    if (!info) return;
+    if (!info.ready) {
+      flashTip(info.notReadyReason ?? '这个技能还不能用');
+      return;
+    }
+    const targeting = info.def.targeting;
+    if (targeting === 'point' || targeting === 'direction') {
+      pendingSkill = { unitId: unit.id, skillId, targeting };
+      skillAim =
+        targeting === 'direction'
+          ? [
+              [0, -1],
+              [0, 1],
+              [-1, 0],
+              [1, 0],
+            ]
+              .map(([dx, dy]) => {
+                const x = unit.x + (dx as number);
+                const y = unit.y + (dy as number);
+                return x >= 0 && y >= 0 && x < state.w && y < state.h ? y * state.w + x : -1;
+              })
+              .filter((i) => i >= 0)
+          : [];
+      flashTip(targeting === 'point' ? '点地图上任意一格施法（点自己脚下取消）' : '点四个方向之一施法');
+      render();
+      return;
+    }
+    if (info.def.input) {
+      const v = window.prompt(info.def.input.label);
+      if (v === null) return;
+      act({ type: 'HERO_SKILL', unitId: unit.id, skillId, targetX: unit.x, targetY: unit.y, input: v });
+      return;
+    }
+    act({ type: 'HERO_SKILL', unitId: unit.id, skillId, targetX: unit.x, targetY: unit.y });
   }
 
   function flashTip(msg: string): void {
@@ -366,6 +467,25 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const coords = cellAtPoint(boardEl as HTMLElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
     if (!coords) return;
     const { x, y } = coords;
+    /*
+     * 技能落点优先于一切：正在选点时，这一下点击只有一个含义。
+     */
+    if (pendingSkill) {
+      const { unitId, skillId, targeting } = pendingSkill;
+      const caster = state.units.find((u) => u.id === unitId);
+      const onSelf = !!caster && caster.x === x && caster.y === y;
+      const cell = y * state.w + x;
+      const picked = targeting === 'point' ? !onSelf : skillAim.includes(cell);
+      pendingSkill = null;
+      skillAim = [];
+      if (!picked) {
+        flashTip('已取消施法');
+        render();
+        return;
+      }
+      act({ type: 'HERO_SKILL', unitId, skillId, targetX: x, targetY: y });
+      return;
+    }
     const clicked = state.units.find((u) => u.x === x && u.y === y && u.hp > 0);
     if (clicked && clicked.owner === 'A') {
       selectedId = clicked.id;
@@ -409,6 +529,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       if (r.ok) {
         state = r.state;
         selectedId = null;
+        pendingSkill = null;
+        skillAim = [];
         undoStack.length = 0;
         render();
         void runAi();
@@ -423,6 +545,11 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       if (busy || finished) return;
       finished = true;
       handlers.onDone({ win: false, survivors: [], gold: state.players.A.gold, turns: state.turn });
+      return;
+    }
+    const skillId = target?.closest<HTMLElement>('[data-skill]')?.dataset.skill;
+    if (skillId) {
+      castSkill(skillId);
       return;
     }
     const unitId = target?.closest<HTMLElement>('[data-unit]')?.dataset.unit;

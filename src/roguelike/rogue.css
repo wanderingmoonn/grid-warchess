@@ -447,6 +447,40 @@
 .rg-unitrow.done {
   opacity: 0.55;
 }
+/* 技能栏：一个兵一行按钮，和本体的"指挥官技能"同一个手感 */
+.rg-skills {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rg-skill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #cbb98d;
+  background: #fffaf0;
+  border-radius: 7px;
+  padding: 5px 9px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rg-skill b {
+  color: #5a3f14;
+}
+.rg-skill span {
+  color: #837b6b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.rg-skill:hover:not([disabled]) {
+  border-color: #b08a3c;
+  background: #fdf3dd;
+}
+.rg-skill[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
 .rg-recruit {
   display: grid;
   grid-template-columns: 1fr 1fr;

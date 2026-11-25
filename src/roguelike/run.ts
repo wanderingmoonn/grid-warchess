@@ -52,7 +52,7 @@ export const ROOMS_PER_LAYER = STEPS_PER_LAYER * 2;
  * 只查基础表的话 `costOf` 对它们返回 0，于是 `pickEnemyTypes` 会把它们全部跳过——
  * 第三层后半段的敌人会变成"一个兵都没有"。这不是平衡问题，是查表漏了一层。
  */
-const CATALOG: Record<string, { cost: number }> = {
+const CATALOG: Record<string, import('../core/types.ts').UnitTypeDef> = {
   ...UNIT_TYPES,
   ...expansionUnitsFor(LAYERS[1].expansions),
   ...expansionUnitsFor(LAYERS[3].expansions),
@@ -60,6 +60,69 @@ const CATALOG: Record<string, { cost: number }> = {
 // 四种世界各自带来的兵（奇想的飞龙、修真的法器……）也要能查到造价
 for (const w of Object.values(WORLDS)) Object.assign(CATALOG, expansionUnitsFor(w.theme.expansions));
 const costOf = (id: string): number => CATALOG[id]?.cost ?? 0;
+
+/**
+ * 英雄：本体规则里**同一方场上只能有一个**，第一次招它还要付解锁费。
+ *
+ * 肉鸽没有"招募"这个动作（兵只从战利品/商店/事件来），所以这两条规则要
+ * 在**获取**这一侧补上：
+ *   · `addUnitCapped` 保证队伍里最多一位英雄；
+ *   · `valueOf` 把解锁费算进它的"自身费用"，敌人编成与商店标价都用这个数，
+ *     否则 470 造价的英雄会以 470 的价格买到一个价值 690 的单位。
+ */
+const isHero = (id: string): boolean => CATALOG[id]?.hero === true;
+/** 给界面层用：这一件货是不是英雄（买了会占掉唯一的英雄名额） */
+export const isHeroUnit = (id: string): boolean => isHero(id);
+const heroUnlockOf = (id: string): number => (CATALOG[id]?.hero ? (CATALOG[id]?.unlockCost ?? 0) : 0);
+/** 一个兵的"自身费用"：造价 +（英雄的）解锁费 */
+const valueOf = (id: string): number => costOf(id) + heroUnlockOf(id);
+const isAirUnit = (id: string): boolean => CATALOG[id]?.layer === 'air' || CATALOG[id]?.flight === true;
+const armyHasHero = (army: ArmyEntry[]): boolean => army.some((a) => isHero(a.type));
+
+/**
+ * 金币价格水位（**按层**，第一层 = 1）。
+ *
+ * 事件/休整/决议里的钱原本是写死的（"−30 金""+90 金"），于是第一层用几十金
+ * 买两个民兵、第三层还能用几十金买到重机枪组——同一个数字在两层的购买力
+ * 差了一个数量级。这里按各层池子的中位造价定水位（35 / 150 / 380），
+ * 取整成 1 / 4 / 9，所有"写死的钱"都乘它。
+ *
+ * 战利品与商店**不走这张表**：它们本来就按兵价算，乘上去会重复放大。
+ */
+export const PRICE_SCALE: Record<LayerId, number> = { 1: 1, 2: 4, 3: 9 };
+
+export function priceScale(run: RunState): number {
+  return PRICE_SCALE[run.layer] ?? 1;
+}
+
+/** 把"第一层的钱"换算成这一层的钱（取整到 10，避免出现 137 这种数） */
+export function scaleGold(amount: number, run: RunState): number {
+  const raw = amount * priceScale(run);
+  return Math.sign(raw) * Math.round(Math.abs(raw) / 10) * 10;
+}
+
+/**
+ * 一条效果**实际**会进账/扣掉多少钱。
+ *
+ * 除了按层换算，还有一条上限：**买兵的选项不能比兵本身还贵**。
+ *
+ * 事件里写的是"−80 金，得 1 个高级兵"，到第三层 ×9 就是 720 金——而那个
+ * "高级兵"在店里只卖 500 出头。层数越高，这种写死的钱越容易跟兵价脱钩，
+ * 所以买兵的负金再夹一道 `0.9 × 自身费用 × 人数` 的上限。
+ * 第一层基本不触发（作者写的本来就是那个价位的钱），第三层才会把它拉回来。
+ */
+export function effectiveGold(effect: Effect, run: RunState): number {
+  const g = effect.gold ?? 0;
+  if (g === 0) return 0;
+  const scaled = scaleGold(g, run);
+  if (g < 0 && effect.add) {
+    const type = resolveType(themeOf(run), effect.add.type);
+    const count = isHero(type) ? 1 : effect.add.count;
+    const cap = Math.round((valueOf(type) * count * 0.9) / 10) * 10;
+    return -Math.min(Math.abs(scaled), cap);
+  }
+  return scaled;
+}
 
 /**
  * 某一层、某一支史下的主题。
@@ -125,9 +188,9 @@ export function armyText(army: ArmyEntry[]): string {
   return army.map((a) => `${unitName(a.type)}×${a.count}`).join('、');
 }
 
-/** 按造价排序后的池子 */
+/** 按造价排序后的池子（**不含英雄**：奖励、整编、事件都不能白送英雄） */
 function byPrice(pool: readonly string[]): string[] {
-  return [...pool].sort((a, b) => costOf(a) - costOf(b));
+  return [...pool].filter((id) => !isHero(id)).sort((a, b) => costOf(a) - costOf(b));
 }
 
 function cheapestOf(theme: LayerTheme): string {
@@ -322,13 +385,24 @@ function resolveType(theme: LayerTheme, type: string): string {
  * `log` 只给递归用：赌博的两岔会再进来一次，内层不要再往行记里写一遍，
  * 否则同一次结算在界面上出现两遍。
  */
-function applyEffectInner(run: RunState, effect: Effect, rng: Rng, log: boolean): string[] {
+function applyEffectInner(
+  run: RunState,
+  effect: Effect,
+  rng: Rng,
+  log: boolean,
+  opts: { scaleGold: boolean },
+): string[] {
   const notes: string[] = [];
   const theme = themeOf(run);
 
   if (typeof effect.gold === 'number' && effect.gold !== 0) {
-    run.gold = Math.max(0, run.gold + effect.gold);
-    notes.push(`${effect.gold > 0 ? '+' : ''}${effect.gold} 金`);
+    /*
+     * 事件/休整里写死的钱是"第一层的钱"，按层的水位换算之后再进账。
+     * 战利品、商店、决议不走这条路（它们已经按兵价算好了），见 `applyEffect` 的 opts。
+     */
+    const amount = opts.scaleGold ? effectiveGold(effect, run) : effect.gold;
+    run.gold = Math.max(0, run.gold + amount);
+    notes.push(`${amount > 0 ? '+' : ''}${amount} 金`);
   }
   if (typeof effect.nextAtk === 'number' && effect.nextAtk !== 0) {
     run.buffs.atk += effect.nextAtk;
@@ -344,8 +418,18 @@ function applyEffectInner(run: RunState, effect: Effect, rng: Rng, log: boolean)
   }
   if (effect.add) {
     const type = resolveType(theme, effect.add.type);
-    addUnits(run.army, type, effect.add.count);
-    notes.push(`${unitName(type)} ×${effect.add.count}`);
+    /*
+     * 英雄**发不出第二个**：本体的规则是"同一方场上只能有一个"，
+     * 而肉鸽的兵是白给的（战利品/事件），不在这里拦就会攒出两个英雄。
+     * 已经有一位时，这一项改成一句说明，不静默吞掉。
+     */
+    if (isHero(type) && armyHasHero(run.army)) {
+      notes.push(`队伍里只能有一位英雄，${unitName(type)} 没跟上来`);
+    } else {
+      const n = isHero(type) ? 1 : effect.add.count;
+      addUnits(run.army, type, n);
+      notes.push(`${unitName(type)} ×${n}${isHero(type) ? '（英雄）' : ''}`);
+    }
   }
   if (effect.remove) {
     if (effect.remove.type.startsWith('layer-')) {
@@ -407,15 +491,26 @@ function applyEffectInner(run: RunState, effect: Effect, rng: Rng, log: boolean)
     const hit = rng.next() < effect.risk.chance;
     notes.push(hit ? effect.risk.winText : effect.risk.loseText);
     const branch = hit ? effect.risk.win : effect.risk.lose;
-    if (branch) notes.push(...applyEffectInner(run, branch, rng, false));
+    if (branch) notes.push(...applyEffectInner(run, branch, rng, false, opts));
   }
   if (log) for (const n of notes) run.log.push(n);
   return notes;
 }
 
-/** 对外的入口：结算一条效果，并写进行记 */
-export function applyEffect(run: RunState, effect: Effect, rng: Rng): string[] {
-  return applyEffectInner(run, effect, rng, true);
+/**
+ * 对外的入口：结算一条效果，并写进行记。
+ *
+ * `opts.scaleGold`：这条效果里的钱是"第一层的钱"还是"已经算好的钱"。
+ *   · 事件选项 → true（数据里写的是 −30 / +70 这种基准值）
+ *   · 休整 / 决议 / 战利品 / 商店 → false（它们在生成时已经按当前层算过）
+ */
+export function applyEffect(
+  run: RunState,
+  effect: Effect,
+  rng: Rng,
+  opts: { scaleGold?: boolean } = {},
+): string[] {
+  return applyEffectInner(run, effect, rng, true, { scaleGold: opts.scaleGold === true });
 }
 
 /** 房间走完：步数与时代钟一起涨 */
@@ -492,7 +587,7 @@ function enemyScale(
    * 于是"算出来 6 个、场上只出现 3 个"。用最低价 ×1.35 保证每个位置
    * 都买得起人，**人数一定凑得齐**，贵的兵靠"第一个位置拿一半预算"去买。
    */
-  const costs = pool.map(costOf).filter((n) => n > 0);
+  const costs = pool.map(valueOf).filter((n) => n > 0);
   const cheapest = Math.min(...costs);
   const avg = costs.reduce((n, c) => n + c, 0) / Math.max(1, costs.length);
   const q = BALANCE.quality[kind] ?? 0.9;
@@ -583,6 +678,38 @@ export function defenseFor(run: RunState): import('./data.ts').DefenseSet {
   return DEFENSE_BY_ERA[theme.eraLow] ?? (DEFENSE_BY_ERA[3] as import('./data.ts').DefenseSet);
 }
 
+/**
+ * 飞行单位的两条**编成**约束（不是禁用）。
+ *
+ * 规则层对空中目标只多算一格距离（`strikeDistance`），所以有射程的兵照样能
+ * 打下来；但纯近战的队伍确实碰不到它——那种局会拖到回合上限，两边都难受。
+ * 因此：
+ *   · 一场最多留**一个**飞行单位（编成里还有地面兵，仗总能打完）；
+ *   · 我方没有任何射程 ≥2 的兵时，一个都不留。
+ * 被换掉的按"造价最接近的地面兵"顶替，人数与预算都不变。
+ */
+function sanitizeAir(types: string[], run: RunState, theme: LayerTheme): string[] {
+  const airSlots = types.map((t, i) => (isAirUnit(t) ? i : -1)).filter((i) => i >= 0);
+  if (airSlots.length === 0) return types;
+  const hasRanged = run.army.some((a) => (CATALOG[a.type]?.range ?? 1) >= 2);
+  const ground = byPrice([...theme.pool, ...theme.poolHigh].filter((id) => !isAirUnit(id)));
+  if (ground.length === 0) return types;
+  const nearestGround = (value: number): string => {
+    let best = ground[0] as string;
+    let gap = Infinity;
+    for (const id of ground) {
+      const g = Math.abs(costOf(id) - value);
+      if (g < gap) {
+        gap = g;
+        best = id;
+      }
+    }
+    return best;
+  };
+  const keep = hasRanged ? airSlots[0] : -1;
+  return types.map((t, i) => (i === keep || !isAirUnit(t) ? t : nearestGround(costOf(t))));
+}
+
 export function battleFor(run: RunState, node: RoomNode, seed: number): BattleInit {
   const theme = themeOf(run);
   const isBoss = node.kind === 'boss';
@@ -645,12 +772,20 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     enemyDefense.push({ type: def.tower, count: 1 });
   } else if (isBoss) {
     /*
-     * 层末的工事按层加：第一层只有一座塔+一道墙（不然新手第一次见 boss 就被
-     * 两座塔交叉火力按住），第三层才有两塔两墙的"正面阵地"。
+     * 层末的工事按层加。
+     *
+     * 第一/二层：一座塔 + 一道墙（新手第一次见 boss 不该被交叉火力按住）。
+     * 第三层：**两座城各一套**——以前只给两座塔、而且全堆在第一座城边上，
+     * 第二座城光秃秃的，看起来不像"钟楼"，像一座空营。现在工事翻到四件
+     * （2 塔 + 2 墙），由 `battle.ts` 按城均分。
      */
-    enemyDefense.push({ type: def.tower, count: run.layer >= 3 ? 2 : 1 });
-    // 第三层两座塔已经封住了正面，再加一道墙会把路彻底堵死——墙留给前两层
-    if (def.wall && run.layer < 3) enemyDefense.push({ type: def.wall, count: 1 });
+    if (run.layer >= 3) {
+      enemyDefense.push({ type: def.tower, count: 2 });
+      if (def.wall) enemyDefense.push({ type: def.wall, count: 2 });
+    } else {
+      enemyDefense.push({ type: def.tower, count: 1 });
+      if (def.wall) enemyDefense.push({ type: def.wall, count: 1 });
+    }
   }
 
   /*
@@ -674,10 +809,18 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     enemyDefense.reduce((n, d) => n + (costOf(d.type) || 0) * d.count * 0.5, 0),
   );
   const troopBudget = Math.max(40, scale.budget - defValue);
-  const troopHead = Math.max(2, Math.round(headcount * (troopBudget / Math.max(1, scale.budget))));
+  /*
+   * 人数**不因工事缩水**（2026-11-25 改）。
+   *
+   * 上一版按"剩下的钱占原预算的比例"折人数：L3 层末四件工事吃掉 35% 预算，
+   * 五个守军就变成三个——玩家走上去看见的是"两座城、四件工事、四个兵"，
+   * 既不像会战，也不像钟楼。现在人数照旧，工事的钱从**兵的质量**里出：
+   * 同样是 5 个人，可能由几个当代尖子变成一群便宜兵，但"十打七"还在。
+   */
+  const troopHead = headcount;
 
   const waves: Array<{ atRound: number; types: string[] }> = [];
-  let enemyTypes = pickEnemyTypes(pool, troopBudget, costOf, troopHead);
+  let enemyTypes = sanitizeAir(pickEnemyTypes(pool, troopBudget, valueOf, troopHead, isHero), run, theme);
   let holdRounds = 0;
   let roundLimit: number;
   if (isSpecial) {
@@ -691,7 +834,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     const w3 = Math.max(2, Math.ceil(push * 0.3));
     const waveTypes = [w1, w2, w3].map((n) => {
       const sc = enemyScale(run.layer, 'special', n, pool, clockForScale, power);
-      return pickEnemyTypes(pool, sc.budget, costOf, n);
+      return sanitizeAir(pickEnemyTypes(pool, sc.budget, valueOf, n, isHero), run, theme);
     });
     enemyTypes = waveTypes[0] as string[];
     if (waveTypes[1]?.length) waves.push({ atRound: 3, types: waveTypes[1] });
@@ -708,7 +851,10 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const kept = cut > 0 ? enemyTypes.slice(0, enemyTypes.length - cut) : enemyTypes;
   const tempUnits: ArmyEntry[] = bonus.tempUnits > 0 ? [{ type: cheapestOf(theme), count: bonus.tempUnits }] : [];
   const playerDefense: ArmyEntry[] = isSpecial
-    ? [{ type: def.tower, count: 1 }, ...(def.wall ? [{ type: def.wall, count: 1 }] : [])]
+    ? def.wall
+      ? [{ type: def.tower, count: 1 }, { type: def.wall, count: 1 }]
+      : // 没有真墙的时代（正史）：给两座塔，而不是塞一座产兵的军营
+        [{ type: def.tower, count: 2 }]
     : [];
 
   return {
@@ -946,7 +1092,7 @@ export function specialRewards(run: RunState, node: RoomNode, rng: Rng): string[
     notes.push('藏品已集齐，折成 60 金');
   }
 
-  const gold = 60;
+  const gold = scaleGold(60, run);
   run.gold += gold;
   notes.push(`${gold} 金`);
 
@@ -966,8 +1112,9 @@ export interface ShopItem {
 
 const SHOP_REFRESH_COST = 40;
 
-export function refreshCost(): number {
-  return SHOP_REFRESH_COST;
+/** 刷新价也跟着层走：第三层花 40 金刷新等于免费 */
+export function refreshCost(run: RunState): number {
+  return scaleGold(SHOP_REFRESH_COST, run);
 }
 
 /** 商店价格折扣（行军图） */
@@ -987,7 +1134,7 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
   const theme = themeOf(run);
   const off = shopDiscount(run);
   /*
-   * 行商按造价 1.15 倍卖兵。
+   * 行商按"自身费用"的 1.15 倍卖兵（英雄连解锁费一起算）。
    *
    * 这个数字和战利品那条「钱 = 1.15 个兵价」是配平的：一场普通战斗拿钱，
    * 刚好能在店里换回一个兵。于是两个选项的**价值相同、节奏不同**——
@@ -997,7 +1144,15 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
   const price = (base: number): number =>
     Math.max(10, Math.round(base * 1.15 * (1 - off) * (1 + (run.layer - 1) * 0.08)));
 
-  const units = rng.shuffle([...theme.pool, ...theme.poolHigh]).slice(0, 3);
+  /*
+   * 英雄：队伍里已经有一位，就不再上架第二位（本体的"英雄唯一"）。
+   * 没有英雄时它才出现，价格里含解锁费——这是它"贵得有理"的部分。
+   */
+  const heroOk = !armyHasHero(run.army);
+  const units = rng
+    .shuffle([...theme.pool, ...theme.poolHigh])
+    .filter((id) => heroOk || !isHero(id))
+    .slice(0, 3);
   const owned = new Set(run.relics);
   const relicPool = rng.shuffle(RELICS.filter((r) => !owned.has(r.id)));
   const relics = relicPool.slice(0, 2);
@@ -1006,8 +1161,8 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
     id: `buy-${id}`,
     group: 'unit',
     title: unitName(id),
-    sub: `${costOf(id)} 造价的兵`,
-    price: price(costOf(id)),
+    sub: isHero(id) ? `英雄 · 造价 ${costOf(id)} ＋ 解锁 ${heroUnlockOf(id)}` : `${costOf(id)} 造价的兵`,
+    price: price(valueOf(id)),
     effect: { add: { type: id, count: 1 } },
   }));
   for (const r of relics) {
@@ -1016,7 +1171,7 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
       group: 'relic',
       title: `藏品「${r.name}」`,
       sub: r.desc,
-      price: price(200),
+      price: price(200 * priceScale(run)),
       effect: { relic: r.id },
     });
   }
@@ -1025,37 +1180,64 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
     group: 'supply',
     title: '随军补给',
     sub: '下一战我军最大生命 +6、护甲 +1',
+    // 补给是**定量**的（+6 血 / +1 甲），不随层涨价；涨价就等于第三层花三倍钱
+    // 买同样的东西。它在这一层偏弱是应该的——那是"钱多到没处花"的出口。
     price: price(110),
     effect: { nextHp: 6, nextArmor: 1 },
   });
   return stock;
 }
 
-/** 休整房：从池里抽 3 个选项 */
+/**
+ * 休整房：从池里抽 3 个选项。
+ *
+ * 价钱**按兵价算**，不用写死的 90/80/60：第三层的"高级兵"是 400 造价的
+ * 主战坦克，还用 80 金卖它就是白送。募饷的金额则按层的水位换算。
+ */
 export function restOptions(run: RunState, rng: Rng): RewardOption[] {
   const theme = themeOf(run);
+  const low = cheapestOf(theme);
+  const high = highOf(theme);
+  const round10 = (n: number): number => Math.round(n / 10) * 10;
+  const wage = scaleGold(90, run);
+  const recruitCost = round10(valueOf(high) * 0.9);
+  const musterCost = round10(valueOf(low) * 1.2);
+  const hintOf: Record<string, string> = {
+    reinforce: `得 1 个本层基础兵（${unitName(low)}）`,
+    wage: `+${wage} 金`,
+    recruit: `−${recruitCost} 金，得 1 个本层高级兵（${unitName(high)}）`,
+    reform: '把 1 个最低级的兵换成 1 个本层高级兵',
+    muster: `−${musterCost} 金，得 2 个本层基础兵`,
+  };
   const opts = rng.shuffle([...REST_OPTIONS]).slice(0, 3);
-  return opts.map((o) => ({
+  const built: RewardOption[] = opts.map((o) => ({
     id: o.id,
     title: o.label,
-    sub: o.hint,
+    sub: hintOf[o.id] ?? o.hint,
     effect:
       o.id === 'reinforce'
-        ? { add: { type: cheapestOf(theme), count: 1 } }
+        ? { add: { type: low, count: 1 } }
         : o.id === 'wage'
-          ? { gold: 90 }
+          ? { gold: wage }
           : o.id === 'recruit'
-            ? { gold: -80, add: { type: highOf(theme), count: 1 } }
+            ? { gold: -recruitCost, add: { type: high, count: 1 } }
             : o.id === 'reform'
               ? { promote: 1 }
-              : { gold: -60, add: { type: cheapestOf(theme), count: 2 } },
+              : { gold: -musterCost, add: { type: low, count: 2 } },
   }));
+  // 掏不起的选项不上桌（和事件同一个口径）；全掏不起就照旧全给
+  const afford = built.filter((o) => (o.effect.gold ?? 0) >= 0 || run.gold >= Math.abs(o.effect.gold ?? 0));
+  return afford.length > 0 ? afford : built;
 }
 
-/** 临战决议：抽 3 个给玩家选 1 个 */
+/** 临战决议：抽 3 个给玩家选 1 个。花钱的那两条按层换算（第三层的 120 金太便宜） */
 export function decisionOptions(run: RunState, rng: Rng): DecisionOption[] {
-  void run;
-  return rng.shuffle([...DECISIONS]).slice(0, 3);
+  const k = priceScale(run);
+  return rng.shuffle([...DECISIONS]).slice(0, 3).map((o) => {
+    if (!o.cost) return { ...o };
+    const cost = Math.round((o.cost * k) / 10) * 10;
+    return { ...o, cost, hint: o.hint.replace(/−\d+ 金/, `−${cost} 金`) };
+  });
 }
 
 /** 把决议的加成写进 run（在开 boss 之前调用） */
@@ -1106,8 +1288,9 @@ export function nextLayer(run: RunState, seed: number): boolean {
     const e = relicById(id)?.effect;
     if (!e) continue;
     if (e.goldPerLayer) {
-      run.gold += e.goldPerLayer;
-      notes.push(`军饷袋：+${e.goldPerLayer} 金`);
+      const g = scaleGold(e.goldPerLayer, run);
+      run.gold += g;
+      notes.push(`军饷袋：+${g} 金`);
     }
     if (e.unitPerLayer) {
       const type = cheapestOf(themeOf(run));

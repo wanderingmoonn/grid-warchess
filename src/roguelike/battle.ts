@@ -20,7 +20,7 @@ import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { LevelDef } from '../core/level.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import type { ArmyEntry, BattleInit, BattleResult } from './types.ts';
-import { CULTIVATORS } from './data.ts';
+import { CULTIVATORS, DEFENSE_UNIT_DEFS } from './data.ts';
 import { makeRng } from './rng.ts';
 
 const VARIANT = 'rg:';
@@ -169,7 +169,12 @@ function flatten(army: ArmyEntry[]): string[] {
  *   · 遭遇 / 精英：B 也没有城 → 双方都按"兵打光算输"；
  *   · 攻坚 / 层末：B 有 1–2 座城 → 玩家要啃城，B 丢了城才算输。
  */
-function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB: Cell[] } {
+function makeLevel(init: BattleInit): {
+  level: LevelDef;
+  cellsA: Cell[];
+  cellGroupsB: Cell[][];
+  groupSizes: number[];
+} {
   const w = init.size;
   const h = init.size;
   const grid = makeRows(w, h, init.seed).map((r) => [...r]);
@@ -204,7 +209,7 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
    */
   const placeStructures = (
     origin: Cell,
-    defs: ArmyEntry[],
+    defs: string[],
     layout: 'fort' | 'field',
     dir: 1 | -1 = 1,
   ): Array<{ type: string; x: number; y: number }> => {
@@ -242,18 +247,16 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
       }
     }
     let cursor = 0;
-    for (const e of defs) {
-      for (let n = 0; n < e.count; n += 1) {
-        let cell: Cell | undefined;
-        while (cursor < preferred.length && !cell) {
-          const c = preferred[cursor++];
-          if (c && free(c)) cell = c;
-        }
-        cell = cell ?? fallback.shift();
-        if (!cell) break;
-        blocked.add(`${cell.x},${cell.y}`);
-        out.push({ type: e.type, x: cell.x, y: cell.y });
+    for (const type of defs) {
+      let cell: Cell | undefined;
+      while (cursor < preferred.length && !cell) {
+        const c = preferred[cursor++];
+        if (c && free(c)) cell = c;
       }
+      cell = cell ?? fallback.shift();
+      if (!cell) break;
+      blocked.add(`${cell.x},${cell.y}`);
+      out.push({ type, x: cell.x, y: cell.y });
     }
     return out;
   };
@@ -263,15 +266,34 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
    *   · 精英战没有城，塔就是它的"城"——兵围着塔布防；
    *   · 攻坚/层末把塔放在城的两侧、墙放在正面，于是"先拆墙还是先打塔"变成一道题。
    */
-  const structuresB: Array<{ type: string; x: number; y: number }> = init.enemyDefense.length
-    ? placeStructures(
-        citiesB[0] ?? { x: Math.floor(w / 2), y: 0 },
-        init.enemyDefense,
-        citiesB[0] ? 'fort' : 'field',
-      )
-    : [];
+  /**
+   * 工事按城分：两座城就**轮流分**，塔排在前面，所以每座城至少分到一座塔。
+   *
+   * 上一版把所有工事都堆在 `citiesB[0]`，L3 层末的第二座城连块石头都没有，
+   * 而两座城之间也没有任何区别——"三家共守的钟楼"看起来像一座空营。
+   */
+  const splitDefense = (entries: ArmyEntry[], groups: number): string[][] => {
+    const flat = entries.flatMap((e) => Array<string>(e.count).fill(e.type));
+    if (groups <= 1) return [flat];
+    const out: string[][] = Array.from({ length: groups }, () => []);
+    flat.forEach((type, i) => out[i % groups]!.push(type));
+    return out;
+  };
+  const cityGroups = citiesB.length > 1 ? citiesB.length : 1;
+  const defenseGroups = splitDefense(init.enemyDefense, cityGroups);
+  const structuresB: Array<{ type: string; x: number; y: number }> = [];
+  if (citiesB.length === 0) {
+    if (defenseGroups[0]!.length > 0) {
+      structuresB.push(...placeStructures({ x: Math.floor(w / 2), y: 0 }, defenseGroups[0]!, 'field'));
+    }
+  } else {
+    citiesB.forEach((city, g) => {
+      const defs = defenseGroups[g] ?? [];
+      if (defs.length > 0) structuresB.push(...placeStructures(city, defs, 'fort'));
+    });
+  }
   const structuresA: Array<{ type: string; x: number; y: number }> = init.playerDefense.length
-    ? placeStructures(citiesA[0] ?? { x: Math.floor(w / 2), y: h - 3 }, init.playerDefense, 'fort', -1)
+    ? placeStructures(citiesA[0] ?? { x: Math.floor(w / 2), y: h - 3 }, flatten(init.playerDefense), 'fort', -1)
     : [];
 
   // ---- 阵位 ----
@@ -279,14 +301,23 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
     ? // 守城：人站在**城的前面**（朝敌人那一侧），不是缩在城后面
       { x: (citiesA[0] as Cell).x + 1, y: Math.max(1, (citiesA[0] as Cell).y - 2) }
     : { x: Math.floor(w / 2), y: h - 2 };
-  const enemyAnchor: Cell = citiesB[0]
-    ? { x: (citiesB[0] as Cell).x + 1, y: (citiesB[0] as Cell).y + 3 }
-    : init.kind === 'special'
-      ? { x: Math.floor(w / 2), y: 1 }
-      : { x: Math.floor(w / 2), y: 4 };
+  const enemyAnchors: Cell[] =
+    citiesB.length > 0
+      ? citiesB.map((c) => ({ x: c.x + 1, y: c.y + 3 }))
+      : [{ x: Math.floor(w / 2), y: init.kind === 'special' ? 1 : 4 }];
 
   const playerFlat = flatten([...init.playerArmy, ...init.tempUnits]);
   const enemyFlat = init.enemyTypes;
+  /*
+   * 两座城 → 兵力也对半开（奇偶交替，贵的和便宜的都混在两边）。
+   *
+   * 上一版所有兵都从 `enemyAnchor`（第一座城下方）出场，第二座城只有一段墙——
+   * 玩家从那一侧上去，等于白拿。现在每座城都有守军，攻坚要决定先打哪一边。
+   */
+  const enemyGroups: string[][] =
+    citiesB.length > 1
+      ? [enemyFlat.filter((_, i) => i % 2 === 0), enemyFlat.filter((_, i) => i % 2 === 1)]
+      : [enemyFlat];
   /*
    * 多要几个格子当"余量"。
    *
@@ -296,7 +327,18 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
    */
   const SLACK = 6;
   const playerCells = pickCells(w, h, grid, blocked, playerAnchor, playerFlat.length + SLACK, init.seed ^ 0x1234);
-  const enemyCells = pickCells(w, h, grid, blocked, enemyAnchor, enemyFlat.length + SLACK, init.seed ^ 0x5678);
+  const enemyCellGroups = enemyGroups.map((group, g) =>
+    pickCells(
+      w,
+      h,
+      grid,
+      blocked,
+      enemyAnchors[g] ?? (enemyAnchors[0] as Cell),
+      group.length + SLACK,
+      (init.seed ^ (0x5678 + g * 0x9e3779b1)) >>> 0,
+    ),
+  );
+  const enemyCells = enemyCellGroups.flat();
 
   // 站人的格子一律铺平：阵型不该被一丛树卡出个缺口
   for (const c of [...playerCells, ...enemyCells]) grid[c.y]![c.x] = '.';
@@ -308,13 +350,14 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
     }),
     ...structuresA,
   ];
-  const deployB = [
-    ...enemyFlat.map((type, i) => {
-      const cell = enemyCells[i] ?? enemyAnchor;
-      return { type, x: cell.x, y: cell.y };
-    }),
-    ...structuresB,
-  ];
+  const deployB: Array<{ type: string; x: number; y: number }> = [];
+  enemyGroups.forEach((group, g) => {
+    group.forEach((type, i) => {
+      const cell = enemyCellGroups[g]?.[i] ?? (enemyAnchors[g] ?? (enemyAnchors[0] as Cell));
+      deployB.push({ type, x: cell.x, y: cell.y });
+    });
+  });
+  deployB.push(...structuresB);
 
   const noCity: PlayerId[] = [];
   if (!init.playerCity) noCity.push('A');
@@ -336,9 +379,27 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
     },
     seats: { count: 2, ai: ['B'], cityless: noCity },
     deploy: { A: deployA, B: deployB },
+    /*
+     * 关卡自带工事兵种：墙在 era-arms 包里，但肉鸽不开那个包（会把 89 个
+     * 近现代兵塞进招募池），所以由关卡自己登记这几件。
+     */
+    units: DEFENSE_UNIT_DEFS,
     setup: { startEra: init.cityEra, firstSide: 'A' },
+    /*
+     * AI 的进攻性。
+     *
+     * 守城战/遭遇战的 B 是**没有城**的一方：核心 AI 在没有城时会退化成
+     * "守住出生点等对面来"，实测 5 个兵里有 3 个在出兵点站到第 8 轮。
+     * `pressure` 是引擎给这种局面准备的开关（只对无城席位生效）：
+     * 越拖越往敌城压，而且核心 AI 认为"没事可做"时还会督战推进一步。
+     * `riskAversion` 压低 = 愿意用伤亡换推进。
+     */
+    ai:
+      init.enemyCityCount === 0
+        ? { riskAversion: 0.4, cohesion: 0, appetite: 2.5, pressure: 2 }
+        : { riskAversion: 0.8, cohesion: 0.5, appetite: 1.5 },
   };
-  return { level, cellsA: playerCells, cellsB: enemyCells };
+  return { level, cellsA: playerCells, cellGroupsB: enemyCellGroups, groupSizes: enemyGroups.map((g) => g.length) };
 }
 
 /**
@@ -354,14 +415,14 @@ function makeLevel(init: BattleInit): { level: LevelDef; cellsA: Cell[]; cellsB:
  * 上一版只按"近战/远程"分两档、同一档里按 y 排，结果骑兵经常被裹在阵中间
  * ——因为它和民兵一样都是近战，只是排得早一点，而"排得早"不等于"站边上"。
  */
-function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1, slots: Cell[]): void {
+function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1, slots: Cell[], subset?: Unit[]): void {
   /*
    * 建筑不参加排阵。
    *
    * 塔和墙是"钉在地上"的：它们的位置本身就是这一关的题面（塔在城侧、墙在正面），
    * 被排到别处就全乱了。而且 move 0 的单位本来也没有"前后排"可言。
    */
-  const units = s.units.filter(
+  const units = (subset ?? s.units).filter(
     (u) => u.owner === owner && u.hp > 0 && (s.unitTypes[u.type]?.category !== 'building') && (s.unitTypes[u.type]?.move ?? 1) > 0,
   );
   if (units.length < 3) return; // 两三个人怎么站都一样
@@ -436,7 +497,7 @@ function arrangeFormation(s: GameState, owner: PlayerId, toward: -1 | 1, slots: 
  * 建完之后只做两件它管不了的事：套我方加成（变体兵种）与盖金币。
  */
 export function buildBattle(init: BattleInit): GameState {
-  const { level, cellsA, cellsB } = makeLevel(init);
+  const { level, cellsA, cellGroupsB, groupSizes } = makeLevel(init);
   /*
    * 进场的兵种：地面战斗兵 + **这一关用到的工事**。
    *
@@ -461,7 +522,14 @@ export function buildBattle(init: BattleInit): GameState {
       aiLevel: 'advanced',
       expansionIds: init.expansions,
       enabledUnits: allUnits,
-      disabledUnits: [],
+      /*
+       * 工事兵种能**部署**，但不该进招募池。
+       *
+       * `LevelDef.units` 会把它们塞进本局兵种表（这是部署能认出来的前提），
+       * 而引擎的规则是"关卡自带的兵种默认进场"——不在这里关掉，AI 会拿
+       * 一个补员名额去买一道不会走的墙。
+       */
+      disabledUnits: Object.keys(DEFENSE_UNIT_DEFS),
       level,
       aiDoctrine: init.enemyDoctrine,
       aiDoctrineSeat: 'B',
@@ -515,8 +583,25 @@ export function buildBattle(init: BattleInit): GameState {
   if (aUnits.length > 0 && bUnits.length > 0) {
     const avgY = (list: Unit[]): number => list.reduce((n, u) => n + u.y, 0) / list.length;
     const aDown = avgY(aUnits) > avgY(bUnits);
+    const dirB = aDown ? 1 : -1;
     arrangeFormation(s, 'A', aDown ? -1 : 1, cellsA);
-    arrangeFormation(s, 'B', aDown ? 1 : -1, cellsB);
+    if (cellGroupsB.length > 1) {
+      /*
+       * 两座城两组守军：**各摆各的**。
+       *
+       * 不能把所有 B 的格子合在一起排——那会把第二座城的兵排到第一座城去，
+       * 两座城又变回"一座满、一座空"。所以按部署顺序切片，一组一份格子。
+       */
+      const combatB = bUnits.filter((u) => s.unitTypes[u.type]?.category === 'combat');
+      let cursor = 0;
+      cellGroupsB.forEach((cells, g) => {
+        const size = groupSizes[g] ?? 0;
+        arrangeFormation(s, 'B', dirB, cells, combatB.slice(cursor, cursor + size));
+        cursor += size;
+      });
+    } else {
+      arrangeFormation(s, 'B', dirB, cellGroupsB[0] ?? []);
+    }
   }
 
   // ---- 我方加成（变体兵种）----
@@ -525,10 +610,15 @@ export function buildBattle(init: BattleInit): GameState {
    *
    * `unitTypes` 是全图共用的一张表，所以不能直接把 +1 写进去（敌人也会变强）；
    * 给每个兵注册一个带后缀的**变体兵种**，只有我军用变体 id。
+   *
+   * **只给战斗单位**（2026-11-25 修）。上一版把加成套到了所有 `owner === 'A'`
+   * 的单位上，于是"骑军"方略的 +1 移动、急行靴的 +1 移动也给了土墙和塔——
+   * 工事在本体里 `move: 0`，到了肉鸽却能走一格。建筑不是"兵"，不吃这套加成。
    */
   const moveUp = init.bonusMove;
   for (const u of s.units) {
     if (u.owner !== 'A') continue;
+    if (s.unitTypes[u.type]?.category !== 'combat') continue;
     const def = s.unitTypes[u.type];
     let atk = init.bonusAtk;
     if (init.strategyId === 'skirmish' && def && def.range >= 3) atk += 2;
@@ -627,18 +717,21 @@ export function spawnWave(s: GameState, types: string[], seed: number): Unit[] {
     rows.push(row);
   }
   const cells = pickCells(s.w, s.h, rows, blocked, { x: Math.floor(s.w / 2), y: 0 }, types.length, seed ^ 0x3c6ef372);
-  let seq = 1;
-  for (const u of s.units) {
-    const m = /^u(\d+)$/.exec(u.id);
-    if (m) seq = Math.max(seq, Number(m[1]) + 1);
-  }
   const out: Unit[] = [];
   for (let i = 0; i < types.length; i += 1) {
     const cell = cells[i];
     const def = s.unitTypes[types[i] as string];
     if (!cell || !def) continue;
+    /*
+     * id 必须走**引擎的序号**（`nextUnitSeq`），不能自己按"当前最大 id + 1"算。
+     *
+     * 这是"国王闪现"那条 bug 的根：波次先来了 u10，但 `nextUnitSeq` 还是 10；
+     * 下一回合哥布林战营召唤的小兵也拿到 u10——场上两个 u10。渲染层按 id 认节点，
+     * 于是两张牌共用一个 DOM，国王的图标被挪到哥布林的位置、随后消失。
+     * 按引擎的序号发号，永远不会撞车；顺手也补上出生回合与弹药字段。
+     */
     const u: Unit = {
-      id: `u${seq++}`,
+      id: `u${s.nextUnitSeq++}`,
       type: def.id,
       owner: 'B',
       x: cell.x,
@@ -647,6 +740,9 @@ export function spawnWave(s: GameState, types: string[], seed: number): Unit[] {
       kills: 0,
       moved: false,
       acted: false,
+      bornTurn: s.turn,
+      ...(typeof def.ammo === 'number' ? { ammoLeft: def.ammo } : {}),
+      ...(def.hatch ? { hatchLeft: def.hatch.turns } : {}),
     };
     s.units.push(u);
     out.push(u);
@@ -678,6 +774,14 @@ export function outcomeOf(s: GameState, init?: BattleInit): 'win' | 'lose' | nul
    */
   if (init && init.holdRounds > 0) {
     if (!s.cities.some((c) => c.owner === 'A' && !c.ruined)) return 'lose';
+    /*
+     * 提前赢：**三波都到齐了，而且都打光了**。
+     *
+     * 不给这一条的话，玩家把攻城的兵全歼之后还得空按四五轮"结束回合"
+     * 等计时器走完——那不是"守住了"，是罚站。
+     */
+    const lastWave = init.waves.reduce((n, w) => Math.max(n, w.atRound), 0);
+    if (people('B') === 0 && Math.ceil(s.turn / 2) >= lastWave) return 'win';
     if (Math.floor(s.turn / 2) >= init.holdRounds) return 'win';
   }
   return null;
