@@ -121,9 +121,9 @@ function withSpend(s: GameState, world: World, d: BareDecision): Decision {
  * 为什么统一成一个出口：这两个字段都**必须每个 `return` 都有**，漏一个就是
  * "沿用了决定、忘了沿用升级"的默认值 bug。让唯一入口来挂，漏不掉。
  */
-function complete(s: GameState, world: World, d: BareDecision): Decision {
+function complete(s: GameState, world: World, mem: V4Memory | undefined, d: BareDecision): Decision {
   const dec = withSpend(s, world, d);
-  return { ...dec, upgrade: upgradeOf(s, world, dec) };
+  return { ...dec, upgrade: upgradeOf(s, world, mem, dec) };
 }
 
 /**
@@ -180,11 +180,55 @@ function roundsText(n: number): string {
  * 枚举（每一代的累计价、每格最强的兵）在服务层 `world.eraLadder`；这里只做**选择**：
  * 对每一代算 `n = min(格数×剩余手数, 钱÷单价)`，取 `n × 每格战力` 最大的那一代。
  *
- * ⚠️ **只在"还没有军队"时规划**：升级费是沉没成本，每手重算会漂（E-2-03 从 3 代漂到 5 代）。
- * 这道门是补丁，D5 会换成记忆里的承诺。
+ * ⚠️ **规划一次，然后记住**（D5，2026-11-26）：升级费是沉没成本，每手重算会漂
+ * （E-2-03 从 3 代漂到 5 代）。D5 之前靠"场上有兵就不规划"挡着，副作用是
+ * "先造一个兵再暴富就永远升不了"；现在靠记忆里的 `eraPlan` 承诺挡住，**与有没有兵无关**。
  */
-function econCandidates(s: GameState, world: World, gold: number): Decision['upgrade'] {
-  if (world.myCombat.length > 0) return undefined;
+function econCandidates(
+  s: GameState,
+  world: World,
+  mem: V4Memory | undefined,
+  gold: number,
+): Decision['upgrade'] {
+  /** 承诺有效期：和编队的 12 手同一个尺度，够长到让"边升边攒"跑完，够短到不会变成常数 */
+  const VALID = 12;
+  const prev = mem?.eraPlan ?? null;
+  /* ⚠️ `ruined` 是可选字段（正常城是 `undefined` 不是 `false`），不能写成 `?.ruined ?? true` */
+  const prevCity = prev ? s.cities.find((c) => c.id === prev.cityId) : undefined;
+  const live = prev && s.turn - prev.since <= VALID && !!prevCity && prevCity.ruined !== true ? prev : null;
+
+  /*
+   * **有承诺就照承诺走**（D5）：不再重算"哪一代最优"。
+   *
+   * 这就是拆掉"有兵就不规划"那道门之后的安全带——那门治的是漂移（沉没成本 + 窗口每手在变，
+   * 最优代会越来越高），代价是"先造了一个兵再暴富就永远升不了"（E-2-05 正是这个形状）。
+   * 承诺只治漂移，不管场上有没有兵：**这正是两条不同的判断**。
+   *
+   * 已经升到目标代 → 这一期不再规划（承诺到期才重来），否则到顶之后会立刻找下一样更贵的。
+   */
+  if (live) {
+    const city = world.myCities.find((c) => c.id === live.cityId);
+    if (!city || (city.era ?? 1) >= live.targetEra) return undefined;
+    const ladder = world.eraLadder(city);
+    const step = ladder.find((x) => x.era === live.targetEra);
+    const next = ladder[1];
+    if (!step || !next) return undefined;
+    return {
+      kind: 'econ',
+      candidates: [
+        {
+          cityId: city.id,
+          targetEra: step.era,
+          /* 这一手付的是"下一级"的价 */
+          cost: next.cost,
+          label: `第${step.era}代`,
+          rounds: { now: 0, after: 0 },
+          why: `沿用第 ${live.since} 手立的承诺：升到第 ${step.era} 代（每格 ${Math.round(step.worth)}）`,
+        },
+      ],
+    };
+  }
+
   const h = world.developLeft();
   if (!h) return undefined;
   const left = Math.floor(h.left);
@@ -226,13 +270,13 @@ function econCandidates(s: GameState, world: World, gold: number): Decision['upg
 }
 
 /** 这一期要不要升代（D4a）：先问"救不救得了"，再问"钱是不是多到花不完" */
-function upgradeOf(s: GameState, world: World, d: Decision): Decision['upgrade'] {
+function upgradeOf(s: GameState, world: World, mem: V4Memory | undefined, d: Decision): Decision['upgrade'] {
   /* 攒钱期不升级：那笔钱是重建费，动了就前功尽弃 */
   if (d.spend.mode === 'save') return undefined;
   const gold = s.players[world.me]?.gold ?? 0;
   const rescue = rescueCandidates(s, world, gold);
   if (rescue.length > 0) return { kind: 'rescue', candidates: rescue };
-  return econCandidates(s, world, gold);
+  return econCandidates(s, world, mem, gold);
 }
 
 /** 兵力对比（按"身价"不按个数：一个四代兵不等于一个民兵） */
@@ -274,7 +318,7 @@ export const DECIDE_HORIZON = 6;
  * 阶段是**每回合重算**的（不沿用）：它只依赖两件每回合都在变的事（敌人还在不在、
  * 钱够不够），而且只会往一个方向走（clear → save → enter），不会抖。
  */
-function takeoverDecision(s: GameState, world: World, ruin: City): Decision {
+function takeoverDecision(s: GameState, world: World, mem: V4Memory | undefined, ruin: City): Decision {
   const threats = world.ruinThreats(ruin);
   const cost = world.ruinCost(ruin);
   const gold = s.players[world.me]?.gold ?? 0;
@@ -285,7 +329,7 @@ function takeoverDecision(s: GameState, world: World, ruin: City): Decision {
       : stage === 'save'
         ? `城下清干净了，攒 ${cost} 金重建（现有 ${gold}）`
         : `钱够了（${gold} ≥ ${cost}），派兵入驻`;
-  return complete(s, world, {
+  return complete(s, world, mem, {
     kind: 'takeover',
     stage,
     untilTurn: s.turn + DECIDE_HORIZON,
@@ -318,10 +362,10 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
        * 不转的话会一直按 press 造兵，把钱花光（S-001：城血 0 之后 40 手都没钱重建）。
        */
       const ruin = prev.cityId ? s.cities.find((c) => c.id === prev.cityId && c.ruined) : undefined;
-      if (ruin) return takeoverDecision(s, world, ruin);
+      if (ruin) return takeoverDecision(s, world, mem, ruin);
       /* 打不动了就提前收手：兵力比跌破 1.0（原来是 1.25 才进） */
       if (cityAlive && ratio >= 1.0) {
-        return complete(s, world, {
+        return complete(s, world, mem, {
           kind: 'press',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
@@ -331,7 +375,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     } else if (prev.kind === 'defend') {
       /* 威胁解除就提前转攻：对面掉到我方 0.6 以下 */
       if (foeStr >= myStr * 0.6) {
-        return complete(s, world, {
+        return complete(s, world, mem, {
           kind: 'defend',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
@@ -339,7 +383,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         });
       }
     } else if (ratio < 1.25) {
-      return complete(s, world, {
+      return complete(s, world, mem, {
         kind: 'expand',
         untilTurn: prev.untilTurn,
         reason: `${prev.reason}（沿用）`,
@@ -352,7 +396,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   if (threatened.length > 0 && foeStr > myStr * 0.9) {
     /* 离敌军最近的先救；`foeEta` 是"敌人几回合能摸到它"，越小越急 */
     const worst = threatened.sort((a, b) => a.foeEta - b.foeEta)[0]!;
-    return complete(s, world, {
+    return complete(s, world, mem, {
       kind: 'defend',
       untilTurn: s.turn + horizon,
       cityId: worst.city.id,
@@ -378,7 +422,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       );
       return da - db;
     })[0];
-    if (near) return takeoverDecision(s, world, near);
+    if (near) return takeoverDecision(s, world, mem, near);
   }
 
   /* 2) 我明显更强、且有敌城 → 推 */
@@ -405,7 +449,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         (st.range ?? 1) + (st.move ?? 2)
       );
     });
-    return complete(s, world, {
+    return complete(s, world, mem, {
       kind: 'press',
       stage: guards.length > 0 ? 'clear' : 'siege',
       untilTurn: s.turn + horizon,
@@ -418,7 +462,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   }
 
   /* 3) 其它情况：发展 */
-  return complete(s, world, {
+  return complete(s, world, mem, {
     kind: 'expand',
     untilTurn: s.turn + horizon,
     reason: `身价 ${Math.round(myStr)} : ${Math.round(foeStr)}，不占优，先攒兵攒钱`,

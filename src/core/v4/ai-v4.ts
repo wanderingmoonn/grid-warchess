@@ -84,6 +84,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     squad: squadMemo(con, mem, s.turn),
     econSince: econSinceMemo(s, me, mem),
     econHome: econHomeMemo(s, me, mem, world),
+    eraPlan: eraPlanMemo(s, decision, mem, s.turn),
   });
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
   logSquads(s, world.me, decision, con);
@@ -160,6 +161,43 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
     out[u.id] = prev[u.id] ?? near?.id ?? '';
   }
   return out;
+}
+
+/**
+ * 记"这一局决定升到第几代"（D5）。
+ *
+ * 它替代的是原来那道 `world.myCombat.length === 0` 的门——那道门治的是**漂移**
+ * （升级费是沉没成本，每手重算都像从零开始），副作用是"先造了一个兵再暴富就永远升不了"。
+ * 承诺只记这件事本身，和场上有没有兵无关。
+ *
+ * 只在一件事上更新：决定层这手给出了**新的**经济升级目标。其余情况一律沿用——
+ * 包括"目标已经达成"（那时 `upgrade` 是 undefined，承诺必须留着，否则下一手又重新规划，
+ * 又会挑一个更贵的代，就是原来的漂移）。
+ */
+function eraPlanMemo(
+  s: GameState,
+  decision: Decision,
+  mem: V4Memory,
+  turn: number,
+): V4Memory['eraPlan'] {
+  const VALID = 12;
+  const prev = mem.eraPlan ?? null;
+  const alive = prev && turn - prev.since <= VALID ? prev : null;
+  /* 城没了 / 成废墟 → 承诺作废。
+   * ⚠️ `ruined` 是**可选**字段：正常城是 `undefined`，不是 `false`。
+   * 写成 `?.ruined ?? true` 会把每座正常城都当成废墟（2026-11-26 踩到：承诺刚立就作废）。 */
+  if (alive && !isLiveCity(s, alive.cityId)) return null;
+  const up = decision.upgrade;
+  if (!up || up.kind !== 'econ' || up.candidates.length === 0) return alive;
+  const first = up.candidates[0]!;
+  if (alive && alive.cityId === first.cityId && alive.targetEra === first.targetEra) return alive;
+  return { cityId: first.cityId, targetEra: first.targetEra, since: turn };
+}
+
+/** 这座城还在、还没成废墟（`ruined` 是可选字段，不能拿 `?? true` 判） */
+function isLiveCity(s: GameState, cityId: string): boolean {
+  const c = s.cities.find((x) => x.id === cityId);
+  return !!c && c.ruined !== true;
 }
 
 /** 给探针清缓存用（换局时调一次） */
