@@ -18,6 +18,7 @@ import { upgradeTargetOf } from '../era-routes.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
+import { bestProjection, incomeNow, projectEconUntil, unitWorth, unitWorthOfType } from './project.ts';
 import type { Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
 import type { World } from './world.ts';
 
@@ -159,11 +160,7 @@ function planTactics(s: GameState, ids: string[], canMove: boolean): SquadTactic
   };
 }
 
-/** 一个单位值多少（身价）：atk + hp + 射程×4，按剩余血量打折。和决定层同一个口径 */
-function unitWorth(s: GameState, u: Unit): number {
-  const d = utype(s, u.type);
-  return ((d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4) * (u.hp / Math.max(1, d.maxHp ?? 1));
-}
+export { unitWorth };
 
 /** 集结点：自家城朝敌方向外挪两格，取一个能站人的空点 */
 function assemblePoint(s: GameState, world: World, cityId: string): { x: number; y: number } | undefined {
@@ -571,25 +568,28 @@ function planUpgrade(
  * 人类给的是一个**时间**——"发展到第 T 手"，因为再晚出发，对面就升完本了（低代打高代）。
  * 所以 T 是"我的主力最早能威胁到对面城"的回合数，它是**地图与地形的函数**，不是调参常量。
  *
- * ── "主力"就按现有的进攻编队算（用户 2026-11-25 定）────────────────
+ * ── 两种来源（用户 2026-11-25 定）──────────────────────────────
  *
- * 不看"离敌城最近的那 80%"这种新口径——那会跟以后的侦查编队、建设编队混在一起。
- * **进攻编队 = `main` 队里目标是敌城、且任务是出去的那支**（march / siege / assemble）。
- * 没有这样的队（守、纯发展、接管）就**不给 T**，而不是拿别的队凑一个。
+ * ① `squad`：有**进攻编队**时，按它算。进攻编队 = `main` 队里目标是敌城、任务是出去的那支
+ *    （march / siege / assemble）。不看"离敌城最近的那 80%"这种新口径——那会跟以后的
+ *    侦查编队、建设编队混在一起。
+ * ② `map`：**没有进攻编队时按地图算**——我方非废墟城 ↔ 敌方非废墟城的**最小步数**
+ *    ÷ 当前代兵种移动力的众数。为什么必须有这条：只有"有编队才有 T"会成死循环——
+ *    T 不存在 → 一直发展不造兵 → 一直没有进攻编队 → T 永远不存在。
+ *    （`expand` 的局面恰恰就是这个状态，而发展期正是 `expand`。）
  *
- * ── 取哪个数：现在其实是"中速" ────────────────────────────────
+ * ── 速度：整队取**最慢的兵** ──────────────────────────────────
  *
- * 用的是 `world.marchTurns`，而它内部按 `baseMove`（我方战斗兵移动力的**中位数**）算回合，
- * 所以每个兵算出来是**同一个数**——下面那句 `Math.max` 目前是空转，留着是为了
- * 以后换成"每个兵自己的场"时不用改结构。
+ * 快的必须等慢的，慢的不会因为队里有骑兵就变快。C1 第一版用 `world.marchTurns`
+ * （内部固定按我方战斗兵 move 的**中位数**）给全队算，每个人得同一个数，`Math.max` 是空转。
+ * 现在按每兵自己的 `effectiveStats(u).move` 折回合，再取最大（= 最后一个到的人）。
  *
- * **要小心**：真实的"整队到齐"应该按**最慢的那个兵**算（和 press 的 `eta` 同一口径），
- * 现在的 T 会**低估**慢兵（骑兵和民兵混编时尤其明显）。C2 再修这件事——
- * 那时才需要给每个兵算一张场（或者按 `effectiveStats(u).move` 折算 `stepsFrom`）。
+ * 地图兜底那一路没有编队可看，用**当前代战斗兵移动力的众数**（并列取平均）——
+ * 用户 2026-11-25 定。平均/中位数会被极端值拉偏，众数不会；统计量以后再调。
  *
- * C1 只把它**算出来 + 打印**，不接任何判断；C2 的枚举（k=0..T）才读它。
+ * C1/C2 只把它**算出来 + 打印**，不接任何判断；C3 的"投到第 k 手"才读它。
  */
-function planHorizon(
+function horizonOfSquad(
   s: GameState,
   world: World,
   squads: Squad[],
@@ -604,18 +604,82 @@ function planHorizon(
   if (!main) return undefined;
   const city = s.cities.find((c) => c.id === main.cityId);
   if (!city) return undefined;
-  const turns = main.unitIds
+  const units = main.unitIds
     .map((id) => s.units.find((u) => u.id === id))
-    .filter((u): u is NonNullable<typeof u> => !!u)
-    .map((u) => world.marchTurns(u, city))
+    .filter((u): u is NonNullable<typeof u> => !!u);
+  if (units.length === 0) return undefined;
+  /* 整队速度 = 最慢的那个兵 */
+  const slowest = Math.max(1, Math.min(...units.map((u) => effectiveStats(s, u).move ?? 1)));
+  const turns = units
+    .map((u) => world.marchTurnsOf(u, city, slowest))
     .filter((t) => Number.isFinite(t));
   if (turns.length === 0) return undefined;
-  return {
-    turns: Math.max(...turns),
-    squadId: main.id,
-    cityId: city.id,
-    n: turns.length,
-  };
+  return { turns: Math.max(...turns), squadId: main.id, cityId: city.id, n: turns.length };
+}
+
+/**
+ * 当前代战斗兵移动力的**众数**（并列取平均，四舍五入）。
+ *
+ * 用众数而不是平均数/中位数：一代里可能有侦察兵那种异常快、或者攻城器械那种异常慢的，
+ * 平均数会被拉偏。这一代没有兵种数据时退回"≤ 这一代"的全体。
+ */
+function eraModeMove(s: GameState, era: number): number {
+  const pick = (maxEra: number): number[] =>
+    Object.values(s.unitTypes)
+      .filter((d) => d.category === 'combat' && (d.era ?? 1) <= maxEra)
+      .map((d) => d.move ?? 1);
+  let moves = pick(era);
+  if (moves.length === 0) moves = pick(9);
+  if (moves.length === 0) return 2;
+  const count = new Map<number, number>();
+  for (const m of moves) count.set(m, (count.get(m) ?? 0) + 1);
+  let best = 0;
+  for (const c of count.values()) best = Math.max(best, c);
+  const tied = [...count.entries()].filter(([, c]) => c === best).map(([m]) => m);
+  return Math.max(1, Math.round(tied.reduce((a, b) => a + b, 0) / tied.length));
+}
+
+/**
+ * **没有进攻编队时的 T**：双方非废墟城之间的最小步数 ÷ 当代众数移动力。
+ *
+ * 只算非废墟城：废墟格是已经拿下的地方，拿它当"要去打的目标"没意义。
+ * 多远算多远——城之间的距离本来就在地图上写着，不需要编队。
+ */
+function horizonOfMap(
+  s: GameState,
+  world: World,
+): { turns: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined {
+  const mine = world.myCities.filter((c) => !c.ruined);
+  const foes = world.foeCities.filter((c) => !c.ruined);
+  if (mine.length === 0 || foes.length === 0) return undefined;
+  const era = Math.max(1, ...mine.map((c) => c.era ?? 1));
+  const move = eraModeMove(s, era);
+  let best: { turns: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined;
+  for (const a of mine) {
+    for (const b of foes) {
+      for (const p of cityTiles(a)) {
+        for (const q of cityTiles(b)) {
+          const steps = world.marchTurnsOf(p, q, 1);
+          if (!Number.isFinite(steps)) continue;
+          const turns = Math.ceil(steps / move);
+          if (!best || turns < best.turns) best = { turns, fromCityId: a.id, cityId: b.id, move, steps };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function planHorizon(
+  s: GameState,
+  world: World,
+  squads: Squad[],
+): Constraints['horizon'] {
+  const sq = horizonOfSquad(s, world, squads);
+  if (sq) return { source: 'squad', ...sq };
+  const mp = horizonOfMap(s, world);
+  if (mp) return { source: 'map', ...mp };
+  return undefined;
 }
 
 /**
@@ -1846,11 +1910,77 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     const ms = Math.min(
       ...world.myCities.flatMap((a) => world.foeCities.map((b) => world.marchTurns({ x: a.x, y: a.y }, { x: b.x, y: b.y }))),
     );
+    const t =
+      horizon === undefined
+        ? 'T=无'
+        : horizon.source === 'squad'
+          ? `T=${horizon.turns}(编队 ${horizon.n}人)`
+          : `T=${horizon.turns}(地图 ${horizon.steps}步/${horizon.move}速)`;
     console.error(
-      `[horizon] ${s.w}x${s.h} 城距=${Number.isFinite(md) ? md : '-'}(曼)/${Number.isFinite(ms) ? ms : '-'}(步) 主力=${
-        horizon ? `${horizon.n}人 T=${horizon.turns}` : '无'
-      } 决定=${decision.kind}`,
+      `[horizon] ${s.w}x${s.h} 城距=${Number.isFinite(md) ? md : '-'}(曼)/${Number.isFinite(ms) ? ms : '-'}(步) ${t} 决定=${decision.kind}`,
     );
+  }
+  /*
+   * **发展期投影**（C2）：扫 k = 0..T，看"经济投到第 k 手"在 T 时刻的战力/收入。
+   * 只打印，不接动作——验收是"人工手算能对上"。见 `docs/PLAN-V4-PHASE2` 的 C2。
+   */
+  if (process.env.V4_PROJECT_LOG && s.turn === 1 && horizon) {
+    const spots = world.econSpots().map((x) => ({ type: x.type, yield: x.yield, turns: x.turns, gold: x.gold }));
+    const picks: Array<{ type: string; gold: number; worth: number }> = [];
+    const seenType = new Set<string>();
+    for (const c of world.myCities) {
+      for (const o of world.affordableCombat(c, Number.MAX_SAFE_INTEGER)) {
+        if (seenType.has(o.type)) continue;
+        seenType.add(o.type);
+        picks.push({ type: o.type, gold: o.gold, worth: unitWorthOfType(s, o.type) });
+      }
+    }
+    const pts = projectEconUntil({
+      T: horizon.turns,
+      gold: s.players[world.me].gold,
+      income: incomeNow(s, world),
+      spots,
+      combat: picks,
+      soldierSlots: world.myCities.reduce(
+        (n, c) => n + cityTiles(c).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length,
+        0,
+      ),
+    });
+    const best = bestProjection(pts);
+    console.error(
+      `[project] T=${horizon.turns} 金=${s.players[world.me].gold} 收入=${incomeNow(s, world)} 在场战力=${Math.round(
+        world.myCombat.reduce((n, u) => n + unitWorth(s, u), 0),
+      )} 岗=${spots.length} 兵种=${picks.map((p) => `${p.type}:${p.gold}`).join(',')} 最优k=${best?.k ?? '-'}`,
+    );
+    for (const p of pts) {
+      console.error(
+        `[project]   k=${p.k} 经济${p.econN} 兵${p.armyN} 末金${Math.round(p.gold)} 收入${Math.round(p.income)} 战力${Math.round(p.worth)}`,
+      );
+    }
+    /*
+     * **敏感性：把窗口拉到 20 手再看一次。**
+     *
+     * 12×12 的贴脸题 T 只有 6~9 手，8 手里投经济不可能赚回战力，所以最优 k 恒为 0——
+     * 这不是模型错，是窗口太短。真实 24×24 上 T 到 20+，"先发展再出兵"才会翻过来。
+     * 这一行只是为了让人看到"k 会不会翻"，**不是真实 T**，别拿它当判据。
+     */
+    if (horizon.turns < 20) {
+      const far = projectEconUntil({
+        T: 20,
+        gold: s.players[world.me].gold,
+        income: incomeNow(s, world),
+        spots,
+        combat: picks,
+        soldierSlots: world.myCities.reduce(
+          (n, c) => n + cityTiles(c).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length,
+          0,
+        ),
+      });
+      const fb = bestProjection(far);
+      console.error(
+        `[project] 敏感性 T=20（假窗口，只看 k 翻不翻）最优k=${fb?.k ?? '-'} 经济${fb?.econN ?? '-'} 兵${fb?.armyN ?? '-'} 收入${Math.round(fb?.income ?? 0)} 战力${Math.round(fb?.worth ?? 0)}`,
+      );
+    }
   }
   /*
    * **把"让开"写成一支队**（9.14 的收尾）：只收那些这一手**真的被派了活儿**的兵。

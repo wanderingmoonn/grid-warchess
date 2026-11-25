@@ -144,6 +144,14 @@ export interface World {
   /** 从某格到某格要走几回合；走不到 = Infinity */
   marchTurns(from: { x: number; y: number }, to: { x: number; y: number }): number;
   /**
+   * 按**指定的移动力**算几回合（`marchTurns` 固定按我方战斗兵的中位速度）。
+   *
+   * 为什么需要：整队行军的速度**不是中位数，是最慢的那个**——快的必须等慢的，
+   * 慢的不会因为队里有骑兵就变快。C1 第一版用 `marchTurns` 给全队算，队里
+   * 每个人都得同一个数，`Math.max(最慢)` 就是空转。见 `V4-CODE-MAP` 9.21。
+   */
+  marchTurnsOf(from: { x: number; y: number }, to: { x: number; y: number }, move: number): number;
+  /**
    * 从 `p` 出发的**真实回合数距离场**（引擎的 BFS，带缓存）。
    *
    * 为什么需要它：`stepToward` 原来按直线距离挑落点，遇到河就全错——
@@ -592,6 +600,12 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     marchTurns(from, to) {
       if (from.x === to.x && from.y === to.y) return 0;
       return marchFrom(from)[idxOn(s, EARTH, to.x, to.y)] ?? Infinity;
+    },
+    marchTurnsOf(from, to, move) {
+      if (from.x === to.x && from.y === to.y) return 0;
+      const steps = stepFrom(from)[idxOn(s, EARTH, to.x, to.y)] ?? Infinity;
+      if (!Number.isFinite(steps)) return Infinity;
+      return Math.ceil(steps / Math.max(1, move));
     },
     foeEta(p) {
       return foeEtaAt(p);
