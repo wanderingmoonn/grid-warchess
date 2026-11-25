@@ -1348,18 +1348,28 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    */
   const foes = world.foeCombat;
   /*
-   * 只在**人数不占优**时才讲"质量"。
+   * **有敌人就按"够用"筛，不再看人数。**（2026-11-25，P1）
    *
-   * S-002 有 30 个兵打 12 个：数量本身就是答案，硬按"挨得住一发"筛会把
-   * 便宜的量产兵全筛掉（实测 S-002 从绿变红）。S-012 是 2~6 个打 3~4 个，
-   * 这时候再堆便宜兵就是白送。
+   * 原来这里有一道 `outnumbered = myCombat.length <= foes.length`——只有"人数不占优"
+   * 才启用质量门槛。那是个正反馈陷阱：**买便宜兵 → 人数上去了 → 门槛关掉 → 继续买便宜兵**。
+   * 实测 S-001 造 21 个 1 代民兵、S-002 造 45 个、S-011 造 8 个（`V4-CODE-MAP` 9.17）。
+   *
+   * 用户 2026-11-25 的判断："人数明显占优时仍允许堆量"这句话本身有问题——
+   * 人类会去**基建出最强的单位来堆**，不会靠"血少攻低的单位"堆：
+   * 血少的会被带溅射的一次清掉，攻低的完全打不动高护甲。
+   * 所以人数不再参与"要不要讲质量"的判断；"堆不堆量"是**数量够不够**的问题，
+   * 由需求（`planMains` 的 want）管，不该混进采购。
+   *
+   * ⚠️ S-002 当年正是因为这条门槛从绿变红，才写下"数量就是答案"。用户 2026-11-25 澄清：
+   * 那道题太综合、他打都不需要造新兵，所以那个结论不成立，**不要为它保留例外**。
    */
-  const outnumbered = world.myCombat.length <= foes.length;
   const need =
-    foes.length > 0 && outnumbered
+    foes.length > 0
       ? {
           hp: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).atk ?? 0), 0),
           atk: Math.ceil(foes.reduce((n, u) => Math.max(n, u.hp), 0) / 3),
+          /* 对面最大射程：压不过它就没有"先手"，排序要改比血（见 tactics 的 byRange） */
+          range: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).range ?? 1), 0),
         }
       : undefined;
 

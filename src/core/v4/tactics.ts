@@ -649,7 +649,7 @@ function stepOffSpawn(
 export function recruitAction(
   s: GameState,
   world: World,
-  need?: { hp: number; atk: number },
+  need?: { hp: number; atk: number; range: number },
   cap?: number,
 ): Action | null {
   const gold = Math.min(s.players[world.me]?.gold ?? 0, cap ?? Infinity);
@@ -678,23 +678,53 @@ export function recruitAction(
         })
       : [];
     /*
-     * 满足门槛之后：**先挑射程远的**（先手权），射程一样再挑便宜的。
+     * 满足门槛之后：**先挑射程远的**（先手权），同射程挑**血厚的**，再看攻，价格只做最后一档。
      *
-     * S-012 实测：都满足两条不等式的弩手（射程 3）和火枪（射程 4），
-     * 从便宜的挑会选弩手——和装甲车（射程 3）对射，谁先手全看站位。
-     * 射程 4 的火枪能站着不动先打一轮，这才是"编制"里该有的那一条。
+     * 2026-11-25（P1）改的三件事：
+     *
+     * ① **价格从前排挪到最后排**。原来是 `射程 → 便宜`，所以射程一样就买最便宜的——
+     *    这是"有钱就买 1 代民兵"的最后一环（实测 S-001 造 21 个、S-002 造 45 个，见 9.17）。
+     *    用户的判断："会算性价比，但不可能直接买最便宜的。"
+     *    血厚的先，因为**血少的单位堆再多，会被带溅射的一次清掉**。
+     * ② **没有敌人时也要排**（`need` 为空）。原来那里 `pick = opts`，而 `opts` 是按价升序的，
+     *    等于"没敌人就买最便宜的"。空城也是一样：打空城不需要射程，但也不该买 1 代。
+     *    没敌人时按**血 → 攻 → 价格**（通用强度），有敌人时按**射程 → 血 → 攻 → 价格**。
+     * ③ 兜底保留"攻击最高的"不变。理由没变：打不穿也总比完全不还手强。
      */
-    const order = (a: { type: string }, b: { type: string }): number => {
+    const foeRange = need?.range ?? 0;
+    const byRange = (a: { type: string; gold: number }, b: { type: string; gold: number }): number => {
       const da = utype(s, a.type);
       const db = utype(s, b.type);
-      return ((db.range ?? 1) - (da.range ?? 1)) || 0;
+      /*
+       * **"先手"= 射程压过对面**，不是"射程大"。压不过就没有先手可言，
+       * 这时候射程 3 和射程 1 一样得挨打，该比的是血（血薄的会被溅射一次清掉）。
+       * S-011 实测：造射程 3 的弓手（22 血）去冲射程 5 的炮，一发就没了。
+       */
+      const oa = (da.range ?? 1) > foeRange ? 1 : 0;
+      const ob = (db.range ?? 1) > foeRange ? 1 : 0;
+      return (
+        (ob - oa) ||
+        ((db.maxHp ?? 0) - (da.maxHp ?? 0)) ||
+        ((db.atk ?? 0) - (da.atk ?? 0)) ||
+        a.gold - b.gold
+      );
+    };
+    /* 没有具体对手时，"先手权"没有意义——按通用强度挑，价格仍然垫底 */
+    const byBulk = (a: { type: string; gold: number }, b: { type: string; gold: number }): number => {
+      const da = utype(s, a.type);
+      const db = utype(s, b.type);
+      return (
+        ((db.maxHp ?? 0) - (da.maxHp ?? 0)) ||
+        ((db.atk ?? 0) - (da.atk ?? 0)) ||
+        a.gold - b.gold
+      );
     };
     const pick =
       ok.length > 0
-        ? [...ok].sort(order)
+        ? [...ok].sort(byRange)
         : need
           ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
-          : opts;
+          : [...opts].sort(byBulk);
     for (const opt of pick) {
       const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: opt.type };
       const r = applyAction(s, a);

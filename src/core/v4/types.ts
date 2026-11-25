@@ -197,8 +197,14 @@ export interface Constraints {
    * 全程金币 60~193，一次都没够过）。
    */
   spendCap?: number;
-  /** 采购门槛：要造"挨得住一发、三发能打穿"的兵（从对面构成算，见 constrain） */
-  need?: { hp: number; atk: number };
+  /**
+   * 采购门槛：要造"挨得住一发、三发能打穿"的兵（从对面构成算，见 constrain）。
+   *
+   * `range` 是**对面最大射程**（2026-11-25 加）。它决定的不是"门槛"，是"排序"：
+   * 我方射程压不过它，就谈不上先手，这时候该比的是**血**（血薄的会被溅射一次清掉），
+   * 不是射程。S-011 实测：造射程 3 的弓手去冲射程 5 的炮，弓手 22 血，一发就没。
+   */
+  need?: { hp: number; atk: number; range: number };
   /** 必须空出来的格子（产兵格、城门口）。打分层发现自家单位站着，第一件事就是把它挪开 */
   keepClear: number[];
   squads: Squad[];
