@@ -1363,11 +1363,75 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * ⚠️ S-002 当年正是因为这条门槛从绿变红，才写下"数量就是答案"。用户 2026-11-25 澄清：
    * 那道题太综合、他打都不需要造新兵，所以那个结论不成立，**不要为它保留例外**。
    */
+  /*
+   * **闸 1：打得穿吗**（2026-11-25，P2-2a）
+   *
+   * 判据：拿这个兵种打**多数决目标**（数量最多的那一类敌人），
+   * `previewAttack` 的伤害 ×3 ≥ 目标的血——**三发能打穿它**。
+   *
+   * 为什么不是"伤害 ≥1"：那太松，民兵对 4 代戟兵一发 8、46 血要 6 发才倒，
+   * 实测就是"造了一堆打不动的"（S-001 一度从绿变红）。
+   *
+   * 为什么沿用 3 而不是 4 或 6：P1 已经用"三发打穿"验证过整套行为（S-012 转绿、
+   * S-001 损 13）。2a 只换**算法**（`atk−armor` → `previewAttack`，让破甲算进来），
+   * 不动阈值——一次只改一件事，否则读数变了不知道是哪个造成的。
+   *
+   * 为什么用 `previewAttack` 而不是 `atk − armor`：引擎的能力（破甲 7 个兵有、
+   * 盾墙）都在它里面。实测火枪打坦克：23−10=13，但 `previewAttack` 给 16（破甲生效）。
+   *
+   * 为什么对"多数决"而不是"最硬"：混编里放一个坦克，按最硬判会把所有候选都否掉，
+   * 结果是一手不造、被杂兵推平。**打不动硬点不等于没输出**，硬点交给破甲兵或绕开。
+   *
+   * 伤害与攻方位置无关（实测四个位置结果一致），所以这里用模板单位算，不需要真单位。
+   */
+  const mainFoe = (() => {
+    const byType = new Map<string, { n: number; u: (typeof foes)[number] }>();
+    for (const u of foes) {
+      const rec = byType.get(u.type) ?? { n: 0, u };
+      rec.n += 1;
+      /* 同类型里取血最厚的那个当代表（同一兵种血量可能不同） */
+      if (u.hp > rec.u.hp) rec.u = u;
+      byType.set(u.type, rec);
+    }
+    return [...byType.values()].sort((a, b) => b.n - a.n || b.u.hp - a.u.hp)[0]?.u;
+  })();
+  const usable = mainFoe
+    ? Object.values(s.unitTypes)
+        .filter((d) => d.category === 'combat')
+        .filter((d) => {
+          const probe = {
+            id: '__probe',
+            owner: s.current,
+            type: d.id,
+            x: mainFoe.x,
+            y: mainFoe.y,
+            hp: d.maxHp,
+          } as Unit;
+          return previewAttack(s, probe, mainFoe).toDefender * 3 >= mainFoe.hp;
+        })
+        .map((d) => d.id)
+    : [];
   const need =
     foes.length > 0
       ? {
+          /** 对多数决目标"三发能解决"的兵种（闸 1 的唯一口径） */
+          usable,
+          /** 对面最高单发：血不如它厚的，挨一发就没了（P1 留下，2b 会换成完整的"活得到"） */
           hp: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).atk ?? 0), 0),
-          atk: Math.ceil(foes.reduce((n, u) => Math.max(n, u.hp), 0) / 3),
+          /*
+           * **能不能"充数"**（2026-11-25，用户原话）：
+           * "敌方射程大但无溅射无多段 → 最后才是用许多不符合要求的兵充数、以伤换伤；
+           *  但敌方有多段或溅射，连这条也要排除，得尽量散开。"
+           *
+           * 所以"买一堆打不动的便宜兵"不是无条件的兜底：
+           * 敌方有**溅射**（一发清一片）或**多段**（一回合多次）时，充数是负资产。
+           * 这条只影响"没有候选时要不要凑数"，不影响正常挑选。
+           */
+          canPad: !foes.some((u) => {
+            /* 溅射/多段是兵种自身属性，`effectiveStats` 不带它们，直接读定义 */
+            const d = utype(s, u.type);
+            return (d.splash ?? 0) > 0 || (d.burst ?? 1) > 1;
+          }),
           /* 对面最大射程：压不过它就没有"先手"，排序要改比血（见 tactics 的 byRange） */
           range: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).range ?? 1), 0),
         }

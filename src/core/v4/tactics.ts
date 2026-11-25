@@ -649,7 +649,7 @@ function stepOffSpawn(
 export function recruitAction(
   s: GameState,
   world: World,
-  need?: { hp: number; atk: number; range: number },
+  need?: { usable: string[]; hp: number; range: number; canPad: boolean },
   cap?: number,
 ): Action | null {
   const gold = Math.min(s.players[world.me]?.gold ?? 0, cap ?? Infinity);
@@ -666,16 +666,16 @@ export function recruitAction(
      */
     const opts = world.affordableCombat(info.city, gold);
     /*
-     * 先按**门槛**筛，再按价钱挑——顺序不能反。
+     * **闸 1：打得穿吗**（2026-11-25，P2-2a）。
      *
-     * 反过来的话永远是"买得起的最便宜"（民兵），而民兵在装甲车面前一发都挨不住。
-     * 筛完空了就退回"攻击最高的"（打不穿也总比完全不还手强），再空就退回原样。
+     * 约束层已经算好"对多数决目标打得穿的兵种"（`need.usable`），这里只做交集，
+     * 不自己判断伤害——两处算同一件事必然跑偏。
+     *
+     * 从前这里是"血 > 对面最高单发 且 三发打穿"，而"血"那一半其实属于闸 2
+     * （抵近途中会不会死），P2-2b 才做。现在先把"0 伤害"的整类排除。
      */
     const ok = need
-      ? opts.filter((o) => {
-          const d = utype(s, o.type);
-          return (d.maxHp ?? 0) > need.hp && (d.atk ?? 0) * 3 >= need.atk * 3;
-        })
+      ? opts.filter((o) => need.usable.includes(o.type) && (utype(s, o.type).maxHp ?? 0) > need.hp)
       : [];
     /*
      * 满足门槛之后：**先挑射程远的**（先手权），同射程挑**血厚的**，再看攻，价格只做最后一档。
@@ -719,11 +719,19 @@ export function recruitAction(
         a.gold - b.gold
       );
     };
+    /*
+     * **一个都"打不穿"时：能不能充数，看敌方清不清得掉你**（用户 2026-11-25）。
+     *
+     * 敌方没有溅射/多段 → 可以买一堆便宜的凑数、以伤换伤（S-001 就靠这个铺量）；
+     * 敌方有溅射或多段 → 充数是负资产（一发清一片），**宁可攒钱不造**。
+     */
     const pick =
       ok.length > 0
         ? [...ok].sort(byRange)
         : need
-          ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
+          ? need.canPad
+            ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
+            : []
           : [...opts].sort(byBulk);
     for (const opt of pick) {
       const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: opt.type };
