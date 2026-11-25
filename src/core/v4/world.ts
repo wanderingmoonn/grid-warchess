@@ -499,8 +499,25 @@ export function buildWorld(s: GameState, me: PlayerId): World {
    * 关键格的定义不能依赖"现在有没有空位"，否则它会在最需要工作的时刻失效。
    */
   const keepClear: number[] = [];
-  for (const city of myCities) {
+  for (const info of cities) {
+    const city = info.city;
     const n = city.size ?? 2;
+    /*
+     * **挨打的时候，城格是可以站的**（2026-11-25，修 9.12）。
+     *
+     * 引擎的事实：地形防御表 **city = +3 护甲、plain = 0**，所以守军站进城里
+     * 比站在城外多 3 点护甲。而 v4 原来把城格和外圈一律算成"必须空"，
+     * 于是守军永远站在平原上挨打（实测 D-1-01：v1 站 2 个进城里、城血 18；
+     * v4 一个都不进、城血 11）。
+     *
+     * 为什么只在 `foeEta <= 1`（敌人下一手就能摸到）时放开：
+     * 这是**同一个数**（9.7 的威胁场）的第三个读者，不另起一个"我在防守"的判断。
+     * 不在威胁下的城仍然按"产兵口"处理——那时候挡住产兵口是真的会造不出兵。
+     *
+     * 挨打时为什么不怕堵产兵口：被压着的城本来就不造兵
+     * （`recruitAction` 跳过 `threatened` 的城、`need.spawn` 也不含它），
+     * 所以这里放开不会和产兵打架。
+     */
     /*
      * **城格 + 外一圈都保**（2026-11-24 试过只保城格，回退了）。
      *
@@ -510,19 +527,16 @@ export function buildWorld(s: GameState, me: PlayerId): World {
      *
      * 结论：城边的高产地在这个口径下吃不到。要吃得改地图（把高产地形挪出外圈），
      * 不是改 keepClear。
+     *
+     * 城格为什么也算（2026-11-24 修正）：兵站在城里，产兵口就被堵住，
+     * `recruitSpawnCells` 直接返回 0（S-009：守军退回城下之后金 190 一分都花不出去）。
+     * **例外只有一个**：挨打的时候（上面那条 `foeEta <= 1`），城格是可以站的。
      */
     for (let dy = -1; dy <= n; dy++) {
       for (let dx = -1; dx <= n; dx++) {
-        /*
-         * **城格也算**（2026-11-24 修正）。
-         *
-         * 一开始我把城格排除了，理由是"新兵本来就生在城里"。错：
-         * 兵站在城格里，产兵口就被堵住——`recruitSpawnCells` 直接返回 0
-         * （S-009：守军退回城下之后金 190 一分都花不出去）。
-         * v3 的 `spawn` 类关键格也是把"被占的城格"算进去的。
-         *
-         * 新兵出生在城格上这件事，靠 ai-v4 里"本回合动过的单位跳过"来兜（不会反复派让开）。
-         */
+        /* 挨打时城格可以站（见上）；外圈照旧不许停——那是出城通道 */
+        const inside = dx >= 0 && dy >= 0 && dx < n && dy < n;
+        if (inside && info.foeEta <= 1) continue;
         const x = city.x + dx;
         const y = city.y + dy;
         if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;

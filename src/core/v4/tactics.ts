@@ -12,7 +12,7 @@
  * 单位查不到任务，就什么都不做。
  */
 import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, utype } from '../rules.ts';
-import type { Action, GameState, Unit } from '../types.ts';
+import type { Action, City, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
 
@@ -172,14 +172,43 @@ export function actFor(
     const home = s.cities.find((c) => c.id === sqNow.cityId);
     if (home) {
       /*
-       * 守军贴着城还不够——**不许站在产兵格上**。
+       * **挨打的城：守军站进城里**（2026-11-25，修 9.12）。
        *
-       * S-009 逼出来的：决定是"守"，5 个兵全退回城下、把产兵圈占满，
-       * `recruitSpawnCells` 返回 0，金 190 一分花不出去；
-       * 而且"回城"和"让位"会来回拉锯（一回合挪出去、下一回合拽回来）。
-       * 所以把站位写进 hold 的条件里，两条指令别打架。
+       * 城是地形，`terrainDef.city = 3`，站在城里比站在平原上多 3 点护甲。
+       * 只要这一格还有敌兵够得着（`foeEta <= 1`，同一个威胁场的数），
+       * 守军就该在城里挨这一轮，而不是站在城墙外的平原上。
+       *
+       * 顺序（和下面那段"回城优先于打人"是同一个理由，只是分了两段）：
+       *   · 离城还远 → 先回城（S-004 那条：回城的路上不要停下打）；
+       *   · 已经在城下 → **这一手打得到人就先打**，打不到才进城里站好。
+       *     不先打的话，D-1-02 那四个人会花两回合往回走进城，期间城里一拳不出。
        */
-      if (con.keepClear.includes(u.y * s.w + u.x)) {
+      const underFire =
+        (world.cities.find((c) => c.city.id === sqNow.cityId)?.foeEta ?? Infinity) <= 1;
+      if (underFire) {
+        if (manhattan(u, home) > 2) {
+          const spot = stepToward(s, u, { x: home.x, y: home.y });
+          if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+        } else if (u.acted || !attackableTargets(s, u).some((v) => v.owner !== world.me)) {
+          /*
+           * **这一手已经打过了，就顺路进城**（引擎允许"打一次 + 走一段"）。
+           * 没打过但打得到 → 落下去走攻击分支，先把这一拳打出去再谈站位。
+           */
+          const post = cityPostCell(s, world, con, u, home);
+          if (post && (post.x !== u.x || post.y !== u.y)) {
+            const spot = stepToward(s, u, post, false, world.stepsFrom(post));
+            if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+          }
+        }
+      } else if (con.keepClear.includes(u.y * s.w + u.x)) {
+        /*
+         * 守军贴着城还不够——**不许站在产兵格上**。
+         *
+         * S-009 逼出来的：决定是"守"，5 个兵全退回城下、把产兵圈占满，
+         * `recruitSpawnCells` 返回 0，金 190 一分花不出去；
+         * 而且"回城"和"让位"会来回拉锯（一回合挪出去、下一回合拽回来）。
+         * 所以把站位写进 hold 的条件里，两条指令别打架。
+         */
         const spot = stepOffSpawn(s, u, home, con);
         if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
       } else if (manhattan(u, home) > 2) {
@@ -462,6 +491,51 @@ function stepAside(
     }
   }
   return best;
+}
+
+/**
+ * **守城占位**：挨打的时候，守军该站进城里的哪一格。
+ *
+ * 城格每一格都是同样的 +3 护甲，所以"站哪一格"只影响**往哪个方向进去**：
+ * 挑离敌人最近的那一格，冲锋方向最短。同距按格号排（每回合选同一格，不会抖）。
+ *
+ * 一格一个人：同一支队的守军按 id 排先后、依次挑剩下的格。
+ * 不这么分的话两个兵会抢同一格，第二个被堵在城墙外——那等于白站。
+ *
+ * 还没做的是"按兵种排前排后排"（守卫站哪面墙、远程站哪格），
+ * 那是 9.11 的另一半（守军站位），比这道题大。
+ */
+function cityPostCell(
+  s: GameState,
+  world: World,
+  con: Constraints,
+  u: Unit,
+  home: City,
+): { x: number; y: number } | null {
+  /* 已经在城里 → 不动（每格护甲一样，换格只是白费一步） */
+  const n = home.size ?? 2;
+  if (u.x >= home.x && u.x < home.x + n && u.y >= home.y && u.y < home.y + n) return null;
+  const foes = world.foeCombat;
+  if (foes.length === 0) return null;
+
+  const free: Array<{ x: number; y: number; d: number; k: number }> = [];
+  for (let dy = 0; dy < n; dy += 1) {
+    for (let dx = 0; dx < n; dx += 1) {
+      const x = home.x + dx;
+      const y = home.y + dy;
+      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+      const d = Math.min(...foes.map((f) => Math.abs(f.x - x) + Math.abs(f.y - y)));
+      free.push({ x, y, d, k: y * s.w + x });
+    }
+  }
+  if (free.length === 0) return null;
+  free.sort((a, b) => a.d - b.d || a.k - b.k);
+
+  /* 同一支队里我排第几（按 id，稳定），就挑第几个候选格 */
+  const sq = squadOf(con, u);
+  const ids = sq ? [...sq.unitIds].sort((a, b) => (a < b ? -1 : 1)) : [u.id];
+  const rank = Math.max(0, ids.indexOf(u.id));
+  return free[Math.min(free.length - 1, rank)]!;
 }
 
 /**
