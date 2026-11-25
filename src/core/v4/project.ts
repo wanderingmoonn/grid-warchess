@@ -303,3 +303,125 @@ export function bestEraBy(points: EraPoint[], key: 'worth' | 'income'): EraPoint
   }
   return best;
 }
+
+/* ────────────────────────────────────────────────────────────────
+ * **v3 经济求解器的那套逻辑**（2026-11-25 晚，用户要求复刻）
+ *
+ * v3 的 `scripts/solve-economy.ts` 里有一件事我上面漏了，而它正是"升级到底值不值"的关键：
+ *
+ *   升级不是"攒够钱再升"，而是**先投经济、让攒钱变快，再去升**。
+ *   它的判据是：
+ *
+ *     payback   = 造价 ÷ 产出 + 走路回合        （这个经济兵多久回本）
+ *     turnsLeft = (还差多少升级费) ÷ 每回合收入  （照现在的收入，还要几手才攒够）
+ *     投 ⟺ payback ≤ turnsLeft
+ *
+ *   意思是："**在攒够升级费之前，这个经济兵能不能先把自己赚回来**"。
+ *   能，就先投（它一边赚钱一边帮你攒）；不能，就别投（这笔钱是升级费的一部分）。
+ *
+ * 这句话解释了一个反直觉的事实（用户 2026-11-25 指出的）：
+ *   · 1 代 → 2 代（220 金）：攒得很快，turnsLeft 小 → 投经济不划算 → **只能干攒**；
+ *   · 1 代 → 3 代（580 金）：turnsLeft 大 → 1 代经济兵在等待期里能回本 → **投经济反而更快**。
+ * 所以"升级"从来不是"攒钱"和"投资"二选一，而是**由目标远近决定的时序**。
+ *
+ * 另外两条也照搬：
+ *   · **产出阶梯递减**："第 i 个经济兵站的地越来越差"——这里直接按认领表里的
+ *     `造价/产出 + 走路` 从小到大挑，天然就是阶梯。
+ *   · **名额与兵共享**：每回合总共只放得下 `slots` 个（2×2 城是 4 格），
+ *     投经济就等于这段时间少造兵。
+ * ──────────────────────────────────────────────────────────────── */
+
+export interface EconPlanPoint {
+  /** 目标代（0 = 一直不升，1 = 升一级，…） */
+  upTo: number;
+  /** T 时刻的每回合收入 */
+  income: number;
+  econN: number;
+  gold: number;
+  /** 实际到达的代（钱不够就到不了目标） */
+  era: number;
+  /** 每一代在哪一回合达成 */
+  eraTurns: number[];
+  /** 花在升级上的钱 */
+  spent: number;
+}
+
+/**
+ * 模拟"以升到第 `upTo` 级为目标"的一整局（学 v3 的 `simulate(econCap)`）。
+ *
+ * 和 `projectWithEra` 的区别：那边是"钱够就升"的贪心；这里是**先算还差多少升级费、
+ * 再决定这笔钱该不该变成经济兵**。用户指出的正是这个差别。
+ */
+export function solveEconToEra(input: EraProjectInput, upTo: number): EconPlanPoint {
+  const T = Math.max(0, Math.floor(input.T));
+  const eras = input.eras;
+  const targetIdx = Math.max(0, Math.min(upTo, eras.length - 1));
+  let gold = input.gold;
+  let income = input.income;
+  let eraIdx = 0;
+  let econN = 0;
+  let spent = 0;
+  const eraTurns: number[] = [];
+  const used = new Set<string>();
+  const pending: Array<{ at: number; yield: number }> = [];
+  const slots = Math.max(1, input.soldierSlots);
+
+  for (let turn = 1; turn <= T; turn++) {
+    /* ① 攒够就升：升代本身抬高城收入，晚升没有好处（v3 的原话） */
+    while (eraIdx < targetIdx) {
+      const next = eras[eraIdx + 1];
+      if (!next || !Number.isFinite(next.cost) || gold < next.cost) break;
+      gold -= next.cost;
+      spent += next.cost;
+      income += next.cityIncome - eras[eraIdx]!.cityIncome;
+      eraIdx++;
+      eraTurns.push(turn);
+    }
+
+    /* ② 还差多少升级费 / 照现在收入要几手 */
+    let remaining = 0;
+    for (let i = eraIdx; i < targetIdx; i++) remaining += eras[i + 1]!.cost;
+    const turnsLeft =
+      remaining <= 0 ? T - turn + 1 : Math.max(0, (remaining - gold) / Math.max(1, income));
+
+    /* ③ 名额共享：这一手最多买 slots 个；按"回本期"从快到慢挑 */
+    let bought = 0;
+    while (bought < slots) {
+      const spots = eras[eraIdx]!.spots;
+      let best: (typeof spots)[number] | undefined;
+      let bestPb = Infinity;
+      for (const sp of spots) {
+        if (used.has(`${sp.x},${sp.y}`)) continue;
+        if (gold < sp.gold) continue;
+        const pb = sp.gold / Math.max(1, sp.yield) + sp.turns;
+        if (pb < bestPb) {
+          bestPb = pb;
+          best = sp;
+        }
+      }
+      if (!best) break;
+      /* **核心判据**：回本期比"攒够之前剩下的手数"还长 → 这笔钱是升级费，别动它 */
+      if (bestPb > turnsLeft) break;
+      used.add(`${best.x},${best.y}`);
+      gold -= best.gold;
+      econN++;
+      bought++;
+      pending.push({ at: turn + 1 + best.turns, yield: best.yield });
+    }
+
+    /* ④ 到岗才产钱 */
+    for (const p of pending) if (p.at <= turn) income += p.yield;
+    for (let i = pending.length - 1; i >= 0; i--) if (pending[i]!.at <= turn) pending.splice(i, 1);
+
+    gold += income;
+  }
+
+  return { upTo, income, econN, gold, era: eras[eraIdx]!.era, eraTurns, spent };
+}
+
+/** 对每个目标代各跑一遍，返回所有点（按目标从低到高） */
+export function solveEconAll(input: EraProjectInput): EconPlanPoint[] {
+  const out: EconPlanPoint[] = [];
+  for (let i = 0; i < input.eras.length; i++) out.push(solveEconToEra(input, i));
+  return out;
+}

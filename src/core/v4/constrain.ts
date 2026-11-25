@@ -18,7 +18,7 @@ import { upgradeTargetOf } from '../era-routes.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
-import { bestEraBy, bestProjection, incomeNow, projectEconUntil, projectWithEra, unitWorth, unitWorthOfType } from './project.ts';
+import { bestEraBy, bestProjection, incomeNow, projectEconUntil, projectWithEra, solveEconAll, unitWorth, unitWorthOfType } from './project.ts';
 import type { EraTable } from './project.ts';
 import type { Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
 import { buildWorld } from './world.ts';
@@ -2066,6 +2066,18 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         combat: picks,
         soldierSlots: slots,
       });
+      /*
+       * **v3 式求解**：以"升到第 N 级"为目标，先算还差多少升级费，
+       * 再决定这笔钱该不该变成经济兵（回本期 ≤ 攒够之前的剩余手数）。
+       */
+      const plans = solveEconAll({ T: horizon.turns, gold: s.players[world.me].gold, income: incomeNow(s, world), eras, combat: picks, soldierSlots: slots });
+      console.error(
+        `[project3] T=${horizon.turns}（v3 式：边投边攒）${plans.map((p) => `升到第${p.upTo + 1}级→第${p.era}代 收入${Math.round(p.income)} 经济${p.econN} 末金${Math.round(p.gold)} 升级费${p.spent}`).join(' · ')}`,
+      );
+      const plans40 = solveEconAll({ T: 40, gold: s.players[world.me].gold, income: incomeNow(s, world), eras, combat: picks, soldierSlots: slots });
+      console.error(
+        `[project3] 敏感性 T=40：${plans40.map((p) => `升到第${p.upTo + 1}级→第${p.era}代 收入${Math.round(p.income)} 经济${p.econN}`).join(' · ')}`,
+      );
       console.error(
         `[project2] 敏感性 T=40（假窗口）：${[0, 1, 2, 3]
           .map((ups) => {
