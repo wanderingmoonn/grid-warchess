@@ -571,6 +571,18 @@ export const BALANCE = {
   /** 每深一层，人数下限 +1（一层的遭遇战至少 3 个，三层至少 5 个） */
   countBase: { battle: 3, elite: 3, siege: 3, special: 3, boss: 4 } as Record<string, number>,
   /**
+   * **我方的钱折成敌军人头的系数**（1 = 一个最便宜的兵的价格算一个人头）。
+   *
+   * 0.1 = **十个最便宜的兵的钱，才抵一个敌人**。为什么不设 0：
+   * 敌方只跟"人数"走的话，"开局不拿兵、纯屯钱买藏品、后期再补兵"是严格最优
+   * ——你越空，对面越弱。给钱一个低权重，屯钱仍然要付代价，但不会把
+   * "攒钱买藏品"这条玩法打死（那本来是本作的主要乐趣之一）。
+   *
+   * 取整用 floor，所以开局那 180 金不会立刻多一个敌人（0.72 → 0），
+   * 也避免"多 1 金就涨一个人"的悬崖。
+   */
+  goldFollow: 0.1,
+  /**
    * "加钱"的系数（按房型）：底钱只够买池里最便宜的兵，这一笔决定能往上抬多少。
    * 调大 = 敌人更精锐（同人数、更好的兵）；调小 = 更多便宜兵。
    */
@@ -775,24 +787,6 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
         ? [...theme.pool, ...theme.prevPool]
         : [...theme.poolHigh, ...theme.poolHigh, ...theme.pool, ...theme.prevPool];
 
-  const headcount = enemyHeadcount(node.kind, run.layer, myCount);
-  /*
-   * 地图要跟人数一起长。
-   *
-   * 8×8 上站 6 个人是遭遇战，站 20 个人就是堵车——后排一辈子挤不上去，
-   * 攻坚还会因为走不到城下被判超时。人多的时候把图放大一点，
-   * 但只放大到 22（再大就变成"跑半天才见面"）。
-   */
-  const crowd = Math.max(0, Math.floor((myCount + headcount - 8) / 3));
-  const size = Math.min(22, (theme.size[idx] as number) + Math.min(4, crowd) + (isSpecial ? 2 : 0));
-
-  // 遭遇/精英：双方无城；攻坚 1 座；层末 L1–L2 一座、L3 两座；守城战是"玩家有城"
-  const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
-
-  const clockForScale = isBoss ? STEPS_PER_LAYER : run.clock;
-  const power = WORLDS[run.world].power ?? 1;
-  const scale = enemyScale(run.layer, node.kind, headcount, pool, clockForScale, power);
-
   const def = defenseFor(run);
   /** 敌方的工事：精英一座塔；攻坚一座塔；层末两座塔 */
   const enemyDefense: ArmyEntry[] = [];
@@ -821,6 +815,49 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   }
 
   /*
+   * ---- 这一场敌方有多少人 ----
+   *
+   * 两个维度一起决定：
+   *   1. **我方的兵**：×0.7，仍然比我方少一个以上；
+   *   2. **我方的钱**：按"池内最低价兵"折成虚拟人头，系数 `goldFollow = 0.15`。
+   *      钱的 k 比兵低一个数量级，但必须算——不然"开局不拿兵、纯屯钱买藏品、
+   *      后期再补兵"就是最优解：对面只跟着你的**人数**走，你越空它越弱。
+   * 钱只进编成，不进地图尺寸（图是按真人头长的）。
+   */
+  const cheapest = byPrice(theme.pool)[0] as string;
+  const goldHeads = Math.floor(
+    (Math.max(0, run.gold) / Math.max(1, costOf(cheapest))) * BALANCE.goldFollow,
+  );
+
+  /*
+   * 防御工事**换编制**：每两件工事多一个守军（至少 +1）。
+   *
+   * 攻方先手，守方本来就吃亏；上一版工事还要按半价吃守军的预算，等于
+   * "多两座塔 = 少一个兵"。现在工事只按 1/4 价占预算，并且**倒过来补人**：
+   * a 个兵 b 座塔 → a + ⌈b/2⌉ 个兵 b 座塔。
+   */
+  const structures = enemyDefense.reduce((n, d) => n + d.count, 0);
+  const defenseCrew = structures > 0 ? Math.max(1, Math.ceil(structures / 2)) : 0;
+  const headcount = enemyHeadcount(node.kind, run.layer, myCount) + goldHeads + defenseCrew;
+
+  /*
+   * 地图要跟人数一起长。
+   *
+   * 8×8 上站 6 个人是遭遇战，站 20 个人就是堵车——后排一辈子挤不上去，
+   * 攻坚还会因为走不到城下被判超时。人多的时候把图放大一点，
+   * 但只放大到 22（再大就变成"跑半天才见面"）。
+   */
+  const crowd = Math.max(0, Math.floor((myCount + headcount - 8) / 3));
+  const size = Math.min(22, (theme.size[idx] as number) + Math.min(4, crowd) + (isSpecial ? 2 : 0));
+
+  // 遭遇/精英：双方无城；攻坚 1 座；层末 L1–L2 一座、L3 两座；守城战是"玩家有城"
+  const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
+
+  const clockForScale = isBoss ? STEPS_PER_LAYER : run.clock;
+  const power = WORLDS[run.world].power ?? 1;
+  const scale = enemyScale(run.layer, node.kind, headcount, pool, clockForScale, power);
+
+  /*
    * 守城战：三波。
    *
    * 第一波就在场上（`enemyTypes`），后面两波在第 3 / 第 6 轮到场。波次
@@ -829,16 +866,16 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
    * 但你有一座城和一处工事，这是"守"的本钱。
    */
   /*
-   * 工事要**占预算**。
+   * 工事只按**造价 1/4** 占预算（上一版是 1/2）。
    *
-   * 不占的话等于白送：层末本来就按"我方造价 × k"给兵，再叠两座碉堡，
-   * 对面的总价值直接翻倍——实测第三层层末 10 打 7 会被两座塔按死在半路。
-   * 工事按造价的一半计入（它不能动、不能换位置，值不了全价），
-   * 但最多吃掉 35% 的预算，免得把守军压成两三个人。
+   * 守方没有先手：塔和墙不能走位、吃不到地形、也换不了目标，值不了全价。
+   * 而且它们本来就已经通过 `defenseCrew` 换成了编制——再按半价挤兵，
+   * 就是"造塔反而更弱"。1/4 这个数配合"每两件 +1 兵"，让 a 兵 b 塔
+   * 稳定变成 a+⌈b/2⌉ 兵 b 塔，而不是 a−1 兵 b 塔。
    */
   const defValue = Math.min(
     scale.budget * 0.35,
-    enemyDefense.reduce((n, d) => n + (costOf(d.type) || 0) * d.count * 0.5, 0),
+    enemyDefense.reduce((n, d) => n + (costOf(d.type) || 0) * d.count * 0.25, 0),
   );
   const troopBudget = Math.max(40, scale.budget - defValue);
   /*

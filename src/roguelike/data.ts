@@ -556,8 +556,11 @@ export const EVENTS: EventDef[] = [
     body: '两年前这里打过一场，现在草长得很好。兵器还插在土里，像谁忘了收。',
     choices: [
       { label: '捡兵器', hint: '得 1 个中档兵', effect: { add: { type: 'layer-mid', count: 1 } } },
-      // 免费藏品在这一档里太强（一件藏品≈5 个兵），翻尸体堆得付点代价
-      { label: '找那面旗', hint: '得 1 件藏品，损 1 个基础兵', effect: { relic: 'random', remove: { type: 'layer-low', count: 1 } } },
+      /*
+       * 免费藏品是**故意的**（2026-11-26 定）：事件节点的收益必须高于一场战斗，
+       * 否则玩家最优解是"只走战斗、绕开事件"。藏品 ≈ 5~6 个兵，白拿才值得绕路。
+       */
+      { label: '找那面旗', hint: '得 1 件藏品', effect: { relic: 'random' } },
       { label: '什么都不动', hint: '+40 金', effect: { gold: 40 } },
     ],
   },
@@ -601,8 +604,7 @@ export const EVENTS: EventDef[] = [
     choices: [
       { label: '借兵', hint: '−80 金，得 1 个高级兵', effect: { gold: -80, add: { type: 'layer-high', count: 1 } } },
       { label: '卖情报', hint: '+110 金', effect: { gold: 110 } },
-      // 白拿的藏品会让另外两项变成摆设：抄账本要买通账房
-      { label: '抄一份账本', hint: '−80 金，得 1 件藏品', effect: { gold: -80, relic: 'random' } },
+      { label: '抄一份账本', hint: '得 1 件藏品', effect: { relic: 'random' } },
     ],
   },
   {
@@ -704,18 +706,18 @@ export const EVENTS: EventDef[] = [
     choices: [
       {
         label: '押大',
-        hint: '−100 金，五成：+260 金',
+        hint: '−100 金，五成：+320 金',
         effect: {
           gold: -100,
-          risk: { chance: 0.5, win: { gold: 260 }, winText: '开了大', loseText: '开了小' },
+          risk: { chance: 0.5, win: { gold: 320 }, winText: '开了大', loseText: '开了小' },
         },
       },
       {
         label: '押小',
-        hint: '−50 金，五成：+120 金',
+        hint: '−50 金，五成：+140 金',
         effect: {
           gold: -50,
-          risk: { chance: 0.5, win: { gold: 120 }, winText: '开了小', loseText: '开了大' },
+          risk: { chance: 0.5, win: { gold: 140 }, winText: '开了小', loseText: '开了大' },
         },
       },
       { label: '看场子', hint: '+40 金', effect: { gold: 40 } },

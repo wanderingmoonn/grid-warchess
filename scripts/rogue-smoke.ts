@@ -589,7 +589,9 @@ console.log('\n[11] 工事、英雄与按层价格（2026-11-25 修）');
   bossHeroRun.world = 'fantasy';
   bossHeroRun.army = [{ type: 'berserker', count: 6 }];
   const bossInit = bossFor(bossHeroRun, 77).init;
-  const bossHeroes = bossInit.enemyTypes.filter((t) => ['holy-knight-lord', 'royal-king', 'elf-queen', 'archmage'].includes(t));
+  // 只数**数据里标了 `hero: true`** 的：国王（royal-king）在本体里不是 hero 标记，
+  // 它可以被重复招募；这条断言只钉引擎定义下的"英雄唯一"。
+  const bossHeroes = bossInit.enemyTypes.filter((t) => ['holy-knight-lord', 'elf-queen', 'archmage'].includes(t));
   check(bossHeroes.length <= 1, '敌方编成最多一个英雄', bossHeroes.join(','));
 
   const stock = shopStock(bossHeroRun, makeRng(2));
@@ -708,6 +710,48 @@ console.log('\n[12] 藏品按层成长、医官额度、移动加成只给慢兵
   const ge = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.name === '戈兵');
   check(!!scout && utype(st, scout.type).move === 4, '骑兵不额外吃 +1 移动', scout ? String(utype(st, scout.type).move) : 'missing');
   check(!!ge && utype(st, ge.type).move === 3, '步兵吃 +1 移动（2→3）', ge ? String(utype(st, ge.type).move) : 'missing');
+}
+
+// ---------------------------------------------------------------- 13. 钱也是兵力 / 工事换编制
+console.log('\n[13] 我方金币计入敌方编成、工事换成守军编制');
+{
+  const mk = (gold: number, layer: LayerId = 1) => {
+    const r = startRun(51, 'frontier');
+    r.layer = layer;
+    r.clock = 4;
+    r.army = [{ type: layer === 1 ? 'ge' : 'hmg', count: 5 }];
+    r.gold = gold;
+    return battleFor(r, { kind: 'battle', title: 't', sub: '' }, 606);
+  };
+  const poor = mk(0);
+  const rich = mk(800);
+  check(
+    rich.enemyTypes.length > poor.enemyTypes.length,
+    '同样 5 个兵，屯 800 金时敌人更多（钱算兵力）',
+    `${poor.enemyTypes.length} → ${rich.enemyTypes.length}`,
+  );
+  check(mk(200).enemyTypes.length === poor.enemyTypes.length, '正常带着两百金不会立刻变难', `${poor.enemyTypes.length} → ${mk(200).enemyTypes.length}`);
+
+  // 工事换编制：层末比同层遭遇战多（L3 四件工事 = +2 人）
+  const bossRun = startRun(52, 'frontier');
+  bossRun.layer = 3;
+  bossRun.world = 'base';
+  bossRun.clock = 5;
+  bossRun.gold = 0;
+  bossRun.army = [{ type: 'hmg', count: 6 }];
+  const boss = bossFor(bossRun, 77).init;
+  const structs = boss.enemyDefense.reduce((n, d) => n + d.count, 0);
+  check(structs === 4, 'L3 层末有四件工事', String(structs));
+  check(boss.enemyTypes.length >= 6, '工事不倒扣兵，反而多给编制（6 兵 + 4 工事 → ≥6 守军）', String(boss.enemyTypes.length));
+
+  // 守城战不该吃这条（攻方没有工事）
+  const sp = startRun(53, 'frontier');
+  sp.layer = 2;
+  sp.world = 'fantasy';
+  sp.gold = 500;
+  sp.army = [{ type: 'berserker', count: 5 }];
+  const spInit = battleFor(sp, { kind: 'special', title: 't', sub: '' }, 11);
+  check(spInit.enemyDefense.length === 0, '守城战的攻方没有工事编制');
 }
 
 console.log(
