@@ -2,7 +2,7 @@ import type { FixedMap } from '../core/fixed-maps.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { GameState, Unit } from '../core/types.ts';
 
-export type BoardAngleScene = 'elevation' | 'damage2' | 'damage' | 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
+export type BoardAngleScene = 'militia' | 'militiaStyles' | 'elevation' | 'damage2' | 'damage' | 'future' | 'cities' | 'all' | 'river' | 'lake' | 'sea';
 
 const near = (x: number, y: number, cx: number, cy: number, rx: number, ry: number): boolean =>
   ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
@@ -214,10 +214,59 @@ function elevationTerrain(w: number, _h: number, x: number, y: number): string {
   return '.';
 }
 
+/** 民兵斜俯视微缩模型近景展示图（12×12：涵盖平原、丘陵、台地、森林、河流木桥、高山与青铜城池） */
+function militiaTerrain(x: number, y: number): string {
+  if (x === 5 && (y <= 4 || y >= 7)) return '~';
+  if (x === 5 && (y === 5 || y === 6)) return '=';
+  if ((x === 4 || x === 6) && (y <= 1 || y >= 10)) return 's';
+  if ((x === 0 && y === 0) || (x === 1 && y === 0) || (x === 11 && y === 0)) return '^';
+  if ((x >= 8 && x <= 10 && y >= 1 && y <= 2)) return 'h';
+  if ((x >= 1 && x <= 3 && y >= 8 && y <= 9)) return 'h';
+  if ((x === 0 || x === 1) && y >= 5 && y <= 6) return 'f';
+  if ((x === 10 || x === 11) && y >= 5 && y <= 7) return 'f';
+  if (x >= 8 && x <= 9 && y >= 9 && y <= 10) return 'f';
+  return '.';
+}
+
+/**
+ * 四套民兵风格 × 真实地貌对照图（16×16）。
+ *
+ * 行 = 风格（y=2 是 A，y=6 是 B，y=10 是 C，y=14 是 D），
+ * 列 = 地貌（x=2 平原、x=6 丘陵、x=10 台地、x=14 森林），
+ * 每个落脚格铺 3×3 的地貌块，保证兵偶站在真正的地块上而不是裸地。
+ * 地形字符沿用主程序 mapgen.CHAR：'.' 平原 / 'h' 丘陵 / 'P' 台地 / 'f' 森林。
+ */
+function militiaStylesTerrain(x: number, _y: number): string {
+  const cols = [2, 6, 10, 14];
+  const bands = ['.', 'h', 'P', 'f'];
+  for (let i = 0; i < cols.length; i++) {
+    const cx = cols[i]!;
+    if (Math.abs(x - cx) <= 1) return bands[i]!;
+  }
+  return '.';
+}
+
+/** 四套风格在真实地貌上的落位：行=风格，列=地貌 */
+const MILITIA_STYLE_GRID: Array<[string, number, number]> = [
+  ['proto_militia_a', 2, 2], ['proto_militia_a', 6, 2], ['proto_militia_a', 10, 2], ['proto_militia_a', 14, 2],
+  ['proto_militia_b', 2, 6], ['proto_militia_b', 6, 6], ['proto_militia_b', 10, 6], ['proto_militia_b', 14, 6],
+  ['proto_militia_c', 2, 10], ['proto_militia_c', 6, 10], ['proto_militia_c', 10, 10], ['proto_militia_c', 14, 10],
+  ['proto_militia_d', 2, 14], ['proto_militia_d', 6, 14], ['proto_militia_d', 10, 14], ['proto_militia_d', 14, 14],
+];
+
 export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all'): GameState {
-  const mapW = scene === 'damage' || scene === 'damage2' ? 20 : scene === 'elevation' ? 24 : size;
-  const mapH = scene === 'damage' ? 20 : scene === 'damage2' ? 16 : scene === 'elevation' ? 24 : size;
+  const mapW = scene === 'militia' ? 12
+    : scene === 'militiaStyles' ? 16
+    : scene === 'damage' || scene === 'damage2' ? 20
+    : scene === 'elevation' ? 24 : size;
+  const mapH = scene === 'militia' ? 12
+    : scene === 'militiaStyles' ? 16
+    : scene === 'damage' ? 20
+    : scene === 'damage2' ? 16
+    : scene === 'elevation' ? 24 : size;
   const cellOf = (x: number, y: number): string => {
+    if (scene === 'militia') return militiaTerrain(x, y);
+    if (scene === 'militiaStyles') return militiaStylesTerrain(x, y);
     if (scene === 'elevation') return elevationTerrain(mapW, mapH, x, y);
     if (scene === 'damage' || scene === 'damage2') return damageTerrain(mapW, mapH, x, y);
     if (scene === 'cities' || scene === 'future') return citiesTerrain(size, x, y);
@@ -228,6 +277,8 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   };
 
   const sceneNames: Record<BoardAngleScene, string> = {
+    militia: '民兵微缩兵偶（四阵营 · 多地形 · 多状态）',
+    militiaStyles: '四套民兵风格 × 真实地貌（行=风格 A/B/C/D，列=平原/丘陵/台地/森林）',
     elevation: '地形高差（台地 / 谷地 / 沼泽）',
     damage2: '时代六至八 · 四档受损（常态/受损/重创/废墟）',
     damage: '时代一至五 · 四档受损（常态/受损/重创/废墟）',
@@ -247,6 +298,23 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     eras16: number[];
     eras32: number[];
   }> = {
+    militia: {
+      a16: [{ x: 1, y: 2 }],
+      b16: [{ x: 8, y: 6 }],
+      a32: [{ x: 1, y: 2 }],
+      b32: [{ x: 8, y: 6 }],
+      eras16: [1, 1],
+      eras32: [1, 1],
+    },
+    // 四风格对照只看兵偶，不放城池，避免遮挡地貌块
+    militiaStyles: {
+      a16: [],
+      b16: [],
+      a32: [],
+      b32: [],
+      eras16: [],
+      eras32: [],
+    },
     elevation: {
       a16: [{ x: 1, y: 1 }],
       b16: [{ x: 20, y: 20 }],
@@ -342,7 +410,7 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     expansionIds: scene === 'elevation' ? ['height-terrain'] : [],
   }, 20261123, {});
   match.fog = false;
-  if (scene === 'elevation') {
+  if (scene === 'elevation' || scene === 'militiaStyles') {
     const chToTerrain: Record<string, typeof match.tiles[number]['terrain']> = {
       '.': 'plain', f: 'forest', h: 'hill', '^': 'mountain',
       '~': 'water', s: 'shallow', D: 'deep', '=': 'bridge',
@@ -359,6 +427,8 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     match.cities.forEach((city, idx) => {
       city.era = eraPlan[idx] ?? city.era;
     });
+    // 四风格对照只看兵偶与地貌：清掉初始城，免得城墙盖住地块
+    if (scene === 'militiaStyles') match.cities = [];
   } else if (scene === 'damage' || scene === 'damage2') {
     // 确保展示区为干净平整的开阔平原，不被随机山脉/河流遮挡任何一座城
     for (let y = 0; y < match.h; y++) {
@@ -403,6 +473,27 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
   }
 
   const formations: Record<BoardAngleScene, Array<[Unit['owner'], string, number, number]>> = {
+    militia: [
+      // 红方 A：选中态、常态、已移动可攻、已行动置灰、森林与丘陵站位、城内驻军
+      ['A', 'militia', 4, 5],
+      ['A', 'militia', 4, 6],
+      ['A', 'militia', 3, 5],
+      ['A', 'militia', 2, 8],
+      ['A', 'militia', 1, 5],
+      ['A', 'militia', 2, 3],
+      // 蓝方 B：受击目标态、满血、残血、护盾、丘陵站位
+      ['B', 'militia', 6, 5],
+      ['B', 'militia', 6, 6],
+      ['B', 'militia', 7, 5],
+      ['B', 'militia', 8, 2],
+      // 绿方 C & 金方 D 阵营配色对照
+      ['C', 'militia', 3, 9],
+      ['C', 'militia', 4, 9],
+      ['D', 'militia', 7, 9],
+      ['D', 'militia', 8, 9],
+    ],
+    // 四套风格统一用红方，排除阵营配色干扰，只比造型
+    militiaStyles: MILITIA_STYLE_GRID.map(([type, x, y]) => ['A' as const, type, x, y]),
     elevation: [
       ['A', 'archer', 14, 6], ['A', 'spearman', 19, 17],
       ['A', 'militia', 7, 17], ['B', 'knight', 11, 13],
@@ -455,14 +546,42 @@ export function boardAngleFixture(size: 16 | 32, scene: BoardAngleScene = 'all')
     ],
   };
 
+  // 四套民兵风格是本页专用的原型兵种：把 militia 的数据表复制成 proto_* 别名，
+  // 具体画笔由 registerMilitiaStylePrototypes() 挂到 angled-units 上。
+  if (scene === 'militiaStyles') {
+    const base = match.unitTypes['militia'];
+    if (base) {
+      for (const [type] of MILITIA_STYLE_GRID) {
+        if (!match.unitTypes[type]) {
+          match.unitTypes[type] = {
+            ...base,
+            id: type,
+            name: `民兵 · ${type.slice(-1).toUpperCase()}`,
+          };
+        }
+      }
+    }
+  }
+
   match.units = formations[scene]
     .filter(([, , x, y]) => {
       const ch = map.rows[y]?.[x];
       return Boolean(ch) && ch !== '~' && ch !== 'D' && ch !== '^';
     })
-    .map(([owner, type, x, y], index) => ({
-      id: `preview-unit-${index}`, owner, type, x, y,
-      hp: match.unitTypes[type]!.maxHp, kills: 0, moved: false, acted: false,
-    }));
+    .map(([owner, type, x, y], index) => {
+      const maxHp = match.unitTypes[type]!.maxHp;
+      const u: Unit = {
+        id: `preview-unit-${index}`, owner, type, x, y,
+        hp: maxHp, kills: 0, moved: false, acted: false,
+      };
+      if (scene === 'militia') {
+        // 展示不同战况态：已移动可攻(index=1)、已行动置灰(index=2)、半血(index=7)、低血+护盾(index=8)
+        if (index === 1) u.moved = true;
+        if (index === 2) { u.moved = true; u.acted = true; }
+        if (index === 7) u.hp = Math.round(maxHp * 0.48);
+        if (index === 8) { u.hp = Math.round(maxHp * 0.24); u.extraHp = Math.round(maxHp * 0.45); }
+      }
+      return u;
+    });
   return match;
 }

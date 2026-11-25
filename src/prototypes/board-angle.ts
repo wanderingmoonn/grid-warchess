@@ -1,13 +1,17 @@
 import { playerView } from '../core/fog.ts';
 import { createAngledBoard } from '../ui/angled-board.ts';
 import { renderBoard } from '../ui/board.ts';
+import { registerMilitiaStylePrototypes } from './militia-styles-art.ts';
 import { boardAngleFixture, type BoardAngleScene } from './board-angle-fixture.ts';
+
+// 把四套民兵原型画笔注册到斜俯视渲染器（只影响 proto_militia_a~d，不碰实机兵种）
+registerMilitiaStylePrototypes();
 
 const params = new URLSearchParams(location.search);
 const size: 16 | 32 = params.get('size') === '16' ? 16 : 32;
 const rawScene = params.get('scene');
 let currentScene: BoardAngleScene =
-  rawScene === 'elevation' || rawScene === 'damage2' || rawScene === 'damage' || rawScene === 'future' || rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
+  rawScene === 'militia' || rawScene === 'militiaStyles' || rawScene === 'elevation' || rawScene === 'damage2' || rawScene === 'damage' || rawScene === 'future' || rawScene === 'cities' || rawScene === 'river' || rawScene === 'lake' || rawScene === 'sea' || rawScene === 'all'
     ? rawScene
     : 'all';
 
@@ -29,6 +33,8 @@ const angleButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-angl
 const sceneButtons = [...preview.querySelectorAll<HTMLButtonElement>('[data-scene]')];
 
 const sceneLabels: Record<BoardAngleScene, string> = {
+  militia: '民兵微缩兵偶（四阵营 · 多地形 · 多状态）',
+  militiaStyles: '四套民兵风格 × 真实地貌（行=风格，列=地貌）',
   elevation: '地形高差（台地 / 谷地 / 沼泽）',
   damage2: '六至八代四档受损（常态/受损/重创/废墟）',
   damage: '一至五代四档受损（常态/受损/重创/废墟）',
@@ -50,7 +56,19 @@ function renderScene(scene: BoardAngleScene): void {
     button.setAttribute('aria-pressed', String(button.dataset.scene === scene));
   }
   showFlat();
-  angled?.draw(currentView);
+  const ui = scene === 'militia'
+    ? {
+        selectedId: 'preview-unit-0',
+        selectedCityId: null,
+        reach: [],
+        targets: ['preview-unit-6'],
+        siegeTargets: [],
+        placeable: [],
+        threat: [],
+        me: 'A' as const,
+      }
+    : undefined;
+  angled?.draw(currentView, ui);
 }
 
 function showView(view: string): void {
@@ -67,7 +85,13 @@ for (const button of sceneButtons) {
 }
 
 renderScene(currentScene);
-showView(matchMedia('(max-width: 740px)').matches ? 'tilted' : 'compare');
+// 支持 ?view=flat|tilted|compare 直接锁定视图，方便截图与逐项比对
+const viewParam = params.get('view');
+showView(
+  viewParam === 'flat' || viewParam === 'tilted' || viewParam === 'compare'
+    ? viewParam
+    : matchMedia('(max-width: 740px)').matches ? 'tilted' : 'compare',
+);
 new ResizeObserver(showFlat).observe(flatBoard);
 
 // 支持原型页也按住鼠标中键旋转/调节斜俯视视角，双击中键复位
