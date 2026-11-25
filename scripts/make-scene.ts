@@ -73,6 +73,10 @@ interface Scene {
    * 对手攒钱造兵，几手之后就会有无中生有的守军混进考题里。
    */
   noIncome?: boolean;
+  /** 四轨 × 三档的坐标，直接抄进题卡（见 DESIGN-EXAM-LADDER 第八节） */
+  track?: string;
+  grade?: string;
+  prev?: string;
   map?: string[];
   cities?: Array<{ owner: PlayerId; x: number; y: number; era?: number; hp?: number; ruined?: boolean }>;
   units?: Array<{ owner: PlayerId; type: string; x: number; y: number; hp?: number }>;
@@ -266,6 +270,7 @@ const { panelFull } = writeExam({
   out: resolve(argOf('out', `exams/${ID}`)),
   ask: scene.ask ?? '这一回合你会怎么做？（最多 3 步，按顺序，每步一句为什么）',
   source: `手摆局面（\`${SCENE}\`）· ${ME} 方 · 我 ${meUnits} 兵 / 敌 ${foeUnits} 兵`,
+  ...(scene.track ? { meta: { track: scene.track, grade: scene.grade ?? '?', prev: scene.prev } } : {}),
   note: `${ID}（手摆）：${scene.ask ?? ''}`,
   fog: s.fog,
   dry: DRY,

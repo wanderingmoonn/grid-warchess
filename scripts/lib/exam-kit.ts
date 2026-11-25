@@ -34,6 +34,13 @@ export interface ExamWriteOpts {
   ask: string;
   /** 来源一句话（写进题卡顶部） */
   source: string;
+  /**
+   * 这道题在"四轨 × 三档"里的坐标（见 `docs/DESIGN-EXAM-LADDER-2026-11-25.md` 第八节）。
+   *
+   * 为什么写进题卡而不是另开一份台账：题卡是唯一会被人打开的那份，
+   * 坐标离开题卡就没人看；而"红了该往哪儿修"的默认答案正是"先看上一道是不是绿的"。
+   */
+  meta?: { track: string; grade: string; prev?: string };
   /** 快照的备注 */
   note?: string;
   /** 出题人参考：这一回合某个 AI 实际做了什么（只有切回放时有） */
@@ -248,7 +255,8 @@ export function writeExam(opts: ExamWriteOpts): { panelFull: string; panelSafe: 
     `# ${opts.id}
 
 > 局面文件：\`snap.json\`——把整个文件内容粘进游戏首页「导入对局」，就站在这一格上。
-> ${opts.source}
+> ${opts.source}${opts.meta ? `
+> 轨道：${opts.meta.track}　档位：${opts.meta.grade}　上一道：${opts.meta.prev ?? '—（本轨起点）'}` : ''}
 
 ## 局面
 
