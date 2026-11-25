@@ -291,7 +291,7 @@ export interface Constraints {
    * 为什么不做"造兵 vs 升级"的比较：那要模拟两支队伍的交换（战力求解器的事）。
    * 这一层只保证"升级不会把造兵的路堵死"，谁先谁后由 `ai-v4` 的动作顺序定。
    */
-  upgrade?: { cityId: string; cost: number; why: string };
+  upgrade?: { cityId: string; cost: number; why: string; rounds: number };
 }
 
 /** 一个单位在本回合的归属：属于哪支队、任务是什么。查不到就是"没任务" */

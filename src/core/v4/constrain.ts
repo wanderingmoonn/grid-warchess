@@ -495,6 +495,12 @@ function planUpgrade(
 ): Constraints['upgrade'] {
   /* 攒钱期（接管废墟的 save 阶段）不升级：那笔钱是重建费，动了就前功尽弃 */
   if (spendCap !== undefined) return undefined;
+  /*
+   * **多城从第一天就按每座城算**（用户 2026-11-25 定），最后只交一个动作：
+   * 取"最快会塌的那座"（`rounds` 最小），同轮数取 id 小的。
+   * 单城局自然退化，不用为它写分支——多城以后不会再"一个一个改"。
+   */
+  let best: NonNullable<Constraints['upgrade']> | undefined;
   for (const info of world.cities) {
     const city = info.city;
     /*
@@ -543,13 +549,17 @@ function planUpgrade(
       .filter((o) => !need || (need.usable.includes(o.type) && need.survivable.includes(o.type)));
     if (pool.length === 0) continue;
 
-    return {
+    const cand = {
       cityId: city.id,
       cost: tgt.cost,
+      rounds: rounds0,
       why: `城 ${rounds0} 轮内会塌，升到${tgt.label}后能撑 ${rounds1} 轮，且还剩 ${rest} 金造得了${utype(s, pool[0]!.type).name}`,
     };
+    if (!best || cand.rounds < best.rounds || (cand.rounds === best.rounds && cand.cityId < best.cityId)) {
+      best = cand;
+    }
   }
-  return undefined;
+  return best;
 }
 
 /**
