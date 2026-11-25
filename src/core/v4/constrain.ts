@@ -18,8 +18,10 @@ import { upgradeTargetOf } from '../era-routes.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
-import { bestProjection, incomeNow, projectEconUntil, unitWorth, unitWorthOfType } from './project.ts';
+import { bestEraBy, bestProjection, incomeNow, projectEconUntil, projectWithEra, unitWorth, unitWorthOfType } from './project.ts';
+import type { EraTable } from './project.ts';
 import type { Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
+import { buildWorld } from './world.ts';
 import type { World } from './world.ts';
 
 /**
@@ -1979,6 +1981,99 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       const fb = bestProjection(far);
       console.error(
         `[project] 敏感性 T=20（假窗口，只看 k 翻不翻）最优k=${fb?.k ?? '-'} 经济${fb?.econN ?? '-'} 兵${fb?.armyN ?? '-'} 收入${Math.round(fb?.income ?? 0)} 战力${Math.round(fb?.worth ?? 0)}`,
+      );
+    }
+    /*
+     * **带升级时代的投影**（2026-11-25 晚）：把"升到第几代"变成枚举维度。
+     *
+     * 上一版把升级硬编码成"不做"，用户的质疑是：高代经济兵每格产出更高，
+     * v4 现在领先也许只是因为 v1/v3 在"经济兵找岗"上太差（v1 每城只认 2 个、
+     * v3 走位混在打分里）。所以这里对 era = 当前代 .. 当前代+3 各建一份岗表
+     * （`econSpots` 是按城代过滤的，换代必须重建 world），再枚举 (k × 升几级)。
+     */
+    const mine = world.myCities[0];
+    if (mine) {
+      const e0 = mine.era ?? 1;
+      const eras: EraTable[] = [];
+      for (let e = e0; e <= e0 + 3; e++) {
+        const s2 = structuredClone(s);
+        s2.current = world.me;
+        for (const c of s2.cities) if (c.owner === world.me) c.era = e;
+        const w2 = buildWorld(s2, world.me);
+        const spots2 = w2.econSpots().map((x) => ({
+          type: x.type,
+          x: x.x,
+          y: x.y,
+          yield: x.yield,
+          turns: x.turns,
+          gold: x.gold,
+        }));
+        let cost = 0;
+        if (e > e0) {
+          const c2 = s2.cities.find((c) => c.owner === world.me)!;
+          c2.era = e - 1;
+          cost = upgradeTargetOf(s2, c2)?.cost ?? Number.POSITIVE_INFINITY;
+        }
+        eras.push({ era: e, spots: spots2, cityIncome: eraDef(e).cityIncome, cost });
+      }
+      const slots = world.myCities.reduce(
+        (n, c) => n + cityTiles(c).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length,
+        0,
+      );
+      const epts = projectWithEra({
+        T: horizon.turns,
+        gold: s.players[world.me].gold,
+        income: incomeNow(s, world),
+        eras,
+        combat: picks,
+        soldierSlots: slots,
+      });
+      console.error(
+        `[project2] T=${horizon.turns} 城 ${e0} 代 → 可升到 ${eras[eras.length - 1]!.era} 代，费用 ${eras
+          .slice(1)
+          .map((x) => `${x.era}:${x.cost}`)
+          .join(' ') || '无'} · 各代 6 手内岗 ${eras.map((x) => `${x.era}代${x.spots.filter((p) => p.turns <= 6).length}格/${x.spots.filter((p) => p.turns <= 6).reduce((n, p) => n + p.yield, 0)}金`).join(' ')}`,
+      );
+      for (const ups of [0, 1, 2, 3]) {
+        const b = bestEraBy(epts.filter((p) => p.ups === ups), 'income');
+        if (!b) continue;
+        console.error(
+          `[project2]   升${ups}级 → 第${b.era}代 · 最优k=${b.k} 经济${b.econN} 兵${b.armyN} 末金${Math.round(b.gold)} 收入${Math.round(b.income)} 战力${Math.round(b.worth)}`,
+        );
+      }
+      const bi = bestEraBy(epts, 'income');
+      const bw = bestEraBy(epts, 'worth');
+      if (bi) {
+        console.error(
+          `[project2] 按收入最优：升${bi.ups}级 k=${bi.k} 收入${Math.round(bi.income)} 战力${Math.round(bi.worth)}`,
+        );
+      }
+      if (bw) {
+        console.error(
+          `[project2] 按战力最优：升${bw.ups}级 k=${bw.k} 收入${Math.round(bw.income)} 战力${Math.round(bw.worth)}`,
+        );
+      }
+      /*
+       * **长窗口敏感性**：用户的观点是"只造低级经济兵不升代会更慢"——那是**长期**结论。
+       * 22 手的窗口里升级费（1→3 代要 580 金）根本赚不回来，所以这里把窗口拉到 40 手再看，
+       * 让"升级 vs 不升"在它该分胜负的尺度上比。**假窗口，只看方向，别当判据。**
+       */
+      const far = projectWithEra({
+        T: 40,
+        gold: s.players[world.me].gold,
+        income: incomeNow(s, world),
+        eras,
+        combat: picks,
+        soldierSlots: slots,
+      });
+      console.error(
+        `[project2] 敏感性 T=40（假窗口）：${[0, 1, 2, 3]
+          .map((ups) => {
+            const b = bestEraBy(far.filter((p) => p.ups === ups), 'income');
+            return b ? `升${ups}级(第${b.era}代) 收入${Math.round(b.income)} 战力${Math.round(b.worth)}` : '';
+          })
+          .filter(Boolean)
+          .join(' · ')}`,
       );
     }
   }

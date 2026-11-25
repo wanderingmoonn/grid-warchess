@@ -188,3 +188,118 @@ export function armyWorthNow(s: GameState, world: World): number {
 export function incomeNow(s: GameState, world: World): number {
   return incomeOf(s, world.me);
 }
+
+/* ────────────────────────────────────────────────────────────────
+ * **带升级时代的投影**（2026-11-25 晚，用户要看"攒钱升级"的情况）
+ *
+ * 上一版（`projectEconUntil`）里升级是硬编码"不做"的。用户判断这不对：
+ * 高代经济兵每格产出更高，v4 现在领先只是因为它走位有序，而 v1/v3 在
+ * "经济兵找岗"这件事上太差（v1 每城只认 2 个、v3 走位混在打分里）。
+ *
+ * 所以这一版把"升到第几代"变成**枚举维度**：`upgradeTo = 0..3`，
+ * 0 = 不升，n = 钱够就往上升 n 次。每种选择都跑一遍 k = 0..T，取 T 时刻最好。
+ *
+ * 为什么用"升到第几级"而不是"第几手升"：升级是**一次性的**，早升只影响"后续造的经济兵
+ * 能不能吃到新代"，所以真正要选的是**升几级**；时点用最省心的贪心（钱够就升）。
+ * ──────────────────────────────────────────────────────────────── */
+
+/** 某一代下这座城的经济岗表（`world.econSpots()` 在该代的结果）+ 升级到这一代的代价 */
+export interface EraTable {
+  era: number;
+  spots: Array<{ type: string; x: number; y: number; yield: number; turns: number; gold: number }>;
+  /** 城的每回合金收入 */
+  cityIncome: number;
+  /** 从上一代升到这一代要多少钱（最下面那一号填 0） */
+  cost: number;
+}
+
+export interface EraProjectInput {
+  T: number;
+  gold: number;
+  income: number;
+  /** 按代排好，第一项是当前代 */
+  eras: EraTable[];
+  combat: CombatPick[];
+  soldierSlots: number;
+}
+
+export interface EraPoint extends ProjectPoint {
+  /** 往上升了几级（0 = 一直没升） */
+  ups: number;
+  /** T 时刻的城代 */
+  era: number;
+}
+
+/** 扫 (k × 升几级)，返回所有点。`k` 的语义同 `projectEconUntil` */
+export function projectWithEra(input: EraProjectInput): EraPoint[] {
+  const T = Math.max(0, Math.floor(input.T));
+  const out: EraPoint[] = [];
+  const order = [...input.combat].sort((a, b) => b.worth / b.gold - a.worth / a.gold || a.gold - b.gold);
+  const maxUps = Math.max(0, input.eras.length - 1);
+
+  for (let ups = 0; ups <= maxUps; ups++) {
+    for (let k = 0; k <= T; k++) {
+      let gold = input.gold;
+      let income = input.income;
+      let eraIdx = 0;
+      let worth = 0;
+      let econN = 0;
+      let armyN = 0;
+      /* 一格只能用一次，跨代共享（升级不换格子，只是同一格能派更好的兵） */
+      const used = new Set<string>();
+      const producing: Array<{ at: number; yield: number }> = [];
+
+      for (let turn = 1; turn <= T; turn++) {
+        gold += income;
+
+        if (turn <= k) {
+          /* 先看要不要升级：钱够、还没升满、这一手在经济段内 */
+          const next = input.eras[eraIdx + 1];
+          if (eraIdx < ups && next && gold >= next.cost) {
+            gold -= next.cost;
+            income += next.cityIncome - input.eras[eraIdx]!.cityIncome;
+            eraIdx++;
+          }
+          /* 再买经济兵：当前代岗表里，找"没用过且买得起"的 */
+          const spots = input.eras[eraIdx]!.spots;
+          for (;;) {
+            const i = spots.findIndex((sp) => !used.has(`${sp.x},${sp.y}`) && gold >= sp.gold);
+            if (i < 0) break;
+            const sp = spots[i]!;
+            used.add(`${sp.x},${sp.y}`);
+            gold -= sp.gold;
+            econN++;
+            producing.push({ at: turn + 1 + sp.turns, yield: sp.yield });
+          }
+        } else {
+          const b = buyArmy(gold, order, Math.max(1, input.soldierSlots));
+          gold = b.gold;
+          worth += b.worth;
+          armyN += b.n;
+        }
+
+        for (const p of producing) if (p.at <= turn) income += p.yield;
+        for (let i = producing.length - 1; i >= 0; i--) if (producing[i]!.at <= turn) producing.splice(i, 1);
+      }
+
+      out.push({ k, ups, era: input.eras[eraIdx]!.era, econN, armyN, gold, income, worth });
+    }
+  }
+  return out;
+}
+
+/** 按某个指标取最好的一行（同分取战力高的；再同取 k 小的） */
+export function bestEraBy(points: EraPoint[], key: 'worth' | 'income'): EraPoint | undefined {
+  let best: EraPoint | undefined;
+  for (const p of points) {
+    if (!best) {
+      best = p;
+      continue;
+    }
+    const a = p[key];
+    const b = best[key];
+    if (a > b) best = p;
+    else if (a === b && p.worth > best.worth) best = p;
+  }
+  return best;
+}
