@@ -369,7 +369,10 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
     case 'cityEra': {
       const cv = cityOf(c.city);
       if (!cv) return { ok: false, got: `找不到城 ${c.city}` };
-      return { ok: c.min === undefined || cv.era >= c.min, got: `时代 ${cv.era}` };
+      /* min/max 都要支持：`mustNot` 里唯一能表达"不许升到 N 代"的就是 max（见 P-1-04） */
+      const lowOk = c.min === undefined || cv.era >= c.min;
+      const highOk = c.max === undefined || cv.era <= c.max;
+      return { ok: lowOk && highOk, got: `时代 ${cv.era}` };
     }
     case 'unitCount': {
       /*
