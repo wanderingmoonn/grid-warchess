@@ -162,6 +162,10 @@ export function actFor(
   }
 
   /*
+   * ①.9 **临时调令**的位置见下面（排在开火之后）。
+   */
+
+  /*
    * ② 让开：站在"必须空"的格子上。
    *
    * **只约束没有理由待在那儿的单位**（驻守兵）。正在推进的战斗单位要过桥，
@@ -270,6 +274,23 @@ export function actFor(
     return { type: 'ATTACK', unitId: u.id, targetId: foes[0].id, x: foes[0].x, y: foes[0].y };
   }
 
+
+  /*
+   * ③.5 **临时调令**（2026-11-25，清 9.18）：站在城格上、但本来有任务的兵，这一手往外走。
+   *
+   * 排在开火**之后**——实测定下来的顺序（S-002 城伤 45→30 就是排错了位置）：
+   * 一个能开火的兵先去走路，等于拿一拳去换一格位移。所以先打，打不到才走。
+   *
+   * 这一条和"让开"（②）方向经常相反：
+   *   · 让开 = 朝**最近的空格**（为产兵口/出城通道服务，方向可能朝后）；
+   *   · 调令 = 朝**它本来该去的目标**（主队的目标 / 集结点 / 废墟）。
+   * 只对**城格**生效（见 `planTransit`）：窄道交给搬迁链，过桥的排队是 P4 的事。
+   */
+  const transitTo = con.transit?.[u.id];
+  if (transitTo && (transitTo.x !== u.x || transitTo.y !== u.y)) {
+    const spot = stepToward(s, u, transitTo, false, world.stepsFrom(transitTo));
+    if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+  }
 
   /* ④ 走：朝任务目标。`hold` 也不是"钉在原地"——离城还远就先走回去 */
   if (!sq) return null;

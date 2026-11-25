@@ -11,7 +11,7 @@
  */
 import { boardOf, boardIdOf } from '../board.ts';
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
+import { attackableTargets, cityTiles, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
@@ -201,6 +201,13 @@ function planYield(
   keepClear: number[],
   squads: Squad[],
   need: { spawn: boolean; exit: boolean },
+  /**
+   * 额外的"正在动、不算挡路"名单（临时调令里的兵）。
+   *
+   * 他们这一手有明确的方向（朝主队的目标走），再被这条链推去"最近的空格"
+   * 就是两个方向打架：链把它往西、调令把它往东，最后它一步也不走。
+   */
+  alsoPassing: string[] = [],
 ): Array<{ unitId: string; x: number; y: number }> {
   /*
    * ════════════════════════════════════════════════════════════════
@@ -286,6 +293,8 @@ function planYield(
     if (sq.order !== 'march' && sq.order !== 'siege') continue;
     for (const id of sq.unitIds) passing.add(id);
   }
+  /* 有临时调令的兵也在动（见 `alsoPassing` 的注释），别再给他们派搬迁落点 */
+  for (const id of alsoPassing) passing.add(id);
 
   /*
    * ⑤ 沿前驱把链上的人依次挪一格。
@@ -348,6 +357,103 @@ function planYield(
       usedCells.add(to);
       out.push({ unitId: u.id, x: to % s.w, y: Math.floor(to / s.w) });
     }
+  }
+  return out;
+}
+
+/**
+ * **临时调令**（2026-11-25，清 9.18）：站在关键格上、但本来有任务的兵，这一手往哪走。
+ *
+ * ── 它修的是什么 ─────────────────────────────────────────────
+ *
+ * 一个刚造出来的兵出生在**产兵格**（城格）上。城格在 `keepClear` 里，于是 `rest` 把它
+ * 摘出所有队伍（下面 `constrain` 里那行 `rest = ... && !keepSet.has(...)`）。
+ * 结果：`actFor` 拿到 `sq === undefined`，只能"能打就打"，一步都不能走——
+ * 直到敌人贴脸（`foeEta <= 1` 时城格不再是关键格），它才突然又开始动。
+ *
+ * 过桥是同一个病：站在桥面上的兵也被摘出去，然后 `planYield` 把它推往
+ * **最近的空格**——方向常常是往回（西岸），于是"过了半步又被弹回来"。
+ *
+ * ── 它怎么修 ─────────────────────────────────────────────────
+ *
+ * 给这些兵一张**带方向的调令**：目的地 = 它本来该去的那支队的终点，不是最近的空格。
+ * 走一步离开关键格之后，下一回合编队重算，它自然回到 `rest` → 回主队。
+ * 所以这里**不需要记任何状态**（"临时编队"能成立全靠 v4 的编队是每手重算的）。
+ *
+ * ── 边界（都踩过）─────────────────────────────────────────────
+ *
+ *   · **守军不调**：`held` 里的兵是有意守在城下的，把它们调出去等于自己撤防；
+ *   · **`hold` 队不当目的地**：召回队的终点就是城，调过去等于让它留在原地，
+ *     而且可能把它从外圈拽进城格（反而堵产兵口）；
+ *   · **已经在目的地上的不发调令**：那不是"被卡住"，那就是它要站的地方。
+ */
+function planTransit(
+  s: GameState,
+  world: World,
+  decision: Decision,
+  squads: Squad[],
+  blockers: Unit[],
+  held: Set<string>,
+  captureTarget: { x: number; y: number } | undefined,
+): Record<string, { x: number; y: number }> {
+  const out: Record<string, { x: number; y: number }> = {};
+  if (blockers.length === 0) return out;
+
+  /*
+   * **只管城格上的挡路兵**（2026-11-25，实测定下来的边界）。
+   *
+   * 第一版对**所有**关键格上的兵发调令，S-001（地板题）从绿变红：20 个兵挤在
+   * 一格宽的桥头时，"各自朝对岸走一步"是贪心的，会把人顶成一横排堵死入口；
+   * 而 `planYield` 的搬迁链是**从空位那头倒着派**的（一次只挪一格、不抢格），
+   * 在窄道上反而是一台好机器。所以窄道（桥头、城圈）继续交给那条链，
+   * 调令只负责"**城格上的新兵**"——那才是 9.18，也正是贪心不会出错的地方（开阔地）。
+   *
+   * 过桥要的是"排队"，那是 P4 投送要单独做的事（见 `docs/PLAN-V4-PHASE2-2026-11-25.md`），
+   * 不该顺手塞进这条调令里。
+   */
+  const spawnCells = new Set<number>();
+  for (const c of world.myCities) {
+    for (const t of cityTiles(c)) spawnCells.add(t.y * s.w + t.x);
+  }
+
+  /* 目的地：接管废墟时就是废墟格；否则跟"正在往外走的队"走 */
+  const dests: Array<{ id: string; at: { x: number; y: number } }> = [];
+  if (decision.kind === 'takeover' && captureTarget) {
+    dests.push({ id: 'takeover', at: captureTarget });
+  } else {
+    for (const q of squads) {
+      if (q.order === 'hold') continue;
+      if (q.unitIds.length === 0) continue; /* 空队没有方向可言 */
+      const at =
+        q.at ??
+        (() => {
+          const c = q.cityId ? s.cities.find((x) => x.id === q.cityId) : undefined;
+          if (!c) return undefined;
+          const n = c.size ?? 2;
+          return { x: c.x + Math.floor(n / 2), y: c.y + Math.floor(n / 2) };
+        })();
+      if (at) dests.push({ id: q.id, at });
+    }
+  }
+  if (dests.length === 0) return out;
+
+  for (const u of blockers) {
+    if (held.has(u.id)) continue;
+    if (!spawnCells.has(u.y * s.w + u.x)) continue; /* 窄道/城圈交给搬迁链（见上） */
+    /*
+     * 多城分兵时挑**离自己最近**的那支（`marchTurns`，不是直线距离）。
+     * 这不是新口径：`planMains` 的"剩下的人补到最近的那座城"用的就是这一条
+     * （`constrain.ts` 里 `picked` 那段），这里只是把同一句话用在"临时队"上。
+     */
+    const pick =
+      dests.length === 1
+        ? dests[0]!
+        : [...dests].sort(
+            (a, b) =>
+              world.marchTurns(u, a.at) - world.marchTurns(u, b.at) || (a.id < b.id ? -1 : 1),
+          )[0]!;
+    if (pick.at.x === u.x && pick.at.y === u.y) continue;
+    out[u.id] = pick.at;
   }
   return out;
 }
@@ -1494,14 +1600,30 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     (q) => q.unitIds.length > 0 && (q.order === 'march' || q.order === 'siege' || q.order === 'assemble'),
   );
 
-  const marched = planMarch(s, world, squads);
-  const yieldMoves = planYield(s, world, keepClear, squads, { spawn, exit });
   /*
-   * **把"让开"写成一支队**（9.14 的收尾）：只收那些这一手**真的被派了让位动作**的兵。
-   * 没被派活儿的挡路兵不写进来——它们这一手就是"站在原地"，不是任务。
+   * **临时调令**：挡路兵自己该往哪走（见 `planTransit` 顶部）。
+   *
+   * 排在 `planYield` 之前：它要进 `planYield` 的"正在动"名单，
+   * 否则同一只手会既给它一个"朝前线"的落点、又给它一个"去最近空格"的落点，
+   * 两个方向打架，最后一步也不走（那正是 9.18 之前的症状）。
    */
-  if (yieldMoves.length > 0) {
-    const yieldIds = yieldMoves.map((m) => m.unitId).filter((id) => blockers.some((b) => b.id === id));
+  const transit = planTransit(s, world, decision, squads, blockers, held, captureTarget);
+
+  const marched = planMarch(s, world, squads);
+  const yieldMoves = planYield(s, world, keepClear, squads, { spawn, exit }, Object.keys(transit));
+  /*
+   * **把"让开"写成一支队**（9.14 的收尾）：只收那些这一手**真的被派了活儿**的兵。
+   * 2026-11-25（9.18）：有了临时调令之后，"活儿"有两种——搬迁落点、或者朝任务走。
+   * 两种都进这支 `yield` 队：回放里要能看见"它这一手的任务就是离开这一格"。
+   */
+  {
+    const blockerIds = new Set(blockers.map((b) => b.id));
+    const yieldIds = [
+      ...new Set([
+        ...Object.keys(transit),
+        ...yieldMoves.map((m) => m.unitId).filter((id) => blockerIds.has(id)),
+      ]),
+    ];
     if (yieldIds.length > 0) squads.push({ id: 'yield', order: 'yield', unitIds: yieldIds });
   }
   return {
@@ -1509,6 +1631,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     spendCap,
     captureId,
     captureTarget,
+    transit,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

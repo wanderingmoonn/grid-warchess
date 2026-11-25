@@ -195,6 +195,15 @@ export function aiNextActionV4(
      * 不跳过的话，这里会一直给它派"让开"，然后被引擎反复拒（实测每回合空烧十几次） */
     if (u.moved || u.acted) continue;
     if (!con.keepClear.includes(u.y * s.w + u.x)) continue;
+    /*
+     * **有临时调令的挡路兵排在最后走**（2026-11-25，9.18 的收尾）。
+     *
+     * 它们这一手的任务是"走出去归队"，不是"让给别人用"——没必要抢在开火和走位之前。
+     * 实测把它们放在这里（最先动）会让 S-002 的城伤从 45 掉到 30：
+     * 十几个人抢在整队之前挪动，把 `planMarch` 排好的落点占了，整队重新贪心一次。
+     * 交给 ④（走位，按 `stepOrder` 排在最后）就没有这场抢跑。
+     */
+    if (con.transit?.[u.id]) continue;
     const a = actFor(s, world, con, u);
     if (usable(a)) return a;
   }
