@@ -346,10 +346,20 @@ export interface Constraints {
    *     只发展不造兵 → 一直没有编队）。`expand` 的局面正是这个状态。
    *
    * C1/C2 只打印；C3 的求解器才开始读它。
+   *
+   * ── `left` 是**长度**，不是回合号（D2，2026-11-25）──────────────
+   *
+   * 它的意思是"**从现在起**还要几手才能摸到对面城"，也就是"还能发展几手"。
+   * 所以读者直接用它，**不许再减 `s.turn`**——2026-11-25 之前升级闸写的是
+   * `T - s.turn`，把长度当成了绝对回合号：第 1 手少 1、第 6 手少 6，
+   * 到第 T 手变 0、闸门静默关掉（`V4-CODE-MAP` 9.27 第 3 条）。
+   *
+   * 字段名从 `turns` 改成 `left`：原来的名字看不出"这是长度还是第几手"，
+   * 而正是这个歧义让两处读者各理解成一样。
    */
   horizon?:
-    | { source: 'squad'; turns: number; squadId: string; cityId: string; n: number }
-    | { source: 'map'; turns: number; fromCityId: string; cityId: string; move: number; steps: number };
+    | { source: 'squad'; left: number; squadId: string; cityId: string; n: number }
+    | { source: 'map'; left: number; fromCityId: string; cityId: string; move: number; steps: number };
 }
 
 /** 一个单位在本回合的归属：属于哪支队、任务是什么。查不到就是"没任务" */

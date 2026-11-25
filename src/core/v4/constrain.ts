@@ -491,7 +491,7 @@ function planUpgrade(
   need: Constraints['need'],
   gold: number,
   spendCap: number | undefined,
-  horizonT: number | undefined,
+  horizonLeft: number | undefined,
 ): Constraints['upgrade'] {
   /* 攒钱期（接管废墟的 save 阶段）不升级：那笔钱是重建费，动了就前功尽弃 */
   if (spendCap !== undefined) return undefined;
@@ -560,7 +560,7 @@ function planUpgrade(
     }
   }
   /* 应急没触发 → 看**发展升级**（钱多到花不完）。见 `planUpgradeEcon` */
-  return best ?? planUpgradeEcon(s, world, gold, horizonT);
+  return best ?? planUpgradeEcon(s, world, gold, horizonLeft);
 }
 
 /**
@@ -596,8 +596,12 @@ function bestPerCell(
  *
  * ① **产兵格不是常数 4**：`capacity` 现算——所有城的城格、去掉站着人的，
  *    多城和兵营自然都被算进来，不写死。
- * ② **"剩余手数"不是考试窗口**：用 `T - s.turn`，而 `T = marchTurns(主力 → 敌城)`
- *    ——那是**行军时间**，实战里 v4 本来就在算（`planHorizon`）。题目窗口不参与。
+ * ② **"剩余手数"不是考试窗口**：用 `horizon.left = marchTurns(主力 → 敌城)`
+ *    ——那是**从现在起还要走几手**，实战里 v4 本来就在算（`planHorizon`）。题目窗口不参与。
+ *
+ *    ⚠️ **2026-11-25（D2）修正**：这里原来写的是 `T - s.turn`，把"长度"当成"绝对回合号"减了
+ *    一次手数——于是第 1 手少 1、第 6 手少 6，到第 T 手直接变 0、**闸门静默关掉**。
+ *    现在 `horizon.left` 本身就是长度，**读者不许再减 `s.turn`**（同一个数只准一处定义）。
  * ③ **"花不完"要按每格战力算**，不是"买不起更贵的"：
  *
  *      每格战力随代上升（民兵 45 → 戟兵 75 → 步枪兵 90）
@@ -617,16 +621,17 @@ function planUpgradeEcon(
   s: GameState,
   world: World,
   gold: number,
-  horizonT: number | undefined,
+  horizonLeft: number | undefined,
 ): Constraints['upgrade'] {
-  if (horizonT === undefined) return undefined;
-  const left = Math.max(0, horizonT - s.turn);
+  if (horizonLeft === undefined) return undefined;
+  const left = Math.max(0, Math.floor(horizonLeft));
   if (left <= 0) return undefined;
   /*
    * **只在"还没有军队"时规划**（2026-11-25 23:30 实测的坑）。
    *
    * 每手重算会漂移：E-2-03 里第 1 手算"升 3 代最优"（34 个戟兵 2550），
-   * 但第 3 手再看时，剩余手数从 6 掉到 4，产能成了瓶颈（16 格），
+   * 但第 3 手再看时，剩余手数从 6 掉到 4（D2 之前那是因为误减了 `s.turn`；D2 之后
+   * 这个例子不再出现，但**沉没成本**那条根因还在，所以这道门等 D5 才拆），产能成了瓶颈（16 格），
    * 于是"16 个戟兵 1200"输给"14 个步枪兵 1260"——它又升了一级。
    * 反复几次就升到 5 代，钱花光、只造 11 个。
    *
@@ -722,7 +727,7 @@ function horizonOfSquad(
   s: GameState,
   world: World,
   squads: Squad[],
-): { turns: number; squadId: string; cityId: string; n: number } | undefined {
+): { left: number; squadId: string; cityId: string; n: number } | undefined {
   const main = squads.find(
     (q) =>
       q.id === 'main' &&
@@ -739,11 +744,11 @@ function horizonOfSquad(
   if (units.length === 0) return undefined;
   /* 整队速度 = 最慢的那个兵 */
   const slowest = Math.max(1, Math.min(...units.map((u) => effectiveStats(s, u).move ?? 1)));
-  const turns = units
+  const each = units
     .map((u) => world.marchTurnsOf(u, city, slowest))
     .filter((t) => Number.isFinite(t));
-  if (turns.length === 0) return undefined;
-  return { turns: Math.max(...turns), squadId: main.id, cityId: city.id, n: turns.length };
+  if (each.length === 0) return undefined;
+  return { left: Math.max(...each), squadId: main.id, cityId: city.id, n: each.length };
 }
 
 /**
@@ -777,21 +782,21 @@ function eraModeMove(s: GameState, era: number): number {
 function horizonOfMap(
   s: GameState,
   world: World,
-): { turns: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined {
+): { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined {
   const mine = world.myCities.filter((c) => !c.ruined);
   const foes = world.foeCities.filter((c) => !c.ruined);
   if (mine.length === 0 || foes.length === 0) return undefined;
   const era = Math.max(1, ...mine.map((c) => c.era ?? 1));
   const move = eraModeMove(s, era);
-  let best: { turns: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined;
+  let best: { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined;
   for (const a of mine) {
     for (const b of foes) {
       for (const p of cityTiles(a)) {
         for (const q of cityTiles(b)) {
           const steps = world.marchTurnsOf(p, q, 1);
           if (!Number.isFinite(steps)) continue;
-          const turns = Math.ceil(steps / move);
-          if (!best || turns < best.turns) best = { turns, fromCityId: a.id, cityId: b.id, move, steps };
+          const left = Math.ceil(steps / move);
+          if (!best || left < best.left) best = { left, fromCityId: a.id, cityId: b.id, move, steps };
         }
       }
     }
@@ -2062,8 +2067,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       horizon === undefined
         ? 'T=无'
         : horizon.source === 'squad'
-          ? `T=${horizon.turns}(编队 ${horizon.n}人)`
-          : `T=${horizon.turns}(地图 ${horizon.steps}步/${horizon.move}速)`;
+          ? `left=${horizon.left}（看到第 ${s.turn + horizon.left} 手，编队 ${horizon.n}人）`
+          : `left=${horizon.left}（看到第 ${s.turn + horizon.left} 手，地图 ${horizon.steps}步/${horizon.move}速）`;
     console.error(
       `[horizon] ${s.w}x${s.h} 城距=${Number.isFinite(md) ? md : '-'}(曼)/${Number.isFinite(ms) ? ms : '-'}(步) ${t} 决定=${decision.kind}`,
     );
@@ -2084,7 +2089,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       }
     }
     const pts = projectEconUntil({
-      T: horizon.turns,
+      T: horizon.left,
       gold: s.players[world.me].gold,
       income: incomeNow(s, world),
       spots,
@@ -2096,7 +2101,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     });
     const best = bestProjection(pts);
     console.error(
-      `[project] T=${horizon.turns} 金=${s.players[world.me].gold} 收入=${incomeNow(s, world)} 在场战力=${Math.round(
+      `[project] T=${horizon.left} 金=${s.players[world.me].gold} 收入=${incomeNow(s, world)} 在场战力=${Math.round(
         world.myCombat.reduce((n, u) => n + unitWorth(s, u), 0),
       )} 岗=${spots.length} 兵种=${picks.map((p) => `${p.type}:${p.gold}`).join(',')} 最优k=${best?.k ?? '-'}`,
     );
@@ -2112,7 +2117,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      * 这不是模型错，是窗口太短。真实 24×24 上 T 到 20+，"先发展再出兵"才会翻过来。
      * 这一行只是为了让人看到"k 会不会翻"，**不是真实 T**，别拿它当判据。
      */
-    if (horizon.turns < 20) {
+    if (horizon.left < 20) {
       const far = projectEconUntil({
         T: 20,
         gold: s.players[world.me].gold,
@@ -2167,7 +2172,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         0,
       );
       const epts = projectWithEra({
-        T: horizon.turns,
+        T: horizon.left,
         gold: s.players[world.me].gold,
         income: incomeNow(s, world),
         eras,
@@ -2175,7 +2180,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         soldierSlots: slots,
       });
       console.error(
-        `[project2] T=${horizon.turns} 城 ${e0} 代 → 可升到 ${eras[eras.length - 1]!.era} 代，费用 ${eras
+        `[project2] T=${horizon.left} 城 ${e0} 代 → 可升到 ${eras[eras.length - 1]!.era} 代，费用 ${eras
           .slice(1)
           .map((x) => `${x.era}:${x.cost}`)
           .join(' ') || '无'} · 各代 6 手内岗 ${eras.map((x) => `${x.era}代${x.spots.filter((p) => p.turns <= 6).length}格/${x.spots.filter((p) => p.turns <= 6).reduce((n, p) => n + p.yield, 0)}金`).join(' ')}`,
@@ -2216,9 +2221,9 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
        * **v3 式求解**：以"升到第 N 级"为目标，先算还差多少升级费，
        * 再决定这笔钱该不该变成经济兵（回本期 ≤ 攒够之前的剩余手数）。
        */
-      const plans = solveEconAll({ T: horizon.turns, gold: s.players[world.me].gold, income: incomeNow(s, world), eras, combat: picks, soldierSlots: slots });
+      const plans = solveEconAll({ T: horizon.left, gold: s.players[world.me].gold, income: incomeNow(s, world), eras, combat: picks, soldierSlots: slots });
       console.error(
-        `[project3] T=${horizon.turns}（v3 式：边投边攒）${plans.map((p) => `升到第${p.upTo + 1}级→第${p.era}代 收入${Math.round(p.income)} 经济${p.econN} 末金${Math.round(p.gold)} 升级费${p.spent}`).join(' · ')}`,
+        `[project3] T=${horizon.left}（v3 式：边投边攒）${plans.map((p) => `升到第${p.upTo + 1}级→第${p.era}代 收入${Math.round(p.income)} 经济${p.econN} 末金${Math.round(p.gold)} 升级费${p.spent}`).join(' · ')}`,
       );
       const plans40 = solveEconAll({ T: 40, gold: s.players[world.me].gold, income: incomeNow(s, world), eras, combat: picks, soldierSlots: slots });
       console.error(
@@ -2257,7 +2262,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     captureTarget,
     transit,
     horizon,
-    upgrade: planUpgrade(s, world, need, gold, spendCap, horizon?.turns),
+    upgrade: planUpgrade(s, world, need, gold, spendCap, horizon?.left),
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

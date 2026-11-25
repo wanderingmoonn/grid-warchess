@@ -65,6 +65,14 @@ console.log(
   v.decision.spend.why,
 );
 console.log('目标城：', v.decision.cityId ?? '（无）');
+/*
+ * 升级（P3 闸 A/B）：这一手要不要升、升哪座城、为什么。
+ * D2 之后 `why` 里的"×N 手"是**还能发展几手**（长度），不再是"第几手"。
+ */
+console.log(
+  '升级：',
+  v.con.upgrade ? `${v.con.upgrade.cityId} · ${v.con.upgrade.cost} 金 · ${v.con.upgrade.why}` : '（这一手不升）',
+);
 console.log('\n队伍：');
 for (const q of v.con.squads) {
   const at = q.at ? ` @(${q.at.x},${q.at.y})` : '';
