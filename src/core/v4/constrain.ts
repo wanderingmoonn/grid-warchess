@@ -1260,16 +1260,15 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   /*
    * 这一手"有没有人真要用关键格"——决定要不要赶人（见 `planYield` 顶部）。
    *
-   * · 产兵口：这城现在买得起至少一个兵（战斗或经济），说明接下来可能要造；
-   *   被压着的城造不出来，不算。
+   * · 产兵口：这城现在买得起至少一个兵（战斗或经济），说明接下来可能要造。
+   *   **挨打的城也算**（2026-11-25 清 9.13）：原来这里写的是 `info.role !== 'threatened'`，
+   *   理由是"被压着的城造不出来"——引擎里没有这条，被围的城照样能造兵（见 9.13）。
    * · 出门通道：有队伍**有兵**且任务是出去（收拢/推进/攻城）。空队伍（0 人）不算——
    *   S-015 那种一条人烟的题里，"main 收拢 0 人"会让城圈一直被赶。
    */
   const gold = s.players[world.me]?.gold ?? 0;
   const spawn = world.cities.some(
-    (info) =>
-      info.role !== 'threatened' &&
-      (world.affordableCombat(info.city, gold).length > 0 || !!econPlan.next),
+    (info) => world.affordableCombat(info.city, gold).length > 0 || !!econPlan.next,
   );
   const exit = squads.some(
     (q) => q.unitIds.length > 0 && (q.order === 'march' || q.order === 'siege' || q.order === 'assemble'),

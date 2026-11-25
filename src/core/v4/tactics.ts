@@ -534,6 +534,16 @@ function cityPostCell(
   if (free.length === 0) return null;
   free.sort((a, b) => a.d - b.d || a.k - b.k);
 
+  /*
+   * **至少留一格空着**（2026-11-25，配套清 9.13）。
+   *
+   * 城格同时是"能站人吃护甲的地方"和"新兵的产兵口"。全站满之后
+   * `recruitSpawnCells` 返回空数组，引擎会拒"城市里已经站满了，先挪出位置"——
+   * 于是守军为了 3 点护甲把补兵这条路堵死了。
+   * 现在要求进城的这一格不会把最后一格占掉（`free.length >= 2` 才进）。
+   */
+  if (free.length < 2) return null;
+
   /* 同一支队里我排第几（按 id，稳定），就挑第几个候选格 */
   const sq = squadOf(con, u);
   const ids = sq ? [...sq.unitIds].sort((a, b) => (a < b ? -1 : 1)) : [u.id];
@@ -590,7 +600,16 @@ export function recruitAction(
 ): Action | null {
   const gold = Math.min(s.players[world.me]?.gold ?? 0, cap ?? Infinity);
   for (const info of world.cities) {
-    if (info.role === 'threatened') continue; // 被压着的城造不出来
+    /*
+     * **挨打的城也造兵**（2026-11-25，清 9.13）。
+     *
+     * 这里原来有一句 `if (info.role === 'threatened') continue;`，注释写"被压着的城造不出来"。
+     * 那是假的：引擎的 `doRecruit` 只拒 非我城 / 废墟 / 本回合刚打下 / 时代白名单 / 钱不够 /
+     * **产兵格被占满**，跟"有没有敌人围着"无关（实测被 4 个敌人贴脸的城照样造得出兵）。
+     * 而"城里造兵反击"本来就是人在被围时最常做的事。
+     *
+     * 唯一要保的是"留一格空位"，那条不在这里——由 `cityPostCell` 保证守军不把城格站满。
+     */
     const opts = world.affordableCombat(info.city, gold);
     /*
      * 先按**门槛**筛，再按价钱挑——顺序不能反。
@@ -642,7 +661,7 @@ export function recruitEcon(s: GameState, world: World, con: Constraints): Actio
   const next = con.econNext;
   if (!next) return null;
   for (const info of world.cities) {
-    if (info.role === 'threatened') continue;
+    /* 挨打的城也能造经济兵（同上，清 9.13）。产不产得出来由引擎和空位说了算 */
     const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: next.type };
     if (applyAction(s, a).ok) return a;
   }
