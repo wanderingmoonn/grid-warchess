@@ -649,7 +649,7 @@ function stepOffSpawn(
 export function recruitAction(
   s: GameState,
   world: World,
-  need?: { usable: string[]; hp: number; range: number; canPad: boolean },
+  need?: { usable: string[]; survivable: string[]; range: number; canPad: boolean },
   cap?: number,
 ): Action | null {
   const gold = Math.min(s.players[world.me]?.gold ?? 0, cap ?? Infinity);
@@ -674,8 +674,12 @@ export function recruitAction(
      * 从前这里是"血 > 对面最高单发 且 三发打穿"，而"血"那一半其实属于闸 2
      * （抵近途中会不会死），P2-2b 才做。现在先把"0 伤害"的整类排除。
      */
+    /*
+     * 两道闸一起过：**打得穿**（闸 1）**且活得到**（闸 2，穿过敌方射程时不被打死）。
+     * 两条都在约束层算好，这里只做交集——打分层不做判断。
+     */
     const ok = need
-      ? opts.filter((o) => need.usable.includes(o.type) && (utype(s, o.type).maxHp ?? 0) > need.hp)
+      ? opts.filter((o) => need.usable.includes(o.type) && need.survivable.includes(o.type))
       : [];
     /*
      * 满足门槛之后：**先挑射程远的**（先手权），同射程挑**血厚的**，再看攻，价格只做最后一档。
@@ -700,8 +704,16 @@ export function recruitAction(
        * 这时候射程 3 和射程 1 一样得挨打，该比的是血（血薄的会被溅射一次清掉）。
        * S-011 实测：造射程 3 的弓手（22 血）去冲射程 5 的炮，一发就没了。
        */
-      const oa = (da.range ?? 1) > foeRange ? 1 : 0;
-      const ob = (db.range ?? 1) > foeRange ? 1 : 0;
+      /*
+       * **射程 ≥ 对面**就算"不吃亏"（2026-11-25 从 `>` 改成 `>=`）。
+       *
+       * `>` 会把"同射程对射"判成"没有先手"，于是火枪（射程 4）在和步枪兵（射程 4）
+       * 对阵时输给戟兵（射程 2、血厚）——实测 P-1-03 里 v4 因此造了 3 个戟兵。
+       * 同射程下谁先动是站位问题，但"不用走进对面射程就能还手"这件事是确定的，
+       * 所以它该算优势。
+       */
+      const oa = (da.range ?? 1) >= foeRange ? 1 : 0;
+      const ob = (db.range ?? 1) >= foeRange ? 1 : 0;
       return (
         (ob - oa) ||
         ((db.maxHp ?? 0) - (da.maxHp ?? 0)) ||
@@ -720,16 +732,36 @@ export function recruitAction(
       );
     };
     /*
-     * **一个都"打不穿"时：能不能充数，看敌方清不清得掉你**（用户 2026-11-25）。
+     * **`ok` 为空有两种原因，处理完全不同**（2026-11-25，P2-2b 踩出来的）：
      *
-     * 敌方没有溅射/多段 → 可以买一堆便宜的凑数、以伤换伤（S-001 就靠这个铺量）；
-     * 敌方有溅射或多段 → 充数是负资产（一发清一片），**宁可攒钱不造**。
+     * ① **根本没有能用的兵种**（打得穿又活得到的一个都没有）→ 按 `canPad` 决定要不要充数：
+     *    敌方无溅射/多段 → 可以买便宜的凑数、以伤换伤；有溅射/多段 → 充数是负资产，攒钱。
+     * ② **有能用的兵种，但这一手买不起** → **攒钱**，不要拿打不动的顶替。
+     *    这是人类的行为："差 20 金买戟兵"时不会先去买个民兵。
+     *
+     * 从前把两种混在一起（`ok` 空就充数），结果闸 2 被完全掩盖：
+     * S-002 里能用的兵（弩手 82 / 骑士 95）买不起，于是又回去买斥候和长枪——
+     * 而它们正是"活不到"的那批。**判据算出来了却没生效，等于没做。**
      */
+    /*
+     * **首批建军 vs 补充损耗，判据不同**（2026-11-25，P2-2b 踩出来的）。
+     *
+     * - **首批**（场上一个战斗兵都没有）：要的是"这支军队能不能打"，所以严格——
+     *   只造打得穿又活得到的；买不起就攒钱，别拿打不动的顶替（P-1-01 就是这么出题的）。
+     * - **补充**（已经有兵）：要的是"把损耗填上、维持战线"，这时候便宜兵是有用的——
+     *   它们填的是"少一个人挨打"，不是"主力输出"。S-001（20 个兵）和 S-009（4 个兵）
+     *   都是这个形状：改成"买不起就攒"之后，它们反而因为兵太少而输了。
+     *
+     * 所以充数不是无条件的，也不是完全禁止的，看**这是不是第一支军队**。
+     */
+    const anyGood = need ? need.usable.some((t) => need.survivable.includes(t)) : true;
+    const firstArmy = world.myCombat.length === 0;
+    const allowedToPad = need ? need.canPad && (!firstArmy || !anyGood) : false;
     const pick =
       ok.length > 0
         ? [...ok].sort(byRange)
         : need
-          ? need.canPad
+          ? allowedToPad
             ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
             : []
           : [...opts].sort(byBulk);

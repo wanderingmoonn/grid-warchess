@@ -1411,13 +1411,52 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         })
         .map((d) => d.id)
     : [];
+  /*
+   * **闸 2：活得到吗**（2026-11-25，P2-2b；用户给的口径）
+   *
+   * 只算**在敌方射程内走的那一段**：
+   *   暴露距离 = 敌方射程 − 我的射程        （≥0 才有意义；我的射程更长就不用走进来）
+   *   暴露手数 = ceil(暴露距离 / 我的移动力)
+   *   挨打     = 暴露手数 × 敌方单发 × burst
+   *   活得到   = 挨打 < 我的血
+   *
+   * 为什么不从"城"算起：从城到战场那段在敌方射程外，**不挨打**，计进去等于把
+   * "路远"当成"会死"，会把所有兵都否掉。用户的原话是"从敌方射程外的一格走到敌人位置"。
+   *
+   * 为什么这个口径能复用到进攻：进攻时同样是"穿过对面的射程去够它"，同一个式子。
+   *
+   * 移动力在这里才是真的有用：骑手（移动 3）穿过 3 格暴露区只要 1 手，
+   * 长枪（移动 2）要 2 手——同样的距离，一个活一个死。这正是"移动快"的价值。
+   */
+  const survivable = mainFoe
+    ? Object.values(s.unitTypes)
+        .filter((d) => d.category === 'combat')
+        .filter((d) => {
+          const mine = {
+            id: '__probe2',
+            owner: s.current,
+            type: d.id,
+            x: mainFoe.x,
+            y: mainFoe.y,
+            hp: d.maxHp,
+          } as Unit;
+          /* 敌方打我一发多少（注意方向：攻方是敌人，守方是我） */
+          const hit = previewAttack(s, mainFoe, mine).toDefender;
+          if (hit <= 0) return true;
+          const gap = Math.max(0, (utype(s, mainFoe.type).range ?? 1) - (d.range ?? 1));
+          const steps = Math.ceil(gap / Math.max(1, d.move ?? 1));
+          const burst = utype(s, mainFoe.type).burst ?? 1;
+          return steps * hit * burst < d.maxHp;
+        })
+        .map((d) => d.id)
+    : [];
   const need =
     foes.length > 0
       ? {
           /** 对多数决目标"三发能解决"的兵种（闸 1 的唯一口径） */
           usable,
-          /** 对面最高单发：血不如它厚的，挨一发就没了（P1 留下，2b 会换成完整的"活得到"） */
-          hp: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).atk ?? 0), 0),
+          /** 穿过敌方射程时活不下来的兵种（闸 2：见上面的 `survivable`） */
+          survivable,
           /*
            * **能不能"充数"**（2026-11-25，用户原话）：
            * "敌方射程大但无溅射无多段 → 最后才是用许多不符合要求的兵充数、以伤换伤；
