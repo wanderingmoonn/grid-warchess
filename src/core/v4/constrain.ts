@@ -45,21 +45,17 @@ function planTactics(s: GameState, ids: string[], canMove: boolean): SquadTactic
    *
    * 打开之后打分层才被允许做两件事：全队打同一个（`focusId`）、为它挪一步（`converge`）。
    * 关着 = 行为与没有这个开关时一字不差（照约束执行、打射程内的）。
+   * 这就是"不退回 v1/v3 那种任何时候都在打分"的那道闸。
    *
-   * 为什么必须"至少两个兵能打到"才叫集火：一个兵谈不上合打，挂上去只是多一层判断。
-   *
-   * 为什么进攻队和守队的门槛天然不同：`canMove` 决定"走一步再打"算不算进伤害。
-   * 守队不许离开城（`canMove = false`），所以它只在"当下就够得着的伤害"够本时才开；
-   * 进攻队可以把"这两步之内能压上去的人"算进来。同一个函数，两种条件。
+   * `canMove` 决定"走一步再打"算不算进伤害：进攻队算，守队不算（它不许离开城）。
    */
   const mine = ids
     .map((id) => s.units.find((u) => u.id === id))
     .filter((u): u is Unit => !!u && u.owner === s.current && (effectiveStats(s, u).atk ?? 0) > 0);
   if (mine.length < 2) return undefined;
 
-  const reach = new Map<string, { n: number; dmg: number; hp: number }>();
-  for (const u of mine) {
-    /* 这个兵能从哪几处开火：原地 + （允许移动时）这一手能走到的每一格 */
+  /** 每个兵这一手的两笔账：能打到的敌人（含走一步）、以及现在就能不能打到人 */
+  const perUnit = mine.map((u) => {
     const spots: Unit[] = [u];
     if (canMove) {
       for (const [k] of reachableTiles(s, u)) {
@@ -68,21 +64,46 @@ function planTactics(s: GameState, ids: string[], canMove: boolean): SquadTactic
       }
     }
     /* 同一个敌人，这个兵最多能打出多少（多格取最大，不累加） */
-    const best = new Map<string, number>();
+    const hits = new Map<string, number>();
     for (const from of spots) {
       for (const foe of attackableTargets(s, from)) {
         if (foe.owner === u.owner) continue;
         const dmg = previewAttack(s, from, foe).toDefender;
         if (dmg <= 0) continue;
-        best.set(foe.id, Math.max(best.get(foe.id) ?? 0, dmg));
+        hits.set(foe.id, Math.max(hits.get(foe.id) ?? 0, dmg));
       }
     }
-    for (const [fid, dmg] of best) {
+    /* 原地能打到谁（不只是能打多少）——"这个兵这一手有没有别的仗打" */
+    const nowFoes = new Map<string, number>();
+    for (const foe of attackableTargets(s, u)) {
+      if (foe.owner === u.owner) continue;
+      const dmg = previewAttack(s, u, foe).toDefender;
+      if (dmg > 0) nowFoes.set(foe.id, dmg);
+    }
+    return { id: u.id, hits, nowFoes };
+  });
+
+  /*
+   * 汇总成"每个敌人"的账：
+   *   `n`      —— 有几个兵够得着它（含走一步）
+   *   `dmg`    —— 这些人合计能打多少
+   *   `dmgNow` —— **原地不动**就能打多少
+   *   `dmgIdle`—— 只算"这一手本来就没仗可打"的兵能补多少（见 `converge`）
+   */
+  const reach = new Map<string, { n: number; dmg: number; dmgNow: number; dmgIdle: number; dmgIdleMax: number; hp: number }>();
+  for (const p of perUnit) {
+    const idle = p.nowFoes.size === 0;
+    for (const [fid, dmg] of p.hits) {
       const foe = s.units.find((x) => x.id === fid);
       if (!foe) continue;
-      const rec = reach.get(fid) ?? { n: 0, dmg: 0, hp: foe.hp };
+      const rec = reach.get(fid) ?? { n: 0, dmg: 0, dmgNow: 0, dmgIdle: 0, dmgIdleMax: 0, hp: foe.hp };
       rec.n += 1;
       rec.dmg += dmg;
+      rec.dmgNow += p.nowFoes.get(fid) ?? 0;
+      if (idle) {
+        rec.dmgIdle += dmg;
+        rec.dmgIdleMax = Math.max(rec.dmgIdleMax, dmg);
+      }
       reach.set(fid, rec);
     }
   }
@@ -103,10 +124,36 @@ function planTactics(s: GameState, ids: string[], canMove: boolean): SquadTactic
    */
   if (pick[1].dmg < pick[1].hp * 0.5) return undefined;
 
+  /*
+   * **要不要为这个目标挪一步**（2026-11-25，第 4 步）。两条同时成立才开：
+   *
+   * ① **已经在打它了，但原地打不死**（`0 < dmgNow < hp`）；
+   * ② **再补一个闲人那一下就收**（`dmgNow + dmgIdleMax ≥ hp`，只算"本来没仗可打"的兵，
+   *    而且只算**一个人**的量）。
+   *
+   * ② 的"一个人"很关键：写成"闲着的都算"会变成"从零开始集火"——
+   * S-017 第 1 手就是这样：没人够得着那个目标（`dmgNow = 0`）、七个闲人合计 73 够
+   * 24 血，于是全军被拽过去，清场反而慢了一手。
+   *
+   * ② 是 S-017 逼出来的。只写①的时候它从绿变红（6 手清场 4 → 3）：那一局里"补一刀"的兵
+   * 手上明明还有别的守军可打，把它拽过来等于让另一个敌人多活一轮。
+   * 清场要的是散开、一人盯一个；只有**闲着的人**去补刀才不亏。
+   *
+   * 判据放在约束层、和 `focusId` 同一个开关里，打分层只执行不判断——
+   * 和"是否集火"一个道理：条件不满足就不开，不在执行层加例外。
+   */
+  const converge =
+    canMove &&
+    pick[1].dmgNow > 0 &&
+    pick[1].dmgNow < pick[1].hp &&
+    pick[1].dmgNow + pick[1].dmgIdleMax >= pick[1].hp;
+
   return {
     focusId: pick[0],
-    converge: false, /* 靠拢（一步前瞻）在第 4 步单独开，见 PLAN-V4-NEXT */
-    why: `${pick[1].n} 个兵能打到 ${pick[0]}：合计 ${Math.round(pick[1].dmg)} / 它 ${Math.round(pick[1].hp)} 血${canMove ? '（允许挪一步）' : '（不挪，只打够得着的）'}`,
+    converge,
+    why: converge
+      ? `补一刀就收：原地 ${Math.round(pick[1].dmgNow)} + 一个闲人 ${Math.round(pick[1].dmgIdleMax)} ≥ 它 ${Math.round(pick[1].hp)} 血`
+      : `${pick[1].n} 个兵能打到 ${pick[0]}：合计 ${Math.round(pick[1].dmg)} / 它 ${Math.round(pick[1].hp)} 血${canMove ? '' : '（守队不挪位）'}`,
   };
 }
 
