@@ -491,6 +491,7 @@ function planUpgrade(
   need: Constraints['need'],
   gold: number,
   spendCap: number | undefined,
+  horizonT: number | undefined,
 ): Constraints['upgrade'] {
   /* 攒钱期（接管废墟的 save 阶段）不升级：那笔钱是重建费，动了就前功尽弃 */
   if (spendCap !== undefined) return undefined;
@@ -558,6 +559,132 @@ function planUpgrade(
       best = cand;
     }
   }
+  /* 应急没触发 → 看**发展升级**（钱多到花不完）。见 `planUpgradeEcon` */
+  return best ?? planUpgradeEcon(s, world, gold, horizonT);
+}
+
+/**
+ * **某一代能造的最强兵**（每格战力最高）。`era` 用假的城算，不改状态。
+ *
+ * "每格战力"就是 `unitWorth`——产兵格是一次性的，一格能打出多少才是瓶颈所在。
+ */
+function bestPerCell(
+  s: GameState,
+  world: World,
+  city: City,
+  era: number,
+): { type: string; gold: number; worth: number } | undefined {
+  let best: { type: string; gold: number; worth: number } | undefined;
+  for (const o of world.affordableCombat({ ...city, era }, Number.MAX_SAFE_INTEGER)) {
+    /*
+     * **排除水兵**（2026-11-25 23:20 实测的坑）：`affordableCombat` 会返回楼船/炮艇
+     * （城边有点水就能造），而它们 worth 高（楼船 108）、只能在水上走。
+     * 第一版因此把"2 代 + 24 个楼船"算成了 2592 战力，比"3 代 + 34 个戟兵"（2550）还高，
+     * 于是 E-2-03 里 v4 升了两代就停手，去造一堆开不上岸的船。
+     */
+    if (utype(s, o.type).domain === 'water') continue;
+    const w = unitWorthOfType(s, o.type);
+    if (!best || w > best.worth) best = { type: o.type, gold: o.gold, worth: w };
+  }
+  return best;
+}
+
+/**
+ * **发展升级**（P3 闸 B，2026-11-25 晚）：钱多到产兵格花不完 → 升代换更强的兵。
+ *
+ * ── 判据（用户 2026-11-25 逐条纠过的三个坑）──────────────────
+ *
+ * ① **产兵格不是常数 4**：`capacity` 现算——所有城的城格、去掉站着人的，
+ *    多城和兵营自然都被算进来，不写死。
+ * ② **"剩余手数"不是考试窗口**：用 `T - s.turn`，而 `T = marchTurns(主力 → 敌城)`
+ *    ——那是**行军时间**，实战里 v4 本来就在算（`planHorizon`）。题目窗口不参与。
+ * ③ **"花不完"要按每格战力算**，不是"买不起更贵的"：
+ *
+ *      每格战力随代上升（民兵 45 → 戟兵 75 → 步枪兵 90）
+ *      每金战力随代下降（民兵 1.80 → 步枪兵 0.45）
+ *
+ *    所以钱不是瓶颈时，**同一条判据要切成"每格"**（和 2c 守城那条同源）：
+ *    对每一代 e 算 `n = min(格数 × 剩余手数, 钱 ÷ 单价)`，取 `n × 每格战力` 最大的那一代。
+ *    升过头会被自动否掉（单价涨得比战力快，n 掉下来）。
+ *
+ * ── 什么时候才轮到它 ────────────────────────────────────────
+ *
+ * 只在"**钱确实花不完**"时：`金 > 格数 × 剩余手数 × 当前代最强兵价`。
+ * 钱够花的时候升级是浪费——那笔钱能变成兵。E-2-01（金 200、T=7、4 格）就是这样：
+ * 200 < 4×7×150，永远不升。
+ */
+function planUpgradeEcon(
+  s: GameState,
+  world: World,
+  gold: number,
+  horizonT: number | undefined,
+): Constraints['upgrade'] {
+  if (horizonT === undefined) return undefined;
+  const left = Math.max(0, horizonT - s.turn);
+  if (left <= 0) return undefined;
+  /*
+   * **只在"还没有军队"时规划**（2026-11-25 23:30 实测的坑）。
+   *
+   * 每手重算会漂移：E-2-03 里第 1 手算"升 3 代最优"（34 个戟兵 2550），
+   * 但第 3 手再看时，剩余手数从 6 掉到 4，产能成了瓶颈（16 格），
+   * 于是"16 个戟兵 1200"输给"14 个步枪兵 1260"——它又升了一级。
+   * 反复几次就升到 5 代，钱花光、只造 11 个。
+   *
+   * 根因是**升级费是沉没成本，重新规划时它不在账上**，于是每一手都像"从零开始"、
+   * 都更喜欢更贵的兵。让它只规划一次：军队成型之后，钱该买兵，不该再改代。
+   */
+  if (world.myCombat.length > 0) return undefined;
+
+  let best: NonNullable<Constraints['upgrade']> | undefined;
+  let bestWorth = -1;
+  for (const info of world.cities) {
+    const city = info.city;
+    if (city.ruined) continue;
+    /* ① 产能现算：城格去掉站着人的（占满就造不了，别把它算成产能） */
+    const cap = Math.max(
+      1,
+      cityTiles(city).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length,
+    );
+    const now = bestPerCell(s, world, city, city.era);
+    if (!now) continue;
+
+    /* 钱够不够花：一手把全部格子造满要多少钱，乘剩余手数 */
+    const spendNow = cap * left * now.gold;
+    if (gold <= spendNow) continue; /* 钱花得完 → 不叫"钱多"，别升 */
+
+    let acc = 0;
+    let curEra = city.era;
+    let cur = { n: Math.min(cap * left, Math.floor(gold / now.gold)), worth: now.worth, gold: now.gold };
+    let curTotal = cur.n * cur.worth;
+    for (;;) {
+      const tgt = upgradeTargetOf(s, { ...city, era: curEra });
+      if (!tgt || tgt.cost === null || tgt.blocked) break;
+      if (gold < acc + tgt.cost) break;
+      const nextEra = tgt.edge.to;
+      const nb = bestPerCell(s, world, city, nextEra);
+      if (!nb) break;
+      acc += tgt.cost;
+      curEra = nextEra;
+      const n = Math.min(cap * left, Math.floor((gold - acc) / nb.gold));
+      const total = n * nb.worth;
+      if (total > curTotal) {
+        curTotal = total;
+        cur = { n, worth: nb.worth, gold: nb.gold };
+        /* 这一代更好 → 记下"下一步要升的那一级"的代价 */
+        bestWorth = total;
+        best = {
+          cityId: city.id,
+          cost: (() => {
+            const one = upgradeTargetOf(s, city);
+            return one && one.cost !== null ? one.cost : tgt.cost;
+          })(),
+          rounds: 0,
+          why: `钱花不完（${gold} > ${cap}格×${left}手×${now.gold}），升到第${curEra}代后这 ${left} 手能造 ${cur.n} 个${utype(s, nb.type).name}（每格 ${Math.round(nb.worth)}，现在 ${Math.round(now.worth)}）→ 战力 ${Math.round(curTotal)} 对 ${Math.round(cur.n * now.worth)}`,
+        };
+      }
+    }
+  }
+  void bestWorth;
   return best;
 }
 
@@ -2126,7 +2253,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     captureTarget,
     transit,
     horizon,
-    upgrade: planUpgrade(s, world, need, gold, spendCap),
+    upgrade: planUpgrade(s, world, need, gold, spendCap, horizon?.turns),
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,
