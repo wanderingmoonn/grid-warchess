@@ -2150,6 +2150,18 @@ export interface AiSquadLog {
   /** 这一回合的主攻城市 */
   cityId: string | null;
   squads: AiSquadReport[];
+  /**
+   * 下面四个是 **v4 专用**（D6，2026-11-26）：把"为什么"写进回放。
+   *
+   * 有了它们，回放不用读代码就能回答三个问题：
+   * 这一手为什么不造兵（`spend`）· 为什么升 / 不升（`upgrade` / `upgradeBlocked`）· 为什么做这件事（`reason`）。
+   * 老记录没有这几个字段，读的时候按可选处理。
+   */
+  kind?: string;
+  reason?: string;
+  spend?: { mode: string; cap?: number; why: string };
+  upgrade?: { kind: string; cityId: string | null; targetEra: number | null; why: string } | null;
+  upgradeBlocked?: string | null;
 }
 
 /** 决战时机的一条判决 */

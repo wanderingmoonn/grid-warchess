@@ -83,7 +83,9 @@ console.log(
 );
 console.log(
   '升级（执行）：',
-  v.con.upgrade ? `${v.con.upgrade.cityId} · ${v.con.upgrade.cost} 金 · ${v.con.upgrade.why}` : '（这一手不升）',
+  v.con.upgrade
+    ? `${v.con.upgrade.cityId} · ${v.con.upgrade.cost} 金 · ${v.con.upgrade.why}`
+    : `（这一手不升）${v.con.upgradeBlocked ? ` —— ${v.con.upgradeBlocked}` : ''}`,
 );
 console.log('\n队伍：');
 for (const q of v.con.squads) {

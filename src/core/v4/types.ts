@@ -365,6 +365,13 @@ export interface Constraints {
    */
   upgrade?: { cityId: string; cost: number; why: string; rounds: number };
   /**
+   * **决定层说要升、但这一手没升，为什么**（D6）。
+   *
+   * 计划层负责的三件事（路线通不通 / 钱够不够 / 升完还剩不剩一个打得穿的兵）任一不过就写在这里。
+   * 为什么不塞进 `upgrade.why`：那个字段属于"要执行的那一个"，而被否的时候根本没有它。
+   */
+  upgradeBlocked?: string;
+  /**
    * **发展期 T**（2026-11-25，P3 闸 C 的 C1）：还要几回合才能威胁到对面城。
    *
    * 它是"经济发展到第几手"的期限——再晚出发，对面就升完本了（低代打高代）。

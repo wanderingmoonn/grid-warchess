@@ -35,7 +35,7 @@ GameState ──► buildWorld ──► decide ──► constrain ──► ac
 
 阶段二做到：P1 采购、P2 编成（2a/2b/2c）、**P3-A 应急升级**、**P3-B 每格战力/解锁**。
 **进行中：插队的「D 决策链路归位」**（六小步 D1~D6，见 `docs/PLAN-V4-CHAIN-2026-11-25.md`，
-证据见本文件 **9.27**）。**D1 ✅ · D2 ✅ · D3 ✅ · D4 ✅（a+b）· D5 ✅，下一步 D6**；**D 做完再回 P4 投送**（题 `P-2-01`，底图 `E-2-04` 的 seed 18）。
+证据见本文件 **9.27**）。**D1 ✅ · D2 ✅ · D3 ✅ · D4 ✅（a+b）· D5 ✅ · D6 ✅ —— D 全部完成，下一步回 P4 投送**；**D 做完再回 P4 投送**（题 `P-2-01`，底图 `E-2-04` 的 seed 18）。
 完整对账看 `docs/PLAN-V4-PHASE2-2026-11-25.md` 的 **§1 / §6 / §7**。
 
 今天新加的 9.x（都在本文件，按编号倒序找不到就用搜索）：
@@ -1846,7 +1846,11 @@ node --experimental-strip-types scripts/long-run.ts --size 20 --seed 1401 --turn
 矩阵仍 0/20/14/29。
 **D5 ✅ 2026-11-26 01:15**：`V4Memory.eraPlan`（承诺）替代"有兵就不规划"那道门；
 33 道旧题零变化，**新题 `E-2-05` 红→绿**（时代 1/44.8 → 3/72.5），矩阵 34 道、0/21/14/30。
-踩坑：`ruined` 是可选字段（正常城 `undefined`），写成 `?? true` 会把每座城当成废墟。探针新增"钱："一行。**已知的小债**：接管废墟的 `enter` 段也归 `save`
+踩坑：`ruined` 是可选字段（正常城 `undefined`），写成 `?? true` 会把每座城当成废墟。
+**D6 ✅ 2026-11-26 01:35**：`planUpgrade` 改成 `{ upgrade?, blocked? }`——被否也留一句话
+（`Constraints.upgradeBlocked`）；面板/`v4Snapshot`/`aiSquads` 三处读者接上（`reason/spend/upgrade/upgradeBlocked`）。
+顺手修了两个可读性问题：理由不再无限追加"（沿用）"、**一手只记第一条回放**（原来一手能记四五条互相矛盾的）。
+零读数。**读完 D 之后**：`ai-v4` 只剩排序与派动作，计划层只剩可行性与翻译。探针新增"钱："一行。**已知的小债**：接管废墟的 `enter` 段也归 `save`
 （钱要留给重建费），理由写准了但名字不精确，留给 D4。
 **D2 ✅ 2026-11-26 00:00**：`horizon.turns` → `horizon.left`（长度），升级闸的 `T − s.turn` 删除；
 33 题仍逐字节一致；探针同时新增"升级："一行。
@@ -1864,6 +1868,10 @@ node --experimental-strip-types scripts/long-run.ts --size 20 --seed 1401 --turn
 **D5 ✅ 2026-11-26 01:15**：`V4Memory.eraPlan`（承诺）替代"有兵就不规划"那道门；
 33 道旧题零变化，**新题 `E-2-05` 红→绿**（时代 1/44.8 → 3/72.5），矩阵 34 道、0/21/14/30。
 踩坑：`ruined` 是可选字段（正常城 `undefined`），写成 `?? true` 会把每座城当成废墟。
+**D6 ✅ 2026-11-26 01:35**：`planUpgrade` 改成 `{ upgrade?, blocked? }`——被否也留一句话
+（`Constraints.upgradeBlocked`）；面板/`v4Snapshot`/`aiSquads` 三处读者接上（`reason/spend/upgrade/upgradeBlocked`）。
+顺手修了两个可读性问题：理由不再无限追加"（沿用）"、**一手只记第一条回放**（原来一手能记四五条互相矛盾的）。
+零读数。**读完 D 之后**：`ai-v4` 只剩排序与派动作，计划层只剩可行性与翻译。
 
 ### 9.26 发展升级落地（P3 闸 B）：三个坑 + "只在没有军队时规划"（2026-11-25）
 

@@ -18,6 +18,17 @@ import { cityTiles, effectiveStats, utype } from '../rules.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import type { GameState } from '../types.ts';
 
+/**
+ * 沿用上一条理由时加一个标记（D6）。
+ *
+ * 原来是 `${prev.reason}（沿用）` 直接拼——理由每手都被沿用一次，于是字符串长成
+ * "先守（沿用）（沿用）（沿用）…"，回放里三十手后就读不出原句了。
+ * 现在先把已有的后缀去掉再拼，永远只有一个。
+ */
+function inherit(reason: string): string {
+  return `${reason.replace(/（沿用）$/, '')}（沿用）`;
+}
+
 /** 还没挂"钱怎么花"的决定（`withSpend` 的入参形状） */
 type BareDecision = Omit<Decision, 'spend'>;
 
@@ -369,7 +380,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
           kind: 'press',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
-          reason: `${prev.reason}（沿用）`,
+          reason: inherit(prev.reason),
         });
       }
     } else if (prev.kind === 'defend') {
@@ -379,14 +390,14 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
           kind: 'defend',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
-          reason: `${prev.reason}（沿用）`,
+          reason: inherit(prev.reason),
         });
       }
     } else if (ratio < 1.25) {
       return complete(s, world, mem, {
         kind: 'expand',
         untilTurn: prev.untilTurn,
-        reason: `${prev.reason}（沿用）`,
+        reason: inherit(prev.reason),
       });
     }
   }

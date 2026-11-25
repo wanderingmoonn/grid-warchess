@@ -86,6 +86,31 @@ function miniMap(s: GameState, me: PlayerId, keepClear: number[]): string {
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block">${parts.join('')}</svg>`;
 }
 
+/**
+ * **升级那一行**（D6）：决定层要不要、计划层执不执行、被否时为什么。
+ *
+ * 三种状态各一句话，不合并：
+ *   · 不升   → 决定层没这个念头（没在救城、钱也不算花不完）；
+ *   · 要升   → 哪座城、升到第几代、多少钱；
+ *   · 被否   → 决定层要升，计划层说不行，**原因写在这儿**。
+ */
+function upgradeLine(
+  d: { upgrade?: { kind: string; candidates: Array<{ cityId: string; targetEra: number; why: string }> } },
+  exec: { cityId: string; cost: number; why: string } | undefined,
+  blocked: string | undefined,
+): string {
+  const plan = d.upgrade;
+  if (!plan || plan.candidates.length === 0) {
+    return '<span style="color:#888780">升级 · 这一期不升</span>';
+  }
+  const first = plan.candidates[0]!;
+  const tag = plan.kind === 'rescue' ? '救城' : '升代';
+  if (exec) {
+    return `<span style="color:#FAC775">升级 · ${tag} ${first.cityId}→第${first.targetEra}代 · ${exec.cost} 金</span>`;
+  }
+  return `<span style="color:#F09595">升级 · ${tag} ${first.cityId}→第${first.targetEra}代被否 · ${blocked ?? '原因未知'}</span>`;
+}
+
 /** 整块面板。每回合重建一次就够（调用方按回合号缓存），别放进每帧渲染 */
 export function v4HudHtml(s: GameState, me: PlayerId): string {
   const snap = v4Snapshot(s, me);
@@ -111,7 +136,8 @@ export function v4HudHtml(s: GameState, me: PlayerId): string {
       管到第 ${d.untilTurn} 手${d.cityId ? ` · 目标 ${d.cityId}` : ''}<br>
       <span style="color:#888780">${d.reason}</span><br>
       <span style="color:#9FE1CB">钱 ${SPEND_LABEL[d.spend.mode] ?? d.spend.mode}${d.spend.cap !== undefined ? `（上限 ${d.spend.cap}）` : ''}</span>
-      <span style="color:#888780"> · ${d.spend.why}</span>
+      <span style="color:#888780"> · ${d.spend.why}</span><br>
+      ${upgradeLine(d, snap.upgrade, snap.upgradeBlocked)}
     </div>
     <div style="border-top:1px solid #3A3A38;padding-top:6px;margin-bottom:8px">
       ${rows || '<span style="font-size:11px;color:#888780">没有队伍（都闲着）</span>'}

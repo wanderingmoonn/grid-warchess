@@ -488,36 +488,60 @@ function planUpgrade(
   need: Constraints['need'],
   gold: number,
   plan: Decision['upgrade'],
-): Constraints['upgrade'] {
-  if (!plan) return undefined;
+): { upgrade?: NonNullable<Constraints['upgrade']>; blocked?: string } {
+  if (!plan) return {};
+  /*
+   * **被否的时候要留下一句话**（D6）。
+   *
+   * 以前这里每个 `continue` 都不说话，于是"决定层说要升、这一手却没升"在回放里
+   * 完全看不见——只能去读代码。现在每个出口都写原因，`upgradeBlocked` 一路传到面板和回放。
+   */
+  let blocked: string | undefined;
   for (const cand of plan.candidates) {
     const city = s.cities.find((c) => c.id === cand.cityId);
-    if (!city) continue;
+    if (!city) {
+      blocked = `找不到城 ${cand.cityId}`;
+      continue;
+    }
     /* ① 路线通不通（决定层查过一次，这里再查是为了不信任上游：状态可能已经变了） */
     const tgt = upgradeTargetOf(s, city);
-    if (!tgt || tgt.cost === null || tgt.blocked) continue;
+    if (!tgt || tgt.cost === null || tgt.blocked) {
+      blocked = `${city.id} 这条路现在升不了（${tgt?.blocked ?? '没有下一级' }）`;
+      continue;
+    }
     /* ② 钱够不够 */
-    if (gold < cand.cost) continue;
+    if (gold < cand.cost) {
+      blocked = `${city.id} 要 ${cand.cost} 金，手上只有 ${gold}`;
+      continue;
+    }
 
     /* ③ 救城才要"别把造兵的路堵死"；升代那条本来就是因为钱花不完才升的 */
     if (plan.kind === 'rescue') {
       const rest = gold - tgt.cost;
       const after = upgradedCity(s, city);
-      if (!after) continue;
+      if (!after) {
+        blocked = `${city.id} 升级后的状态算不出来`;
+        continue;
+      }
       const pool = world
         .affordableCombat(after, rest)
         .filter((o) => !need || (need.usable.includes(o.type) && need.survivable.includes(o.type)));
-      if (pool.length === 0) continue;
+      if (pool.length === 0) {
+        blocked = `升完只剩 ${rest} 金，造不出打得穿又活得到的兵（会把造兵的路堵死）`;
+        continue;
+      }
       return {
-        cityId: city.id,
-        cost: tgt.cost,
-        rounds: cand.rounds.now,
-        why: `城 ${cand.rounds.now} 轮内会塌，升到${tgt.label}后能撑 ${cand.rounds.after} 轮，且还剩 ${rest} 金造得了${utype(s, pool[0]!.type).name}`,
+        upgrade: {
+          cityId: city.id,
+          cost: tgt.cost,
+          rounds: cand.rounds.now,
+          why: `城 ${cand.rounds.now} 轮内会塌，升到${tgt.label}后能撑 ${cand.rounds.after} 轮，且还剩 ${rest} 金造得了${utype(s, pool[0]!.type).name}`,
+        },
       };
     }
-    return { cityId: city.id, cost: tgt.cost, rounds: 0, why: cand.why };
+    return { upgrade: { cityId: city.id, cost: tgt.cost, rounds: 0, why: cand.why } };
   }
-  return undefined;
+  return { blocked };
 }
 
 function horizonOfSquad(
@@ -2000,6 +2024,11 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     ];
     if (yieldIds.length > 0) squads.push({ id: 'yield', order: 'yield', unitIds: yieldIds });
   }
+  /*
+   * 升级的"能不能"（D6）：决定层说要不要，这里回答执行得了吗。
+   * 被否时带一句话出去（`upgradeBlocked`），否则回放里只看得见"这一手什么也没升"。
+   */
+  const upgradePlan = planUpgrade(s, world, need, gold, decision.upgrade);
   return {
     need,
     spendCap,
@@ -2007,7 +2036,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     captureTarget,
     transit,
     horizon,
-    upgrade: planUpgrade(s, world, need, gold, decision.upgrade),
+    upgrade: upgradePlan.upgrade,
+    upgradeBlocked: upgradePlan.blocked,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

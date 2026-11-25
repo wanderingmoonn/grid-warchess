@@ -371,12 +371,18 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   squads: Array<{ id: string; order: string; n: number }>;
   /** 必须空的格子（下标）。面板要画它们，所以给原值不是数量 */
   keepClearList: number[];
+  /** 升级的执行结果（要不要升在 `decision.upgrade` 里，这里是"这一手执不执行"） */
+  upgrade?: NonNullable<Constraints['upgrade']>;
+  /** 决定层说要升、但计划层否掉了——为什么（D6） */
+  upgradeBlocked?: string;
 } {
   const v = currentView(s, me);
   return {
     decision: v.decision,
     squads: v.con.squads.map((q) => ({ id: q.id, order: q.order, n: q.unitIds.length })),
     keepClearList: v.con.keepClear,
+    upgrade: v.con.upgrade,
+    upgradeBlocked: v.con.upgradeBlocked,
   };
 }
 
@@ -406,11 +412,45 @@ function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constrai
     lanes: q.lanes?.length ?? 0,
   }));
   if (reps.length === 0) return;
-  const sig = reps.map((x) => `${x.id}:${x.state}:${x.count}`).join('|');
+  /*
+   * 去重签名要包含**钱和升级**（D6）：这两件事变了而队伍没变时，回放里也该留一条。
+   * 否则"这一手为什么没造兵"在回放里永远是同一个画面。
+   */
+  const up = con.upgrade;
+  const sig =
+    reps.map((x) => `${x.id}:${x.state}:${x.count}`).join('|') +
+    `|sp:${decision.spend.mode}:${decision.spend.cap ?? ''}` +
+    `|up:${up ? `${up.cityId}#${up.cost}` : '-'}:${con.upgradeBlocked ?? ''}`;
   const log = (s.aiSquads ??= []);
   const last = [...log].reverse().find((x) => x.me === me);
+  /*
+   * **一手只记一条**（D6）：
+   *
+   * 原来靠签名去重，可一手之内每做一个动作金币就变，决定也跟着变
+   * （"要救城"→买完兵钱不够→"没这个念头"），于是同一手记下四五条互相矛盾的记录。
+   * 一手的第一条才是"这一手开始时它想干什么"，后面的都是花钱的后果。
+   */
+  if (last && last.turn === s.turn) return;
   const lastSig = last ? last.squads.map((x) => `${x.id}:${x.state}:${x.count}`).join('|') : '';
   if (sig === lastSig) return;
-  log.push({ turn: s.turn, me, cityId: decision.cityId ?? null, squads: reps, kind: decision.kind } as never);
+  log.push({
+    turn: s.turn,
+    me,
+    cityId: decision.cityId ?? null,
+    squads: reps,
+    kind: decision.kind,
+    /* ── D6：三句话，让回放不读代码也能回答"为什么" ── */
+    reason: decision.reason,
+    spend: { mode: decision.spend.mode, cap: decision.spend.cap, why: decision.spend.why },
+    upgrade: decision.upgrade
+      ? {
+          kind: decision.upgrade.kind,
+          cityId: decision.upgrade.candidates[0]?.cityId ?? null,
+          targetEra: decision.upgrade.candidates[0]?.targetEra ?? null,
+          why: decision.upgrade.candidates[0]?.why ?? '',
+        }
+      : null,
+    upgradeBlocked: con.upgradeBlocked ?? null,
+  } as never);
   if (log.length > 200) log.splice(0, log.length - 200);
 }
