@@ -1173,6 +1173,19 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     }
   }
 
+  /*
+   * **站在关键格上的兵：不在主队里，但有一个任务叫"让开"**（2026-11-25，清 9.14）。
+   *
+   * 它们原来是被**摘出所有队伍**：这一手"没有任何任务"，不报错、不复盘、日志里看不见，
+   * 回放里就是"它突然不动了"。现在改成给一个明确的 `yield` 任务（见下面 push 的那支队），
+   * 行为不变（它们本来也不跟着主队走），但看得见、说得清。
+   *
+   * **为什么不让它们直接留在主队里**：试过，S-001（该赢的必须赢）从绿变红——
+   * 它们一进主队，就成了 `march` 的一员，`planYield` 的"正在执行的兵不算挡路"会把它们保护起来，
+   * 于是谁都不去腾格子；而且主队人数虚高，`ready`（`ids.length >= want`）提前成立，队伍早发。
+   * 这两个副作用都比"多一个任务名"贵。
+   */
+  const blockers = world.myCombat.filter((u) => keepSet.has(u.y * s.w + u.x));
   const rest = world.myCombat.filter((u) => !held.has(u.id) && !keepSet.has(u.y * s.w + u.x));
 
   /*
@@ -1369,6 +1382,15 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   );
 
   const marched = planMarch(s, world, squads);
+  const yieldMoves = planYield(s, world, keepClear, squads, { spawn, exit });
+  /*
+   * **把"让开"写成一支队**（9.14 的收尾）：只收那些这一手**真的被派了让位动作**的兵。
+   * 没被派活儿的挡路兵不写进来——它们这一手就是"站在原地"，不是任务。
+   */
+  if (yieldMoves.length > 0) {
+    const yieldIds = yieldMoves.map((m) => m.unitId).filter((id) => blockers.some((b) => b.id === id));
+    if (yieldIds.length > 0) squads.push({ id: 'yield', order: 'yield', unitIds: yieldIds });
+  }
   return {
     need,
     spendCap,
@@ -1381,7 +1403,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     squads,
     steps: marched.steps,
     stepOrder: marched.order,
-    yieldMoves: planYield(s, world, keepClear, squads, { spawn, exit }),
+    yieldMoves,
     forbid,
   };
 }
