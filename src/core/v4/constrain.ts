@@ -1556,6 +1556,70 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         })
         .map((d) => d.id)
     : [];
+  /*
+   * **每格输出**（2026-11-25，P2-2c）：池内按哪个数比，由"瓶颈"决定。
+   *
+   * 守城时能站人的地方就是城的格子（2×2 只有 4 格）——钱再多也放不下第五个。
+   * 所以这时候要比的是"**这一格能打出多少**"，不是"每一金能打出多少"：
+   *
+   *     每格输出 = 我对多数决目标的伤害 × 它要挨几下才倒
+   *
+   * 为什么"挨几下"要进乘法：一个兵站在城里，它的贡献是"能开火几轮"。
+   * 血厚 = 多站几轮 = 更多发。这也是血在这个游戏里唯一的意义（护甲已经算进伤害）。
+   *
+   * 为什么不除价格（和 `DESIGN-PURCHASE-CRITERIA` 的"每金"不同）：
+   * P1 实测过——价格一做分母就选回 1 代民兵（S-001 造 21 个、S-002 造 45 个）。
+   * 钱是瓶颈的时候，正确做法是"**买得起的最强**"，不是"性价比最高"。见 `V4-CODE-MAP` 9.19。
+   */
+  const perCell: Record<string, number> = {};
+  if (mainFoe) {
+    for (const d of Object.values(s.unitTypes)) {
+      if (d.category !== 'combat') continue;
+      const probe = {
+        id: '__probe3',
+        owner: s.current,
+        type: d.id,
+        x: mainFoe.x,
+        y: mainFoe.y,
+        hp: d.maxHp,
+      } as Unit;
+      const dmg = previewAttack(s, probe, mainFoe).toDefender; /* 我打它 */
+      if (dmg <= 0) {
+        perCell[d.id] = 0;
+        continue;
+      }
+      /* 方向别反：攻方是敌人。0 伤害（够不着/打不动）= 它永远打不死我，按 99 发算 */
+      const hit = previewAttack(s, mainFoe, probe).toDefender;
+      const hits = hit <= 0 ? 99 : Math.max(1, Math.ceil((d.maxHp ?? 1) / hit));
+      perCell[d.id] = dmg * hits;
+    }
+  }
+  /*
+   * 瓶颈只有两种，**由"钱够不够填满格子"判**，不是打分：
+   *
+   *   · 守（`defend`）**且**这笔钱能把城格全填上最强的兵 → `cell`（每格）；
+   *   · 其余 → `gold`（买得起的最强，价格只在同分时做最后一档）。
+   *
+   * ── 为什么"守城"还不够（2026-11-25 实测踩出来的）──
+   *
+   * 第一版是"只要决定是守就按每格"，结果 **S-012 / P-1-01 / P-1-02 三道一起红**：
+   * 每格口径会挑**最贵的强兵**（骠骑兵 150），300 金只买得起 2 个 —— 城格的 4 个只填了 2 个，
+   * 而 3 个戟兵（300）能填 3 个。**"每格"的前提是钱能把格子填满**；填不满的时候，
+   * 真正的瓶颈还是钱（这是一个背包问题，贪心解就是"每金最划算"，而 P1 已经证过那条路
+   * 会选回民兵）。所以只在"钱够填满"时才换成每格口径。
+   *
+   * 也**不做**"能站的格子数 < 想造的兵数"那条更泛的判据：现在只有城格会紧，
+   * 别的场景没有题能证明它需要区分（宁可少一条没有读数的规则）。
+   */
+  const cityCells = city ? cityTiles(city).length : 0;
+  const bestPrice = usable
+    .filter((t) => survivable.includes(t))
+    .reduce((n, t) => Math.max(n, utype(s, t).cost ?? 0), 0);
+  const bottleneck: 'cell' | 'gold' =
+    decision.kind === 'defend' && cityCells > 0 && bestPrice > 0 && (s.players[world.me]?.gold ?? 0) >= cityCells * bestPrice
+      ? 'cell'
+      : 'gold';
+
   const need =
     foes.length > 0
       ? {
@@ -1579,6 +1643,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
           }),
           /* 对面最大射程：压不过它就没有"先手"，排序要改比血（见 tactics 的 byRange） */
           range: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).range ?? 1), 0),
+          bottleneck,
+          perCell,
         }
       : undefined;
 

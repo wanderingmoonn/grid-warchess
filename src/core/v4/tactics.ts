@@ -670,7 +670,7 @@ function stepOffSpawn(
 export function recruitAction(
   s: GameState,
   world: World,
-  need?: { usable: string[]; survivable: string[]; range: number; canPad: boolean },
+  need?: NonNullable<Constraints['need']>,
   cap?: number,
 ): Action | null {
   const gold = Math.min(s.players[world.me]?.gold ?? 0, cap ?? Infinity);
@@ -778,9 +778,19 @@ export function recruitAction(
     const anyGood = need ? need.usable.some((t) => need.survivable.includes(t)) : true;
     const firstArmy = world.myCombat.length === 0;
     const allowedToPad = need ? need.canPad && (!firstArmy || !anyGood) : false;
+    /*
+     * **池内按哪个数比，看瓶颈**（2026-11-25，P2-2c）。
+     *
+     * · 守城（`cell`）：比"每格输出"——一格能打出多少。城就 4 格，钱再多也放不下第五个，
+     *   所以"更强"胜过"更划算"；同分才退回 P1 的字典序（先手 → 血 → 攻 → 价）。
+     * · 其余（`gold`）：**保持 P1 的排序不变**（射程 → 血 → 攻 → 价）。
+     *   "每金"不写成 `输出 ÷ 价格`：P1 实测过，一除价格就选回 1 代民兵。
+     */
+    const byCell = (a: { type: string; gold: number }, b: { type: string; gold: number }): number =>
+      (need!.perCell[b.type] ?? 0) - (need!.perCell[a.type] ?? 0) || byRange(a, b);
     const pick =
       ok.length > 0
-        ? [...ok].sort(byRange)
+        ? [...ok].sort(need?.bottleneck === 'cell' ? byCell : byRange)
         : need
           ? allowedToPad
             ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
