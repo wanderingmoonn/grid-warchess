@@ -11,8 +11,10 @@
  */
 import { boardOf, boardIdOf } from '../board.ts';
 import { passable } from '../config.ts';
-import { attackableTargets, cityTiles, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
+import { attackableTargets, attacksPerTurn, cityTiles, damageToCity, distToCity, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
+import { eraDef } from '../config.ts';
+import { upgradeTargetOf } from '../era-routes.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
@@ -456,6 +458,98 @@ function planTransit(
     out[u.id] = pick.at;
   }
   return out;
+}
+
+/**
+ * **应急升级**（2026-11-25，P3 闸 A）：这座城现在花钱升一级，能不能改变"守得住 / 守不住"。
+ *
+ * ── 它回答什么 ───────────────────────────────────────────────
+ *
+ * 不是"血和甲值多少钱"，而是**翻不翻**：不升的时候还剩几轮塌？升完还剩几轮？
+ * 所以不用给回血、护甲单独定价——`damageToCity` 里 hp 和 armor 都算进去了，
+ * 升级自带的 `hp += Δ` 也自然反映在"能撑几轮"上。
+ *
+ * ── 三个条件（缺一不可）─────────────────────────────────────
+ *
+ *   ① **急**：按当前齐射，城 ≤2 轮就塌（1 轮 = 一轮所有能砸到它的敌人各砸一下）；
+ *   ② **翻**：升完能多撑至少一轮（不然钱花了、结论没变 → "守不住就别升级"）；
+ *   ③ **还有人**：升完剩下的钱，还买得起一个**打得穿又活得到**的兵。
+ *      没有这一条，"全升墙、一个兵不造"会被判成好棋——实测 D-2-02 就是这样：
+ *      400 − 360 = 40，连民兵都买得起但民兵过不了闸，等于把钱变成了墙。
+ *
+ * ── 为什么门槛是"≤2 轮" ─────────────────────────────────────
+ *
+ * 更长的预测要模拟"对方补兵、我方补兵、谁先死"，那是战力求解器的事（P3 闸 C 之后）。
+ * 两轮是**能用手上的数直接算出来**的最长窗口：这一轮 + 下一轮。
+ *
+ * 也**不在这里比"造兵 vs 升级"**：造兵能不能救，正常采购会去试；这一层只保证
+ * "升级不会把造兵的路堵死"（条件 ③）。真正意义上的二选一（造兵更好还是升级更好）
+ * 要模拟两支队伍的交换，那是战力求解器的事，不塞进这条闸里。
+ */
+function planUpgrade(
+  s: GameState,
+  world: World,
+  need: Constraints['need'],
+  gold: number,
+  spendCap: number | undefined,
+): Constraints['upgrade'] {
+  /* 攒钱期（接管废墟的 save 阶段）不升级：那笔钱是重建费，动了就前功尽弃 */
+  if (spendCap !== undefined) return undefined;
+  for (const info of world.cities) {
+    const city = info.city;
+    /*
+     * 谁在威胁它：**两轮内能砸到它的都算**（射程内的立刻算；移动 + 射程以内的下一轮算）。
+     * 只算"已经贴脸"的话，"敌人已经走到门口"这一格永远轮不到升级。
+     */
+    const threat = world.foeCombat.filter((u) => {
+      const t = utype(s, u.type);
+      const reach = (t.move ?? 2) + (effectiveStats(s, u).range ?? 1) + 1;
+      return distToCity(u, city) <= reach;
+    });
+    if (threat.length === 0) continue;
+    /*
+     * 一轮齐射 = 每个敌人**每一拳**都砸在城上。`burst` 必须乘进去——
+     * 第一版漏了它，装甲车（多段 2）被当成 14/轮，实际 28/轮，于是
+     * "升级能多撑一轮"被算成了真的（P-1-04 实测：城在 T5 就塌了）。
+     */
+    const dmg0 = threat.reduce((n, u) => n + damageToCity(u, city, s) * attacksPerTurn(s, u), 0);
+    if (dmg0 <= 0) continue;
+    const rounds0 = Math.ceil(city.hp / dmg0);
+    if (rounds0 > 2) continue; /* 撑得过两轮 → 不叫应急 */
+
+    const tgt = upgradeTargetOf(s, city);
+    if (!tgt || tgt.cost === null || tgt.blocked) continue;
+    if (gold < tgt.cost) continue;
+
+    /* 升级后的样子：和 `doUpgrade` 逐条对齐（maxHp/armor 加差、hp 加同样多） */
+    const from = eraDef(city.era);
+    const dHp = tgt.era.cityMaxHp - from.cityMaxHp;
+    const dArmor = tgt.era.cityArmor - from.cityArmor;
+    const after: typeof city = {
+      ...city,
+      era: tgt.edge.to,
+      maxHp: city.maxHp + dHp,
+      hp: city.hp + dHp,
+      armor: city.armor + dArmor,
+    };
+    const dmg1 = threat.reduce((n, u) => n + damageToCity(u, after, s) * attacksPerTurn(s, u), 0);
+    const rounds1 = dmg1 > 0 ? Math.ceil(after.hp / dmg1) : Infinity;
+    if (rounds1 <= rounds0) continue; /* 升了不多撑一轮 → 白升 */
+
+    /* ③：升完得还剩一个"打得穿 + 活得到"的兵可造 */
+    const rest = gold - tgt.cost;
+    const pool = world
+      .affordableCombat(after, rest)
+      .filter((o) => !need || (need.usable.includes(o.type) && need.survivable.includes(o.type)));
+    if (pool.length === 0) continue;
+
+    return {
+      cityId: city.id,
+      cost: tgt.cost,
+      why: `城 ${rounds0} 轮内会塌，升到${tgt.label}后能撑 ${rounds1} 轮，且还剩 ${rest} 金造得了${utype(s, pool[0]!.type).name}`,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -1698,6 +1792,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     captureId,
     captureTarget,
     transit,
+    upgrade: planUpgrade(s, world, need, gold, spendCap),
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,
