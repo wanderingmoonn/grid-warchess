@@ -10,6 +10,8 @@
  */
 
 import type { PlayerId } from '../core/types.ts';
+import { ERA1_UNIT_SPECS } from './angled-units-era1.ts';
+import { ERA2_UNIT_SPECS } from './angled-units-era2.ts';
 
 export interface AngledUnitPaintOpts {
   typeId: string;
@@ -33,13 +35,25 @@ export interface AngledUnitPaintOpts {
   facing: 1 | -1;
 }
 
-interface TeamClothPalette {
+export interface TeamClothPalette {
   lit: string;
   mid: string;
   shade: string;
   ring: string;
   ringFill: string;
 }
+
+export type AngledUnitHitQuad = readonly [
+  readonly [number, number],
+  readonly [number, number],
+  readonly [number, number],
+  readonly [number, number],
+];
+
+export type AngledUnitPainter = (
+  ctx: CanvasRenderingContext2D,
+  opts: AngledUnitPaintOpts,
+) => AngledUnitHitQuad;
 
 const TEAM_PALETTES: Record<PlayerId, TeamClothPalette> = {
   A: {
@@ -81,9 +95,19 @@ const DIM_PALETTE: TeamClothPalette = {
 };
 
 const SUPPORTED_UNIT_ART = new Set<string>(['militia']);
+const BUILTIN_UNIT_SPECS = { ...ERA1_UNIT_SPECS, ...ERA2_UNIT_SPECS };
+const customPainters = new Map<string, AngledUnitPainter>();
+
+export function getAngledUnitTeamPalette(owner: PlayerId, dim: boolean): TeamClothPalette {
+  return dim ? DIM_PALETTE : (TEAM_PALETTES[owner] ?? TEAM_PALETTES.A);
+}
+
+export function registerAngledUnitArt(typeId: string, painter: AngledUnitPainter): void {
+  customPainters.set(typeId, painter);
+}
 
 export function hasAngledUnitArt(typeId: string): boolean {
-  return SUPPORTED_UNIT_ART.has(typeId);
+  return SUPPORTED_UNIT_ART.has(typeId) || Object.hasOwn(BUILTIN_UNIT_SPECS, typeId) || customPainters.has(typeId);
 }
 
 function poly(
@@ -347,49 +371,61 @@ function drawLevySoldier(
 export function paintAngledUnit(
   ctx: CanvasRenderingContext2D,
   opts: AngledUnitPaintOpts,
-): readonly [readonly [number, number], readonly [number, number], readonly [number, number], readonly [number, number]] {
+): AngledUnitHitQuad {
+  const custom = customPainters.get(opts.typeId);
+  if (custom) return custom(ctx, opts);
+
   const { x, y, scale, owner, dim, selected, target, isMine, spent, moved, hp, maxHp, extraHp, facing } = opts;
-  const pal = dim ? DIM_PALETTE : (TEAM_PALETTES[owner] ?? TEAM_PALETTES.A);
+  const pal = getAngledUnitTeamPalette(owner, dim);
+  const spec = BUILTIN_UNIT_SPECS[opts.typeId];
 
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(scale, scale);
 
-  // 1. 克制的桌面战棋脚底阵营/选中/受击光环（细线低饱和，不抢地面与兵偶风头）
-  ctx.beginPath();
-  ctx.ellipse(0, 0.6, selected || target ? 11.4 : 9.8, selected || target ? 5.0 : 4.2, 0, 0, Math.PI * 2);
-  ctx.fillStyle = selected
-    ? 'rgba(210, 236, 248, 0.58)'
-    : target
-      ? 'rgba(248, 224, 214, 0.58)'
-      : pal.ringFill;
-  ctx.fill();
-  ctx.strokeStyle = selected ? '#1f6c96' : target ? '#c4322b' : pal.ring;
-  ctx.lineWidth = selected || target ? 1.85 : 1.05;
-  ctx.stroke();
+  // 1. 克制的桌面战棋脚底阵营/选中/受击光环（水上单位由自身水纹承载，避免陆地环违和）
+  if (!spec?.waterUnit) {
+    const baseRx = spec?.ringRx ?? 9.8;
+    const baseRy = spec?.ringRy ?? 4.2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0.6, selected || target ? baseRx + 1.6 : baseRx, selected || target ? baseRy + 0.8 : baseRy, 0, 0, Math.PI * 2);
+    ctx.fillStyle = selected
+      ? 'rgba(210, 236, 248, 0.58)'
+      : target
+        ? 'rgba(248, 224, 214, 0.58)'
+        : pal.ringFill;
+    ctx.fill();
+    ctx.strokeStyle = selected ? '#1f6c96' : target ? '#c4322b' : pal.ring;
+    ctx.lineWidth = selected || target ? 1.85 : 1.05;
+    ctx.stroke();
+  }
 
-  // 2. 双人错落征召民兵小组（按前后景深度先绘后排、再绘前排，按阵营朝向对峙）
+  // 2. 单位主体（民兵保持已定稿 v2 双人征召兵，时代 1/2 其余兵种与建筑走 BUILTIN_UNIT_SPECS）
   ctx.save();
   if (dim) ctx.globalAlpha = 0.72;
-  ctx.scale(facing, 1);
+  if (spec) {
+    spec.paint(ctx, pal, opts);
+  } else {
+    ctx.scale(facing, 1);
 
-  // 后排民兵（略靠后上方，高斜持矛）
-  ctx.save();
-  ctx.translate(-3.6, -2.8);
-  ctx.scale(0.95, 0.95);
-  drawLevySoldier(ctx, pal, dim, 1);
-  ctx.restore();
+    // 后排民兵（略靠后上方，高斜持矛）
+    ctx.save();
+    ctx.translate(-3.6, -2.8);
+    ctx.scale(0.95, 0.95);
+    drawLevySoldier(ctx, pal, dim, 1);
+    ctx.restore();
 
-  // 前排民兵（略靠前下方，前倾平举短矛护阵）
-  ctx.save();
-  ctx.translate(3.4, 1.5);
-  ctx.scale(1.02, 1.02);
-  drawLevySoldier(ctx, pal, dim, 0);
-  ctx.restore();
-
+    // 前排民兵（略靠前下方，前倾平举短矛护阵）
+    ctx.save();
+    ctx.translate(3.4, 1.5);
+    ctx.scale(1.02, 1.02);
+    drawLevySoldier(ctx, pal, dim, 0);
+    ctx.restore();
+  }
   ctx.restore();
 
   // 3. 受击目标红色角标准星
+  const topEdge = -(spec?.hitTop ?? 27) + 0.5;
   if (target) {
     ctx.strokeStyle = '#c4322b';
     ctx.lineWidth = 1.5;
@@ -401,8 +437,8 @@ export function paintAngledUnit(
       ctx.lineTo(cx + sx * 4.8, cy);
       ctx.stroke();
     };
-    drawCorner(-13.2, -26.5, 1, 1);
-    drawCorner(13.2, -26.5, -1, 1);
+    drawCorner(-13.2, topEdge, 1, 1);
+    drawCorner(13.2, topEdge, -1, 1);
     drawCorner(-13.2, 3.2, 1, -1);
     drawCorner(13.2, 3.2, -1, -1);
   }
@@ -411,7 +447,7 @@ export function paintAngledUnit(
   const barW = 19;
   const barH = 2.6;
   const barX = -barW / 2;
-  const barY = 4.4;
+  const barY = spec?.barY ?? 4.4;
   ctx.fillStyle = 'rgba(28, 25, 20, 0.88)';
   ctx.beginPath();
   ctx.roundRect(barX - 0.8, barY - 0.8, barW + 1.6, barH + 1.6, 1.2);
@@ -442,8 +478,8 @@ export function paintAngledUnit(
   ctx.restore();
 
   const hw = 13 * scale;
-  const hTop = 27 * scale;
-  const hBot = 7 * scale;
+  const hTop = (spec?.hitTop ?? 27) * scale;
+  const hBot = ((spec?.barY ?? 4.4) + 2.8) * scale;
   return [
     [x - hw, y - hTop],
     [x + hw, y - hTop],
