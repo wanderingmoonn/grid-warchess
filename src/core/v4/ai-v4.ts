@@ -346,6 +346,7 @@ export const V4_MAX_STEPS = AI_MAX_STEPS;
  * 和 v3 一个路子：**只在结论变化时记**，否则 60 手的回放会塞满重复帧。
  * 字段尽量复用 `AiSquadReport` 的语义（count/lead/spread/note），
  * v4 特有的 `want` / `focusId` / `lanes` 顺手带上——复盘面板不认也不会坏。
+ * （`tactics.focusId` 是 2026-11-25 之后的写法；没开战术模式的队伍记 null。）
  */
 function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints): void {
   const reps = con.squads.map((q) => ({
@@ -358,7 +359,7 @@ function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constrai
     lost: 0,
     note: (q.order === 'assemble' ? 'blocked' : 'advance') as 'advance' | 'blocked',
     want: q.want ?? 0,
-    focusId: q.focusId ?? null,
+    focusId: q.tactics?.focusId ?? null,
     lanes: q.lanes?.length ?? 0,
   }));
   if (reps.length === 0) return;

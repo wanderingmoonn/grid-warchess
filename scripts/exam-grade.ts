@@ -67,6 +67,13 @@ type Criterion = {
   category?: string;
   type?: string;
   owner?: 'me' | 'foe';
+  /**
+   * `unitCount` 用：按**敌我**数人头（2026-11-25 加）。
+   *
+   * 为什么要它：`foeLost` 是全程累加量、`in` 无效，于是"N 手内把敌人打到剩几个"
+   * 没法表达。`side` 读的是按手快照（`st.count`），时间窗才有意义。
+   */
+  side?: 'me' | 'foe';
   x?: number;
   y?: number;
   r?: number;
@@ -206,6 +213,8 @@ function capture(s: GameState): void {
     if (u.owner === ME) {
       count['me:total'] = (count['me:total'] ?? 0) + 1;
       mine.push({ x: u.x, y: u.y, category: d.category });
+    } else {
+      count['foe:total'] = (count['foe:total'] ?? 0) + 1;
     }
   }
   record.set(s.turn, {
@@ -363,7 +372,15 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
       return { ok: c.min === undefined || cv.era >= c.min, got: `时代 ${cv.era}` };
     }
     case 'unitCount': {
-      const key = c.type ? `type:${c.type}` : `cat:${c.category}`;
+      /*
+       * `side`（2026-11-25 加）：按**敌我**数人头，而不是按兵种。
+       *
+       * 为什么需要：`foeLost` 是全程累加量、`in` 对它无效（X-1-01 踩过），
+       * 于是"N 手内把敌人打到只剩几个"没法表达。这里走 `st.count` 的按手快照，
+       * 时间窗才有意义。
+       */
+      const key =
+        c.side === 'foe' ? 'foe:total' : c.side === 'me' ? 'me:total' : c.type ? `type:${c.type}` : `cat:${c.category}`;
       const n = st.count[key] ?? 0;
       const lowOk = c.min === undefined || n >= c.min;
       const highOk = c.max === undefined || n <= c.max;

@@ -11,12 +11,12 @@
  */
 import { boardOf, boardIdOf } from '../board.ts';
 import { passable } from '../config.ts';
-import { attackableTargets, effectiveStats, reachableTiles, threatTiles } from '../rules.ts';
+import { attackableTargets, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
-import type { Constraints, Decision, Squad, V4Memory } from './types.ts';
+import type { Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
 import type { World } from './world.ts';
 
 /**
@@ -39,32 +39,75 @@ const manhattan = (a: { x: number; y: number }, b: { x: number; y: number }): nu
  *
  * 不做"威胁权重""价值系数"那种东西：那正是 v3 那张必须调参的表。
  */
-function pickFocus(s: GameState, ids: string[]): string | undefined {
-  /* 每个敌人能被我们几个单位够到、我们一共能砸多少伤害 */
+function planTactics(s: GameState, ids: string[], canMove: boolean): SquadTactics | undefined {
+  /*
+   * **战术模式**（2026-11-25）：只有"这一手有一个值得全队一起办的目标"才打开。
+   *
+   * 打开之后打分层才被允许做两件事：全队打同一个（`focusId`）、为它挪一步（`converge`）。
+   * 关着 = 行为与没有这个开关时一字不差（照约束执行、打射程内的）。
+   *
+   * 为什么必须"至少两个兵能打到"才叫集火：一个兵谈不上合打，挂上去只是多一层判断。
+   *
+   * 为什么进攻队和守队的门槛天然不同：`canMove` 决定"走一步再打"算不算进伤害。
+   * 守队不许离开城（`canMove = false`），所以它只在"当下就够得着的伤害"够本时才开；
+   * 进攻队可以把"这两步之内能压上去的人"算进来。同一个函数，两种条件。
+   */
+  const mine = ids
+    .map((id) => s.units.find((u) => u.id === id))
+    .filter((u): u is Unit => !!u && u.owner === s.current && (effectiveStats(s, u).atk ?? 0) > 0);
+  if (mine.length < 2) return undefined;
+
   const reach = new Map<string, { n: number; dmg: number; hp: number }>();
-  for (const id of ids) {
-    const u = s.units.find((x) => x.id === id);
-    if (!u) continue;
-    const st = effectiveStats(s, u);
-    if ((st.atk ?? 0) <= 0) continue;
-    for (const foe of attackableTargets(s, u)) {
-      const rec = reach.get(foe.id) ?? { n: 0, dmg: 0, hp: foe.hp };
+  for (const u of mine) {
+    /* 这个兵能从哪几处开火：原地 + （允许移动时）这一手能走到的每一格 */
+    const spots: Unit[] = [u];
+    if (canMove) {
+      for (const [k] of reachableTiles(s, u)) {
+        if (k === u.y * s.w + u.x) continue;
+        spots.push({ ...u, x: k % s.w, y: Math.floor(k / s.w), moved: true } as Unit);
+      }
+    }
+    /* 同一个敌人，这个兵最多能打出多少（多格取最大，不累加） */
+    const best = new Map<string, number>();
+    for (const from of spots) {
+      for (const foe of attackableTargets(s, from)) {
+        if (foe.owner === u.owner) continue;
+        const dmg = previewAttack(s, from, foe).toDefender;
+        if (dmg <= 0) continue;
+        best.set(foe.id, Math.max(best.get(foe.id) ?? 0, dmg));
+      }
+    }
+    for (const [fid, dmg] of best) {
+      const foe = s.units.find((x) => x.id === fid);
+      if (!foe) continue;
+      const rec = reach.get(fid) ?? { n: 0, dmg: 0, hp: foe.hp };
       rec.n += 1;
-      rec.dmg += Math.max(1, (st.atk ?? 0) - 0);
-      reach.set(foe.id, rec);
+      rec.dmg += dmg;
+      reach.set(fid, rec);
     }
   }
-  if (reach.size === 0) return undefined;
-  const rows = [...reach.entries()];
+
+  /* 至少两个兵能打到同一个，才谈得上"合打" */
+  const rows = [...reach.entries()].filter(([, r]) => r.n >= 2);
+  if (rows.length === 0) return undefined;
+
+  /* ① 这一手能收掉的 → 挑血最少的（省手）；② 否则挑"伤害/血量"最高的 */
   const killable = rows.filter(([, r]) => r.dmg >= r.hp);
-  if (killable.length > 0) {
-    /* 能打死：挑血最少的（最省手） */
-    killable.sort((a, b) => a[1].hp - b[1].hp);
-    return killable[0]![0];
-  }
-  /* 打不死：挑"总伤害/血量"最高的，下回合最可能收掉 */
-  rows.sort((a, b) => b[1].dmg / b[1].hp - a[1].dmg / a[1].hp);
-  return rows[0]![0];
+  const pick = killable.length > 0
+    ? killable.sort((a, b) => a[1].hp - b[1].hp)[0]!
+    : [...rows].sort((a, b) => b[1].dmg / b[1].hp - a[1].dmg / a[1].hp)[0]!;
+
+  /*
+   * 门槛：打不死、又打不掉一半的，**别为它改变动作**。
+   * 没有这一条，只要场上有人就永远"有战术模式"，等于开关常开。
+   */
+  if (pick[1].dmg < pick[1].hp * 0.5) return undefined;
+
+  return {
+    focusId: pick[0],
+    converge: false, /* 靠拢（一步前瞻）在第 4 步单独开，见 PLAN-V4-NEXT */
+    why: `${pick[1].n} 个兵能打到 ${pick[0]}：合计 ${Math.round(pick[1].dmg)} / 它 ${Math.round(pick[1].hp)} 血${canMove ? '（允许挪一步）' : '（不挪，只打够得着的）'}`,
+  };
 }
 
 /** 一个单位值多少（身价）：atk + hp + 射程×4，按剩余血量打折。和决定层同一个口径 */
@@ -785,7 +828,7 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
       unitIds: squadIds,
       cityId: n.city.id,
       want: n.want,
-      focusId: pickFocus(s, squadIds),
+      tactics: planTactics(s, squadIds, true),
       ...(planLanes(s, world, squadIds, n.city) ?? {}),
     });
   }
@@ -1077,6 +1120,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         order: 'hold',
         unitIds: guards.map((g) => g.id),
         cityId: info.city.id,
+        /* 守军也要集火（X-1-01 量出来的）：但**不许挪**——离开城就没护甲、也守不住 */
+        tactics: planTactics(s, guards.map((g) => g.id), false),
       });
     }
   }
@@ -1211,7 +1256,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       want: keepWant,
       eta: Number.isFinite(eta) ? eta : 99,
       /* 集火点：这一手全队打同一个。出发前（assemble）也照样选，等于"边收拢边集火" */
-      focusId: pickFocus(s, ids),
+      tactics: planTactics(s, ids, ready && decision.stage === 'clear'),
       /* 分路：只给推进中的队分；路数由地形宽度决定（窄道自动退回单列） */
       detour,
       ...(ready ? planLanes(s, world, ids, city) ?? {} : {}),
@@ -1223,6 +1268,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       order: 'hold',
       unitIds: rest.map((u) => u.id),
       cityId: city.id,
+      /* 召回：先回城（S-004 的规矩），所以只给集火、不给挪位 */
+      tactics: planTactics(s, rest.map((u) => u.id), false),
     });
   } else {
     const at = assemblePoint(s, world, world.myCities[0]?.id ?? '');

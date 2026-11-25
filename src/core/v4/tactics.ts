@@ -125,6 +125,28 @@ export function actFor(
   }
 
   /*
+   * ①.48 **战术模式：为集火目标靠一步**（2026-11-25，第 4 步的前半）。
+   *
+   * 只在约束层挂了 `tactics.converge` 时走这里（现在只有"进攻中、目标是城下守军"才挂）。
+   * 判据是**二值**的，不是打分：
+   *   "这一手有没有一格，站上去就能打到 focus？有 → 去；没有 → 照计划走。"
+   *
+   * 为什么不给走位加分数项：项目里证伪过一串（靠近队友、回城惩罚、经济距离场……），
+   * 加项的落点永远在意料之外。这里连"哪一格更好"都不比——只问"能不能打到"。
+   */
+  {
+    const sqC = squadOf(con, u);
+    const t = sqC?.tactics;
+    if (t?.converge && sqC!.order === 'march') {
+      const foe = s.units.find((v) => v.id === t.focusId && v.owner !== world.me);
+      if (foe && !attackableTargets(s, u).some((v) => v.id === foe.id)) {
+        const spot = approachStep(s, u, foe);
+        if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+      }
+    }
+  }
+
+  /*
    * **约束层已经排好了这一手站哪一格**（多起点 → 多终点，一人一格，见 `planMarch`）。
    *
    * 照做即可。执行时只校验"这一格还可达"——前面的人先动过之后，计划里的目标格
@@ -230,11 +252,11 @@ export function actFor(
    * 但如果这一手够得着城，攻城优先级更高（去城下本来就是为了打城）。
    * 这里只做执行——选谁不是这一步的事。
    */
-  if (sq?.focusId) {
-    const focus = s.units.find((v) => v.id === sq.focusId && v.owner !== world.me);
-    if (focus && attackableTargets(s, u).some((v) => v.id === focus.id)) {
-      return { type: 'ATTACK', unitId: u.id, targetId: focus.id, x: focus.x, y: focus.y };
-    }
+  const focus = sq?.tactics
+    ? s.units.find((v) => v.id === sq.tactics!.focusId && v.owner !== world.me)
+    : undefined;
+  if (focus && attackableTargets(s, u).some((v) => v.id === focus.id)) {
+    return { type: 'ATTACK', unitId: u.id, targetId: focus.id, x: focus.x, y: focus.y };
   }
 
   /* ③ 打人：能打谁由**引擎**回答，不自己算距离。
@@ -282,6 +304,38 @@ export function actFor(
  * 为什么禁止踩 keepClear：那是约束层说"必须空"的格子。让单位为了走近路踩上去，
  * 等于把约束当参考——v3 就是这么把桥堵住的。
  */
+/**
+ * **靠拢一步**：找一个"站上去就够得着 `foe`"的可达格（2026-11-25）。
+ *
+ * 只回答一个问题：这一手能不能把 `foe` 纳入射程。能就给一格，不能就 `null`。
+ * 多格可选时取**离它最近**的那格（同距取格号小的，保证每手选同一格，不会抖）——
+ * 不再比"地形防御/威胁/队友距离"，那些都是分数项，落点会跑偏（见项目里的证伪清单）。
+ */
+function approachStep(
+  s: GameState,
+  u: Unit,
+  foe: Unit,
+): { x: number; y: number } | null {
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  let bestK = Infinity;
+  for (const [k] of reachableTiles(s, u)) {
+    const x = k % s.w;
+    const y = Math.floor(k / s.w);
+    if (x === u.x && y === u.y) continue;
+    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+    const moved = { ...u, x, y, moved: true } as Unit;
+    if (!attackableTargets(s, moved).some((v) => v.id === foe.id)) continue;
+    const d = manhattan({ x, y }, foe);
+    if (d < bestD || (d === bestD && k < bestK)) {
+      bestD = d;
+      bestK = k;
+      best = { x, y };
+    }
+  }
+  return best;
+}
+
 /**
  * **距离场在这里变成一步棋**——全项目就这一处把"表"翻成"动作"。
  *
