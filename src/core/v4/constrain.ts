@@ -1048,10 +1048,24 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
 
   const squads: Squad[] = [];
 
-  /* 守军：每座受威胁的城留 2 个最近的兵，任务 hold。留谁按"离城近"排，不按分数 */
+  /*
+   * 守军：每座**真的会被摸到**的城留 2 个最近的兵，任务 hold。留谁按"离城近"排，不按分数。
+   *
+   * **2026-11-25 改（修 9.7）：先问一句"敌人来不来得及"，再来不及就不留人。**
+   *
+   * 原来这里是 `role === 'home'` 无条件 `slice(0, 2)`——只要我只有一座城，就永远留 2 个，
+   * 不管敌人离城 7 回合还是场上一个敌兵都没有。于是：
+   *   · S-016（空城、无敌人）8 个兵被扣 2 个，第 4 手城伤只有 33（v1/v3 是 69）；
+   *   · T-1（接管废墟）1 个兵时唯一的兵被扣走，`captureId` 为空，接管根本发不出去。
+   *
+   * 现在读 `foeEta`（敌人最快几回合摸到城）：**下一手就能摸到**才留。
+   * 不留人不是"不设防"——兵本来就在场，该回防的回合 `defend` 会把他们叫回来；
+   * 提前两个回合钉住 2 个人，只是让主力少两个人。
+   */
   const held = new Set<string>();
   for (const info of world.cities) {
     if (info.role !== 'threatened' && info.role !== 'home') continue;
+    if (info.foeEta > 1) continue; /* 敌人一时来不了 → 一个都不留 */
     const guards = world.myCombat
       .filter((u) => !held.has(u.id))
       .sort((a, b) => manhattan(a, info.city) - manhattan(b, info.city))

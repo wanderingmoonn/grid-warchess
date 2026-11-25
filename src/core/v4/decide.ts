@@ -112,12 +112,13 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   /* 1) 自家城被压着，且兵力不占优 → 守 */
   const threatened = world.cities.filter((c) => c.role === 'threatened' || c.role === 'home');
   if (threatened.length > 0 && foeStr > myStr * 0.9) {
-    const worst = threatened.sort((a, b) => a.distToFoeArmy - b.distToFoeArmy)[0]!;
+    /* 离敌军最近的先救；`foeEta` 是"敌人几回合能摸到它"，越小越急 */
+    const worst = threatened.sort((a, b) => a.foeEta - b.foeEta)[0]!;
     return {
       kind: 'defend',
       untilTurn: s.turn + horizon,
       cityId: worst.city.id,
-      reason: `对面身价 ${Math.round(foeStr)} > 我 ${Math.round(myStr)}，${worst.city.id} 离敌军最近，先守`,
+      reason: `对面身价 ${Math.round(foeStr)} > 我 ${Math.round(myStr)}，${worst.city.id} ${Number.isFinite(worst.foeEta) ? `${worst.foeEta} 回合内会被摸到` : '最靠前'}，先守`,
     };
   }
 

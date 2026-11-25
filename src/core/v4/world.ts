@@ -50,6 +50,7 @@
  * （引擎没有"交换两个人位置"这个动作）。
  */
 import { passable } from '../config.ts';
+import { EARTH, idxOn } from '../board.ts';
 import { cityTiles, effectiveStats, rebuildCost, recruitSpawnCells, recruitPriceOf, unitYieldAt, utype } from '../rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
 
@@ -67,9 +68,17 @@ export type CityRole =
 export interface CityInfo {
   city: City;
   role: CityRole;
-  /** 到最近的敌城 / 敌军，占几回合（走不到 = Infinity） */
+  /** 到最近的敌城，占几回合（走不到 = Infinity） */
   distToFoeCity: number;
-  distToFoeArmy: number;
+  /**
+   * **敌人最快几回合能摸到这座城**（敌战斗单位里最快的那一个，按它自己的移动力）。
+   * `Infinity` = 场上没有敌人的兵，或者路被水山堵死。
+   *
+   * 取代了原来的 `distToFoeArmy`（那个是"城到敌军的格数"）。格数没法当判断用：
+   * 3 格的近战和 3 格的炮兵完全不是一回事，而且"隔一条河"和"隔一片平原"的
+   * 3 格也差得远。回合数是这一局里唯一可比的尺度。
+   */
+  foeEta: number;
   /** 我的战斗单位里，几回合内能赶到这座城的（守军潜力） */
   defenders: number;
 }
@@ -115,6 +124,15 @@ export interface World {
    * 清场要清的就是这一批——清完它才敢站在那儿掏钱。
    */
   ruinThreats(city: City): Unit[];
+  /**
+   * **敌人最快几回合能摸到这一格**（按敌战斗单位自己的移动力，绕水绕山）。
+   * `Infinity` = 场上没有敌人的兵，或者路被地形堵死。
+   *
+   * 这是全项目唯一的"威胁口径"。想知道"这座城危不危险""这一手要不要回去守"，
+   * 一律读它，别拿曼哈顿距离自己比——格数在"隔一条河"和"隔一片平原"上是一回事，
+   * 在"近战三格"和"炮兵三格"上又不是一回事。
+   */
+  foeEta(p: { x: number; y: number }): number;
   /** 能走进废墟接管的兵：地面、活着、不是建筑 */
   captureCandidates(): Unit[];
   /** 战斗 / 经济单位，按"离敌人由近到远"排好序（上层不用再排） */
@@ -195,7 +213,12 @@ export interface World {
   corridorWidth(p: { x: number; y: number }, toward: { x: number; y: number }): number;
 }
 
-const idx = (s: GameState, x: number, y: number): number => y * s.w + x;
+/*
+ * 格号一律走 `idxOn(s, EARTH, …)`，不自己乘宽度。
+ *
+ * 多图之后"按宽度乘"这件事默认指地球，在别的图上会静默错一格。v4 现在只处理地球，
+ * 但把这件事写在字面上——以后要接多图，搜 `idxOn` 就能一次找齐。
+ */
 
 /**
  * **唯一的那张距离场。**（2026-11-24 把原来的四张合成这一张）
@@ -394,22 +417,74 @@ export function buildWorld(s: GameState, me: PlayerId): World {
 
   const distToNearestFoeCity = (p: { x: number; y: number }): number => {
     let best = Infinity;
-    for (const d of flipFromFoeCity) best = Math.min(best, d[idx(s, p.x, p.y)] ?? Infinity);
+    for (const d of flipFromFoeCity) best = Math.min(best, d[idxOn(s, EARTH, p.x, p.y)] ?? Infinity);
+    return best;
+  };
+
+  /*
+   * ── 威胁场（2026-11-25，修 9.7）─────────────────────────────
+   *
+   * **每个敌战斗单位到每一格的步数**，按地形绕水绕山、不穿人。
+   *
+   * 为什么不是"一张场再除以移动力"：一支队伍里的兵移动力不同（步兵 2、骑兵 3、炮 1），
+   * 除以谁都是错的。所以每个敌人单独一张"步"场，**读的时候按它自己的移动力折成回合**，
+   * 取最小的那个。敌人一般不超过十来个，一张 12×12 的场 144 格，这点开销比"算错"便宜。
+   *
+   * 两个读者（同一份数，不再各算一张图）：
+   *   · `foeEta(city)`：敌人最快几回合能摸到这座城 → 城的角色、守家兵留不留；
+   *   · `ruinThreats`：哪个敌人够得着这座废墟 → 接管要不要先清场。
+   * 这两件事以前各写了一套 BFS（一个按城、一个按废墟），就是"同一概念多份实现"的老病。
+   */
+  const foeSteps = foeCombat.map((u) => {
+    const st = effectiveStats(s, u);
+    return {
+      unit: u,
+      dist: distanceField(s, [u.y * s.w + u.x], { perTurn: 1 }).dist,
+      move: Math.max(1, st.move ?? 2),
+      range: Math.max(1, st.range ?? 1),
+    };
+  });
+
+  /** 敌人最快几回合能摸到这一格。`Infinity` = 没有敌人 / 来不了 */
+  const foeEtaAt = (p: { x: number; y: number }): number => {
+    const k = idxOn(s, EARTH, p.x, p.y);
+    let best = Infinity;
+    for (const f of foeSteps) {
+      const d = f.dist[k] ?? Infinity;
+      if (!Number.isFinite(d)) continue;
+      best = Math.min(best, Math.ceil(d / f.move));
+    }
+    return best;
+  };
+
+  /** 敌人最快几回合能摸到这座城的任意一格（城的角色和守家兵都读它） */
+  const foeEtaOfCity = (city: City): number => {
+    let best = Infinity;
+    for (const t of cityTiles(city)) best = Math.min(best, foeEtaAt(t));
     return best;
   };
 
   const cities: CityInfo[] = myCities.map((city) => {
     const dFoeCity = distToNearestFoeCity({ x: city.x, y: city.y });
-    const dFoeArmy = foeCombat.length === 0
-      ? Infinity
-      : Math.min(...foeCombat.map((u) => Math.abs(u.x - city.x) + Math.abs(u.y - city.y)));
+    const foeEta = foeEtaOfCity(city);
     const defenders = myCombat.filter((u) => near(u, city, 6)).length;
-    /* 角色判定：只有这一处口径。别处想问"这座城算前线吗"，一律调 roleOf。 */
+    /*
+     * 角色判定：只有这一处口径。别处想问"这座城算前线吗"，一律调 roleOf。
+     *
+     * **"被威胁"现在按敌军的回合数判，不再按"离敌城几格"判。**
+     * 原来那句写的是"离敌人近、且敌人有兵能到"，但代码只看敌城——
+     * 敌军贴脸、敌城却在十格外的局面会被判成"安全"（S-013：两座城都判 safe，
+     * 于是一个守军都不派，丢城是"没人守"而不是"打输了"）。
+     *
+     * 阈值 1 = "敌人下一手就能站到城下"。再早不做反应，是因为早一步的判断只能靠猜；
+     * 到了这一步是事实，而且正好还来得及派兵。
+     */
     let role: CityRole;
-    if (myCities.length === 1) role = 'home';
+    if (foeEta <= 1) role = 'threatened';
+    else if (myCities.length === 1) role = 'home';
     else if (dFoeCity <= 6) role = defenders >= 3 ? 'front' : 'threatened';
     else role = 'safe';
-    return { city, role, distToFoeCity: dFoeCity, distToFoeArmy: dFoeArmy, defenders };
+    return { city, role, distToFoeCity: dFoeCity, foeEta, defenders };
   });
 
   const roleMap = new Map(cities.map((c) => [c.city.id, c.role]));
@@ -500,7 +575,10 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     marchTurns(from, to) {
       if (from.x === to.x && from.y === to.y) return 0;
-      return marchFrom(from)[idx(s, to.x, to.y)] ?? Infinity;
+      return marchFrom(from)[idxOn(s, EARTH, to.x, to.y)] ?? Infinity;
+    },
+    foeEta(p) {
+      return foeEtaAt(p);
     },
     roleOf(city) {
       return roleMap.get(city.id) ?? 'safe';
@@ -535,16 +613,22 @@ export function buildWorld(s: GameState, me: PlayerId): World {
      */
     ruins: s.cities.filter((c) => c.ruined === true),
     ruinCost: (city) => rebuildCost(city, s.config?.freeRebuild === true),
+    /*
+     * 谁够得着这座废墟。
+     *
+     * **不再自己算一张 BFS**（2026-11-25）：它和威胁场问的是同一件事
+     * ——"这个敌人离这几格有多远"。现在读的是同一份 `foeSteps`：
+     * 对每个敌人看"它到废墟最近一格的步数 ≤ 自己的移动力 + 射程"。
+     */
     ruinThreats: (city) => {
       const cells = cityTiles(city).map((t) => t.y * s.w + t.x);
       if (cells.length === 0) return [];
-      /* 按格计步（不穿人）：敌人走到废墟边要几步 */
-      const field = distanceField(s, cells, { perTurn: 1 }).dist;
-      return foeCombat.filter((u) => {
-        const st = effectiveStats(s, u);
-        const reach = (st.move ?? 2) + (st.range ?? 1);
-        return (field[u.y * s.w + u.x] ?? Infinity) <= reach;
-      });
+      const nearest = (f: (typeof foeSteps)[number]): number => {
+        let best = Infinity;
+        for (const k of cells) best = Math.min(best, f.dist[k] ?? Infinity);
+        return best;
+      };
+      return foeSteps.filter((f) => nearest(f) <= f.move + f.range).map((f) => f.unit);
     },
     captureCandidates: () =>
       myCombat.filter((u) => u.hp > 0 && utype(s, u.type).category !== 'building'),
