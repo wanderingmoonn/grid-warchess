@@ -292,6 +292,14 @@ export interface Constraints {
    * 这一层只保证"升级不会把造兵的路堵死"，谁先谁后由 `ai-v4` 的动作顺序定。
    */
   upgrade?: { cityId: string; cost: number; why: string; rounds: number };
+  /**
+   * **发展期 T**（2026-11-25，P3 闸 C 的 C1）：进攻编队（`main`，目标是敌城）全员到城下要几回合。
+   *
+   * 它是"经济发展到第几手"的期限——再晚出发，对面就升完本了。
+   * 没有进攻编队（守 / 纯发展 / 接管）时**不给**，别拿别的队凑。
+   * C1 只打印；C2 的求解器才开始读它。
+   */
+  horizon?: { turns: number; squadId: string; cityId: string; n: number };
 }
 
 /** 一个单位在本回合的归属：属于哪支队、任务是什么。查不到就是"没任务" */

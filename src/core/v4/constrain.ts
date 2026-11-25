@@ -563,6 +563,62 @@ function planUpgrade(
 }
 
 /**
+ * **发展期 T**（2026-11-25，P3 闸 C 的 C1 步）：主力到敌方目标城要几回合。
+ *
+ * ── 为什么是"回合"而不是"钱/产出" ────────────────────────────
+ *
+ * 发展升级不能写"永久收入比"：没有终点时经济的复利永远赢，会演变成"只造经济兵不出兵"。
+ * 人类给的是一个**时间**——"发展到第 T 手"，因为再晚出发，对面就升完本了（低代打高代）。
+ * 所以 T 是"我的主力最早能威胁到对面城"的回合数，它是**地图与地形的函数**，不是调参常量。
+ *
+ * ── "主力"就按现有的进攻编队算（用户 2026-11-25 定）────────────────
+ *
+ * 不看"离敌城最近的那 80%"这种新口径——那会跟以后的侦查编队、建设编队混在一起。
+ * **进攻编队 = `main` 队里目标是敌城、且任务是出去的那支**（march / siege / assemble）。
+ * 没有这样的队（守、纯发展、接管）就**不给 T**，而不是拿别的队凑一个。
+ *
+ * ── 取哪个数：现在其实是"中速" ────────────────────────────────
+ *
+ * 用的是 `world.marchTurns`，而它内部按 `baseMove`（我方战斗兵移动力的**中位数**）算回合，
+ * 所以每个兵算出来是**同一个数**——下面那句 `Math.max` 目前是空转，留着是为了
+ * 以后换成"每个兵自己的场"时不用改结构。
+ *
+ * **要小心**：真实的"整队到齐"应该按**最慢的那个兵**算（和 press 的 `eta` 同一口径），
+ * 现在的 T 会**低估**慢兵（骑兵和民兵混编时尤其明显）。C2 再修这件事——
+ * 那时才需要给每个兵算一张场（或者按 `effectiveStats(u).move` 折算 `stepsFrom`）。
+ *
+ * C1 只把它**算出来 + 打印**，不接任何判断；C2 的枚举（k=0..T）才读它。
+ */
+function planHorizon(
+  s: GameState,
+  world: World,
+  squads: Squad[],
+): { turns: number; squadId: string; cityId: string; n: number } | undefined {
+  const main = squads.find(
+    (q) =>
+      q.id === 'main' &&
+      !!q.cityId &&
+      world.foeCities.some((c) => c.id === q.cityId) &&
+      (q.order === 'march' || q.order === 'siege' || q.order === 'assemble'),
+  );
+  if (!main) return undefined;
+  const city = s.cities.find((c) => c.id === main.cityId);
+  if (!city) return undefined;
+  const turns = main.unitIds
+    .map((id) => s.units.find((u) => u.id === id))
+    .filter((u): u is NonNullable<typeof u> => !!u)
+    .map((u) => world.marchTurns(u, city))
+    .filter((t) => Number.isFinite(t));
+  if (turns.length === 0) return undefined;
+  return {
+    turns: Math.max(...turns),
+    squadId: main.id,
+    cityId: city.id,
+    n: turns.length,
+  };
+}
+
+/**
  * 把决定翻成约束。
  *
  * 三条铁律：
@@ -1781,6 +1837,21 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
 
   const marched = planMarch(s, world, squads);
   const yieldMoves = planYield(s, world, keepClear, squads, { spawn, exit }, Object.keys(transit));
+  /* 发展期 T（C1）：只算 + 打印，不接判断。见 `planHorizon` */
+  const horizon = planHorizon(s, world, squads);
+  if (process.env.V4_HORIZON_LOG && s.turn === 1) {
+    const md = Math.min(
+      ...world.myCities.flatMap((a) => world.foeCities.map((b) => manhattan({ x: a.x, y: a.y }, { x: b.x, y: b.y }))),
+    );
+    const ms = Math.min(
+      ...world.myCities.flatMap((a) => world.foeCities.map((b) => world.marchTurns({ x: a.x, y: a.y }, { x: b.x, y: b.y }))),
+    );
+    console.error(
+      `[horizon] ${s.w}x${s.h} 城距=${Number.isFinite(md) ? md : '-'}(曼)/${Number.isFinite(ms) ? ms : '-'}(步) 主力=${
+        horizon ? `${horizon.n}人 T=${horizon.turns}` : '无'
+      } 决定=${decision.kind}`,
+    );
+  }
   /*
    * **把"让开"写成一支队**（9.14 的收尾）：只收那些这一手**真的被派了活儿**的兵。
    * 2026-11-25（9.18）：有了临时调令之后，"活儿"有两种——搬迁落点、或者朝任务走。
@@ -1802,6 +1873,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     captureId,
     captureTarget,
     transit,
+    horizon,
     upgrade: planUpgrade(s, world, need, gold, spendCap),
     econPosts: econPlan.posts,
     econNext: econPlan.next,
