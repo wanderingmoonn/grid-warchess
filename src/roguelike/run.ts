@@ -102,6 +102,31 @@ export function scaleGold(amount: number, run: RunState): number {
 }
 
 /**
+ * 数值藏品**按层成长**的步长（索引 = 层 - 1）。
+ *
+ * 为什么不是简单线性：伤害是 `atk - armor` 的减法，L1 中位攻 14、L3 中位攻 55，
+ * 同样是 +1，第一层是 7%、第三层是 2%。而"移动 +1"是节奏收益，跟时代无关，
+ * 于是越往后移速藏品越强。给攻/甲/血按层加码，是让三种加成**在同一层里等价**，
+ * 不是让藏品滚雪球（每层只取一次，不叠乘）。
+ */
+const RELIC_GROWTH = {
+  atk: [1, 2, 3],
+  armor: [1, 2, 2],
+  hp: [6, 9, 12],
+} as const;
+
+/** 藏品在这一层的实际数值文案（商店/奖励里显示用） */
+export function relicDesc(id: string, layer: LayerId): string {
+  const relic = relicById(id);
+  if (!relic) return id;
+  const i = Math.max(0, Math.min(2, layer - 1));
+  if (relic.effect.atk) return `我军全体攻击 +${RELIC_GROWTH.atk[i]! * relic.effect.atk}`;
+  if (relic.effect.armor) return `我军全体护甲 +${RELIC_GROWTH.armor[i]}`;
+  if (relic.effect.hp) return `我军全体最大生命 +${RELIC_GROWTH.hp[i]}`;
+  return relic.desc;
+}
+
+/**
  * 一条效果**实际**会进账/扣掉多少钱。
  *
  * 除了按层换算，还有一条上限：**买兵的选项不能比兵本身还贵**。
@@ -337,6 +362,7 @@ export function startRun(seed: number, strategyId: string): RunState {
     clock: 0,
     buffs: emptyBuffs(),
     bossDone: false,
+    reviveLeft: 0,
     log: [`开局：${strategy.name}，${armyText(army)}`],
     over: null,
   };
@@ -450,6 +476,8 @@ function applyEffectInner(
         : effect.relic;
     if (!owned.has(id) && relicById(id)) {
       run.relics.push(id);
+      // 随军医官是"每层 2 个额度"，拿到的那一刻就开额度
+      if (id === 'medic') run.reviveLeft = 2;
       notes.push(`藏品「${relicById(id)?.name ?? id}」`);
     } else {
       run.gold += 60;
@@ -621,6 +649,7 @@ export function bonusOf(run: RunState): {
   armor: number;
   hp: number;
   move: number;
+  moveSlow: number;
   enemyCut: number;
   cityDamage: number;
   defenseDamage: number;
@@ -631,6 +660,7 @@ export function bonusOf(run: RunState): {
   let armor = 0;
   let hp = 0;
   let move = 0;
+  let moveSlow = 0;
   let enemyCut = 0;
   let cityDamage = 0;
   let defenseDamage = 0;
@@ -638,10 +668,11 @@ export function bonusOf(run: RunState): {
   for (const id of run.relics) {
     const e = relicById(id)?.effect;
     if (!e) continue;
-    atk += e.atk ?? 0;
-    armor += e.armor ?? 0;
-    hp += e.hp ?? 0;
-    move += e.move ?? 0;
+    const i = Math.max(0, Math.min(2, run.layer - 1));
+    atk += (e.atk ?? 0) * RELIC_GROWTH.atk[i]!;
+    armor += (e.armor ?? 0) * RELIC_GROWTH.armor[i]!;
+    hp += (e.hp ?? 0) * (RELIC_GROWTH.hp[i]! / 6);
+    moveSlow += e.move ?? 0;
     enemyCut += e.enemyCut ?? 0;
     cityDamage += e.cityDamage ?? 0;
   }
@@ -660,6 +691,7 @@ export function bonusOf(run: RunState): {
     armor,
     hp,
     move,
+    moveSlow,
     enemyCut,
     cityDamage,
     defenseDamage,
@@ -897,6 +929,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     bonusArmor: bonus.armor,
     bonusHp: bonus.hp,
     bonusMove: bonus.move,
+    bonusMoveSlow: bonus.moveSlow,
     cityDamage: bonus.cityDamage,
     tempUnits,
     relics: [...run.relics],
@@ -933,13 +966,21 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
    * 兵力只减不增是这一层的压力来源，补员要靠战利品和商店，不能靠后台。
    */
 
-  // 随军医官：一场战斗后返还 N 个阵亡单位（用最低级的兵补）
+  /*
+   * 随军医官：返还阵亡单位，但**每层只有 2 个额度**。
+   *
+   * 上一版是"每战返 1 人"：一局二十多场等于白送二十多个人，把"兵力只减不增"
+   * 这条压力整个抹平。现在额度按层重置，它仍然是好东西，但不是无限补员。
+   */
   const revive = run.relics.reduce((n, id) => n + (relicById(id)?.effect.revive ?? 0), 0);
-  if (revive > 0 && after < before) {
+  if (revive > 0 && after < before && run.reviveLeft > 0) {
     const type = cheapestOf(themeOf(run));
-    const n = Math.min(revive, before - after);
-    addUnits(run.army, type, n);
-    notes.push(`随军医官：${unitName(type)} ×${n} 归队`);
+    const n = Math.min(revive, before - after, run.reviveLeft);
+    if (n > 0) {
+      addUnits(run.army, type, n);
+      run.reviveLeft -= n;
+      notes.push(`随军医官：${unitName(type)} ×${n} 归队（本层还剩 ${run.reviveLeft} 次）`);
+    }
   }
 
   // 一次性加成只作用于刚打完的这一场
@@ -994,7 +1035,7 @@ export function rewardOptions(run: RunState, kind: RoomKind, rng: Rng): RewardOp
         ? {
             id: `unit-relic-${relic.id}`,
             title: `${unitName(unit)} ×1 ＋「${relic.name}」`,
-            sub: relic.desc,
+            sub: relicDesc(relic.id, run.layer),
             effect: { add: { type: unit, count: 1 }, relic: relic.id },
           }
         : { id: 'drill', title: '整训', sub: '下一战我军攻击 +2', effect: { nextAtk: 2 } },
@@ -1170,8 +1211,9 @@ export function shopStock(run: RunState, rng: Rng): ShopItem[] {
       id: `buy-relic-${r.id}`,
       group: 'relic',
       title: `藏品「${r.name}」`,
-      sub: r.desc,
-      price: price(200 * priceScale(run)),
+      sub: relicDesc(r.id, run.layer),
+      // 藏品的层价最多 ×6：它的效果跟着层涨，但再乘 ×9 就变成"一件藏品 = 八场战斗的收入"
+      price: price((r.price ?? 200) * Math.min(6, priceScale(run))),
       effect: { relic: r.id },
     });
   }
@@ -1272,6 +1314,7 @@ export function nextLayer(run: RunState, seed: number): boolean {
   run.step = 0;
   run.clock = 0;
   run.bossDone = false;
+  run.reviveLeft = run.relics.includes('medic') ? 2 : 0;
   run.buffs = emptyBuffs();
   const rng = makeRng((seed ^ (layer * 0x2545f491)) >>> 0);
   run.plan = planLayer(layer, rng, themeFor(run.world, layer));

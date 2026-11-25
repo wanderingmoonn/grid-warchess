@@ -15,6 +15,7 @@ import {
   applyEffect,
   armyCount,
   battleFor,
+  bonusOf,
   bossFor,
   bossRewards,
   finishBattle,
@@ -657,6 +658,56 @@ console.log('\n[11] 工事、英雄与按层价格（2026-11-25 修）');
   const pressure = specState.config.level?.ai?.pressure ?? 0;
   check(pressure > 0, '守城战的攻方带"僵局压力"（不会聚在出兵点不动）', `pressure=${pressure}`);
   void lvl;
+}
+
+// ---------------------------------------------------------------- 12. 藏品与成本曲线
+console.log('\n[12] 藏品按层成长、医官额度、移动加成只给慢兵');
+{
+  // 用骑军测：它的被动是 +1 移动，不会污染护甲的读数
+  const withRelics = (layer: LayerId): ReturnType<typeof startRun> => {
+    const r = startRun(41, 'horse');
+    r.layer = layer;
+    r.relics = ['forge', 'armorplate', 'rampart', 'boots'];
+    return r;
+  };
+  const b1 = bonusOf(withRelics(1));
+  const b3 = bonusOf(withRelics(3));
+  check(b1.atk === 1 && b3.atk === 3, '铁匠铺按层成长（L1 +1 / L3 +3）', `${b1.atk}/${b3.atk}`);
+  check(b1.armor === 1 && b3.armor === 2, '铁甲按层成长（L1 +1 / L3 +2）', `${b1.armor}/${b3.armor}`);
+  check(b1.hp === 6 && b3.hp === 12, '壁垒图按层成长（L1 +6 / L3 +12）', `${b1.hp}/${b3.hp}`);
+  check(b1.moveSlow === 1 && b3.moveSlow === 1, '急行靴的移动不随层涨（它靠的是节奏）', `${b1.moveSlow}/${b3.moveSlow}`);
+  check(b1.move === 1 && b3.move === 1, '方略的 +移动仍是全军生效', `${b1.move}/${b3.move}`);
+
+  // 文案要和实际值一致
+  const { relicDesc } = await import('../src/roguelike/run.ts');
+  check(relicDesc('forge', 3).includes('+3'), '商店/奖励的文案按当前层写', relicDesc('forge', 3));
+  check(relicDesc('rampart', 2).includes('+9'), '壁垒图在第二层写 +9', relicDesc('rampart', 2));
+
+  // 医官：每层 2 个额度，用完就没有；进下一层重置
+  const medic = startRun(42, 'frontier');
+  medic.relics = ['medic'];
+  medic.reviveLeft = 2;
+  medic.army = [{ type: 'ge', count: 6 }];
+  const dead = { win: true, survivors: [{ type: 'ge', count: 3 }], gold: 100, turns: 10 };
+  const n1 = finishBattle(medic, dead).some((t) => t.includes('随军医官'));
+  const n2 = finishBattle(medic, dead).some((t) => t.includes('随军医官'));
+  const n3 = finishBattle(medic, dead).some((t) => t.includes('随军医官'));
+  check(n1 && n2 && !n3 && medic.reviveLeft === 0, '随军医官每层只救 2 次', `${n1}/${n2}/${n3}`);
+  medic.army = [{ type: 'ge', count: 3 }];
+  nextLayer(medic, 1);
+  check(medic.reviveLeft === 2, '进下一层重置医官额度', String(medic.reviveLeft));
+
+  // 移动加成只给基础移速 ≤3 的兵（骑兵 4/5 不吃）
+  // 用边军（无移动被动）+ 急行靴：只看"慢兵是否 +1、骑兵是否不吃"
+  const mv = startRun(43, 'frontier');
+  mv.layer = 2;
+  mv.relics = ['boots'];
+  mv.army = [{ type: 'scout', count: 1 }, { type: 'ge', count: 1 }];
+  const st = buildBattle(battleFor(mv, { kind: 'battle', title: 't', sub: '' }, 808));
+  const scout = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.name === '斥候');
+  const ge = st.units.find((u) => u.owner === 'A' && st.unitTypes[u.type]?.name === '戈兵');
+  check(!!scout && utype(st, scout.type).move === 4, '骑兵不额外吃 +1 移动', scout ? String(utype(st, scout.type).move) : 'missing');
+  check(!!ge && utype(st, ge.type).move === 3, '步兵吃 +1 移动（2→3）', ge ? String(utype(st, ge.type).move) : 'missing');
 }
 
 console.log(

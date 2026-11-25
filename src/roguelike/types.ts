@@ -135,6 +135,14 @@ export interface RunState {
   buffs: Buffs;
   /** 本层的 boss 已经打过 */
   bossDone: boolean;
+  /**
+   * 本层还能救回几个阵亡单位（随军医官）。
+   *
+   * 每层重置为 2：这场藏品如果按"每战返 1 人"算，一局二十多场就是二十多个人，
+   * 等于把"兵力只减不增"这条压力整个抵消掉。给它一个每层的额度，
+   * 它才是"这支队伍有人收尸"，而不是"无限补员"。
+   */
+  reviveLeft: number;
   log: string[];
   over: RunOver | null;
 }
@@ -190,7 +198,10 @@ export interface BattleInit {
   bonusAtk: number;
   bonusArmor: number;
   bonusHp: number;
+  /** 全军移动加成（方略 / 临战决议）：所有兵都吃 */
   bonusMove: number;
+  /** **只给基础移速 ≤3 的兵**的移动加成（急行靴）：骑兵不吃 */
+  bonusMoveSlow: number;
   /** 敌城初始耐久 −N%（0~0.8） */
   cityDamage: number;
   /** 本场临时兵 */

@@ -622,7 +622,17 @@ export function buildBattle(init: BattleInit): GameState {
     const def = s.unitTypes[u.type];
     let atk = init.bonusAtk;
     if (init.strategyId === 'skirmish' && def && def.range >= 3) atk += 2;
-    u.type = variantOf(s, u.type, atk, moveUp, init.bonusArmor, init.bonusHp);
+    /*
+     * 移动加成分两种：
+     *   · 方略 / 临战决议（`bonusMove`）——所有兵都吃（"骑军"本来就是快）；
+     *   · 急行靴（`bonusMoveSlow`）——只给基础移速 ≤3 的兵。
+     *
+     * 为什么后者要设门槛：+1 移动在 12 格小图上是**节奏**收益，2→3 是 +50%
+     * 接敌距离，4→5 只是让本来就快的骑兵再早到一回合——后者才是"移速藏品
+     * 一家独大"的来源。现在它变成"让步兵和弓手跟得上"，骑兵不吃这份加成。
+     */
+    const addMove = (def && def.move <= 3 ? init.bonusMoveSlow : 0) + moveUp;
+    u.type = variantOf(s, u.type, atk, addMove, init.bonusArmor, init.bonusHp);
     const v = s.unitTypes[u.type];
     if (v) u.hp = v.maxHp;
   }

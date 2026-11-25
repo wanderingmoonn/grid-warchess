@@ -432,6 +432,13 @@ export interface Relic {
   id: string;
   name: string;
   desc: string;
+  /**
+   * 摊子上的标价（基准价，结算时再乘层价水位）。
+   *
+   * 上一版所有藏品一个价（200）：急行靴和行军图卖同一个数，等于把"哪个更值"
+   * 这件事藏起来。现在按强度分档——不是让贵的更强，而是让**价格说真话**。
+   */
+  price?: number;
   effect: {
     atk?: number;
     move?: number;
@@ -446,17 +453,38 @@ export interface Relic {
   };
 }
 
+/**
+ * 藏品列表。
+ *
+ * **数值藏品按层成长**（2026-11-25）：攻击/护甲/生命是减法公式里的绝对值，
+ * 第一层 +1 攻很值钱，到第三层（中位攻 55）就只剩 2%；而"移动 +1"的收益
+ * 是节奏，不随时代缩水。结果就是越往后"移速藏品"越一家独大。
+ * 现在这三件按层取 `RELIC_GROWTH`（+1/2/3 攻、+1/2/2 甲、+6/9/12 血），
+ * 相对价值在第一层和第三层差不多；`desc` 里写的是第一层的数，实际值见 `relicDesc`。
+ */
 export const RELICS: Relic[] = [
-  { id: 'forge', name: '铁匠铺', desc: '我军全体攻击 +1', effect: { atk: 1 } },
-  { id: 'boots', name: '急行靴', desc: '我军全体移动 +1', effect: { move: 1 } },
-  { id: 'armorplate', name: '铁甲', desc: '我军全体护甲 +1', effect: { armor: 1 } },
-  { id: 'rampart', name: '壁垒图', desc: '我军全体最大生命 +6', effect: { hp: 6 } },
-  { id: 'scoutnet', name: '斥候网', desc: '每场战斗敌人少 1 个兵', effect: { enemyCut: 1 } },
-  { id: 'powder', name: '火药桶', desc: '攻坚与层末：敌城初始耐久 −30%', effect: { cityDamage: 0.3 } },
-  { id: 'purse', name: '军饷袋', desc: '每层开始 +90 金（按层换算）', effect: { goldPerLayer: 90 } },
-  { id: 'ration', name: '军粮袋', desc: '每层开始 +1 个本层基础兵', effect: { unitPerLayer: 1 } },
-  { id: 'marchmap', name: '行军图', desc: '商店价格 −20%', effect: { shopOff: 0.2 } },
-  { id: 'medic', name: '随军医官', desc: '战斗结束后返还 1 个阵亡单位', effect: { revive: 1 } },
+  { id: 'forge', name: '铁匠铺', desc: '我军全体攻击 +1（第三层 +3）', price: 190, effect: { atk: 1 } },
+  {
+    id: 'boots',
+    name: '急行靴',
+    desc: '我军全体移动 +1（基础移速 4 以上不受影响）',
+    price: 300,
+    effect: { move: 1 },
+  },
+  { id: 'armorplate', name: '铁甲', desc: '我军全体护甲 +1（第三层 +2）', price: 220, effect: { armor: 1 } },
+  { id: 'rampart', name: '壁垒图', desc: '我军全体最大生命 +6（第三层 +12）', price: 170, effect: { hp: 6 } },
+  { id: 'scoutnet', name: '斥候网', desc: '每场战斗敌人少 1 个兵', price: 240, effect: { enemyCut: 1 } },
+  { id: 'powder', name: '火药桶', desc: '攻坚与层末：敌城初始耐久 −30%', price: 160, effect: { cityDamage: 0.3 } },
+  { id: 'purse', name: '军饷袋', desc: '每层开始 +90 金（按层换算）', price: 150, effect: { goldPerLayer: 90 } },
+  { id: 'ration', name: '军粮袋', desc: '每层开始 +1 个本层基础兵', price: 180, effect: { unitPerLayer: 1 } },
+  { id: 'marchmap', name: '行军图', desc: '商店价格 −25%', price: 140, effect: { shopOff: 0.25 } },
+  {
+    id: 'medic',
+    name: '随军医官',
+    desc: '每层最多救回 2 个阵亡单位（用最便宜的兵补员）',
+    price: 300,
+    effect: { revive: 1 },
+  },
 ];
 
 export function relicById(id: string): Relic | undefined {
@@ -528,7 +556,8 @@ export const EVENTS: EventDef[] = [
     body: '两年前这里打过一场，现在草长得很好。兵器还插在土里，像谁忘了收。',
     choices: [
       { label: '捡兵器', hint: '得 1 个中档兵', effect: { add: { type: 'layer-mid', count: 1 } } },
-      { label: '找那面旗', hint: '得 1 件藏品', effect: { relic: 'random' } },
+      // 免费藏品在这一档里太强（一件藏品≈5 个兵），翻尸体堆得付点代价
+      { label: '找那面旗', hint: '得 1 件藏品，损 1 个基础兵', effect: { relic: 'random', remove: { type: 'layer-low', count: 1 } } },
       { label: '什么都不动', hint: '+40 金', effect: { gold: 40 } },
     ],
   },
@@ -572,7 +601,8 @@ export const EVENTS: EventDef[] = [
     choices: [
       { label: '借兵', hint: '−80 金，得 1 个高级兵', effect: { gold: -80, add: { type: 'layer-high', count: 1 } } },
       { label: '卖情报', hint: '+110 金', effect: { gold: 110 } },
-      { label: '抄一份账本', hint: '得 1 件藏品', effect: { relic: 'random' } },
+      // 白拿的藏品会让另外两项变成摆设：抄账本要买通账房
+      { label: '抄一份账本', hint: '−80 金，得 1 件藏品', effect: { gold: -80, relic: 'random' } },
     ],
   },
   {
@@ -650,7 +680,7 @@ export const EVENTS: EventDef[] = [
     title: '瘟疫',
     body: '先是炊事班，然后是马夫。军医说别数了，数了也没用。',
     choices: [
-      { label: '请医', hint: '−90 金', effect: { gold: -90 } },
+      { label: '请医', hint: '−90 金，无人损失', effect: { gold: -90 } },
       { label: '隔离', hint: '损 1 个基础兵', effect: { remove: { type: 'layer-low', count: 1 } } },
       {
         label: '硬扛',

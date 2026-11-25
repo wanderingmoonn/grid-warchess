@@ -10,6 +10,17 @@
   position: fixed;
   inset: 0;
   overflow: auto;
+  /*
+   * 不给横向滚动留任何机会（2026-11-25）。
+   *
+   * 反馈是"选中兵再取消选中，页面会左右平移"。根因不是棋盘变宽了，而是
+   * 侧栏内容高度在"选中/未选中"两态之间变了 20~30px：一旦恰好越过视口高度，
+   * 滚动条出现/消失会吃掉 15px 宽度，整个居中布局就横跳一次。
+   * `scrollbar-gutter` 先给滚动条留固定位置（不再挤内容），`overflow-x: hidden`
+   * 再把任何意外的横向溢出按死。
+   */
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   background: #eae6dc;
   color: #3c3a33;
   font: 14px/1.6 system-ui, 'Microsoft YaHei', sans-serif;
@@ -341,6 +352,8 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* 滚动只发生在棋盘和侧栏各自的容器里：战斗屏本身永远不撑破舞台 */
+  overflow: hidden;
 }
 .rg-battle-head {
   display: flex;
@@ -378,6 +391,9 @@
 }
 .rg-boardwrap {
   min-width: 0;
+  /* 和 .rg-side 一样要有 min-height：否则棋盘的固有高度会把 grid 行顶高，
+     整个战斗屏越过 100%，滚动的就变成 #rogue-root（页面横跳的来源之一） */
+  min-height: 0;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -416,6 +432,7 @@
   display: flex;
   flex-direction: column;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 .rg-army {
   display: flex;
@@ -452,6 +469,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* 同上：有没有技能按钮不该改变侧栏高度 */
+  min-height: 46px;
 }
 .rg-skill {
   display: flex;
@@ -509,6 +528,12 @@
   color: #6d6659;
   font-size: 12px;
   line-height: 1.7;
+  /*
+   * 高度**锁定为两行**。选中/未选中时提示文案长度不同（"绿点走，红框打" vs
+   * 带 <br> 的入门说明），不锁的话侧栏高度会跟着抖，滚动条一开一关，
+   * 整个页面就横跳一次——这就是"选中兵再取消，页面左右平移"的来源。
+   */
+  min-height: 72px;
 }
 
 /* ---------- 弹层 ---------- */
