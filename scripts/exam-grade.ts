@@ -179,6 +179,14 @@ type Stat = {
   recruited: number;
   /** 我方经济兵本手总产出（金）。经济题的核心量：站对格子才高 */
   econYield: number;
+  /**
+   * **我方场上战斗单位的 worth 合计**（2026-11-25 加）。
+   *
+   * 口径和决定层一致：`(atk + maxHp + 射程×4) × 血量比例`。
+   * 为什么需要：钱多到产兵格用不完时，"造了几个"没有意义（一回合就 4 个），
+   * 要看**这 4 个有多强**。见 `docs/DESIGN-UPGRADE-PER-CELL-2026-11-25.md`。
+   */
+  armyWorth: number;
   meCities: number;
   /** 敌方还剩几座活城（废墟不算）。「把对方打到没有城」才是收尾的终点 */
   foeCities: number;
@@ -228,6 +236,12 @@ function capture(s: GameState): void {
     econYield: s.units
       .filter((u) => u.owner === ME && utype(s, u.type).category === 'economy')
       .reduce((n, u) => n + (unitYieldAt(s, u, u.x, u.y).gold ?? 0), 0),
+    armyWorth: s.units
+      .filter((u) => u.owner === ME && utype(s, u.type).category === 'combat')
+      .reduce((n, u) => {
+        const d = utype(s, u.type);
+        return n + ((d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4) * (u.hp / Math.max(1, d.maxHp ?? 1));
+      }, 0),
     alive: s.units.length,
     meCities: s.cities.filter((c) => c.owner === ME && !c.ruined).length,
     foeCities: s.cities.filter((c) => c.owner === FOE && !c.ruined).length,
@@ -413,6 +427,20 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
       /* "有没有把钱换成兵"。累加量，不受打死、也不被收入补回去影响。 */
       const n = st.recruited;
       return { ok: c.min === undefined || n >= c.min, got: `累计造兵 ${n}` };
+    }
+    case 'armyWorth': {
+      const w = Math.round(st.armyWorth);
+      const lowOk = c.min === undefined || w >= c.min;
+      const highOk = c.max === undefined || w <= c.max;
+      return { ok: lowOk && highOk, got: `部队战力 ${w}` };
+    }
+    case 'avgWorth': {
+      /* 平均每个单位（含经济兵）的 worth：防"堆一堆便宜兵把总量刷上去" */
+      const n = st.count['me:total'] ?? 0;
+      const avg = n > 0 ? st.armyWorth / n : 0;
+      const lowOk = c.min === undefined || avg >= c.min;
+      const highOk = c.max === undefined || avg <= c.max;
+      return { ok: lowOk && highOk, got: `平均战力 ${avg.toFixed(1)}（${n} 个）` };
     }
     case 'econYield': {
       /* 经济兵按脚下地形产金：伐木工森林 12 / 平原 3，牧民丘陵 8 / 森林 2，农民平原 7 / 森林 3。

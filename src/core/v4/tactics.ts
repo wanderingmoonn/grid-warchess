@@ -775,7 +775,21 @@ export function recruitAction(
      *
      * 所以充数不是无条件的，也不是完全禁止的，看**这是不是第一支军队**。
      */
-    const anyGood = need ? need.usable.some((t) => need.survivable.includes(t)) : true;
+    /*
+     * `anyGood` 必须按**这一座城现在买得起的兵**算，不是按全局兵种表。
+     *
+     * 2026-11-25 22:45 实测（E-2-03，纯转换题）：1 代城、金 4000、对面 2 个 2 代长枪兵。
+     * `need.usable` 里有弩兵/火枪兵/骠骑兵…… 全是高代兵，**这座城一个都造不出来**；
+     * 而 `affordableCombat` 只有 6 个 1 代兵，全部打不穿 40 血的长枪兵。
+     * 于是 `ok` 为空、`anyGood` 又是 true（它看的是全局表）→ 兜底被关掉 → **一个兵都不造**，
+     * 10 手里金从 4000 涨到 4250、部队 0、战力 0。
+     *
+     * 这就是 2b 踩过的那个坑的翻版：**"买不起"和"过不了闸"是两件事**，
+     * 判断"有没有好兵"必须落在"买得起的"这个集合上。
+     */
+    const anyGood = need
+      ? opts.some((o) => need.usable.includes(o.type) && need.survivable.includes(o.type))
+      : true;
     const firstArmy = world.myCombat.length === 0;
     const allowedToPad = need ? need.canPad && (!firstArmy || !anyGood) : false;
     /*

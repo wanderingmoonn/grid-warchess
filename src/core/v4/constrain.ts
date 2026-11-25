@@ -1862,11 +1862,26 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
            * 敌方有**溅射**（一发清一片）或**多段**（一回合多次）时，充数是负资产。
            * 这条只影响"没有候选时要不要凑数"，不影响正常挑选。
            */
-          canPad: !foes.some((u) => {
-            /* 溅射/多段是兵种自身属性，`effectiveStats` 不带它们，直接读定义 */
-            const d = utype(s, u.type);
-            return (d.splash ?? 0) > 0 || (d.burst ?? 1) > 1;
-          }),
+          canPad:
+            !foes.some((u) => {
+              /* 溅射/多段是兵种自身属性，`effectiveStats` 不带它们，直接读定义 */
+              const d = utype(s, u.type);
+              return (d.splash ?? 0) > 0 || (d.burst ?? 1) > 1;
+            }) &&
+            /*
+             * **但要"值得凑"才凑**（2026-11-25 23:05）。
+             *
+             * 上面那条只排除"凑了也是送"（溅射/多段）。实际还有一类"凑了没用"：
+             * 敌人远在 20 手外、我方还在发展期——这时候买一堆打不动的便宜兵
+             * 既走不到战场、又挤掉经济兵。E-2-02 实测：允许凑数之后经济产出 107→95。
+             *
+             * 所以凑数只在这种时候成立：
+             *   · 决定层要打（`press`）——凑数是为了**堆量**（S-001 的 18 个人过河、S-009 补损耗）；
+             *   · 或者敌人 4 手内能摸到城——凑数是为了**顶住**（D 轨那些贴脸的局）。
+             * 两条都不满足，就是"没仗可打"，钱该留给经济或攒着。
+             */
+            (decision.kind === 'press' ||
+              world.myCities.some((c) => world.foeEta({ x: c.x, y: c.y }) <= 8)),
           /* 对面最大射程：压不过它就没有"先手"，排序要改比血（见 tactics 的 byRange） */
           range: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).range ?? 1), 0),
           bottleneck,
