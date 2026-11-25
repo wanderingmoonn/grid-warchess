@@ -49,9 +49,20 @@
  * 于是"从根那一头开始，一个接一个往前走一格"永远落在上一人刚腾出来的格上
  * （引擎没有"交换两个人位置"这个动作）。
  */
-import { passable } from '../config.ts';
+import { eraDef, passable } from '../config.ts';
+import { upgradeTargetOf } from '../era-routes.ts';
 import { EARTH, idxOn } from '../board.ts';
-import { cityTiles, effectiveStats, rebuildCost, recruitSpawnCells, recruitPriceOf, unitYieldAt, utype } from '../rules.ts';
+import {
+  attacksPerTurn,
+  cityTiles,
+  damageToCity,
+  effectiveStats,
+  rebuildCost,
+  recruitSpawnCells,
+  recruitPriceOf,
+  unitYieldAt,
+  utype,
+} from '../rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
 
 /** 一座城在这一局里的角色——**只有这一个口径** */
@@ -97,6 +108,28 @@ export interface EconSpot {
   gold: number;
   /** 这块地离哪座城近（配岗要按城分组，不然会把 A 城的岗派给 B 城出生的兵） */
   cityId: string;
+}
+
+/**
+ * **这座城还能撑几轮**（D3，2026-11-26）。
+ *
+ * 全项目唯一一份"守得住吗"的算术。决定层要在计划层之前回答"这座城要不要救"，
+ * 而"救不救得了"取决于"还能撑几轮"——所以这个数必须在这里算一次，别处只许读。
+ */
+export interface CityStand {
+  /** 按当前局面还能撑几回合（`Infinity` = 没人能打塌它） */
+  rounds: number;
+  /** 升一级之后还能撑几回合（`undefined` = 这一局升不了 / 到顶了） */
+  roundsAfterUpgrade?: number;
+  /**
+   * 每一轮砸在城上的伤害，**下标就是回合号 − 1**（前面的 0 = 那几轮还没人够得着）。
+   * 留它是为了让"人工手算能对上"——判据错了第一眼就能发现。
+   */
+  incoming: number[];
+  /** 有几个敌人的伤害真的落得到城上（打不动的、走不到的不算） */
+  threats: number;
+  /** 最快的那一个第几回合第一次开火（`Infinity` = 没人到得了） */
+  firstAt: number;
 }
 
 export interface World {
@@ -169,6 +202,11 @@ export interface World {
   stepsFrom(p: { x: number; y: number }): Float64Array;
   /** 城的角色（同一份缓存） */
   roleOf(city: City): CityRole;
+  /**
+   * **这座城还能撑几轮**（D3）：按"每一轮真能开火的人"逐轮推进，
+   * 顺带给出"升一级之后还能撑几轮"。见 `CityStand`。
+   */
+  cityStand(city: City): CityStand;
   /** 这座城现在能造的最便宜的 N 个战斗兵（含价钱） */
   affordableCombat(city: City, gold: number): Array<{ type: string; gold: number }>;
   /**
@@ -381,6 +419,34 @@ const near = (a: { x: number; y: number }, b: { x: number; y: number }, r: numbe
  *
  * 一次 `aiNextAction` 建一次就够——它是只读的，别在循环里反复建（那等于把缓存关掉）。
  */
+/**
+ * **这座城升一级之后的样子**（D3）：耐久 / 护甲 / 时代一起变，兵不变。
+ *
+ * 和引擎 `doUpgrade` 逐条对齐：`maxHp` / `armor` 加两代的差，`hp` 加同样的差值
+ * （引擎是 `min(maxHp, hp + gain)`，这里同样取 min）。
+ *
+ * 这里**只算"变成什么样"**，不管钱够不够、路线通不通——那属于计划层；
+ * 更不管"要不要升"——那属于决定层（D4 之后）。
+ *
+ * ⚠️ `constrain.planUpgrade` 里现在还有一份手抄的同样三行（D4 会删掉，改调这个）。
+ * 在那之前两处必须一致：改这里的话，那边要跟着改，否则"能撑几轮"会有两个答案。
+ */
+export function upgradedCity(s: GameState, city: City): City | undefined {
+  const tgt = upgradeTargetOf(s, city);
+  if (!tgt || tgt.cost === null || tgt.blocked) return undefined;
+  const from = eraDef(city.era);
+  const dHp = tgt.era.cityMaxHp - from.cityMaxHp;
+  const dArmor = tgt.era.cityArmor - from.cityArmor;
+  const maxHp = city.maxHp + dHp;
+  return {
+    ...city,
+    era: tgt.edge.to,
+    maxHp,
+    hp: Math.min(maxHp, city.hp + dHp),
+    armor: city.armor + dArmor,
+  };
+}
+
 export function buildWorld(s: GameState, me: PlayerId): World {
   const seats = [...new Set(s.units.map((u) => u.owner))];
   const foe = (seats.find((p) => p !== me) ?? (me === 'A' ? 'B' : 'A')) as PlayerId;
@@ -577,6 +643,71 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   /* 认领表的原料算一次就够（一场棋里问很多遍），算完缓存 */
   let spotCache: EconSpot[] | null = null;
 
+  /*
+   * ── 这座城还能撑几轮（D3，2026-11-26）─────────────────────────
+   *
+   * ── 为什么要它 ──────────────────────────────────────────────
+   *
+   * 决定层跑在计划层**之前**，却要回答"这座城要不要救"。而"救不救得了"取决于
+   * "还能撑几轮"——所以这个算术不能留在计划层，得搬到这里（算一次，全层读）。
+   *
+   * ── 逐轮推进，不是"一次性齐射" ──────────────────────────────
+   *
+   * 旧算法（`constrain.planUpgrade`）把"两轮内能摸到城"的敌人**当成现在就在全额开火**：
+   * 远处那些还没走到的人也算成这一轮就砸满，于是轮数偏小、更容易判成"马上就塌"。
+   * 这里按每一轮**真能开火的人**推进：
+   *
+   *     第 k 回合第一次开火  ⟺  ceil((到城步数 − 它的射程) ÷ 它的移动力)，最小 1
+   *
+   * 为什么不是"先走一轮、下一轮才打"：引擎允许**走完再打**（同一回合移动 + 攻击），
+   * 所以它这一回合就能补上 `move` 步、当回合开火。P-1-03 就是按这个口径手算的
+   * （戟兵离城 3 格、射程 2、移动 2 → 第 1 回合就砸 15）。
+   *
+   * `burst`（一回合多段）必须乘进去——漏了它，装甲车会被当成一半的伤害（P-1-04 踩过）。
+   */
+  const cityStand = (city: City): CityStand => {
+    const tiles = cityTiles(city);
+
+    /** 一场"齐射表"：每个敌人第几回合第一次开火、每回合砸多少 */
+    const volley = (target: City): Array<{ first: number; dmg: number }> =>
+      foeSteps.flatMap((f) => {
+        /* 到**任意一格**城格的最小步数：从哪一格进城算哪一格 */
+        let steps = Infinity;
+        for (const t of tiles) steps = Math.min(steps, f.dist[t.y * s.w + t.x] ?? Infinity);
+        if (!Number.isFinite(steps)) return []; /* 地形堵死，走不到 */
+        const dmg = damageToCity(f.unit, target, s) * attacksPerTurn(s, f.unit);
+        if (dmg <= 0) return []; /* 打不动这座城（甲的功劳），不参与 */
+        return [{ first: Math.max(1, Math.ceil(Math.max(0, steps - f.range) / f.move)), dmg }];
+      });
+
+    const run = (target: City): CityStand => {
+      const hits = volley(target);
+      if (hits.length === 0) {
+        return { rounds: Infinity, incoming: [], threats: 0, firstAt: Infinity };
+      }
+      const firstAt = Math.min(...hits.map((h) => h.first));
+      const last = Math.max(...hits.map((h) => h.first));
+      let hp = target.hp;
+      const incoming: number[] = [];
+      /*
+       * 推到"最后一个人赶到"之后再给 `hp` 轮余量——再多也不会变。
+       * 极限是 200 轮，纯粹防死循环（正常局面 20 轮内必出结论）。
+       */
+      for (let r = 1; r <= last + 200; r++) {
+        const dmg = hits.reduce((n, h) => n + (h.first <= r ? h.dmg : 0), 0);
+        incoming.push(dmg);
+        if (dmg <= 0) continue;
+        hp -= dmg;
+        if (hp <= 0) return { rounds: r, incoming, threats: hits.length, firstAt };
+      }
+      return { rounds: Infinity, incoming, threats: hits.length, firstAt };
+    };
+
+    const now = run(city);
+    const up = upgradedCity(s, city);
+    return { ...now, roundsAfterUpgrade: up ? run(up).rounds : undefined };
+  };
+
   const world: World = {
     me,
     foe,
@@ -613,6 +744,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     roleOf(city) {
       return roleMap.get(city.id) ?? 'safe';
     },
+    cityStand,
     corridorWidth(p, toward) {
       const dx = Math.sign(toward.x - p.x);
       const dy = Math.sign(toward.y - p.y);

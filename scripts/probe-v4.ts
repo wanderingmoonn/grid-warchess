@@ -80,6 +80,22 @@ for (const q of v.con.squads) {
 }
 console.log(`\n必须空出来的格子：${v.con.keepClear.length} 格`);
 console.log('  坐标：', v.con.keepClear.slice(0, 12).map((k) => `(${k % s.w},${Math.floor(k / s.w)})`).join(' '), v.con.keepClear.length > 12 ? '…' : '');
+/*
+ * **守得住吗**（D3）：不看"离敌人几格"，看"每一轮真能开火的人砸多少、还能撑几轮"。
+ * `incoming` 的下标就是回合号 − 1，可以拿它和 criteria 里的手算逐轮核对。
+ */
+console.log('\n守得住吗：');
+for (const c of v.world.myCities) {
+  const st = v.world.cityStand(c);
+  const r = (x: number): string => (Number.isFinite(x) ? `${x} 轮` : '塌不了');
+  console.log(
+    `  ${c.id} 血 ${c.hp}/${c.maxHp} 甲 ${c.armor} · 现在 ${r(st.rounds)}` +
+      `${st.roundsAfterUpgrade !== undefined ? ` · 升一级后 ${r(st.roundsAfterUpgrade)}` : '（升不了）'}` +
+      ` · 威胁 ${st.threats}（最早第 ${Number.isFinite(st.firstAt) ? st.firstAt : '-'} 回合开火）`,
+  );
+  if (st.incoming.length > 0) console.log(`     每轮齐射 ${st.incoming.join(' / ')}`);
+}
+
 console.log('\n城的角色：');
 for (const c of v.world.cities) {
   console.log(`  ${c.city.id} ${c.role.padEnd(11)} 离敌城 ${Number.isFinite(c.distToFoeCity) ? c.distToFoeCity + ' 回合' : '走不到'} · 守军潜力 ${c.defenders}`);
