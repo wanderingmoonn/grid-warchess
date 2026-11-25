@@ -29,21 +29,18 @@
  *
  * C2 的验收是"人工手算能对上"。C3 才让约束层读 k。
  */
-import { incomeOf, utype } from '../rules.ts';
+import { incomeOf } from '../rules.ts';
 import type { GameState } from '../types.ts';
 import type { World } from './world.ts';
 
-/** 一个单位的"身价"。和决定层同一个口径（`constrain.ts` 的 `unitWorth` 就是它） */
-export function unitWorthOfType(s: GameState, typeId: string): number {
-  const d = utype(s, typeId);
-  return (d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4;
-}
+/*
+ * 「身价」的定义搬到了服务层（`world.ts` 的 `unitWorthOfType` / `unitWorth`）：
+ * 决定层的强弱、计划层的采购口径、这里的投影都要用同一个数，所以它属于"算一次"的那一类。
+ * 这里只做转发，免得外面为了一个公式去依赖投影模块。
+ */
+import { unitWorth } from './world.ts';
 
-/** 一个已存在单位的身价：按剩余血量打折 */
-export function unitWorth(s: GameState, u: { type: string; hp: number }): number {
-  const d = utype(s, u.type);
-  return ((d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4) * (u.hp / Math.max(1, d.maxHp ?? 1));
-}
+export { unitWorth, unitWorthOfType } from './world.ts';
 
 /** 投影里的一个候选战斗兵（"这座城市这个价，买来值这么多"） */
 export interface CombatPick {

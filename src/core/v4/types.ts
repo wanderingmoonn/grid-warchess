@@ -72,6 +72,27 @@ export interface SpendPlan {
   why: string;
 }
 
+/**
+ * 升级的一个候选（D4a）：决定层排好序，计划层挑**第一个可行的**。
+ *
+ * 为什么是列表而不是单个：多城同时告急时，"先救哪座"是决定（撑得最少的那座优先），
+ * 而"这座能不能救"里有一条是可行性（升完还剩不剩一个打得穿的兵）——后者要等
+ * 采购门槛算完才知道，那是计划层。所以决定层给**优先序列**，计划层顺次验证。
+ */
+export interface UpgradeCandidate {
+  cityId: string;
+  /** 目标代。实际每手只升一级，计划层朝它走 */
+  targetEra: number;
+  /** 这一级的价（计划层不用再查价目表） */
+  cost: number;
+  /** 目标代的名字，给回放用（"升到铁器时代"） */
+  label: string;
+  /** 救城用的两个数：现在还能撑几轮 / 升完能撑几轮（升代那条不用） */
+  rounds: { now: number; after: number };
+  /** 一句话：为什么是它 */
+  why: string;
+}
+
 export interface Decision {
   kind: DecisionKind;
   /** `takeover` 用 `TakeoverStage`，`press` 用 `PressStage` */
@@ -89,6 +110,16 @@ export interface Decision {
    * 而那种 bug 只能靠回放猜。必填的话，每个 `return` 都编译不过一次，漏不掉。
    */
   spend: SpendPlan;
+  /**
+   * **这一期要不要升代、先升哪座城**（D4a）。
+   *
+   * 升级的"要不要"原本全在计划层（`constrain.planUpgrade` / `planUpgradeEcon`），
+   * 决定层完全不知道；现在它是决定层的一句话。计划层只剩"这座能不能升"——
+   * 路线通不通、钱够不够、升完还剩不剩一个打得穿的兵。
+   *
+   * `candidates` 按优先级排序：计划层取第一个通过的。
+   */
+  upgrade?: { kind: 'rescue' | 'econ'; candidates: UpgradeCandidate[] };
 }
 
 /** 一支部队在本回合的任务。**任务种类固定**，别用"分数"表达意图 */

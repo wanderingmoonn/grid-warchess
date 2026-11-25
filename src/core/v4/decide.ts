@@ -13,8 +13,10 @@
  */
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
-import type { Decision, TakeoverStage, V4Memory } from './types.ts';
-import { effectiveStats, utype } from '../rules.ts';
+import type { Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
+import { attacksPerTurn, cityTiles, damageToCity, distToCity, effectiveStats, utype } from '../rules.ts';
+import { upgradeTargetOf } from '../era-routes.ts';
+import { upgradedCity } from './world.ts';
 import type { GameState } from '../types.ts';
 
 /** 还没挂"钱怎么花"的决定（`withSpend` 的入参形状） */
@@ -114,6 +116,146 @@ function withSpend(s: GameState, world: World, d: BareDecision): Decision {
   };
 }
 
+/**
+ * 把"钱怎么花"和"要不要升代"一起挂到决定上（D4a）。
+ *
+ * 为什么统一成一个出口：这两个字段都**必须每个 `return` 都有**，漏一个就是
+ * "沿用了决定、忘了沿用升级"的默认值 bug。让唯一入口来挂，漏不掉。
+ */
+function complete(s: GameState, world: World, d: BareDecision): Decision {
+  const dec = withSpend(s, world, d);
+  return { ...dec, upgrade: upgradeOf(s, world, dec) };
+}
+
+/**
+ * **旧闸 A 的算术**（D4a 原样搬来，**D4b 会整块删掉**换成 `world.cityStand`）。
+ *
+ * 为什么先搬旧的：D4a 是搬家，读数必须一字不变。这一段连同它的毛病
+ * （半径硬切、曼哈顿距离、一律从第 1 轮起算）原样搬过来，才能证明
+ * "位置变了、结论没变"；换口径是 D4b 的事，那时读数变了也能归因。
+ */
+function rescueStand(
+  s: GameState,
+  world: World,
+  city: City,
+): { rounds0: number; rounds1: number; cost: number; targetEra: number; label: string } | undefined {
+  const threat = world.foeCombat.filter((u) => {
+    const t = utype(s, u.type);
+    const reach = (t.move ?? 2) + (effectiveStats(s, u).range ?? 1) + 1;
+    return distToCity(u, city) <= reach;
+  });
+  if (threat.length === 0) return undefined;
+  const dmg0 = threat.reduce((n, u) => n + damageToCity(u, city, s) * attacksPerTurn(s, u), 0);
+  if (dmg0 <= 0) return undefined;
+  const tgt = upgradeTargetOf(s, city);
+  if (!tgt || tgt.cost === null || tgt.blocked) return undefined;
+  const after = upgradedCity(s, city);
+  if (!after) return undefined;
+  const dmg1 = threat.reduce((n, u) => n + damageToCity(u, after, s) * attacksPerTurn(s, u), 0);
+  return {
+    rounds0: Math.ceil(city.hp / dmg0),
+    rounds1: dmg1 > 0 ? Math.ceil(after.hp / dmg1) : Infinity,
+    cost: tgt.cost,
+    targetEra: tgt.edge.to,
+    label: tgt.label,
+  };
+}
+
+/**
+ * **闸 A：救不救这座城**（D4a 从 `planUpgrade` 搬来，判据一字未改）。
+ *
+ * 两条：城 ≤2 轮就塌（`rounds0 <= 2`）、升完能多撑至少一轮（`rounds1 > rounds0`）。
+ * 按"最快会塌的那座"排（同轮数取 id 小的），**多城从第一天就按每座城算**。
+ *
+ * 升完还剩不剩一个打得穿的兵（原来的条件③）不在这里——那是可行性，留在计划层。
+ */
+function rescueCandidates(s: GameState, world: World, gold: number): UpgradeCandidate[] {
+  const out: UpgradeCandidate[] = [];
+  for (const info of world.cities) {
+    const city = info.city;
+    const st = rescueStand(s, world, city);
+    if (!st) continue;
+    if (st.rounds0 > 2) continue; /* 撑得过两轮 → 不叫应急 */
+    if (gold < st.cost) continue;
+    if (st.rounds1 <= st.rounds0) continue; /* 升了不多撑一轮 → 白升 */
+    out.push({
+      cityId: city.id,
+      targetEra: st.targetEra,
+      cost: st.cost,
+      label: st.label,
+      rounds: { now: st.rounds0, after: st.rounds1 },
+      why: `城 ${st.rounds0} 轮内会塌，升到${st.label}后能撑 ${st.rounds1} 轮`,
+    });
+  }
+  return out.sort((a, b) => a.rounds.now - b.rounds.now || (a.cityId < b.cityId ? -1 : 1));
+}
+
+/**
+ * **闸 B：钱多到产兵格成了瓶颈 → 升代**（D4a 从 `planUpgradeEcon` 搬来）。
+ *
+ * 判据（用户 2026-11-25 逐条纠过的三个坑，一个都没改）：
+ *   ① 产兵格现算（城格减掉站着人的），不写死 4；
+ *   ② "剩余手数" = `world.developLeft()`（行军时间，不是题目窗口）；
+ *   ③ "花不完"按**每格战力**判：`金 > 格数 × 剩余手数 × 当前代最强兵价`。
+ *
+ * 枚举（每一代的累计价、每格最强的兵）在服务层 `world.eraLadder`；这里只做**选择**：
+ * 对每一代算 `n = min(格数×剩余手数, 钱÷单价)`，取 `n × 每格战力` 最大的那一代。
+ *
+ * ⚠️ **只在"还没有军队"时规划**：升级费是沉没成本，每手重算会漂（E-2-03 从 3 代漂到 5 代）。
+ * 这道门是补丁，D5 会换成记忆里的承诺。
+ */
+function econCandidates(s: GameState, world: World, gold: number): Decision['upgrade'] {
+  if (world.myCombat.length > 0) return undefined;
+  const h = world.developLeft();
+  if (!h) return undefined;
+  const left = Math.floor(h.left);
+  if (left <= 0) return undefined;
+
+  let best: UpgradeCandidate | undefined;
+  for (const city of world.myCities) {
+    if (city.ruined) continue;
+    /* ① 产能现算：城格去掉站着人的（占满就造不了，别把它算成产能） */
+    const cap = Math.max(
+      1,
+      cityTiles(city).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length,
+    );
+    const ladder = world.eraLadder(city);
+    const now = ladder[0];
+    if (!now) continue;
+    /* ③ 钱花得完 → 不叫"钱多"，别升 */
+    if (gold <= cap * left * now.gold) continue;
+
+    let curTotal = Math.min(cap * left, Math.floor(gold / now.gold)) * now.worth;
+    for (const step of ladder.slice(1)) {
+      if (gold < step.acc) break;
+      const n = Math.min(cap * left, Math.floor((gold - step.acc) / step.gold));
+      const total = n * step.worth;
+      if (total <= curTotal) continue;
+      curTotal = total;
+      best = {
+        cityId: city.id,
+        targetEra: step.era,
+        /* 这一手要付的是"下一级"的价，不是整条路径的累计价 */
+        cost: ladder[1]!.cost,
+        label: `第${step.era}代`,
+        rounds: { now: 0, after: 0 },
+        why: `钱花不完（${gold} > ${cap}格×${left}手×${now.gold}），升到第${step.era}代后这 ${left} 手能造 ${n} 个${utype(s, step.type).name}（每格 ${Math.round(step.worth)}，现在 ${Math.round(now.worth)}）→ 战力 ${Math.round(total)} 对 ${Math.round(n * now.worth)}`,
+      };
+    }
+  }
+  return best ? { kind: 'econ', candidates: [best] } : undefined;
+}
+
+/** 这一期要不要升代（D4a）：先问"救不救得了"，再问"钱是不是多到花不完" */
+function upgradeOf(s: GameState, world: World, d: Decision): Decision['upgrade'] {
+  /* 攒钱期不升级：那笔钱是重建费，动了就前功尽弃 */
+  if (d.spend.mode === 'save') return undefined;
+  const gold = s.players[world.me]?.gold ?? 0;
+  const rescue = rescueCandidates(s, world, gold);
+  if (rescue.length > 0) return { kind: 'rescue', candidates: rescue };
+  return econCandidates(s, world, gold);
+}
+
 /** 兵力对比（按"身价"不按个数：一个四代兵不等于一个民兵） */
 function strength(s: GameState, sideUnits: GameState['units']): number {
   let n = 0;
@@ -164,7 +306,7 @@ function takeoverDecision(s: GameState, world: World, ruin: City): Decision {
       : stage === 'save'
         ? `城下清干净了，攒 ${cost} 金重建（现有 ${gold}）`
         : `钱够了（${gold} ≥ ${cost}），派兵入驻`;
-  return withSpend(s, world, {
+  return complete(s, world, {
     kind: 'takeover',
     stage,
     untilTurn: s.turn + DECIDE_HORIZON,
@@ -200,7 +342,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       if (ruin) return takeoverDecision(s, world, ruin);
       /* 打不动了就提前收手：兵力比跌破 1.0（原来是 1.25 才进） */
       if (cityAlive && ratio >= 1.0) {
-        return withSpend(s, world, {
+        return complete(s, world, {
           kind: 'press',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
@@ -210,7 +352,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     } else if (prev.kind === 'defend') {
       /* 威胁解除就提前转攻：对面掉到我方 0.6 以下 */
       if (foeStr >= myStr * 0.6) {
-        return withSpend(s, world, {
+        return complete(s, world, {
           kind: 'defend',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
@@ -218,7 +360,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         });
       }
     } else if (ratio < 1.25) {
-      return withSpend(s, world, {
+      return complete(s, world, {
         kind: 'expand',
         untilTurn: prev.untilTurn,
         reason: `${prev.reason}（沿用）`,
@@ -231,7 +373,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   if (threatened.length > 0 && foeStr > myStr * 0.9) {
     /* 离敌军最近的先救；`foeEta` 是"敌人几回合能摸到它"，越小越急 */
     const worst = threatened.sort((a, b) => a.foeEta - b.foeEta)[0]!;
-    return withSpend(s, world, {
+    return complete(s, world, {
       kind: 'defend',
       untilTurn: s.turn + horizon,
       cityId: worst.city.id,
@@ -284,7 +426,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         (st.range ?? 1) + (st.move ?? 2)
       );
     });
-    return withSpend(s, world, {
+    return complete(s, world, {
       kind: 'press',
       stage: guards.length > 0 ? 'clear' : 'siege',
       untilTurn: s.turn + horizon,
@@ -297,7 +439,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
   }
 
   /* 3) 其它情况：发展 */
-  return withSpend(s, world, {
+  return complete(s, world, {
     kind: 'expand',
     untilTurn: s.turn + horizon,
     reason: `身价 ${Math.round(myStr)} : ${Math.round(foeStr)}，不占优，先攒兵攒钱`,

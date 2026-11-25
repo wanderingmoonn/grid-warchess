@@ -65,6 +65,26 @@ import {
 } from '../rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
 
+/**
+ * **身价**：一个兵种值多少（决定层的强弱、采购口径、发展投影都读它）。
+ *
+ * 公式 `攻 + 血 + 射程×4`。射程乘 4 是唯一写死的系数——一格射程约等于
+ * 4 点属性的价值（能先手、能不吃反击地站住）。动它要跑全量题库。
+ *
+ * 为什么放在服务层：它被三层同时读，以前住在投影模块（`project.ts`）里，
+ * 结果是"想用身价就得先依赖投影"。它是个事实，不是投影的一部分。
+ */
+export function unitWorthOfType(s: GameState, typeId: string): number {
+  const d = utype(s, typeId);
+  return (d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4;
+}
+
+/** 一个已存在单位的身价：按剩余血量打折 */
+export function unitWorth(s: GameState, u: { type: string; hp: number }): number {
+  const d = utype(s, u.type);
+  return unitWorthOfType(s, u.type) * (u.hp / Math.max(1, d.maxHp ?? 1));
+}
+
 /** 一座城在这一局里的角色——**只有这一个口径** */
 export type CityRole =
   /** 自家最后一座城：丢了就输 */
@@ -130,6 +150,26 @@ export interface CityStand {
   threats: number;
   /** 最快的那一个第几回合第一次开火（`Infinity` = 没人到得了） */
   firstAt: number;
+}
+
+/**
+ * **一个时代的一步**（D4a）。`eraLadder(城)` 的返回值。
+ *
+ * 它是**枚举**，不是选择：这里只回答"如果升到这一代，累计要花多少、那一代每格能放多强的兵"。
+ * 选哪一代是决定层的事（`decide.ts`）——"枚举属于服务层，选择属于决定层"。
+ */
+export interface EraStep {
+  era: number;
+  /** 从**上一代**升到这一代要多少金（第 0 步 = 当前代，0） */
+  cost: number;
+  /** 从当前代升到这一代**累计**要多少金 */
+  acc: number;
+  /** 这一代"每格战力最强"的那个兵种（已排除水兵） */
+  type: string;
+  /** 它的单价 */
+  gold: number;
+  /** 它的每格战力（`unitWorthOfType`） */
+  worth: number;
 }
 
 export interface World {
@@ -207,6 +247,20 @@ export interface World {
    * 顺带给出"升一级之后还能撑几轮"。见 `CityStand`。
    */
   cityStand(city: City): CityStand;
+  /**
+   * **升级阶梯**（D4a）：从当前代往上，每一代"累计升级价 + 每格最强的兵 + 单价"。
+   *
+   * 只枚举，不选。决定层拿它去比"哪一代的总战力最大"（闸 B 的判据）。
+   * 升不动（路线封着 / 到顶）就到此为止——所以数组长度不固定，至少 1 个（当前代）。
+   */
+  eraLadder(city: City): EraStep[];
+  /**
+   * **发展期还有几手**（D4a，地图兜底那一路）：双方非废墟城之间的最小步数 ÷ 当代众数移动力。
+   *
+   * 决定层需要它（闸 B 的"钱花不完"要乘剩余手数），而决定层跑在编队之前，
+   * 拿不到 `planHorizon` 的编队结果。**这里给的和 `planHorizon` 的 `map` 来源是同一个数**。
+   */
+  developLeft(): { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined;
   /** 这座城现在能造的最便宜的 N 个战斗兵（含价钱） */
   affordableCombat(city: City, gold: number): Array<{ type: string; gold: number }>;
   /**
@@ -708,6 +762,91 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     return { ...now, roundsAfterUpgrade: up ? run(up).rounds : undefined };
   };
 
+  /** 这座城现在买得起的战斗兵（按价升序）。抽成局部函数：`eraLadder` 要在对象建好之前用它 */
+  const affordable = (city: City, gold: number): Array<{ type: string; gold: number }> => {
+    const out: Array<{ type: string; gold: number }> = [];
+    for (const def of Object.values(s.unitTypes)) {
+      if (def.category !== 'combat') continue;
+      if ((def.era ?? 1) > (city.era ?? 1)) continue;
+      if (recruitSpawnCells(s, city.id, undefined, def.id).length === 0) continue;
+      const price = recruitPriceOf(s, me, def).gold;
+      if (price <= gold) out.push({ type: def.id, gold: price });
+    }
+    return out.sort((a, b) => a.gold - b.gold);
+  };
+
+  /**
+   * **某一代"每格战力最强"的兵**（D4a，从 `constrain.bestPerCell` 搬来，判据一字未改）。
+   *
+   * 每格战力就是 `unitWorthOfType`——产兵格是一次性的，一格能打出多少才是瓶颈。
+   *
+   * **排除水兵**（2026-11-25 23:20 实测）：`affordableCombat` 会返回楼船/炮艇
+   * （城边有点水就能造），它们 worth 高（楼船 108）但只能在水上走。第一版因此把
+   * "2 代 + 24 个楼船"算成 2592 战力，比"3 代 + 34 个戟兵"（2550）还高，
+   * 于是 E-2-03 里 v4 升了两代就停手、去造一堆开不上岸的船。
+   */
+  const bestPerCell = (city: City): { type: string; gold: number; worth: number } | undefined => {
+    let best: { type: string; gold: number; worth: number } | undefined;
+    for (const o of affordable(city, Number.MAX_SAFE_INTEGER)) {
+      if (utype(s, o.type).domain === 'water') continue;
+      const w = unitWorthOfType(s, o.type);
+      if (!best || w > best.worth) best = { type: o.type, gold: o.gold, worth: w };
+    }
+    return best;
+  };
+
+  /**
+   * 当前代战斗兵移动力的**众数**（并列取平均，四舍五入）。
+   *
+   * 用众数而不是平均数/中位数：一代里可能有侦察兵那种异常快、或者攻城器械那种异常慢的，
+   * 平均数会被拉偏。这一代没有兵种数据时退回"≤ 这一代"的全体。
+   */
+  const eraModeMove = (era: number): number => {
+    const pick = (maxEra: number): number[] =>
+      Object.values(s.unitTypes)
+        .filter((d) => d.category === 'combat' && (d.era ?? 1) <= maxEra)
+        .map((d) => d.move ?? 1);
+    let moves = pick(era);
+    if (moves.length === 0) moves = pick(9);
+    if (moves.length === 0) return 2;
+    const count = new Map<number, number>();
+    for (const m of moves) count.set(m, (count.get(m) ?? 0) + 1);
+    let best = 0;
+    for (const c of count.values()) best = Math.max(best, c);
+    const tied = [...count.entries()].filter(([, c]) => c === best).map(([m]) => m);
+    return Math.max(1, Math.round(tied.reduce((a, b) => a + b, 0) / tied.length));
+  };
+
+  /**
+   * **发展期还有几手（地图兜底那一路）**（D4a，从 `constrain.horizonOfMap` 搬来）。
+   *
+   * 双方非废墟城之间的最小步数 ÷ 当代战斗兵移动力的众数。没有编队可看时用它——
+   * `expand` 的局面正是这个状态（没有进攻编队 → 只看地图）。
+   *
+   * 注意它是**长度**（从现在起还要几手），不是回合号（D2）。
+   */
+  const developLeft = (): { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined => {
+    const mine = myCities.filter((c) => !c.ruined);
+    const foes = foeCities.filter((c) => !c.ruined);
+    if (mine.length === 0 || foes.length === 0) return undefined;
+    const era = Math.max(1, ...mine.map((c) => c.era ?? 1));
+    const move = eraModeMove(era);
+    let best: { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined;
+    for (const a of mine) {
+      for (const b of foes) {
+        for (const p of cityTiles(a)) {
+          for (const q of cityTiles(b)) {
+            const steps = stepFrom(p)[idxOn(s, EARTH, q.x, q.y)] ?? Infinity;
+            if (!Number.isFinite(steps)) continue;
+            const left = Math.ceil(steps / move);
+            if (!best || left < best.left) best = { left, fromCityId: a.id, cityId: b.id, move, steps };
+          }
+        }
+      }
+    }
+    return best;
+  };
+
   const world: World = {
     me,
     foe,
@@ -794,17 +933,29 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     captureCandidates: () =>
       myCombat.filter((u) => u.hp > 0 && utype(s, u.type).category !== 'building'),
-    affordableCombat(city, gold) {
-      const out: Array<{ type: string; gold: number }> = [];
-      for (const def of Object.values(s.unitTypes)) {
-        if (def.category !== 'combat') continue;
-        if ((def.era ?? 1) > (city.era ?? 1)) continue;
-        if (recruitSpawnCells(s, city.id, undefined, def.id).length === 0) continue;
-        const price = recruitPriceOf(s, me, def).gold;
-        if (price <= gold) out.push({ type: def.id, gold: price });
+    affordableCombat: (city, gold) => affordable(city, gold),
+    eraLadder(city) {
+      /*
+       * 一直往上爬到"升不动"为止（路线封着 / 到顶 / 4 代以内）。
+       * 钱够不够**不在这里判**——那是决定层的事（它才知道金币和剩余手数）。
+       */
+      const out: EraStep[] = [];
+      let cur = city;
+      let cost = 0;
+      let acc = 0;
+      for (let i = 0; i < 8; i++) {
+        const pick = bestPerCell(cur);
+        if (!pick) break;
+        out.push({ era: cur.era ?? 1, cost, acc, type: pick.type, gold: pick.gold, worth: pick.worth });
+        const tgt = upgradeTargetOf(s, cur);
+        if (!tgt || tgt.cost === null || tgt.blocked) break;
+        cost = tgt.cost;
+        acc += cost;
+        cur = { ...cur, era: tgt.edge.to };
       }
-      return out.sort((a, b) => a.gold - b.gold);
+      return out;
     },
+    developLeft,
 
     econSpots() {
       if (spotCache) return spotCache;

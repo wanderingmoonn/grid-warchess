@@ -11,7 +11,7 @@
  */
 import { boardOf, boardIdOf } from '../board.ts';
 import { passable } from '../config.ts';
-import { attackableTargets, attacksPerTurn, cityTiles, damageToCity, distToCity, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
+import { attackableTargets, cityTiles, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
 import { eraDef } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
@@ -21,7 +21,7 @@ import { DECIDE_HORIZON } from './decide.ts';
 import { bestEraBy, bestProjection, incomeNow, projectEconUntil, projectWithEra, solveEconAll, unitWorth, unitWorthOfType } from './project.ts';
 import type { EraTable } from './project.ts';
 import type { Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
-import { buildWorld } from './world.ts';
+import { buildWorld, upgradedCity } from './world.ts';
 import type { World } from './world.ts';
 
 /**
@@ -460,269 +460,66 @@ function planTransit(
 }
 
 /**
- * **应急升级**（2026-11-25，P3 闸 A）：这座城现在花钱升一级，能不能改变"守得住 / 守不住"。
+ * **升级的可行性**（D4a 之后只剩这一件事）。
  *
- * ── 它回答什么 ───────────────────────────────────────────────
+ * ── 谁决定"要不要"，谁决定"能不能" ──────────────────────────
  *
- * 不是"血和甲值多少钱"，而是**翻不翻**：不升的时候还剩几轮塌？升完还剩几轮？
- * 所以不用给回血、护甲单独定价——`damageToCity` 里 hp 和 armor 都算进去了，
- * 升级自带的 `hp += Δ` 也自然反映在"能撑几轮"上。
+ * "要不要升"现在在决定层（`decide.ts` 的 `upgradeOf`：救不救得了 / 钱是不是花不完）。
+ * 这里只回答"这个决定这一手执行得了吗"，三条，全是可行性：
  *
- * ── 三个条件（缺一不可）─────────────────────────────────────
+ *   ① **路线通不通**：`upgradeTargetOf` 有目标、没封路、没到顶；
+ *   ② **钱够不够**：这一级的价 ≤ 现有金币；
+ *   ③ **救城的最后一道门槛**：升完剩下的钱，还得买得起一个**打得穿又活得到**的兵。
+ *      没有这一条，"全升墙、一个兵不造"会被判成好棋——D-2-02 实测就是这样：
+ *      400 − 360 = 40，民兵买得起但过不了闸，等于把钱变成了墙。
  *
- *   ① **急**：按当前齐射，城 ≤2 轮就塌（1 轮 = 一轮所有能砸到它的敌人各砸一下）；
- *   ② **翻**：升完能多撑至少一轮（不然钱花了、结论没变 → "守不住就别升级"）；
- *   ③ **还有人**：升完剩下的钱，还买得起一个**打得穿又活得到**的兵。
- *      没有这一条，"全升墙、一个兵不造"会被判成好棋——实测 D-2-02 就是这样：
- *      400 − 360 = 40，连民兵都买得起但民兵过不了闸，等于把钱变成了墙。
+ * ③ 为什么留在这里而不是决定层：它要读采购门槛（`need.usable` / `need.survivable`），
+ * 那是计划层用 `previewAttack` 算出来的东西。决定层答不了这个问。
  *
- * ── 为什么门槛是"≤2 轮" ─────────────────────────────────────
+ * ── 为什么是"候选列表" ──────────────────────────────────────
  *
- * 更长的预测要模拟"对方补兵、我方补兵、谁先死"，那是战力求解器的事（P3 闸 C 之后）。
- * 两轮是**能用手上的数直接算出来**的最长窗口：这一轮 + 下一轮。
- *
- * 也**不在这里比"造兵 vs 升级"**：造兵能不能救，正常采购会去试；这一层只保证
- * "升级不会把造兵的路堵死"（条件 ③）。真正意义上的二选一（造兵更好还是升级更好）
- * 要模拟两支队伍的交换，那是战力求解器的事，不塞进这条闸里。
+ * 多城同时告急时，决定层给的是**优先序列**（撑得最少的那座在前）。
+ * 这里顺次验证，取第一个通过的——这样"第一座因为买不起兵被否"时，
+ * 还会去试第二座，行为和搬家之前一致。
  */
 function planUpgrade(
   s: GameState,
   world: World,
   need: Constraints['need'],
   gold: number,
-  spendCap: number | undefined,
-  horizonLeft: number | undefined,
+  plan: Decision['upgrade'],
 ): Constraints['upgrade'] {
-  /* 攒钱期（接管废墟的 save 阶段）不升级：那笔钱是重建费，动了就前功尽弃 */
-  if (spendCap !== undefined) return undefined;
-  /*
-   * **多城从第一天就按每座城算**（用户 2026-11-25 定），最后只交一个动作：
-   * 取"最快会塌的那座"（`rounds` 最小），同轮数取 id 小的。
-   * 单城局自然退化，不用为它写分支——多城以后不会再"一个一个改"。
-   */
-  let best: NonNullable<Constraints['upgrade']> | undefined;
-  for (const info of world.cities) {
-    const city = info.city;
-    /*
-     * 谁在威胁它：**两轮内能砸到它的都算**（射程内的立刻算；移动 + 射程以内的下一轮算）。
-     * 只算"已经贴脸"的话，"敌人已经走到门口"这一格永远轮不到升级。
-     */
-    const threat = world.foeCombat.filter((u) => {
-      const t = utype(s, u.type);
-      const reach = (t.move ?? 2) + (effectiveStats(s, u).range ?? 1) + 1;
-      return distToCity(u, city) <= reach;
-    });
-    if (threat.length === 0) continue;
-    /*
-     * 一轮齐射 = 每个敌人**每一拳**都砸在城上。`burst` 必须乘进去——
-     * 第一版漏了它，装甲车（多段 2）被当成 14/轮，实际 28/轮，于是
-     * "升级能多撑一轮"被算成了真的（P-1-04 实测：城在 T5 就塌了）。
-     */
-    const dmg0 = threat.reduce((n, u) => n + damageToCity(u, city, s) * attacksPerTurn(s, u), 0);
-    if (dmg0 <= 0) continue;
-    const rounds0 = Math.ceil(city.hp / dmg0);
-    if (rounds0 > 2) continue; /* 撑得过两轮 → 不叫应急 */
-
+  if (!plan) return undefined;
+  for (const cand of plan.candidates) {
+    const city = s.cities.find((c) => c.id === cand.cityId);
+    if (!city) continue;
+    /* ① 路线通不通（决定层查过一次，这里再查是为了不信任上游：状态可能已经变了） */
     const tgt = upgradeTargetOf(s, city);
     if (!tgt || tgt.cost === null || tgt.blocked) continue;
-    if (gold < tgt.cost) continue;
+    /* ② 钱够不够 */
+    if (gold < cand.cost) continue;
 
-    /* 升级后的样子：和 `doUpgrade` 逐条对齐（maxHp/armor 加差、hp 加同样多） */
-    const from = eraDef(city.era);
-    const dHp = tgt.era.cityMaxHp - from.cityMaxHp;
-    const dArmor = tgt.era.cityArmor - from.cityArmor;
-    const after: typeof city = {
-      ...city,
-      era: tgt.edge.to,
-      maxHp: city.maxHp + dHp,
-      hp: city.hp + dHp,
-      armor: city.armor + dArmor,
-    };
-    const dmg1 = threat.reduce((n, u) => n + damageToCity(u, after, s) * attacksPerTurn(s, u), 0);
-    const rounds1 = dmg1 > 0 ? Math.ceil(after.hp / dmg1) : Infinity;
-    if (rounds1 <= rounds0) continue; /* 升了不多撑一轮 → 白升 */
-
-    /* ③：升完得还剩一个"打得穿 + 活得到"的兵可造 */
-    const rest = gold - tgt.cost;
-    const pool = world
-      .affordableCombat(after, rest)
-      .filter((o) => !need || (need.usable.includes(o.type) && need.survivable.includes(o.type)));
-    if (pool.length === 0) continue;
-
-    const cand = {
-      cityId: city.id,
-      cost: tgt.cost,
-      rounds: rounds0,
-      why: `城 ${rounds0} 轮内会塌，升到${tgt.label}后能撑 ${rounds1} 轮，且还剩 ${rest} 金造得了${utype(s, pool[0]!.type).name}`,
-    };
-    if (!best || cand.rounds < best.rounds || (cand.rounds === best.rounds && cand.cityId < best.cityId)) {
-      best = cand;
+    /* ③ 救城才要"别把造兵的路堵死"；升代那条本来就是因为钱花不完才升的 */
+    if (plan.kind === 'rescue') {
+      const rest = gold - tgt.cost;
+      const after = upgradedCity(s, city);
+      if (!after) continue;
+      const pool = world
+        .affordableCombat(after, rest)
+        .filter((o) => !need || (need.usable.includes(o.type) && need.survivable.includes(o.type)));
+      if (pool.length === 0) continue;
+      return {
+        cityId: city.id,
+        cost: tgt.cost,
+        rounds: cand.rounds.now,
+        why: `城 ${cand.rounds.now} 轮内会塌，升到${tgt.label}后能撑 ${cand.rounds.after} 轮，且还剩 ${rest} 金造得了${utype(s, pool[0]!.type).name}`,
+      };
     }
+    return { cityId: city.id, cost: tgt.cost, rounds: 0, why: cand.why };
   }
-  /* 应急没触发 → 看**发展升级**（钱多到花不完）。见 `planUpgradeEcon` */
-  return best ?? planUpgradeEcon(s, world, gold, horizonLeft);
+  return undefined;
 }
 
-/**
- * **某一代能造的最强兵**（每格战力最高）。`era` 用假的城算，不改状态。
- *
- * "每格战力"就是 `unitWorth`——产兵格是一次性的，一格能打出多少才是瓶颈所在。
- */
-function bestPerCell(
-  s: GameState,
-  world: World,
-  city: City,
-  era: number,
-): { type: string; gold: number; worth: number } | undefined {
-  let best: { type: string; gold: number; worth: number } | undefined;
-  for (const o of world.affordableCombat({ ...city, era }, Number.MAX_SAFE_INTEGER)) {
-    /*
-     * **排除水兵**（2026-11-25 23:20 实测的坑）：`affordableCombat` 会返回楼船/炮艇
-     * （城边有点水就能造），而它们 worth 高（楼船 108）、只能在水上走。
-     * 第一版因此把"2 代 + 24 个楼船"算成了 2592 战力，比"3 代 + 34 个戟兵"（2550）还高，
-     * 于是 E-2-03 里 v4 升了两代就停手，去造一堆开不上岸的船。
-     */
-    if (utype(s, o.type).domain === 'water') continue;
-    const w = unitWorthOfType(s, o.type);
-    if (!best || w > best.worth) best = { type: o.type, gold: o.gold, worth: w };
-  }
-  return best;
-}
-
-/**
- * **发展升级**（P3 闸 B，2026-11-25 晚）：钱多到产兵格花不完 → 升代换更强的兵。
- *
- * ── 判据（用户 2026-11-25 逐条纠过的三个坑）──────────────────
- *
- * ① **产兵格不是常数 4**：`capacity` 现算——所有城的城格、去掉站着人的，
- *    多城和兵营自然都被算进来，不写死。
- * ② **"剩余手数"不是考试窗口**：用 `horizon.left = marchTurns(主力 → 敌城)`
- *    ——那是**从现在起还要走几手**，实战里 v4 本来就在算（`planHorizon`）。题目窗口不参与。
- *
- *    ⚠️ **2026-11-25（D2）修正**：这里原来写的是 `T - s.turn`，把"长度"当成"绝对回合号"减了
- *    一次手数——于是第 1 手少 1、第 6 手少 6，到第 T 手直接变 0、**闸门静默关掉**。
- *    现在 `horizon.left` 本身就是长度，**读者不许再减 `s.turn`**（同一个数只准一处定义）。
- * ③ **"花不完"要按每格战力算**，不是"买不起更贵的"：
- *
- *      每格战力随代上升（民兵 45 → 戟兵 75 → 步枪兵 90）
- *      每金战力随代下降（民兵 1.80 → 步枪兵 0.45）
- *
- *    所以钱不是瓶颈时，**同一条判据要切成"每格"**（和 2c 守城那条同源）：
- *    对每一代 e 算 `n = min(格数 × 剩余手数, 钱 ÷ 单价)`，取 `n × 每格战力` 最大的那一代。
- *    升过头会被自动否掉（单价涨得比战力快，n 掉下来）。
- *
- * ── 什么时候才轮到它 ────────────────────────────────────────
- *
- * 只在"**钱确实花不完**"时：`金 > 格数 × 剩余手数 × 当前代最强兵价`。
- * 钱够花的时候升级是浪费——那笔钱能变成兵。E-2-01（金 200、T=7、4 格）就是这样：
- * 200 < 4×7×150，永远不升。
- */
-function planUpgradeEcon(
-  s: GameState,
-  world: World,
-  gold: number,
-  horizonLeft: number | undefined,
-): Constraints['upgrade'] {
-  if (horizonLeft === undefined) return undefined;
-  const left = Math.max(0, Math.floor(horizonLeft));
-  if (left <= 0) return undefined;
-  /*
-   * **只在"还没有军队"时规划**（2026-11-25 23:30 实测的坑）。
-   *
-   * 每手重算会漂移：E-2-03 里第 1 手算"升 3 代最优"（34 个戟兵 2550），
-   * 但第 3 手再看时，剩余手数从 6 掉到 4（D2 之前那是因为误减了 `s.turn`；D2 之后
-   * 这个例子不再出现，但**沉没成本**那条根因还在，所以这道门等 D5 才拆），产能成了瓶颈（16 格），
-   * 于是"16 个戟兵 1200"输给"14 个步枪兵 1260"——它又升了一级。
-   * 反复几次就升到 5 代，钱花光、只造 11 个。
-   *
-   * 根因是**升级费是沉没成本，重新规划时它不在账上**，于是每一手都像"从零开始"、
-   * 都更喜欢更贵的兵。让它只规划一次：军队成型之后，钱该买兵，不该再改代。
-   */
-  if (world.myCombat.length > 0) return undefined;
-
-  let best: NonNullable<Constraints['upgrade']> | undefined;
-  let bestWorth = -1;
-  for (const info of world.cities) {
-    const city = info.city;
-    if (city.ruined) continue;
-    /* ① 产能现算：城格去掉站着人的（占满就造不了，别把它算成产能） */
-    const cap = Math.max(
-      1,
-      cityTiles(city).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length,
-    );
-    const now = bestPerCell(s, world, city, city.era);
-    if (!now) continue;
-
-    /* 钱够不够花：一手把全部格子造满要多少钱，乘剩余手数 */
-    const spendNow = cap * left * now.gold;
-    if (gold <= spendNow) continue; /* 钱花得完 → 不叫"钱多"，别升 */
-
-    let acc = 0;
-    let curEra = city.era;
-    let cur = { n: Math.min(cap * left, Math.floor(gold / now.gold)), worth: now.worth, gold: now.gold };
-    let curTotal = cur.n * cur.worth;
-    for (;;) {
-      const tgt = upgradeTargetOf(s, { ...city, era: curEra });
-      if (!tgt || tgt.cost === null || tgt.blocked) break;
-      if (gold < acc + tgt.cost) break;
-      const nextEra = tgt.edge.to;
-      const nb = bestPerCell(s, world, city, nextEra);
-      if (!nb) break;
-      acc += tgt.cost;
-      curEra = nextEra;
-      const n = Math.min(cap * left, Math.floor((gold - acc) / nb.gold));
-      const total = n * nb.worth;
-      if (total > curTotal) {
-        curTotal = total;
-        cur = { n, worth: nb.worth, gold: nb.gold };
-        /* 这一代更好 → 记下"下一步要升的那一级"的代价 */
-        bestWorth = total;
-        best = {
-          cityId: city.id,
-          cost: (() => {
-            const one = upgradeTargetOf(s, city);
-            return one && one.cost !== null ? one.cost : tgt.cost;
-          })(),
-          rounds: 0,
-          why: `钱花不完（${gold} > ${cap}格×${left}手×${now.gold}），升到第${curEra}代后这 ${left} 手能造 ${cur.n} 个${utype(s, nb.type).name}（每格 ${Math.round(nb.worth)}，现在 ${Math.round(now.worth)}）→ 战力 ${Math.round(curTotal)} 对 ${Math.round(cur.n * now.worth)}`,
-        };
-      }
-    }
-  }
-  void bestWorth;
-  return best;
-}
-
-/**
- * **发展期 T**（2026-11-25，P3 闸 C 的 C1 步）：主力到敌方目标城要几回合。
- *
- * ── 为什么是"回合"而不是"钱/产出" ────────────────────────────
- *
- * 发展升级不能写"永久收入比"：没有终点时经济的复利永远赢，会演变成"只造经济兵不出兵"。
- * 人类给的是一个**时间**——"发展到第 T 手"，因为再晚出发，对面就升完本了（低代打高代）。
- * 所以 T 是"我的主力最早能威胁到对面城"的回合数，它是**地图与地形的函数**，不是调参常量。
- *
- * ── 两种来源（用户 2026-11-25 定）──────────────────────────────
- *
- * ① `squad`：有**进攻编队**时，按它算。进攻编队 = `main` 队里目标是敌城、任务是出去的那支
- *    （march / siege / assemble）。不看"离敌城最近的那 80%"这种新口径——那会跟以后的
- *    侦查编队、建设编队混在一起。
- * ② `map`：**没有进攻编队时按地图算**——我方非废墟城 ↔ 敌方非废墟城的**最小步数**
- *    ÷ 当前代兵种移动力的众数。为什么必须有这条：只有"有编队才有 T"会成死循环——
- *    T 不存在 → 一直发展不造兵 → 一直没有进攻编队 → T 永远不存在。
- *    （`expand` 的局面恰恰就是这个状态，而发展期正是 `expand`。）
- *
- * ── 速度：整队取**最慢的兵** ──────────────────────────────────
- *
- * 快的必须等慢的，慢的不会因为队里有骑兵就变快。C1 第一版用 `world.marchTurns`
- * （内部固定按我方战斗兵 move 的**中位数**）给全队算，每个人得同一个数，`Math.max` 是空转。
- * 现在按每兵自己的 `effectiveStats(u).move` 折回合，再取最大（= 最后一个到的人）。
- *
- * 地图兜底那一路没有编队可看，用**当前代战斗兵移动力的众数**（并列取平均）——
- * 用户 2026-11-25 定。平均/中位数会被极端值拉偏，众数不会；统计量以后再调。
- *
- * C1/C2 只把它**算出来 + 打印**，不接任何判断；C3 的"投到第 k 手"才读它。
- */
 function horizonOfSquad(
   s: GameState,
   world: World,
@@ -751,59 +548,6 @@ function horizonOfSquad(
   return { left: Math.max(...each), squadId: main.id, cityId: city.id, n: each.length };
 }
 
-/**
- * 当前代战斗兵移动力的**众数**（并列取平均，四舍五入）。
- *
- * 用众数而不是平均数/中位数：一代里可能有侦察兵那种异常快、或者攻城器械那种异常慢的，
- * 平均数会被拉偏。这一代没有兵种数据时退回"≤ 这一代"的全体。
- */
-function eraModeMove(s: GameState, era: number): number {
-  const pick = (maxEra: number): number[] =>
-    Object.values(s.unitTypes)
-      .filter((d) => d.category === 'combat' && (d.era ?? 1) <= maxEra)
-      .map((d) => d.move ?? 1);
-  let moves = pick(era);
-  if (moves.length === 0) moves = pick(9);
-  if (moves.length === 0) return 2;
-  const count = new Map<number, number>();
-  for (const m of moves) count.set(m, (count.get(m) ?? 0) + 1);
-  let best = 0;
-  for (const c of count.values()) best = Math.max(best, c);
-  const tied = [...count.entries()].filter(([, c]) => c === best).map(([m]) => m);
-  return Math.max(1, Math.round(tied.reduce((a, b) => a + b, 0) / tied.length));
-}
-
-/**
- * **没有进攻编队时的 T**：双方非废墟城之间的最小步数 ÷ 当代众数移动力。
- *
- * 只算非废墟城：废墟格是已经拿下的地方，拿它当"要去打的目标"没意义。
- * 多远算多远——城之间的距离本来就在地图上写着，不需要编队。
- */
-function horizonOfMap(
-  s: GameState,
-  world: World,
-): { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined {
-  const mine = world.myCities.filter((c) => !c.ruined);
-  const foes = world.foeCities.filter((c) => !c.ruined);
-  if (mine.length === 0 || foes.length === 0) return undefined;
-  const era = Math.max(1, ...mine.map((c) => c.era ?? 1));
-  const move = eraModeMove(s, era);
-  let best: { left: number; fromCityId: string; cityId: string; move: number; steps: number } | undefined;
-  for (const a of mine) {
-    for (const b of foes) {
-      for (const p of cityTiles(a)) {
-        for (const q of cityTiles(b)) {
-          const steps = world.marchTurnsOf(p, q, 1);
-          if (!Number.isFinite(steps)) continue;
-          const left = Math.ceil(steps / move);
-          if (!best || left < best.left) best = { left, fromCityId: a.id, cityId: b.id, move, steps };
-        }
-      }
-    }
-  }
-  return best;
-}
-
 function planHorizon(
   s: GameState,
   world: World,
@@ -811,7 +555,8 @@ function planHorizon(
 ): Constraints['horizon'] {
   const sq = horizonOfSquad(s, world, squads);
   if (sq) return { source: 'squad', ...sq };
-  const mp = horizonOfMap(s, world);
+  /* 地图兜底那一路和 `world.developLeft()` 是同一个数（决定层也是读它） */
+  const mp = world.developLeft();
   if (mp) return { source: 'map', ...mp };
   return undefined;
 }
@@ -2262,7 +2007,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     captureTarget,
     transit,
     horizon,
-    upgrade: planUpgrade(s, world, need, gold, spendCap, horizon?.left),
+    upgrade: planUpgrade(s, world, need, gold, decision.upgrade),
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

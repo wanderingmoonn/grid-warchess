@@ -69,8 +69,20 @@ console.log('目标城：', v.decision.cityId ?? '（无）');
  * 升级（P3 闸 A/B）：这一手要不要升、升哪座城、为什么。
  * D2 之后 `why` 里的"×N 手"是**还能发展几手**（长度），不再是"第几手"。
  */
+/*
+ * 升级分两句话看（D4a）：
+ *   · 决定层说"要不要、先升哪座"——`decision.upgrade`；
+ *   · 计划层说"这一手执行得了吗"——`con.upgrade`（被否时决定层那句话仍然看得见，
+ *     这正是"为什么没升"要能读出来的意思）。
+ */
+const plan = v.decision.upgrade;
 console.log(
-  '升级：',
+  '升级（决定）：',
+  plan ? `${plan.kind} → ${plan.candidates.map((c) => `${c.cityId}/第${c.targetEra}代`).join('、')}` : '（不升）',
+  plan ? `· ${plan.candidates[0]!.why}` : '',
+);
+console.log(
+  '升级（执行）：',
   v.con.upgrade ? `${v.con.upgrade.cityId} · ${v.con.upgrade.cost} 金 · ${v.con.upgrade.why}` : '（这一手不升）',
 );
 console.log('\n队伍：');
