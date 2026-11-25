@@ -7,7 +7,7 @@
 
 阶段二：**P1 / P2 / P3-A / P3-B 完成**；**进行中：插队「D 决策链路归位」**（`docs/PLAN-V4-CHAIN-2026-11-25.md`，
 D1~D6）。**D1 ✅（`Decision.spend`）· D2 ✅（`horizon.left` 真长度）· D3 ✅（`world.cityStand`）·
-D4a ✅（`Decision.upgrade` 上移），下一步 D4b（应急闸换成 cityStand）**；**D 做完再回 P4 投送**
+D4 ✅（`Decision.upgrade` 上移 + 应急闸换成 `cityStand`），下一步 D5**；**D 做完再回 P4 投送**
 （`P-2-01`，底图 `E-2-04`：24×24、`seed 18`、城距 46 步）。
 
 **D 的纪律**：D1~D3 是搬家，读数必须**逐字节**一致（不是只看红绿）——先用

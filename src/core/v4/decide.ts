@@ -14,9 +14,8 @@
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
 import type { Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
-import { attacksPerTurn, cityTiles, damageToCity, distToCity, effectiveStats, utype } from '../rules.ts';
+import { cityTiles, effectiveStats, utype } from '../rules.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
-import { upgradedCity } from './world.ts';
 import type { GameState } from '../types.ts';
 
 /** 还没挂"钱怎么花"的决定（`withSpend` 的入参形状） */
@@ -128,66 +127,46 @@ function complete(s: GameState, world: World, d: BareDecision): Decision {
 }
 
 /**
- * **旧闸 A 的算术**（D4a 原样搬来，**D4b 会整块删掉**换成 `world.cityStand`）。
+ * **闸 A：救不救这座城**（D4b：输入换成 `world.cityStand`）。
  *
- * 为什么先搬旧的：D4a 是搬家，读数必须一字不变。这一段连同它的毛病
- * （半径硬切、曼哈顿距离、一律从第 1 轮起算）原样搬过来，才能证明
- * "位置变了、结论没变"；换口径是 D4b 的事，那时读数变了也能归因。
- */
-function rescueStand(
-  s: GameState,
-  world: World,
-  city: City,
-): { rounds0: number; rounds1: number; cost: number; targetEra: number; label: string } | undefined {
-  const threat = world.foeCombat.filter((u) => {
-    const t = utype(s, u.type);
-    const reach = (t.move ?? 2) + (effectiveStats(s, u).range ?? 1) + 1;
-    return distToCity(u, city) <= reach;
-  });
-  if (threat.length === 0) return undefined;
-  const dmg0 = threat.reduce((n, u) => n + damageToCity(u, city, s) * attacksPerTurn(s, u), 0);
-  if (dmg0 <= 0) return undefined;
-  const tgt = upgradeTargetOf(s, city);
-  if (!tgt || tgt.cost === null || tgt.blocked) return undefined;
-  const after = upgradedCity(s, city);
-  if (!after) return undefined;
-  const dmg1 = threat.reduce((n, u) => n + damageToCity(u, after, s) * attacksPerTurn(s, u), 0);
-  return {
-    rounds0: Math.ceil(city.hp / dmg0),
-    rounds1: dmg1 > 0 ? Math.ceil(after.hp / dmg1) : Infinity,
-    cost: tgt.cost,
-    targetEra: tgt.edge.to,
-    label: tgt.label,
-  };
-}
-
-/**
- * **闸 A：救不救这座城**（D4a 从 `planUpgrade` 搬来，判据一字未改）。
+ * 判据的两句话没变：城 ≤2 轮就塌、升完能多撑至少一轮。
+ * 变的是**数的来源**——原来用一份"半径硬切 + 曼哈顿距离 + 一律从第 1 轮开火"的算术，
+ * 现在读服务层的逐轮推进（`world.cityStand`）：
  *
- * 两条：城 ≤2 轮就塌（`rounds0 <= 2`）、升完能多撑至少一轮（`rounds1 > rounds0`）。
- * 按"最快会塌的那座"排（同轮数取 id 小的），**多城从第一天就按每座城算**。
+ *   · 隔水/隔山"看着近"的敌人不再被算成当回合就砸（Y-001：曼哈顿 4 格、实际 9 步）；
+ *   · 半径外正在赶来的敌人开始被计入（S-005：曼哈顿 9 格、实际 18 步）；
+ *   · `burst`（一回合多段）已经在 `cityStand` 里乘过，这里不用再管。
  *
+ * 排序不变：撑得最少的在前，同轮数取 id 小的；**多城从第一天就按每座城算**。
  * 升完还剩不剩一个打得穿的兵（原来的条件③）不在这里——那是可行性，留在计划层。
  */
 function rescueCandidates(s: GameState, world: World, gold: number): UpgradeCandidate[] {
   const out: UpgradeCandidate[] = [];
   for (const info of world.cities) {
     const city = info.city;
-    const st = rescueStand(s, world, city);
-    if (!st) continue;
-    if (st.rounds0 > 2) continue; /* 撑得过两轮 → 不叫应急 */
-    if (gold < st.cost) continue;
-    if (st.rounds1 <= st.rounds0) continue; /* 升了不多撑一轮 → 白升 */
+    const stand = world.cityStand(city);
+    if (!Number.isFinite(stand.rounds) || stand.rounds > 2) continue; /* 撑得过两轮 → 不叫应急 */
+    const tgt = upgradeTargetOf(s, city);
+    if (!tgt || tgt.cost === null || tgt.blocked) continue;
+    if (gold < tgt.cost) continue;
+    const after = stand.roundsAfterUpgrade;
+    if (after === undefined) continue;
+    if (!(after > stand.rounds)) continue; /* 升了不多撑一轮 → 白升 */
     out.push({
       cityId: city.id,
-      targetEra: st.targetEra,
-      cost: st.cost,
-      label: st.label,
-      rounds: { now: st.rounds0, after: st.rounds1 },
-      why: `城 ${st.rounds0} 轮内会塌，升到${st.label}后能撑 ${st.rounds1} 轮`,
+      targetEra: tgt.edge.to,
+      cost: tgt.cost,
+      label: tgt.label,
+      rounds: { now: stand.rounds, after },
+      why: `城 ${stand.rounds} 轮内会塌（威胁 ${stand.threats} 个，第 ${stand.firstAt} 回合开始挨打），升到${tgt.label}后能${roundsText(after)}`,
     });
   }
   return out.sort((a, b) => a.rounds.now - b.rounds.now || (a.cityId < b.cityId ? -1 : 1));
+}
+
+/** `Infinity` 不是给人看的：塌不了就说"塌不了" */
+function roundsText(n: number): string {
+  return Number.isFinite(n) ? `撑 ${n} 轮` : '撑到打不塌';
 }
 
 /**
