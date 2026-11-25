@@ -189,10 +189,13 @@ export function actFor(
         if (manhattan(u, home) > 2) {
           const spot = stepToward(s, u, { x: home.x, y: home.y });
           if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
-        } else if (u.acted || !attackableTargets(s, u).some((v) => v.owner !== world.me)) {
+        } else if (!attackableTargets(s, u).some((v) => v.owner !== world.me)) {
           /*
-           * **这一手已经打过了，就顺路进城**（引擎允许"打一次 + 走一段"）。
-           * 没打过但打得到 → 落下去走攻击分支，先把这一拳打出去再谈站位。
+           * **能打就打，打不到才进城**——这是二选一，不是两件事。
+           *
+           * 引擎里**攻击会同时置 `moved`**（`doAttack` 的 `attacker.moved = true`），
+           * 所以"先打一拳再走进城里"是**非法操作**，同一回合只能选一件。
+           * 选打：城里那 3 点护甲要拿一整拳去换，而拳是守城的全部产出。
            */
           const post = cityPostCell(s, world, con, u, home);
           if (post && (post.x !== u.x || post.y !== u.y)) {
