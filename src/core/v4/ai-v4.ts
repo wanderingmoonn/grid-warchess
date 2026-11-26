@@ -28,8 +28,8 @@ import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
 import { recruitPriceOf, utype } from '../rules.ts';
-import type { BandReport, Constraints, Decision, V4Memory } from './types.ts';
-import type { Action, GameState, PlayerId } from '../types.ts';
+import type { Band, BandReport, Constraints, Decision, V4Memory } from './types.ts';
+import type { Action, GameState, PlayerId, Unit } from '../types.ts';
 
 interface TurnCache {
   /** 缓存键：回合号 + 轮到谁 + 单位数 + 金币。变了就重算 */
@@ -98,9 +98,9 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     ...laneMemo(s, world, con, decision, mem, s.turn),
   };
   writeMemory(s, me, nextMem);
-  logLane(s, con, nextMem);
+  logLane(s, world, con, nextMem);
   cache = { key, world, decision, con, tried: new Set(), recruits: 0, combatRecruits: 0 };
-  logSquads(s, world.me, decision, con, nextMem);
+  logSquads(s, world.me, world, decision, con, nextMem);
   return cache;
 }
 
@@ -440,7 +440,7 @@ function waveBrief(w: NonNullable<V4Memory['waves']>[number]): string {
 
 let laneLoggedTurn = -1;
 
-function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
+function logLane(s: GameState, world: World, con: Constraints, mem: V4Memory): void {
   if (!process.env.V4_LANE_LOG) return;
   /* 一手只打一行：`currentView` 一手内会被重建多次（每花一笔钱一次） */
   if (laneLoggedTurn === s.turn) return;
@@ -473,7 +473,7 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
    * **每队一行**（W3.6 第 6 步）：掉的、到的、堵的、还有几手到。
    * 这几个数原来在回放里全是 0 占位，所以"哪一队在卡"只能靠猜。
    */
-  const reps = bandReports(s, con, mem);
+  const reps = bandReports(s, world, con, mem);
   if (reps.length > 0) {
     process.stderr.write(
       `[band] T=${s.turn} ` +
@@ -483,7 +483,8 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
               `${r.id}[${r.state === 'forming' ? '集' : (r.order ?? '?')}] ${r.alive}/${r.men}` +
               `${r.want > r.alive ? `(缺${r.want - r.alive})` : ''}` +
               ` 掉${r.lost} 到${r.arrived}${r.stuck ? ` 堵${r.stuck}` : ''}` +
-              `${r.turnsToTarget !== undefined ? ` 距${r.turnsToTarget}手` : ''}`,
+              `${r.turnsToTarget !== undefined ? ` 距${r.turnsToTarget}手` : ''}` +
+              `${r.narrow ? ` 窄${r.narrow.width}格@${r.narrow.at} 排${r.narrow.queue} 要${r.narrow.crossTurns}手` : ''}`,
           )
           .join(' · ') +
         '\n',
@@ -743,7 +744,7 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
     lineGap: memoryOf(s, me).lineGap ?? {},
     exchangeByCity: memoryOf(s, me).exchangeByCity ?? {},
     exchange: memoryOf(s, me).exchange ?? [],
-    bands: bandReports(s, v.con, memoryOf(s, me)),
+    bands: bandReports(s, v.world, v.con, memoryOf(s, me)),
     bandNeed: v.con.bandNeed,
   };
 }
@@ -767,6 +768,7 @@ export const V4_MAX_STEPS = AI_MAX_STEPS;
  */
 function bandReports(
   s: GameState,
+  world: World,
   con: Constraints,
   mem: V4Memory,
 ): BandReport[] {
@@ -789,12 +791,77 @@ function bandReports(
       stuck: w?.stuck ?? 0,
       arrived: w?.arrivedIds.length ?? 0,
       formedAt: b.formedAt,
+      narrow: bottleneckOf(s, world, b),
     };
   });
 }
 
-function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints, mem: V4Memory): void {
-  const reports = new Map(bandReports(s, con, mem).map((r) => [r.id, r]));
+/**
+ * **这条路最窄的一段在哪、几个人卡在那儿、要几手过去**（W4-4a，纯观测）。
+ *
+ * 走法：从队首顺着"到城的步数"一格一格往回走（`stepsFrom` 的距离场），
+ * 每格问一次 `corridorWidth`——它就是"这里能并排几格"，分队形时已经在用。
+ * 不在路上量几何，量的是"这批人实际要走的那条路"。
+ */
+function bottleneckOf(
+  s: GameState,
+  world: World,
+  b: Band,
+): BandReport['narrow'] {
+  const city = s.cities.find((c) => c.id === b.cityId);
+  if (!city) return undefined;
+  const units = b.unitIds
+    .map((id) => s.units.find((u) => u.id === id))
+    .filter((u): u is Unit => !!u);
+  if (units.length === 0) return undefined;
+  const size = city.size ?? 2;
+  const center = { x: city.x + Math.floor(size / 2), y: city.y + Math.floor(size / 2) };
+  const field = world.stepsFrom(center);
+  const at = (u: { x: number; y: number }): number => field[u.y * s.w + u.x] ?? Infinity;
+  const lead = [...units].sort((a, c) => at(a) - at(c))[0]!;
+  let cur = { x: lead.x, y: lead.y };
+  let best = { x: cur.x, y: cur.y, w: Infinity };
+  for (let i = 0; i < 80; i++) {
+    const d = at(cur);
+    /*
+     * 只量"路上"的最窄处：最后两格是城门口，城本身就把它夹窄了，
+     * 那不是路况（P-3-01 纯平原上会报出"窄 2 格"的假窄口）。
+     */
+    if (!Number.isFinite(d) || d <= 2) break;
+    let next: { x: number; y: number } | undefined;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = cur.x + dx;
+      const ny = cur.y + dy;
+      if (field[ny * s.w + nx] === d - 1) {
+        next = { x: nx, y: ny };
+        break;
+      }
+    }
+    if (!next) break;
+    /*
+     * **法向按"下一格"取，不按"朝城中心"取。**
+     *
+     * `corridorWidth` 是按"朝目标的符号"取法向的：斜着走时法向也是斜的，
+     * 于是桥面（实际 1 格宽）会量成 5 格（S-005 实测）。改成朝下一格，
+     * 法向就和这一段的实际走向垂直了。
+     */
+    /* 先量再走：`corridorWidth(p, toward)` 要的是"从 p 朝 toward"，顺序反了会得到 (0,0) */
+    const w = world.corridorWidth(cur, next);
+    cur = next;
+    if (w < best.w) best = { ...cur, w };
+  }
+  if (!Number.isFinite(best.w)) return undefined;
+  const queue = units.filter((u) => Math.abs(u.x - best.x) + Math.abs(u.y - best.y) <= 3).length;
+  return {
+    width: best.w,
+    at: `${best.x},${best.y}`,
+    queue,
+    crossTurns: Math.ceil(Math.max(1, queue) / Math.max(1, best.w)),
+  };
+}
+
+function logSquads(s: GameState, me: PlayerId, world: World, decision: Decision, con: Constraints, mem: V4Memory): void {
+  const reports = new Map(bandReports(s, world, con, mem).map((r) => [r.id, r]));
   const reps = con.squads.map((q) => {
     const r = reports.get(q.id);
     return {

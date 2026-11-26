@@ -584,6 +584,13 @@ export interface BandReport {
   arrived: number;
   /** 第几手成立的 */
   formedAt: number;
+  /**
+   * **这条路上最窄的一段**（W4-4a，2026-11-26；纯观测）。
+   *
+   * `width` = 最窄处能并排几格；`queue` = 卡在它前后 3 格内的自己人；
+   * `crossTurns` = 这批人要几手才能全过去（人 ÷ 宽度）。平地没有窄口就是 `undefined`。
+   */
+  narrow?: { width: number; at: string; queue: number; crossTurns: number };
 }
 
 /** 一条线的断档计数（W1.5）：前线 0 人、路上 0 人 = 送不上 */
