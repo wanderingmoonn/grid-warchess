@@ -1502,36 +1502,60 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => restIds.has(id)) }))
       .filter((b) => b.unitIds.length > 0);
     const inBand = new Set(live.flatMap((b) => b.unitIds));
-    const free = rest.filter((u) => !inBand.has(u.id));
-    const bands: Band[] = [...live];
-    /*
-     * ② **前面那队一出发，就组织下一队**（用户 2026-11-26 定的）。
-     *
-     * 之前的条件是"上一队全部展开在城下才组下一队"——那等于**等它打起来**，
-     * 而打起来的时候往往已经在死了，第二批再出发就来不及。
-     * 现在每手最多新组一队，规模用决定层给的 `men`；兵不够就先攒着，不一个一个人送。
-     */
-    /*
-     * 手上只剩 1 个兵也照样编队：那不是"一个一个送"，是**只剩这一个**。
-     * （P-1-01 实测：3 个兵里 2 个要守城、1 个站在关键格上，`rest` 只剩 1 个；
-     *   要求 ≥2 的话这 1 个永远不出门，一道采购题就变成"站着不动"。）
-     */
+    let free = rest.filter((u) => !inBand.has(u.id));
     const minSize = Math.max(1, decision.menMin ?? 1);
-    /*
-     * 前方一支编队都没有时，**剩几个就编几个**（那不是"一个一个送"，是只剩这些）；
-     * 已经有队伍在编时，才要求凑够一支的最小规模（`menMin`），避免新兵一个一个往上送。
+    const FORM_TIMEOUT = 10;
+
+    /**
+     * ② **收拢中的队伍继续吸收新兵**（学 v3 的 `squadTick`）。
+     *
+     * 不吸收的话会出现"走 2 人"：编成时手头只有 2 个兵，之后就再也补不进来，
+     * 队伍一直是残的，永远凑不够、永远不走。只补到 `want`，不许吸成巨型编队。
      */
-    if ((live.length === 0 && free.length >= 1) || free.length >= minSize) {
-      const cap = Math.max(1, Math.min(decision.men ?? free.length, free.length));
+    const forming = live.find((b) => (b.state ?? 'forming') === 'forming') ?? null;
+    if (forming && free.length > 0) {
+      const room = Math.max(0, (forming.want ?? forming.unitIds.length) - forming.unitIds.length);
       const pick = [...free]
         .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
-        .slice(0, cap);
+        .slice(0, room);
+      if (pick.length > 0) {
+        forming.unitIds.push(...pick.map((u) => u.id));
+        const taken = new Set(pick.map((u) => u.id));
+        free = free.filter((u) => !taken.has(u.id));
+      }
+    }
+
+    /**
+     * ③ **没有收拢中的队伍时，新组一队**（同一时刻只允许一支在收拢）。
+     *
+     * 前方一支都没有 → 剩几个编几个（不是滴灌，是只剩这些）；
+     * 已经有队伍 → 要凑够最小规模才开新队，免得一个兵一支队。
+     */
+    const bands: Band[] = [...live];
+    if (!bands.some((b) => (b.state ?? 'forming') === 'forming') && free.length >= (bands.length === 0 ? 1 : minSize)) {
+      const pick = [...free]
+        .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
+        .slice(0, Math.max(1, decision.men ?? free.length));
       bands.push({
         id: `${city.id}#${s.turn}`,
         cityId: city.id,
         formedAt: s.turn,
+        /* 编制人数 = 决定层给的目标；手头不够就先收拢，等超时再走 */
+        want: Math.max(pick.length, decision.men ?? pick.length),
+        state: 'forming',
         unitIds: pick.map((u) => u.id),
       });
+    }
+
+    /*
+     * ④ 状态推进：凑够编制就走；凑不够等满 `FORM_TIMEOUT` 也走（有多少走多少）。
+     * 只等"凑够"的话，钱不够时会永远不出兵——那和"没有编队"一样（v3 的 10 手超时）。
+     */
+    for (const b of bands) {
+      if ((b.state ?? 'forming') !== 'forming') continue;
+      if (b.unitIds.length >= (b.want ?? b.unitIds.length) || s.turn - b.formedAt >= FORM_TIMEOUT) {
+        b.state = 'marching';
+      }
     }
 
     for (const b of bands) {
@@ -1541,7 +1565,6 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         .filter((u): u is Unit => !!u);
       if (us.length === 0) continue;
       const etas = us.map((u) => world.marchTurns(u, city)).sort((a, b2) => a - b2);
-      const eta80 = etas[Math.min(etas.length - 1, Math.floor(etas.length * 0.8))] ?? Infinity;
       const eta = etas[etas.length - 1] ?? Infinity;
       const lead = [...us].sort((a, b2) => world.marchTurns(a, city) - world.marchTurns(b2, city))[0];
       const detour = lead ? world.marchTurns(lead, city) > manhattan(lead, city) + 2 : false;
@@ -1549,11 +1572,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
        * **没到齐先收拢**：编队是"一批人一起上去"，散着走会被各个击破。
        * 两回合内八成人能到城下就走（不让慢的拖住全队），否则先去集结点集合。
        */
-      /*
-       * 够一支完整编队的人数就走；不够就先收拢。第一队通常就是"手上全部"，
-       * 所以它照旧立刻出发（和 W3 之前一致）；只有后面补上来的小队会先集合。
-       */
-      const ready = us.length >= (decision.men ?? us.length) || eta80 <= 2;
+      /* 能走不能走，看编队自己的状态（W3.6）；不再拿"新队的目标人数"去卡老兵 */
+      const ready = (b.state ?? 'forming') === 'marching';
       squads.push({
         id: b.id,
         /* clear 段打人（march），siege 段砸城；没到齐先去集结点 */

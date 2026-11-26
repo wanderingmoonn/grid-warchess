@@ -499,6 +499,15 @@ export interface Band {
   cityId: string;
   formedAt: number;
   unitIds: string[];
+  /**
+   * **状态**（W3.6 第 1 步，学 v3）：`forming` 收拢 → `marching` 出发。
+   *
+   * 以前没有状态，靠"人数 >= 新队的目标"去判能不能走——名册只减不增，
+   * 掉一个人就永远判"没到齐"，于是整队卡在集结点（回放里显示"组"）。
+   */
+  state?: 'forming' | 'marching';
+  /** 这支队的**编制人数**（收拢时就按它吸收新兵；够了或超时就出发） */
+  want?: number;
 }
 
 /** 一条线的断档计数（W1.5）：前线 0 人、路上 0 人 = 送不上 */
