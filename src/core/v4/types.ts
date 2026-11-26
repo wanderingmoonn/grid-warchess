@@ -424,6 +424,19 @@ export interface Constraints {
   buildBand?: V4Memory['buildBand'];
   /** 架桥到了哪一段（只看日志用）：先占岸 / 工兵上 */
   bridgeStage?: 'seize' | 'build';
+  /**
+   * **这一手去造一个能铺桥的人**（W4-5a，2026-11-26）。
+   *
+   * 来历：全项目原来**没有任何一处会造建造单位**——采购只认 `category === 'combat'`，
+   * 而工兵是第三类（`builder`）。于是"要过河"这个决定只能空转：先头部队站到岸边，
+   * 桥一格都铺不出来（`G-16x16-era1` 实测，连续 22 手判"走不到、要架桥"，工兵 0 个）。
+   * 手工小局里工兵是**人手摆好**的（`P-2-03`），所以这个洞一直没被考出来。
+   *
+   * 谁给的：计划层（`constrain.ts` 的架桥分支）。它只做三件能数的判断——
+   * 城里造不造得出（引擎的 `produceAt` + 出兵格）、钱够不够、手上有没有工兵。
+   * 入口只负责把这个单发出去（同 `upgrade` 的写法）。
+   */
+  recruitBuilder?: { cityId: string; unitType: string };
   /** **采购要留出来的修桥钱**（这条路依赖桥时 = 一格桥价）；0 = 不用留 */
   reserveGold?: number;
   /**

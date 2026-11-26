@@ -672,6 +672,25 @@ export function aiNextActionV4(
      */
     const sp = view.decision.spend;
     /*
+     * **架桥先造人**（W4-5a，2026-11-26）：计划层给了"这城造这个工兵"，这里只发出去。
+     *
+     * 排在"照模式造兵"**之前**，也不看花钱模式：钱一旦被战斗兵吃掉，工兵就永远造不出来，
+     * 桥永远铺不了，决定会一直卡在"先占岸"（`G-16x16-era1` 就是这么输的）。
+     * 工兵造出来之后计划层自然不再下单（它只问"手上有几个工兵"）。
+     */
+    if (con.recruitBuilder) {
+      const rb: Action = {
+        type: 'RECRUIT',
+        cityId: con.recruitBuilder.cityId,
+        unitType: con.recruitBuilder.unitType,
+      };
+      if (usable(rb)) {
+        view.recruits += 1;
+        return rb;
+      }
+    }
+
+    /*
      * **采购按编队缺口发单**（W3.6 第 5 步，2026-11-26）。
      *
      * 试过"按编制封顶"（编制之和 + 一支预备队就停），**实测不行**：E-2-03 是一道

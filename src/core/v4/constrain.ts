@@ -11,7 +11,7 @@
  */
 import { boardIdOf, boardOf, tileOn } from '../board.ts';
 import { passable } from '../config.ts';
-import { attackableTargets, cityTiles, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
+import { attackableTargets, cityTiles, effectiveStats, previewAttack, produceAt, reachableTiles, recruitCost, recruitSpawnCells, threatTiles } from '../rules.ts';
 import { occupantAt, utype } from '../rules.ts';
 import { eraDef } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
@@ -1477,6 +1477,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   let outBandNeed: Constraints['bandNeed'];
   /** 在编的工兵队（架桥用；桥通了就不写，等于撤编） */
   let outBuildBand: Constraints['buildBand'];
+  /** 这一手去造一个能铺桥的人（架桥那条决定落到采购上；见 `Constraints.recruitBuilder`） */
+  let outRecruitBuilder: Constraints['recruitBuilder'];
   /** 决定层给这支编队的任务（W3.6 第 3c 步）：意图在这儿，走不走得通由下面判 */
   const taskOf = (bandId: string) => (decision.bandTasks ?? []).find((t) => t.bandId === bandId);
 
@@ -1967,6 +1969,44 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
           tactics: planTactics(s, pick, false),
         });
       }
+    }
+
+    /*
+     * **架桥要有人铺**（W4-5a，2026-11-26）：这条决定得落到"买一个能铺桥的人"上。
+     *
+     * 计划层只问三件能数的事，不问"值不值"：
+     *   · 城里造不造得出来 —— 引擎的 `produceAt`（时代/白名单/选卡）+ 出兵格有没有空；
+     *   · 钱够不够 —— `recruitCost`；
+     *   · 手上有没有 —— `world.myBuilders`。
+     *
+     * **有工兵就不下单**：否则每一手都买一个，钱全变成工兵。
+     * **挑最便宜的**：一架桥只要 8 点工，谁铺都是铺；钱省下来才是桥钱
+     * （同价再挑离渡口近的，少走几手、少挨几炮）。
+     *
+     * 排在这里（而不是 `stage === 'build'` 里面）：`build` 段的意思是"岸边有人了、
+     * 该工兵上了"，可**工兵得先有**。等岸边站满人才开始造，等于把整条链拖后 3~5 手；
+     * 而且 v4 原来就是在这里空转——22 手连着判"要架桥"，一个工兵都没造。
+     */
+    if (world.myBuilders.length === 0) {
+      const gold = s.players[world.me]?.gold ?? 0;
+      const pick = world.myCities
+        .filter((c) => !c.ruined)
+        .flatMap((c) =>
+          Object.values(s.unitTypes)
+            .filter((d) => d.category === 'builder' && (d.builds ?? []).includes('bridge'))
+            .filter((d) => produceAt(s, { kind: 'city', city: c }, d).ok)
+            .filter((d) => recruitSpawnCells(s, c.id, undefined, d.id).length > 0)
+            .map((d) => ({ cityId: c.id, unitType: d.id, cost: recruitCost(s, world.me, d) }))
+            .filter((x) => x.cost <= gold)
+            .map((x) => ({ ...x, turns: world.marchTurns({ x: c.x, y: c.y }, st) })),
+        )
+        .sort(
+          (a, b) =>
+            a.cost - b.cost ||
+            a.turns - b.turns ||
+            (a.cityId < b.cityId ? -1 : a.cityId > b.cityId ? 1 : 0),
+        )[0];
+      if (pick) outRecruitBuilder = { cityId: pick.cityId, unitType: pick.unitType };
     }
   } else if (decision.kind === 'defend' && city) {
     /*
@@ -2561,6 +2601,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     bands: outBands,
     buildBand: outBuildBand,
     bridgeStage: decision.kind === 'bridge' ? decision.bridge?.stage : undefined,
+    recruitBuilder: outRecruitBuilder,
     bandNeed: outBandNeed,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
