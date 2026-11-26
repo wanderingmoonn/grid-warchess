@@ -9,7 +9,7 @@
  *
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
-import { boardOf, boardIdOf } from '../board.ts';
+import { boardIdOf, boardOf, tileOn } from '../board.ts';
 import { passable } from '../config.ts';
 import { attackableTargets, cityTiles, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
 import { utype } from '../rules.ts';
@@ -1224,6 +1224,11 @@ function planMarch(
       /*
        * 窄道**整队交给打分层**（`stepToward`）：桥面一次过一个人，
        * 排队的事它本来就比自己再实现一遍做得好（S-005 的过河数就是这么保住的）。
+       *
+       * 试过在这里"按离城近的先动"定排队顺序（W4-4c，2026-11-26）：**净负**——
+       * S-001 从 25 手拖到 33 手、S-011 从 11 手变未分胜负。原因是打分层本来就按
+       * "离目标近的在前"派动作（`myCombat` 的排序），再插一层顺序反而打乱了它。
+       * 所以**这一层不排序**，只保留"桥上的人不算挡路"（见 `blockers`）。
        */
       continue;
     }
@@ -1444,8 +1449,27 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 于是谁都不去腾格子；而且主队人数虚高，`ready`（`ids.length >= want`）提前成立，队伍早发。
    * 这两个副作用都比"多一个任务名"贵。
    */
-  const blockers = world.myCombat.filter((u) => keepSet.has(u.y * s.w + u.x));
-  const rest = world.myCombat.filter((u) => !keepSet.has(u.y * s.w + u.x));
+  /*
+   * **正在过桥的人不算"挡路"**（W4-4c，2026-11-26；用户的想法）。
+   *
+   * 关键格驱离（`yield`）的本意是"别把产兵口/桥头堵死"。但它把**正在过桥的人**
+   * 也一起赶下来了：一个兵踩上桥面 → 下一手它在关键格上 → 被摘出队伍去"让开"，
+   * 走一步下桥；再下一手又从头排队。过桥因此被拖慢（`P-4-01` 实测：v1 11 手打空，
+   * v4 41 手还没打空）。
+   *
+   * 现在只驱离**不准备过桥的**：已经在某支进攻编队名册里、且目标还是敌城的人，
+   * 允许它站在桥上继续走；其余（守家的、让位的、散兵）照旧驱离。
+   * 只对**桥面**放宽，城格（产兵口）不动——堵产兵口是真的不出兵。
+   */
+  const marching = new Set(
+    (mem?.bands ?? [])
+      .filter((b) => world.foeCities.some((c) => c.id === b.cityId))
+      .flatMap((b) => b.unitIds),
+  );
+  const onBridge = (u: Unit): boolean => tileOn(s, boardIdOf(u), u.x, u.y)?.terrain === 'bridge';
+  const passing = (u: Unit): boolean => marching.has(u.id) && onBridge(u);
+  const blockers = world.myCombat.filter((u) => keepSet.has(u.y * s.w + u.x) && !passing(u));
+  const rest = world.myCombat.filter((u) => !keepSet.has(u.y * s.w + u.x) || passing(u));
 
   /*
    * 两座以上城同时受威胁 → 分兵，每城一支队。
