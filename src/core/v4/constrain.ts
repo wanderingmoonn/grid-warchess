@@ -1591,15 +1591,20 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 现在决定层一次算完（`decision.spend`），这里和打分层都只是转发。
    */
   /*
-   * **给修桥留一笔钱**（W4-4d-3，2026-11-26）。
+   * **有过桥计划才攒修桥钱**（W4-4d-3，2026-11-26；条件按用户口径收窄）。
    *
-   * 只要"这条路依赖桥"（忽略桥面就走不到城），就预留一格桥的钱。
    * 不预留的话，钱会在"打得顺"的那几手全变成兵，桥一塌一分钱拿不出来
-   * （`P-4-03` 实测：900 金在桥通后的 10 手里造了 8 个兵，桥被打掉后修不起，
-   * 决定层明明已经回到 `bridge`、工兵队也在，就是没钱建）。
+   * （`P-2-03` 实测：900 金在桥通后的 10 手里造了 8 个兵，桥被打掉后修不起）。
+   * 但也不能只要"这座城隔着河"就永远扣着一格桥钱——**守城、发展期没有过桥的打算**，
+   * 扣着只是让兵造不出来。所以预留要求两件事同时成立：
+   *
+   *   1. 这条路**真的依赖桥**（`needsBridge`：忽略桥面就走不到）；
+   *   2. 这一手的决定**正在过桥**：`bridge`（占岸/架桥）或者 `press`（桥已通、正在推）。
    */
   const bridgePrice = utype(s, 'bridge').cost ?? 45;
-  const reserveGold = city && world.needsBridge(city) ? bridgePrice : 0;
+  const bridgePlan =
+    !!city && (decision.kind === 'bridge' || decision.kind === 'press');
+  const reserveGold = bridgePlan && city && world.needsBridge(city) ? bridgePrice : 0;
   const spendCap =
     decision.spend.mode === 'save'
       ? decision.spend.cap
