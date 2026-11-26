@@ -1565,28 +1565,42 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      * 不吸收的话会出现"走 2 人"：编成时手头只有 2 个兵，之后就再也补不进来，
      * 队伍一直是残的，永远凑不够、永远不走。只补到 `want`，不许吸成巨型编队。
      */
-    const forming = live.find((b) => (b.state ?? 'forming') === 'forming') ?? null;
-    if (forming && free.length > 0) {
-      const room = Math.max(0, (forming.want ?? forming.unitIds.length) - forming.unitIds.length);
+    /*
+     * **所有收拢中的队伍一起吸收新兵/散兵**（2026-11-26，用户："直接允许任意支队伍同时接收"）。
+     *
+     * 以前只让"第一支还在收拢的队"吃人（`live.find(...)`），于是第二、第三支队
+     * 只能干等——S-001 实测：20 个人被切成 9+9+2，后面两队一直补不上来。
+     * v3 那边不限支数，几支队可以同时在路上，这也是它快的原因之一。
+     *
+     * 每支队仍然只补到自己的 `want`：不封顶会吸成巨型编队（v3 的 `Q2 seed32` 实测）。
+     * 顺序按"离城近的队先补"，避免远处的队把近处的人抢走。
+     */
+    const formingAll = live.filter((b) => (b.state ?? 'forming') === 'forming');
+    for (const f of formingAll) {
+      if (free.length === 0) break;
+      const room = Math.max(0, (f.want ?? f.unitIds.length) - f.unitIds.length);
+      if (room === 0) continue;
       const pick = [...free]
         .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
         .slice(0, room);
-      if (pick.length > 0) {
-        forming.unitIds.push(...pick.map((u) => u.id));
-        forming.men = (forming.men ?? forming.unitIds.length - pick.length) + pick.length;
-        const taken = new Set(pick.map((u) => u.id));
-        free = free.filter((u) => !taken.has(u.id));
-      }
+      if (pick.length === 0) continue;
+      f.unitIds.push(...pick.map((u) => u.id));
+      f.men = (f.men ?? f.unitIds.length - pick.length) + pick.length;
+      const taken = new Set(pick.map((u) => u.id));
+      free = free.filter((u) => !taken.has(u.id));
     }
 
     /**
-     * ③ **没有收拢中的队伍时，新组一队**（同一时刻只允许一支在收拢）。
+     * ③ **新组一队**：不再"同一时刻只许一支收拢"（2026-11-26）。
      *
      * 前方一支都没有 → 剩几个编几个（不是滴灌，是只剩这些）；
-     * 已经有队伍 → 要凑够最小规模才开新队，免得一个兵一支队。
+     * 已经有队伍 → 要凑够最小规模才开新队（`menMin` = 打死一个守军），
+     * 所以**不会出现"一人一批"**：一个人凑不出最小规模，就不会单独成队。
+     *
+     * 每手最多新建一支（`free` 是这一手能派的人，建完就没了）。
      */
     const bands: Band[] = [...live];
-    if (!bands.some((b) => (b.state ?? 'forming') === 'forming') && free.length >= (bands.length === 0 ? 1 : minSize)) {
+    if (free.length >= (bands.length === 0 ? 1 : minSize)) {
       const pick = [...free]
         .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
         .slice(0, Math.max(1, decision.men ?? free.length));
