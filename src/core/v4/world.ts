@@ -1124,6 +1124,19 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   const bridgeOutlook = (city: City): BridgeOutlook => {
     const hit = crossCache.get(city.id);
     if (hit) return hit;
+    /*
+     * **废墟和自己的城不适用架桥**（2026-11-26，用户问"有没有排除废墟"）。
+     *
+     * "走不到"只可能有两种原因：地形挡死（水/山），或者我根本没有单位。
+     * **废墟不是原因**——废墟的地形是可通行的，走得到；它要办的是接管，不是架桥。
+     * 加这一条是防"调用方传错城"：`world.foeCities` 里**是含废墟的**（只按 owner 过滤），
+     * 谁哪天直接拿它喂进来，就会把"这座城已经是废墟"误报成"走不到、要架桥"。
+     */
+    if (city.ruined === true || (city.owner && city.owner === me)) {
+      const out: BridgeOutlook = { reach: true, why: '废墟/自己的城，不适用架桥' };
+      crossCache.set(city.id, out);
+      return out;
+    }
     if (canReach(city)) {
       const out: BridgeOutlook = { reach: true, why: '走得到，不用架桥' };
       crossCache.set(city.id, out);
