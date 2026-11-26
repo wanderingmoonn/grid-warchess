@@ -53,6 +53,7 @@ import { eraDef, passable } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import { EARTH, idxOn } from '../board.ts';
 import {
+  attackableTargets,
   attacksPerTurn,
   cityTiles,
   damageToCity,
@@ -255,12 +256,15 @@ export interface World {
    * 一波到底几手（见 `docs/DESIGN-LANES-WAVES-2026-11-26.md` 的 W1）。
    *
    * 口径：
-   *   · `front`：`ids` 里到任意一格城的**步数 ≤ 自己的射程**（这一回合就能开火）；
-   *   · `road`：走得到但还够不着（在途）；
+   *   · `front`：`ids` 里到任意一格城的**步数 ≤ 自己的射程**（这一回合就能攻城）；
+   *   · `engaged`：原地就能打到**某个敌兵**的人数。和 `front` 一起回答"这支队算不算进入交战"——
+   *     只要一方成立就是。为什么不能只看 `front`：进城前先和守军接火是常态，
+   *     那时候按 `front` 会判成"还在路上"（2026-11-26 用户指出）。
+   *   · `road`：走得到但两个都不成立（在途）；
    *   · `make`：空产兵格 × 钱够几个（取小）。这是"每回合能造出几个"的上限，
    *     钱和格子任一不够都算。
    */
-  laneStats(ids: string[], city: City): { front: number; road: number; make: number };
+  laneStats(ids: string[], city: City): { front: number; road: number; make: number; engaged: number };
   /**
    * **升级阶梯**（D4a）：从当前代往上，每一代"累计升级价 + 每格最强的兵 + 单价"。
    *
@@ -902,6 +906,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       const tiles = cityTiles(city);
       let front = 0;
       let road = 0;
+      let engaged = 0;
       for (const id of ids) {
         const u = s.units.find((x) => x.id === id);
         if (!u) continue;
@@ -909,15 +914,18 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         const field = stepFrom({ x: u.x, y: u.y });
         let steps = Infinity;
         for (const t of tiles) steps = Math.min(steps, field[t.y * s.w + t.x] ?? Infinity);
-        if (!Number.isFinite(steps)) continue;
-        if (steps <= range) front += 1;
-        else road += 1;
+        const atCity = Number.isFinite(steps) && steps <= range;
+        if (atCity) front += 1;
+        /* 原地能打到敌兵 = 已经接火（不算"走一步再打"，那会偏乐观） */
+        const hitting = attackableTargets(s, u).length > 0;
+        if (hitting) engaged += 1;
+        if (!atCity && !hitting) road += 1;
       }
       const free = tiles.filter((p) => !s.units.some((x) => x.x === p.x && x.y === p.y)).length;
       const price = bestPerCell(city)?.gold ?? 0;
       const gold = s.players[me]?.gold ?? 0;
       const make = price > 0 ? Math.min(free, Math.floor(gold / price)) : 0;
-      return { front, road, make };
+      return { front, road, make, engaged };
     },
     corridorWidth(p, toward) {
       const dx = Math.sign(toward.x - p.x);

@@ -184,8 +184,8 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
  * 引擎不报"击杀事件"，所以只能**逐手差分**：上一次见到的单位这一手没了，就按它的
  * **造价**记一笔（不按残血——残血的兵换掉对方一个贵的，仍然算赚，这是用户定的口径）。
  *
- * 已知不精确：`DISBAND`（自己拆兵）也会被算成"损失"。v4 只在推城时禁 DISBAND，
- * 其余时候拆兵极少；影子阶段先这样，等数出来再看要不要单独标。
+ * `DISBAND`（自己拆兵）不会被误算：**v4 根本不拆兵**（`grep DISBAND src/core/v4/` 只有
+ * 一处 `forbid`）——用户 2026-11-26 指出。以后如果真加了拆兵，要在这里补一条排除。
  *
  * ── 波次 ──────────────────────────────────────────────────
  *
@@ -233,8 +233,9 @@ function laneMemo(
   if (main && (main.order === 'march' || main.order === 'siege')) {
     if (!wave || wave.cityId !== main.cityId) {
       wave = { id: `${main.cityId}-${turn}`, cityId: main.cityId!, startedTurn: turn, men: main.unitIds.length };
-    } else if (wave.arrivedTurn === undefined && (con.lane?.front ?? 0) > 0) {
-      wave = { ...wave, arrivedTurn: turn, arrivedMen: con.lane!.front };
+    } else if (wave.arrivedTurn === undefined && (con.lane?.front ?? 0) + (con.lane?.engaged ?? 0) > 0) {
+      /* "到"= 能打到城的 + 已经接火的（守军先打起来也算到了） */
+      wave = { ...wave, arrivedTurn: turn, arrivedMen: con.lane!.front + con.lane!.engaged };
     }
   }
   return { unitSeen: now, exchange: ex, wave };
@@ -259,7 +260,7 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
   const loss = ex.reduce((n, x) => n + x.loss, 0);
   const w = mem.wave;
   process.stderr.write(
-    `[lane] T=${s.turn} front=${lane?.front ?? '-'} road=${lane?.road ?? '-'} make=${lane?.make ?? '-'}` +
+    `[lane] T=${s.turn} front=${lane?.front ?? '-'} 接火=${lane?.engaged ?? '-'} road=${lane?.road ?? '-'} make=${lane?.make ?? '-'}` +
       ` · 波${w ? ` ${w.cityId} 出发T${w.startedTurn} ${w.men}人${w.arrivedTurn ? ` → T${w.arrivedTurn} 到${w.arrivedMen}人(${w.arrivedTurn - w.startedTurn}手)` : ' 在路上'}` : ' 无'}` +
       ` · 交换(${ex.length}手) 赚${gain} 亏${loss}\n`,
   );
@@ -479,7 +480,7 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   /** 决定层说要升、但计划层否掉了——为什么（D6） */
   upgradeBlocked?: string;
   /** W1 影子观测：前线的 / 在途的 / 这回合能造几个 */
-  lane?: { front: number; road: number; make: number };
+  lane?: { front: number; road: number; make: number; engaged: number };
   /** W1 影子观测：这一波（出发 → 第一次能打到城） */
   wave?: V4Memory['wave'];
   /** W1 影子观测：最近 6 手的金币交换 */
