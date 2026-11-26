@@ -679,7 +679,12 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
        */
       const home = prev.cityId ? s.cities.find((c) => c.id === prev.cityId) : undefined;
       const atGate = home ? world.foeEta({ x: home.x, y: home.y }) <= 2 : false;
-      if (home && (atGate || !world.defensible(home).hold)) {
+      /*
+       * 这里仍然用**旧口径的等价物**（`state === 'lose'` = 连"在场 + 能回来的"都不够）。
+       * 不能换成 `state !== 'hold'`：那会让"需要增援"也把守势无限续期，
+       * 而"要不要继续守"是另一件事（下一步再单独改，一次只动一处）。
+       */
+      if (home && (atGate || world.defensible(home).state === 'lose')) {
         return complete(s, world, mem, {
           kind: 'defend',
           untilTurn: prev.untilTurn,
@@ -746,8 +751,25 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     );
   const losing = threatened
     .map((c) => ({ info: c, out: world.defensible(c.city, committedTo(c.city.id)) }))
-    .filter((x) => !x.out.hold)
-    .sort((a, b) => a.out.rounds - b.out.rounds || a.info.foeEta - b.info.foeEta);
+    /*
+     * **"挡得住"不够用了，要有"需要增援"这一档**（2026-11-26 22:00，用户定）。
+     *
+     * 原来这里写的是 `!out.hold`，而 `hold` 数的是**窗口内能赶回来的所有人**——
+     * 于是"外面推得顺"反而让守军身价虚高，判据永远说"挡得住"，一次都不派人回。
+     * 现在 `state` 把"在场"和"能回来"分开：只有**在场就够**才叫 hold；
+     * "在场不够、加上能回来的够"是 `reinforce`——这一档必须整队召回。
+     */
+    .filter((x) => x.out.state !== 'hold')
+    /*
+     * 先救最快塌的；同样急的时候，"回去也守不住"的排在"需要增援"前面
+     * （前者更危急，而且需要更果断的动作）。
+     */
+    .sort(
+      (a, b) =>
+        a.out.rounds - b.out.rounds ||
+        (a.out.state === b.out.state ? 0 : a.out.state === 'lose' ? -1 : 1) ||
+        a.info.foeEta - b.info.foeEta,
+    );
   if (losing.length > 0) {
     const { info, out } = losing[0]!;
     return complete(s, world, mem, {
@@ -756,7 +778,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       cityId: info.city.id,
       reason: `${info.city.id} ${
         Number.isFinite(out.rounds) ? `${out.rounds} 轮内会塌` : '正在被压'
-      }：${out.why}，先守`,
+      }（${out.state === 'reinforce' ? '需要增援' : '回去也守不住'}）：${out.why}，先守`,
     });
   }
 

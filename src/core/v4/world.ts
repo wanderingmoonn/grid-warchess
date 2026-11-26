@@ -154,19 +154,42 @@ export interface CityStand {
 }
 
 /**
- * **这座城守得住吗**（W3.6 第 3b 步，2026-11-26）。
+ * **这座城守得住吗**（W3.6 第 3b 步，2026-11-26；2026-11-26 22:00 拆成三档）。
  *
  * 用户定的口径：判据是"**现有守城部队 + 这座城自己的产能，挡不住**"，
  * 不是"全军总身价被压到对手的几成"——后者是全军比较，回答不了"这一座城要不要救"。
+ *
+ * ── 为什么要三档（2026-11-26 22:00 用户定）────────────────────────
+ *
+ * 原来只有"守得住 / 守不住"两档，而"守得住"里数的是**窗口内能赶回来的所有人**。
+ * 结果是一个自证的循环：外面的兵越多、离城越近 → 守军身价越高 → 判"挡得住" →
+ * 决定层不派人回去 → 城掉到 0（实测 900 局：城只剩 33 血时还写着"守军 448 ≥ 来犯 121"，
+ * 28 手城塌，`defend` 一次都没出现）。
+ *
+ * 现在把"人在哪"拆开数，中间加一档：
+ *   · **在场**（1 手内能到）：这一档才配叫"挡得住"；
+ *   · **需要增援**：在场不够，但**在场 + 窗口内能赶回来的**够 —— 这一档必须派人回去，
+ *     而且要**整队回**（编队任务从"打某城"改成"守某城"），不是稀稀拉拉调个人；
+ *   · **守不住**：连"在场 + 能回来的"都不够。
+ *
+ * 三档各自对应一个动作，判据全是数：hold → 不动；reinforce → 召回编队；lose → 召回（保命）。
  */
+export type DefendState = 'hold' | 'reinforce' | 'lose';
+
 export interface DefendOutlook {
-  /** 挡得住 = 守军身价 + 窗口内能补出来的身价 ≥ 来犯身价 */
+  /** 三档：守得住 / 需要增援 / 守不住 */
+  state: DefendState;
+  /** 兼容字段：`state === 'hold'` */
   hold: boolean;
   /** 城还能撑几轮（`Infinity` = 没人打得塌） */
   rounds: number;
   /** 判据用的时间窗（轮）——只数这个窗口内赶得到的人，产能也只在这个窗口内累计 */
   window: number;
-  /** 这个窗口内赶得到的我方战斗单位身价 */
+  /** **已经在城边**（1 手内能到）的守军身价 */
+  onSiteWorth: number;
+  /** 1 手以外、窗口内能赶回来的**增援**身价（不含在场的那部分） */
+  incomingWorth: number;
+  /** 场上所有人的身价之和（在场 + 增援） */
   defWorth: number;
   /** 这个窗口内能造出来的兵折成身价 */
   makeWorth: number;
@@ -1000,9 +1023,12 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     const stand = cityStand(city);
     if (stand.threats === 0) {
       return {
+        state: 'hold',
         hold: true,
         rounds: Infinity,
         window: 0,
+        onSiteWorth: 0,
+        incomingWorth: 0,
         defWorth: 0,
         makeWorth: 0,
         foeWorth: 0,
@@ -1011,37 +1037,80 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       };
     }
     const window = Math.min(6, Number.isFinite(stand.rounds) ? Math.max(1, stand.rounds) : 6);
-    const inWindow = (u: Unit): boolean =>
-      !skip?.has(u.id) && world.marchTurns(u, city) <= window;
-    const defWorth = myCombat.reduce((n, u) => n + (inWindow(u) ? unitWorth(s, u) : 0), 0);
-    const foeWorth = foeCombat.reduce((n, u) => n + (inWindow(u) ? unitWorth(s, u) : 0), 0);
+    /*
+     * **两边用同一把尺量"现场"和"会来的"**（2026-11-26 22:10 改）。
+     *
+     * 第一版只给我方分了"在场 / 能回"，敌方仍然只按窗口求和——于是出现
+     * "来犯 0、在场 0"这种比较，`0 > 0` 不成立，判据反而把一座**暂时没人打**的城
+     * 判成"需要增援"（`T-2-01` 实测：敌人还在 10 手外，第 3 手就被召回守城，
+     * 接管废墟的事被顶掉，五道题一起翻红）。
+     *
+     * 现在两边都分成 `here`（1 手内能到）和 `coming`（1 手以外、窗口内能到）：
+     *   · 门口稳 = 门口没敌人，或者我方在场比敌方在场多；
+     *   · 算上援军能赢 = 双方在场 + 会来的，我方占优（这条就是原来的 `hold`）。
+     */
+    const bucket = (units: Unit[]): { here: number; coming: number } => {
+      let here = 0;
+      let coming = 0;
+      for (const u of units) {
+        if (skip?.has(u.id)) continue;
+        const t = world.marchTurns(u, city);
+        if (t <= 1) here += unitWorth(s, u);
+        else if (t <= window) coming += unitWorth(s, u);
+      }
+      return { here, coming };
+    };
+    const mine = bucket(myCombat);
+    const foe = bucket(foeCombat);
+    const onSiteWorth = mine.here;
+    const incomingWorth = mine.coming;
+    const defWorth = mine.here + mine.coming;
+    const foeWorth = foe.here + foe.coming;
     const cell = bestPerCell(city);
     const price = cell?.gold ?? 0;
     const afford = price > 0 ? Math.floor((s.players[me]?.gold ?? 0) / price) : 0;
     const supply = price > 0 ? Math.min(makeAt(city) * window, afford) : 0;
     const makeWorth = supply * (cell?.worth ?? 0);
     /*
-     * **判据：守军自己要占优，才算挡得住。**
+     * **三档（2026-11-26 22:00 用户定；22:10 修好"来犯 0"那一版）**
      *
-     * 产能只回答"守不守得住"（差多少、能不能补上），**不进这个不等式**——
-     * 理由有两条，都是实测出来的：
-     *   · 产能是"只要你肯花钱就有"的承诺：把它算进来，钱多就永远"挡得住"，
-     *     于是既不回头也不放弃（P-1-01：300 金能造 3 个戟兵，判成挡得住 →
-     *     去发展造农民 → 两个戟兵把老家拆了）；
-     *   · 打平也算挡不住：守方没有任何余量时，正确的动作是收队，不是继续在外面打
-     *     （D-1-01：开局 4 对 4，判"挡得住"继续攻城，6 手丢城）。
+     * ① `hold`：门口稳（没人打，或在场比对方多）**且**算上援军能赢 → 不用回；
+     * ② `reinforce`：门口不稳，但把能赶回来的人算上能赢 → **必须整队回去**；
+     * ③ `lose`：算上援军也赢不了 → 回去也守不住，但城不能白送。
+     *
+     * 另加一条地板：`rounds === Infinity`（按现在这股火力打不塌）→ 一律 `hold`。
      */
-    const hold = defWorth > foeWorth;
-    const money = `守军 ${Math.round(defWorth)} + ${window} 轮补 ${supply} 个（${Math.round(makeWorth)}）`;
+    const stableNow = foe.here === 0 || mine.here > foe.here;
+    const winsEventually = defWorth > foeWorth;
+    const state: DefendState = !Number.isFinite(stand.rounds)
+      ? 'hold'
+      : stableNow && winsEventually
+        ? 'hold'
+        : winsEventually
+          ? 'reinforce'
+          : 'lose';
+    const money =
+      `在场 ${Math.round(onSiteWorth)} + 能回 ${Math.round(incomingWorth)}` +
+      `（${window} 轮补 ${supply} 个 / ${Math.round(makeWorth)}）`;
+    const cmp = !Number.isFinite(stand.rounds)
+      ? '打不塌'
+      : state === 'hold'
+        ? '稳'
+        : state === 'reinforce'
+          ? '＋能回才 ≥'
+          : '<';
     return {
-      hold,
+      state,
+      hold: state === 'hold',
       rounds: stand.rounds,
       window,
+      onSiteWorth,
+      incomingWorth,
       defWorth,
       makeWorth,
       foeWorth,
       threats: stand.threats,
-      why: `${money} ${hold ? '≥' : '<'} 来犯 ${Math.round(foeWorth)}`,
+      why: `${money} ${cmp} 来犯 ${Math.round(foeWorth)}`,
     };
   };
 
