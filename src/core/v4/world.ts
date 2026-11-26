@@ -1513,6 +1513,24 @@ export function buildWorld(s: GameState, me: PlayerId): World {
 
           let best: EconSpot | null = null;
           for (const d of defs) {
+            /*
+             * **城格只派给"城里产出最高"的经济兵种**（2026-11-26 22:55，用户定）。
+             *
+             * 挨打的时候城格不在 `keepClear` 里（守军要站进去吃护甲），于是它们也成了
+             * 岗位候选；只要这个兵种在城里有产出（`unitYieldAt > 0`），就会被派进去占着产兵格。
+             * 原版里 `farmer/herder/lumberjack` 城里是 0，`planter` 6、`agribusiness` 32——
+             * 全都不是"城里最高"（最高分别是 7 / 8 / 12 / 20 / 48），所以**原版一个都不该进城**。
+             * 扩展包里有"城里最高"的经济单位（那是它的设计），这类照旧允许。
+             *
+             * 判据是"这一类兵种的城市场地是不是它的最高产地"，与当前局面无关：
+             * 不拍系数、也不看"别处还有没有空位"。
+             */
+            if (t === 'city') {
+              const inc = (d.incomeByTerrain ?? {}) as Record<string, number | undefined>;
+              const onCity = inc.city ?? 0;
+              const top = Math.max(0, ...Object.values(inc).map((v) => v ?? 0));
+              if (onCity <= 0 || onCity < top) continue;
+            }
             const g = unitYieldAt(s, { type: d.id } as never, x, y).gold ?? 0;
             if (g <= 0) continue;
             const raw = walk.get(d.id)![k]!;
