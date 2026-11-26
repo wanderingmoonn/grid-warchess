@@ -1496,11 +1496,32 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      * 也很容易退化成 v1 那种"全军朝一个地方动"。
      */
     const restIds = new Set(rest.map((u) => u.id));
-    /** ① 在编的、还活着的编队（死掉的人从名册里去掉，名册空了就撤编） */
+    const aliveIds = new Set(world.myCombat.map((u) => u.id));
+    /**
+     * ① **在编的编队**：名册只因为"人死了"缩小，**不因为站错格子被踢出去**。
+     *
+     * 以前的写法是"名册 ∩ rest"，而 `rest` 里没有两种人：
+     *   · 站在关键格上的（产兵格、城门口、桥头）——新兵出生就在产兵格上，
+     *     于是"刚编进队的兵下一手就消失了"；队里的人走过关键格也会被静默删掉。
+     * `rest` 只是"这一手能派出去的人"，**不是"编队还剩下谁"**——这两件事被混成了一个。
+     *
+     * 撤编（W3.6 第 2 步）：只有三种情况撤
+     *   · 全灭；· 存活不到编制的四成（v3 的 `SQUAD_DISBAND_RATIO`）；
+     *   · 没有敌城可打（决定层根本不会走到 press，等于自动作废）。
+     */
     const live: Band[] = (mem?.bands ?? [])
       .filter((b) => b.cityId === city.id)
-      .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => restIds.has(id)) }))
-      .filter((b) => b.unitIds.length > 0);
+      .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => aliveIds.has(id)) }))
+      .filter((b) => b.unitIds.length > 0)
+      /*
+       * "存活不到四成"只对**已经出发**的队生效：收拢中的队本来就小，
+       * 按四成判会把刚成军的两三个人立刻判死，于是每手重建一支新队（ID 一直变）。
+       */
+      .filter(
+        (b) =>
+          (b.state ?? 'forming') === 'forming' ||
+          b.unitIds.length / Math.max(1, b.want ?? b.unitIds.length) >= 0.4,
+      );
     const inBand = new Set(live.flatMap((b) => b.unitIds));
     let free = rest.filter((u) => !inBand.has(u.id));
     const minSize = Math.max(1, decision.menMin ?? 1);
@@ -1540,8 +1561,12 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         id: `${city.id}#${s.turn}`,
         cityId: city.id,
         formedAt: s.turn,
-        /* 编制人数 = 决定层给的目标；手头不够就先收拢，等超时再走 */
-        want: Math.max(pick.length, decision.men ?? pick.length),
+        /*
+         * 编制人数：**前线一支队伍都没有时，编多少就是多少**（这一手就是全部家当，
+         * 没有等的理由，等下去只是让敌人先到）；已经有队在打时，才按决定层的目标
+         * 慢慢收拢（后面补上来的小队不该一个一个上）。
+         */
+        want: bands.length === 0 ? pick.length : Math.max(pick.length, decision.men ?? pick.length),
         state: 'forming',
         unitIds: pick.map((u) => u.id),
       });
@@ -1559,10 +1584,15 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     }
 
     for (const b of bands) {
-      const ids = b.unitIds;
+      /*
+       * 这一手**能派出去的**只是名册里不在关键格上、也没被留作守城的人；
+       * 名册本身不变——站错格子的兵下一手还会回来（它只是这一手去让开）。
+       */
+      const ids = b.unitIds.filter((id) => restIds.has(id));
       const us = ids
         .map((id) => s.units.find((u) => u.id === id))
         .filter((u): u is Unit => !!u);
+      /* 全队这一手都在让位 / 守城：不撤编，等下一手 */
       if (us.length === 0) continue;
       const etas = us.map((u) => world.marchTurns(u, city)).sort((a, b2) => a - b2);
       const eta = etas[etas.length - 1] ?? Infinity;
