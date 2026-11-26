@@ -382,6 +382,23 @@ function lineLedger(s: GameState, mem: V4Memory | undefined, city: City): LineLe
  * `min(standing, …)` 是硬上限：手上没有那么多兵就是没有。
  * `max(2, …)` 是下限：一个兵不叫一批。
  */
+/**
+ * **一批至少要几个人**：凑得够打死一个守军（最厚守军的血 ÷ 我方单发）。
+ *
+ * 这是"不要一个一个送"的下限。少于它，一批连一个守军都打不掉，分批没有意义。
+ */
+function killOneNeed(s: GameState, world: World): number {
+  const guards = s.units.filter((u) => u.owner !== world.me && utype(s, u.type).category !== 'economy');
+  const hardest = guards.reduce<((typeof guards)[number] | undefined)>(
+    (best, u) => (!best || u.hp > best.hp ? u : best),
+    undefined,
+  );
+  const dmg = hardest
+    ? world.myCombat.reduce((n, u) => Math.max(n, previewAttack(s, u, hardest).toDefender), 0)
+    : 0;
+  return hardest && dmg > 0 ? Math.ceil(hardest.hp / dmg) : 2;
+}
+
 function batchMen(
   s: GameState,
   world: World,
@@ -398,7 +415,19 @@ function batchMen(
    * 到货速度每张图都不一样，写死一个数迟早出错。所以只在**这条线自己量出来之后**
    * 才分批；没量出来之前按老行为全送——第一批本身就是那次测量。
    */
-  if (waves.length === 0) return Math.max(1, standing);
+  /*
+   * **没有实测数据时用"一半"当默认规模**（用户 2026-11-26）：
+   * 送一半、留一半，下一队马上就能组起来；不是"全送"（那样没有第二队），
+   * 也不是写死一个绝对值（到货速度每张图不一样）。
+   */
+  if (waves.length === 0) {
+    /*
+     * **第一队就是手上全部**（和 W3 之前一样）：开局还没有任何战斗烈度可参考，
+     * 这时候拆一半上，只会让第一拳变软（X-2-01 实测：第 1 手该收掉的人收不掉）。
+     * 后面的队伍才按 `menMin` 从新造的兵里凑——那时候已经有数据可看了。
+     */
+    return Math.max(1, standing);
+  }
   let arrived = 0;
   let turns = 0;
   for (const w of waves) {
@@ -419,15 +448,7 @@ function batchMen(
    * 下限取"最厚守军的血 ÷ 我方单发"：少于这个数，一批连一个守军都打不掉，
    * 分批就没有意义。
    */
-  const guards = s.units.filter((u) => u.owner !== world.me && utype(s, u.type).category !== 'economy');
-  const hardest = guards.reduce<((typeof guards)[number] | undefined)>(
-    (best, u) => (!best || u.hp > best.hp ? u : best),
-    undefined,
-  );
-  const dmg = hardest
-    ? world.myCombat.reduce((n, u) => Math.max(n, previewAttack(s, u, hardest).toDefender), 0)
-    : 0;
-  const need = hardest && dmg > 0 ? Math.ceil(hardest.hp / dmg) : 2;
+  const need = killOneNeed(s, world);
   /*
    * **留多少人当预备队，取决于这段时间能补多少人**（`supply` = 每回合能造几个 × 期限）。
    *
@@ -569,8 +590,13 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
           kind: 'press',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
-          /* 每批重算（W3）：上一批打光了，下一批该多大由现在的到货率说了算 */
-          men: batchMen(s, world, mem, line, world.myCombat.length, supplyPerHorizon(world)),
+          /*
+           * **规模在一次决定期内不变**。每手重算会越算越小：第一队走了以后
+           * 到货率掉到 0，下一队就变成 1 个人（W3 实测的死循环）。
+           * 要调整规模，等下一次决定（开战之后有了烈度数据）再调。
+           */
+          men: prev.men ?? batchMen(s, world, mem, line, world.myCombat.length, supplyPerHorizon(world)),
+          menMin: prev.menMin ?? killOneNeed(s, world),
           reason: inherit(prev.reason),
         });
       }
@@ -697,6 +723,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         untilTurn: s.turn + horizon,
         cityId: target.id,
         men: batchMen(s, world, mem, target, world.myCombat.length, supplyPerHorizon(world)),
+        menMin: killOneNeed(s, world),
         reason: `${ledgerText(target, ledger)}；${
           guards.length > 0 ? `${target.id} 周围还有 ${guards.length} 个守军，先清场` : `${target.id} 城下已清空，开始攻城`
         }`,

@@ -1,0 +1,460 @@
+{
+  "kind": "exam-actions",
+  "exam": null,
+  "seed": 5,
+  "at": "2026-11-26T05:05:11.543Z",
+  "dropped": 0,
+  "actions": [
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 7,
+      "y": 12,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 7,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u15",
+      "x": 7,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 7,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 8,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 8,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 7,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 7,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 6,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 6,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 6,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 6,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u6",
+      "x": 2,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u5",
+      "x": 1,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u11",
+      "x": 10,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 9,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 9,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 9,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 10,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 9,
+      "y": 12,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 9,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 8,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 8,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 8,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u15",
+      "x": 9,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 8,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "hussar",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "hussar",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "hussar",
+      "by": "A"
+    },
+    {
+      "type": "RECRUIT",
+      "cityId": "c1",
+      "unitType": "hussar",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 12,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u12",
+      "targetId": "u21",
+      "x": 13,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 11,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u9",
+      "targetId": "u21",
+      "x": 13,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u16",
+      "x": 11,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u16",
+      "targetId": "u21",
+      "x": 13,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u8",
+      "x": 11,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u8",
+      "targetId": "u20",
+      "x": 13,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u15",
+      "x": 11,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u15",
+      "targetId": "u20",
+      "x": 13,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 11,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u20",
+      "x": 13,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u13",
+      "x": 10,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u13",
+      "targetId": "u19",
+      "x": 13,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 10,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u10",
+      "x": 10,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u14",
+      "x": 10,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u14",
+      "targetId": "u21",
+      "x": 13,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u18",
+      "x": 11,
+      "y": 12,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u23",
+      "x": 6,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u25",
+      "x": 6,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u22",
+      "x": 5,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u24",
+      "x": 5,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "A"
+    },
+    {
+      "type": "END_TURN",
+      "by": "B"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u12",
+      "x": 14,
+      "y": 11,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u9",
+      "x": 13,
+      "y": 10,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u9",
+      "targetId": "u19",
+      "x": 13,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u7",
+      "x": 12,
+      "y": 9,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u7",
+      "targetId": "u19",
+      "x": 13,
+      "y": 8,
+      "by": "A"
+    },
+    {
+      "type": "MOVE",
+      "unitId": "u17",
+      "x": 13,
+      "y": 7,
+      "by": "A"
+    },
+    {
+      "type": "ATTACK",
+      "unitId": "u17",
+      "targetId": "u19",
+      "x": 13,
+      "y": 8,
+      "by": "A"
+    }
+  ]
+}

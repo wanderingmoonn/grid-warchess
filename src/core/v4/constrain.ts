@@ -1505,21 +1505,24 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     const free = rest.filter((u) => !inBand.has(u.id));
     const bands: Band[] = [...live];
     /*
-     * ② **什么时候新组一队：前面的队都已经到城下（或全战死）了。**
+     * ② **前面那队一出发，就组织下一队**（用户 2026-11-26 定的）。
      *
-     * 为什么不是"全战死才组"：一队打到最后剩一两个卡在半路，后面就永远不出人了（S-001 实测）。
-     * 为什么不是"每手都组"：新造的兵一手编一队，又回到一人一批的滴灌。
-     * 现在这个条件的意思是：**上一队已经全部展开在城下 → 下一队从后面顶上来**，
-     * 这样"前一波在打、后一波在路上"能同时成立。
+     * 之前的条件是"上一队全部展开在城下才组下一队"——那等于**等它打起来**，
+     * 而打起来的时候往往已经在死了，第二批再出发就来不及。
+     * 现在每手最多新组一队，规模用决定层给的 `men`；兵不够就先攒着，不一个一个人送。
      */
-    const anyOnRoad = live.some((b) =>
-      b.unitIds.some((id) => {
-        const u = s.units.find((x) => x.id === id);
-        return !!u && !world.contacts([id], city).length;
-      }),
-    );
-    if (!anyOnRoad && free.length > 0) {
-      const cap = Math.max(2, Math.min(decision.men ?? free.length, free.length));
+    /*
+     * 手上只剩 1 个兵也照样编队：那不是"一个一个送"，是**只剩这一个**。
+     * （P-1-01 实测：3 个兵里 2 个要守城、1 个站在关键格上，`rest` 只剩 1 个；
+     *   要求 ≥2 的话这 1 个永远不出门，一道采购题就变成"站着不动"。）
+     */
+    const minSize = Math.max(1, decision.menMin ?? 1);
+    /*
+     * 前方一支编队都没有时，**剩几个就编几个**（那不是"一个一个送"，是只剩这些）；
+     * 已经有队伍在编时，才要求凑够一支的最小规模（`menMin`），避免新兵一个一个往上送。
+     */
+    if ((live.length === 0 && free.length >= 1) || free.length >= minSize) {
+      const cap = Math.max(1, Math.min(decision.men ?? free.length, free.length));
       const pick = [...free]
         .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
         .slice(0, cap);
@@ -1538,13 +1541,24 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         .filter((u): u is Unit => !!u);
       if (us.length === 0) continue;
       const etas = us.map((u) => world.marchTurns(u, city)).sort((a, b2) => a - b2);
+      const eta80 = etas[Math.min(etas.length - 1, Math.floor(etas.length * 0.8))] ?? Infinity;
       const eta = etas[etas.length - 1] ?? Infinity;
       const lead = [...us].sort((a, b2) => world.marchTurns(a, city) - world.marchTurns(b2, city))[0];
       const detour = lead ? world.marchTurns(lead, city) > manhattan(lead, city) + 2 : false;
+      /*
+       * **没到齐先收拢**：编队是"一批人一起上去"，散着走会被各个击破。
+       * 两回合内八成人能到城下就走（不让慢的拖住全队），否则先去集结点集合。
+       */
+      /*
+       * 够一支完整编队的人数就走；不够就先收拢。第一队通常就是"手上全部"，
+       * 所以它照旧立刻出发（和 W3 之前一致）；只有后面补上来的小队会先集合。
+       */
+      const ready = us.length >= (decision.men ?? us.length) || eta80 <= 2;
       squads.push({
         id: b.id,
-        /* clear 段打人（march），siege 段砸城 */
-        order: decision.stage === 'clear' ? 'march' : 'siege',
+        /* clear 段打人（march），siege 段砸城；没到齐先去集结点 */
+        order: ready ? (decision.stage === 'clear' ? 'march' : 'siege') : 'assemble',
+        at: ready ? undefined : assemblePoint(s, world, city.id),
         unitIds: ids,
         cityId: city.id,
         want: ids.length,
