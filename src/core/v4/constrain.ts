@@ -2048,8 +2048,21 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      */
     const restIds = new Set(rest.map((u) => u.id));
     const aliveIds = new Set(world.myCombat.map((u) => u.id));
-    const out = world.defensible(city);
-    const deadline = Number.isFinite(out.rounds) ? Math.max(1, out.rounds) : Infinity;
+    /*
+     * **要守的城可能不止一座**（2026-11-26 23:00，分兵）。
+     *
+     * `decision.cityId` 是最急的那座，`holdAlso` 是同一手也要人的其余几座。
+     * 单城局面下 `guards` 只有一座，下面的分支和以前逐字节一样。
+     */
+    const guards = [city, ...(decision.holdAlso ?? [])]
+      .map((c) => (typeof c === 'string' ? s.cities.find((x) => x.id === c) : c))
+      .filter((c): c is City => !!c && c.ruined !== true);
+    /** 这个人离哪座要守的城最近（按真实步数，不是直线） */
+    const guardOf = (u: Unit): City =>
+      guards.reduce(
+        (best, c) => (world.marchTurns(u, c) < world.marchTurns(u, best) ? c : best),
+        guards[0]!,
+      );
     const bands = liveBandsOf(mem, null, aliveIds);
     for (const b of bands) {
       const target = s.cities.find((c) => c.id === b.cityId);
@@ -2060,15 +2073,19 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       const us = ids
         .map((id) => s.units.find((u) => u.id === id))
         .filter((u): u is Unit => !!u);
+      /* 整队回**离它最近的那座**要守的城（分兵时不再一律回 `city`） */
+      const dest = guards.length > 1 ? guardOf(us[0]!) : city;
+      const destOut = world.defensible(dest);
+      const destDeadline = Number.isFinite(destOut.rounds) ? Math.max(1, destOut.rounds) : Infinity;
       /* 全队一起走：取最慢的那个（骑兵不能把步兵丢在后面） */
-      const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, city)), 0);
+      const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, dest)), 0);
       const task = taskOf(b.id);
-      if (eta <= deadline) {
+      if (eta <= destDeadline) {
         squads.push({
           id: b.id,
           order: task?.order ?? 'hold',
           unitIds: ids,
-          cityId: task?.cityId ?? city.id,
+          cityId: task?.cityId ?? dest.id,
           /* 召回：先回城（S-004 的规矩），所以只给集火、不给挪位 */
           tactics: planTactics(s, ids, false),
         });
@@ -2083,10 +2100,23 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         });
       }
     }
-    /* 不在编队里的兵（刚造的、守家的）照旧收回城下 */
+    /* 不在编队里的兵（刚造的、守家的）收回城下；分兵时各回各的近的那座 */
     const inBand = new Set(bands.flatMap((b) => b.unitIds));
-    const recallIds = rest.filter((u) => !inBand.has(u.id)).map((u) => u.id);
-    if (recallIds.length > 0) {
+    const loose = rest.filter((u) => !inBand.has(u.id));
+    if (guards.length > 1) {
+      for (const g of guards) {
+        const ids = loose.filter((u) => guardOf(u).id === g.id).map((u) => u.id);
+        if (ids.length === 0) continue;
+        squads.push({
+          id: `hold-${g.id}`,
+          order: 'hold',
+          unitIds: ids,
+          cityId: g.id,
+          tactics: planTactics(s, ids, false),
+        });
+      }
+    } else if (loose.length > 0) {
+      const recallIds = loose.map((u) => u.id);
       squads.push({
         id: 'recall',
         order: 'hold',

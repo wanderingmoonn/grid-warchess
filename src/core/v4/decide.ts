@@ -689,6 +689,8 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
           kind: 'defend',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
+          /* 分兵名单跟着这一手一起续期，否则"守 A 时看不见 B"的老毛病又回来了 */
+          ...(prev.holdAlso && prev.holdAlso.length > 0 ? { holdAlso: prev.holdAlso } : {}),
           reason: inherit(prev.reason),
         });
       }
@@ -772,13 +774,24 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     );
   if (losing.length > 0) {
     const { info, out } = losing[0]!;
+    /*
+     * **同时需要增援的城不止一座 → 一起交给计划层分兵**（2026-11-26 23:00）。
+     *
+     * 一手只能点一座城，于是两路同时压过来时它只救一边（`D-3-01`：两城全丢）。
+     * 最急的那座进 `cityId`，其余按急迫排进 `holdAlso`；
+     * **只有一座需要增援时这里必须是空**，单城局面一个字都不该变。
+     */
+    const also = losing.slice(1).map((x) => x.info.city.id);
     return complete(s, world, mem, {
       kind: 'defend',
       untilTurn: s.turn + horizon,
       cityId: info.city.id,
+      ...(also.length > 0 ? { holdAlso: also } : {}),
       reason: `${info.city.id} ${
         Number.isFinite(out.rounds) ? `${out.rounds} 轮内会塌` : '正在被压'
-      }（${out.state === 'reinforce' ? '需要增援' : '回去也守不住'}）：${out.why}，先守`,
+      }（${out.state === 'reinforce' ? '需要增援' : '回去也守不住'}）：${out.why}，先守${
+        also.length > 0 ? `（另有 ${also.join('/')} 也要人）` : ''
+      }`,
     });
   }
 
