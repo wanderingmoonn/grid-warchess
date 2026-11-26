@@ -14,6 +14,7 @@
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
 import type { BandTask, Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
+import { unitWorth } from './world.ts';
 import { cityTiles, effectiveStats, previewAttack, utype } from '../rules.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import type { GameState } from '../types.ts';
@@ -471,77 +472,40 @@ function killOneNeed(s: GameState, world: World): number {
   return hardest && dmg > 0 ? Math.ceil(hardest.hp / dmg) : 2;
 }
 
-function batchMen(
-  s: GameState,
-  world: World,
-  mem: V4Memory | undefined,
-  city: City,
-  standing: number,
-  supply: number,
-): number {
-  const waves = (mem?.waves ?? []).filter((w) => w.cityId === city.id && w.arrivedIds.length > 0);
+function batchMen(s: GameState, world: World, standing: number): number {
   /*
-   * **没有实测数据就不设上限**（全送）。
+   * **一批几个人：学 v3 的两条口径**（用户 2026-11-26："看看 v3 怎么处理编队上限"）。
    *
-   * 一开始这里写死 8（= 1.33 人/手 × 6，实测均值）。用户 2026-11-26 指出：
-   * 到货速度每张图都不一样，写死一个数迟早出错。所以只在**这条线自己量出来之后**
-   * 才分批；没量出来之前按老行为全送——第一批本身就是那次测量。
-   */
-  /*
-   * **没有实测数据时用"一半"当默认规模**（用户 2026-11-26）：
-   * 送一半、留一半，下一队马上就能组起来；不是"全送"（那样没有第二队），
-   * 也不是写死一个绝对值（到货速度每张图不一样）。
-   */
-  if (waves.length === 0) {
-    /*
-     * **第一队就是手上全部**（和 W3 之前一样）：开局还没有任何战斗烈度可参考，
-     * 这时候拆一半上，只会让第一拳变软（X-2-01 实测：第 1 手该收掉的人收不掉）。
-     * 后面的队伍才按 `menMin` 从新造的兵里凑——那时候已经有数据可看了。
-     */
-    return Math.max(1, standing);
-  }
-  let arrived = 0;
-  let turns = 0;
-  for (const w of waves) {
-    const first = w.arrivals.findIndex((n) => n > 0);
-    const last = w.arrivals.length - 1;
-    arrived += w.arrivedIds.length;
-    turns += Math.max(1, last - Math.max(0, first) + 1);
-  }
-  const rate = arrived / Math.max(1, turns);
-  const useful = Math.max(1, Math.round(rate * DECIDE_HORIZON));
-  /*
-   * **下限：凑得够打死一个守军**。
+   * v3 的做法是两层，都是量出来的：
+   *   ① **总配额** `6 + 8 × clamp((兵力比 − 0.7) / 0.9)` → 6~14 人。
+   *      下限 6 是"4 人的编队打不动有守军的城"（Q4 从 5-1-0 掉到 2-3-1）；
+   *      上限 14 是"再多也展不开"。
+   *   ② **每队规模看目标城的守军**（`planNeed`：空城 6 / 突破 9 / 屯兵 8 / 过河 6）。
+   *      12 人那版实测要"攒满才出发"，Q4 反而更差，改成 9。
    *
-   * 不加这条会掉进一个死循环：到货率只数"第一次进前线的人"，被打死的人不计，
-   * 所以**越打不过，量出来的到货率越低，下一批就越小**——P-2-01 实测从 10 人
-   * 一路缩到 1 人一批，六批全填进去了。
-   *
-   * 下限取"最厚守军的血 ÷ 我方单发"：少于这个数，一批连一个守军都打不掉，
-   * 分批就没有意义。
+   * v4 原来的 `men` 是"手上剩多少就编多少"，长局里会涨到 27~29，收拢 10 多手。
+   * 这里换成上面两条，**下限仍然是"打死一个守军"**（够打是硬要求）。
    */
   const need = killOneNeed(s, world);
-  /*
-   * **留多少人当预备队，取决于这段时间能补多少人**（`supply` = 每回合能造几个 × 期限）。
-   *
-   * 产能是 0 的时候一个人都不留：后面根本不会有人来，扣着兵只是让前线更薄
-   * （S-001 实测：18 个兵按 8 个一批送，40 手打不完）。产能 12 的时候最多留 12 个顶上来。
-   */
-  return Math.min(standing, Math.max(2, need, Math.max(useful, standing - Math.max(0, supply))));
-}
 
-/**
- * **这 6 手能补几个兵** = 每回合能造几个 × 期限。
- *
- * 产能读的是自家城这一手的真实值（空格 × 钱买得起几个），不是"钱除以单价"的估算。
- * 钱不够时它自然掉到 0——那意味着**后面不会有人来**，这时候扣着兵不派没有任何好处。
- */
-function supplyPerHorizon(world: World): number {
-  const home = world.myCities[0];
-  if (!home) return 0;
-  const ids = world.myCombat.map((u) => u.id);
-  const make = world.laneStats(ids, home).make;
-  return make * DECIDE_HORIZON;
+  /*
+   * 守军 = **看得见的全部敌战斗兵**，不是"6 手内走得到城的那些"。
+   *
+   * 按距离筛会漏掉隔河/隔远的守军（S-001 的 8 个守军在对岸，`marchTurns > 6`
+   * 全被筛掉 → 判成空城 → 只派 6 人 → 打不动）。v3 用的是"这座城的守军价值"，
+   * 也不看距离。
+   */
+  const guardWorth = world.foeCombat.reduce((n, u) => n + unitWorth(s, u), 0);
+  const mine = world.myCombat;
+  const perUnit = mine.length > 0 ? mine.reduce((n, u) => n + unitWorth(s, u), 0) / mine.length : 0;
+  /* 势均力敌要几个人；空城按 v3 的下限 6 */
+  const parity = guardWorth > 0 && perUnit > 0 ? Math.ceil(guardWorth / perUnit) : 0;
+  /* v3 的总配额：6~14，按兵力比（人数） */
+  const ratio = mine.length / Math.max(1, world.foeCombat.length);
+  const x = Math.min(1, Math.max(0, (ratio - 0.7) / 0.9));
+  const cap = Math.round(6 + 8 * x);
+  const mission = Math.min(cap, Math.max(6, parity));
+  return Math.min(standing, Math.max(need, mission));
 }
 
 /** 账本的一句话（进决定理由，回放里能直接读出来） */
@@ -667,7 +631,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
            * 到货率掉到 0，下一队就变成 1 个人（W3 实测的死循环）。
            * 要调整规模，等下一次决定（开战之后有了烈度数据）再调。
            */
-          men: prev.men ?? batchMen(s, world, mem, line, world.myCombat.length, supplyPerHorizon(world)),
+          men: prev.men ?? batchMen(s, world, world.myCombat.length),
           menMin: prev.menMin ?? killOneNeed(s, world),
           reason: inherit(prev.reason),
         });
@@ -832,7 +796,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         stage: guards.length > 0 ? 'clear' : 'siege',
         untilTurn: s.turn + horizon,
         cityId: target.id,
-        men: batchMen(s, world, mem, target, world.myCombat.length, supplyPerHorizon(world)),
+        men: batchMen(s, world, world.myCombat.length),
         menMin: killOneNeed(s, world),
         reason: `${ledgerText(target, ledger)}；${
           guards.length > 0 ? `${target.id} 周围还有 ${guards.length} 个守军，先清场` : `${target.id} 城下已清空，开始攻城`

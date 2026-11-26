@@ -1590,6 +1590,11 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       const pick = [...free]
         .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
         .slice(0, Math.max(1, decision.men ?? free.length));
+      /* 这一手能补几个兵：0 = 后面不会有人来，编制就不能写得比手上多 */
+      const canFill = world.laneStats(
+        world.myCombat.map((u) => u.id),
+        world.myCities[0] ?? city,
+      ).make;
       bands.push({
         id: `${city.id}#${s.turn}`,
         cityId: city.id,
@@ -1598,8 +1603,15 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
          * 编制人数：**前线一支队伍都没有时，编多少就是多少**（这一手就是全部家当，
          * 没有等的理由，等下去只是让敌人先到）；已经有队在打时，才按决定层的目标
          * 慢慢收拢（后面补上来的小队不该一个一个上）。
+         *
+         * **补不上人时，编制就等于手上这几个**（2026-11-26）。不这么判会死等：
+         * S-001 金 0、一个兵也补不出来，可编制写 9，于是一支队 5 个人在集结点
+         * 等到 10 手超时才走（40 手只砸掉 25 血）。判据用产兵格的实数，不是猜。
          */
-        want: bands.length === 0 ? pick.length : Math.max(pick.length, decision.men ?? pick.length),
+        want:
+          canFill > 0 && bands.length > 0
+            ? Math.max(pick.length, decision.men ?? pick.length)
+            : pick.length,
         state: 'forming',
         men: pick.length,
         unitIds: pick.map((u) => u.id),
