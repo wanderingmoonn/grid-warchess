@@ -1403,6 +1403,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const squads: Squad[] = [];
   /** 这一手在编的进攻编队（要写回记忆，见 `Band`） */
   let outBands: Band[] | undefined;
+  /** 决定层给这支编队的任务（W3.6 第 3c 步）：意图在这儿，走不走得通由下面判 */
+  const taskOf = (bandId: string) => (decision.bandTasks ?? []).find((t) => t.bandId === bandId);
 
   /*
    * 守军：每座**真的会被摸到**的城留 2 个最近的兵，任务 hold。留谁按"离城近"排，不按分数。
@@ -1521,11 +1523,12 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     for (const b of bands) {
       const ids = b.unitIds.filter((id) => restIds.has(id) && id !== captureId);
       if (ids.length === 0) continue;
+      const task = taskOf(b.id);
       squads.push({
         id: b.id,
-        order: decision.stage === 'clear' ? 'march' : 'hold',
+        order: task?.order ?? (decision.stage === 'clear' ? 'march' : 'hold'),
         unitIds: ids,
-        cityId: city.id,
+        cityId: task?.cityId ?? city.id,
         want: b.want ?? ids.length,
       });
     }
@@ -1642,13 +1645,14 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
        */
       /* 能走不能走，看编队自己的状态（W3.6）；不再拿"新队的目标人数"去卡老兵 */
       const ready = (b.state ?? 'forming') === 'marching';
+      const task = taskOf(b.id);
       squads.push({
         id: b.id,
-        /* clear 段打人（march），siege 段砸城；没到齐先去集结点 */
-        order: ready ? (decision.stage === 'clear' ? 'march' : 'siege') : 'assemble',
+        /* 任务由决定层给（清场 march / 攻城 siege）；没到齐先去集结点 */
+        order: ready ? (task?.order ?? (decision.stage === 'clear' ? 'march' : 'siege')) : 'assemble',
         at: ready ? undefined : assemblePoint(s, world, city.id),
         unitIds: ids,
-        cityId: city.id,
+        cityId: task?.cityId ?? city.id,
         want: ids.length,
         eta: Number.isFinite(eta) ? eta : 99,
         /* 战术开关**按编队各自判**：一队在接敌、另一队还在路上，不该互相带开关 */
@@ -1687,12 +1691,13 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         .filter((u): u is Unit => !!u);
       /* 全队一起走：取最慢的那个（骑兵不能把步兵丢在后面） */
       const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, city)), 0);
+      const task = taskOf(b.id);
       if (eta <= deadline) {
         squads.push({
           id: b.id,
-          order: 'hold',
+          order: task?.order ?? 'hold',
           unitIds: ids,
-          cityId: city.id,
+          cityId: task?.cityId ?? city.id,
           /* 召回：先回城（S-004 的规矩），所以只给集火、不给挪位 */
           tactics: planTactics(s, ids, false),
         });
@@ -1720,8 +1725,49 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       });
     }
   } else {
+    /*
+     * **发展只管钱和后方，不改前线的任务**（W3.6 第 3c 步，2026-11-26）。
+     *
+     * 以前这里无条件 `main: assemble`（所有人回城集合），于是"打 → 发展 → 打"每次翻一次，
+     * 正在攻城的编队就要走一趟回头路——S-001 第 8/10/18 手就是这么来回走的，
+     * 40 手打不完不是打不动，是走掉了。
+     *
+     * 现在：有任务的编队照旧打它自己的城；没有任务的兵（新造的、守家的）才回城集合。
+     */
+    const restIds = new Set(rest.map((u) => u.id));
+    const aliveIds = new Set(world.myCombat.map((u) => u.id));
+    const bands = liveBandsOf(mem, null, aliveIds);
+    const inBand = new Set(bands.flatMap((b) => b.unitIds));
+    for (const b of bands) {
+      const task = taskOf(b.id);
+      if (!task) continue;
+      const ids = b.unitIds.filter((id) => restIds.has(id));
+      if (ids.length === 0) continue;
+      const target = s.cities.find((c) => c.id === task.cityId);
+      if (!target) continue;
+      const us = ids
+        .map((id) => s.units.find((u) => u.id === id))
+        .filter((u): u is Unit => !!u);
+      if (us.length === 0) continue;
+      const etas = us.map((u) => world.marchTurns(u, target)).sort((a, b2) => a - b2);
+      const eta = etas[etas.length - 1] ?? Infinity;
+      const lead = [...us].sort((a, b2) => world.marchTurns(a, target) - world.marchTurns(b2, target))[0];
+      const detour = lead ? world.marchTurns(lead, target) > manhattan(lead, target) + 2 : false;
+      squads.push({
+        id: b.id,
+        order: task.order,
+        unitIds: ids,
+        cityId: task.cityId,
+        want: b.want ?? ids.length,
+        eta: Number.isFinite(eta) ? eta : 99,
+        tactics: planTactics(s, ids, task.order !== 'hold'),
+        detour,
+        ...(planColumns(s, world, ids, target) ?? {}),
+      });
+    }
     const at = assemblePoint(s, world, world.myCities[0]?.id ?? '');
-    squads.push({ id: 'main', order: 'assemble', unitIds: rest.map((u) => u.id), at });
+    const freeIds = rest.filter((u) => !inBand.has(u.id)).map((u) => u.id);
+    squads.push({ id: 'main', order: 'assemble', unitIds: freeIds, at });
   }
 
   /* 造兵：不造经济兵以外的东西时，经济兵不设约束（它们自己站格子产金） */

@@ -13,7 +13,7 @@
  */
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
-import type { Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
+import type { BandTask, Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
 import { cityTiles, effectiveStats, previewAttack, utype } from '../rules.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import type { GameState } from '../types.ts';
@@ -146,9 +146,47 @@ function withSpend(s: GameState, world: World, d: BareDecision): Decision {
  * 为什么统一成一个出口：这两个字段都**必须每个 `return` 都有**，漏一个就是
  * "沿用了决定、忘了沿用升级"的默认值 bug。让唯一入口来挂，漏不掉。
  */
+/**
+ * **每队一条任务**（W3.6 第 3c 步，2026-11-26）。
+ *
+ * 决定层的输出原来只有一个"全局类型"，于是一次类型切换（打 → 发展）就只能把所有人
+ * 重建成一支队伍，正在攻城的编队被叫回家（S-001 第 8/10/18 手来回走了 20 手）。
+ *
+ * 现在对**每一支在编的编队**交一条任务，规则只有四条：
+ *   · 守：所有在打敌城的队，任务先标成"守这座城"（走不回去的，计划层会退回进攻）；
+ *   · 接管：只有冲着这座废墟去的队改任务（清场段照打、攒钱/入驻段守着）；
+ *   · 打 / 发展：目标还是敌城就继续打它自己的城——**发展只管钱和后方，不改前线的任务**；
+ *   · 目标已经不是敌城（被打下 / 变废墟 / 丢了）→ 这队没有任务，交给计划层收编。
+ *
+ * 注意这里只写**意图**：`hold` 不代表它真的走得到，可不可行是计划层的事
+ * （`DESIGN-LANES-WAVES` §0 的分工：选择在决定层、可行性在计划层）。
+ */
+function bandTasksOf(world: World, mem: V4Memory | undefined, d: BareDecision): BandTask[] {
+  const out: BandTask[] = [];
+  for (const b of mem?.bands ?? []) {
+    if (b.unitIds.length === 0) continue;
+    const isTarget = !!d.cityId && d.cityId === b.cityId;
+    if (d.kind === 'defend' && d.cityId) {
+      out.push({ bandId: b.id, order: 'hold', cityId: d.cityId });
+      continue;
+    }
+    if (d.kind === 'takeover' && isTarget) {
+      out.push({ bandId: b.id, order: d.stage === 'clear' ? 'march' : 'hold', cityId: b.cityId });
+      continue;
+    }
+    if (!world.foeCities.some((c) => c.id === b.cityId)) continue;
+    out.push({
+      bandId: b.id,
+      order: d.kind === 'press' && isTarget && d.stage === 'siege' ? 'siege' : 'march',
+      cityId: b.cityId,
+    });
+  }
+  return out;
+}
+
 function complete(s: GameState, world: World, mem: V4Memory | undefined, d: BareDecision): Decision {
   const dec = withSpend(s, world, d);
-  return { ...dec, upgrade: upgradeOf(s, world, mem, dec) };
+  return { ...dec, upgrade: upgradeOf(s, world, mem, dec), bandTasks: bandTasksOf(world, mem, dec) };
 }
 
 /**
