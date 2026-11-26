@@ -1269,10 +1269,23 @@ function planMarch(
       continue;
     }
 
+    /*
+     * **分排：先把射程排成前后，同一射程里速度快的在前**（用户 2026-11-26 定的口径）。
+     *
+     * 排与排：**实际射程值**（近战 1 在最前，远程 4 在最后）。
+     * 以前只分三档（≤1 / 2 / ≥3），射程 3 和 5 挤在同一排，
+     * 同排里谁靠前就看谁离城近——那会让射程远的抢到前排，和"远的在后"相反。
+     *
+     * 排内：**移动力大的在前**，同速度才按离城远近。理由和用户说的一样——
+     * 快的本来就该先顶上去、先到先等，慢的按自己的节奏跟上；
+     * 反过来（按离城远近排）会让已经跑到前面的慢兵被配回后排，队伍来回抖。
+     * 顺带说明：分排**全程做**，不等到城下才排——人对这个场面也是"边出发边变阵"，
+     * 只在近处才排就来不及了。
+     */
     const rows = new Map<number, Unit[]>();
     for (const u of pending) {
       const r = effectiveStats(s, u).range ?? 1;
-      const k = r <= 1 ? 0 : r === 2 ? 1 : 2;
+      const k = Math.max(0, r);
       const arr = rows.get(k) ?? [];
       arr.push(u);
       rows.set(k, arr);
@@ -1333,8 +1346,9 @@ function planMarch(
        * **同序配对**：人按"离城远近"排，阵位也按"离城远近"排，序号对序号。
        * 两边都是同一条轴上单调的，所以路线不会交叉；散开的一排会被吸成方块。
        */
+      const moveOf = (u: Unit): number => effectiveStats(s, u).move ?? 2;
       const rowSorted = [...row].sort(
-        (a, b) => axisOf(a) - axisOf(b) || (a.id < b.id ? -1 : 1),
+        (a, b) => moveOf(b) - moveOf(a) || axisOf(a) - axisOf(b) || (a.id < b.id ? -1 : 1),
       );
       const slotSorted = [...slots].sort((a, b) => {
         const da = toBase[a] ?? Infinity;
