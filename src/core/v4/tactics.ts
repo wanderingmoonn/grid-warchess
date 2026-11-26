@@ -16,6 +16,7 @@ import {
   attackableTargets,
   buildSiteError,
   effectiveStats,
+  occupantAt,
   reachableTiles,
   siegeTargets,
   utype,
@@ -366,6 +367,16 @@ export function actFor(
  * 多格可选时取**离它最近**的那格（同距取格号小的，保证每手选同一格，不会抖）——
  * 不再比"地形防御/威胁/队友距离"，那些都是分数项，落点会跑偏（见项目里的证伪清单）。
  */
+/**
+ * **这一格是不是被别人站着**（桥不算，见 `rules.occupantAt`）。
+ *
+ * 桥和兵可以同格，所以"这格有人"不能直接数 `s.units`：
+ * 把 AI 自己造的桥当成一个人，队伍就永远走不上自己修的桥（`P-2-03` 实测）。
+ */
+function takenByOther(s: GameState, u: Unit, x: number, y: number): boolean {
+  return occupantAt(s, x, y, u.id) !== undefined;
+}
+
 function approachStep(
   s: GameState,
   u: Unit,
@@ -378,7 +389,7 @@ function approachStep(
     const x = k % s.w;
     const y = Math.floor(k / s.w);
     if (x === u.x && y === u.y) continue;
-    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+    if (takenByOther(s, u, x, y)) continue;
     const moved = { ...u, x, y, moved: true } as Unit;
     if (!attackableTargets(s, moved).some((v) => v.id === foe.id)) continue;
     const d = manhattan({ x, y }, foe);
@@ -450,7 +461,7 @@ function stepToward(
      * 结果桥头一进 keepClear，全军就过不了河（S-005 从过河 3 个掉到 0）。
      * "别停"由约束层的搬迁计划负责：停在上面的单位下一手会被挪开。
      */
-    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+    if (takenByOther(s, u, x, y)) continue;
     const d = distSafe(x, y);
     if (d < bestD) {
       bestD = d;
@@ -594,7 +605,7 @@ function stepAside(
   for (const [key] of reachableTiles(s, u)) {
     const x = key % s.w;
     const y = Math.floor(key / s.w);
-    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+    if (takenByOther(s, u, x, y)) continue;
     if (d(x, y) !== cur) continue; /* 只横移，不后退 */
     const e = manhattan({ x, y }, to);
     if (e < bestB) {
@@ -635,7 +646,7 @@ function cityPostCell(
     for (let dx = 0; dx < n; dx += 1) {
       const x = home.x + dx;
       const y = home.y + dy;
-      if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+      if (takenByOther(s, u, x, y)) continue;
       const d = Math.min(...foes.map((f) => Math.abs(f.x - x) + Math.abs(f.y - y)));
       free.push({ x, y, d, k: y * s.w + x });
     }
@@ -680,7 +691,7 @@ function stepOffSpawn(
     const x = key % s.w;
     const y = Math.floor(key / s.w);
     if (keep.has(key)) continue;
-    if (s.units.some((v) => v.id !== u.id && v.x === x && v.y === y)) continue;
+    if (takenByOther(s, u, x, y)) continue;
     /* 城 3 格以内：守军不跑远 */
     const dx = Math.max(home.x - x, x - (home.x + n - 1), 0);
     const dy = Math.max(home.y - y, y - (home.y + n - 1), 0);

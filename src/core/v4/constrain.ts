@@ -12,7 +12,7 @@
 import { boardIdOf, boardOf, tileOn } from '../board.ts';
 import { passable } from '../config.ts';
 import { attackableTargets, cityTiles, effectiveStats, previewAttack, reachableTiles, threatTiles } from '../rules.ts';
-import { utype } from '../rules.ts';
+import { occupantAt, utype } from '../rules.ts';
 import { eraDef } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import type { City } from '../types.ts';
@@ -314,8 +314,13 @@ function planYield(
   const usedUnits = new Set<string>();
 
   for (const cell of targets) {
-    /* 关键格自己得是被自己人占着的，否则没什么可让 */
-    const blocker = s.units.find((u) => u.y * s.w + u.x === cell && u.owner === world.me);
+    /*
+     * 关键格自己得是被自己人占着的，否则没什么可让。
+     * **桥不算占位者**：桥和兵可以同格（引擎 `blockedAnchor` 对桥返回 false），
+     * 把桥当成"要挪开的人"会白派一条永远被拒的 MOVE（W4，2026-11-26）。
+     */
+    const occupant = occupantAt(s, cell % s.w, Math.floor(cell / s.w));
+    const blocker = occupant && occupant.owner === world.me ? occupant : undefined;
     if (!blocker || usedUnits.has(blocker.id) || passing.has(blocker.id)) continue;
 
     /*
@@ -352,7 +357,8 @@ function planYield(
     for (let i = chain.length - 1; i >= 0; i--) {
       const to = chain[i]!;
       const from = i === 0 ? cell : chain[i - 1]!;
-      const u = s.units.find((v) => v.y * s.w + v.x === from && v.owner === world.me);
+      const nu = occupantAt(s, from % s.w, Math.floor(from / s.w));
+      const u = nu && nu.owner === world.me ? nu : undefined;
       if (!u || usedUnits.has(u.id) || usedCells.has(to)) continue;
       usedUnits.add(u.id);
       usedCells.add(to);

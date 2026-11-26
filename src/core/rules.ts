@@ -913,6 +913,32 @@ export function utype(s: GameState, id: string): UnitTypeDef {
   return def;
 }
 
+/**
+ * **这一格上真正挡路的单位**（桥不算）。
+ *
+ * 为什么不能用 `unitAt` / `s.units.some(格相同)` 直接问：
+ *   · 桥在局面里是**一条建筑单位**（`category: 'building'` + `bridges: true`），
+ *     同时把脚下那格的地形改成 `'bridge'`；
+ *   · 引擎的口径是"**桥是双向的，谁都能站**"（`blockedAnchor` 对桥返回 `false`），
+ *     所以"桥格上同时有桥和一个兵"是合法局面。
+ * 把桥当成占位者，就等于"AI 自己造的桥，AI 自己走不上去"：
+ * `P-2-03` 实测三格桥满血 40/40、40 手内 14 个兵全在河西、一次没上桥；
+ * 而 `P-4-01` 的桥是**纯地形**（没有桥单位）所以能过 —— 差别就在这个函数。
+ *
+ * 只放行桥：城/产兵格之类仍然算占位（那是产兵口，不该拿来站队）。
+ * `excludeId` 用来排除"自己"（问"这格还能不能再站一个人"时）。
+ */
+export function occupantAt(
+  s: GameState,
+  x: number,
+  y: number,
+  excludeId?: string,
+): Unit | undefined {
+  return s.units.find(
+    (u) => u.id !== excludeId && u.x === x && u.y === y && !utype(s, u.type).bridges,
+  );
+}
+
 export function tileAt(s: GameState, x: number, y: number): Tile | null {
   if (!inBounds(s, x, y)) return null;
   return s.tiles[idx(s, x, y)] ?? null;
