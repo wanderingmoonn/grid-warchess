@@ -12,6 +12,9 @@
 import type { PlayerId } from '../core/types.ts';
 import { ERA1_UNIT_SPECS } from './angled-units-era1.ts';
 import { ERA2_UNIT_SPECS } from './angled-units-era2.ts';
+import { ERA3_UNIT_SPECS } from './angled-units-era3.ts';
+import { ERA4_UNIT_SPECS } from './angled-units-era4.ts';
+import { ERA5_UNIT_SPECS } from './angled-units-era5.ts';
 
 export interface AngledUnitPaintOpts {
   typeId: string;
@@ -95,7 +98,13 @@ const DIM_PALETTE: TeamClothPalette = {
 };
 
 const SUPPORTED_UNIT_ART = new Set<string>(['militia']);
-const BUILTIN_UNIT_SPECS = { ...ERA1_UNIT_SPECS, ...ERA2_UNIT_SPECS };
+const BUILTIN_UNIT_SPECS = {
+  ...ERA1_UNIT_SPECS,
+  ...ERA2_UNIT_SPECS,
+  ...ERA3_UNIT_SPECS,
+  ...ERA4_UNIT_SPECS,
+  ...ERA5_UNIT_SPECS,
+};
 const customPainters = new Map<string, AngledUnitPainter>();
 
 export function getAngledUnitTeamPalette(owner: PlayerId, dim: boolean): TeamClothPalette {
