@@ -51,7 +51,7 @@
  */
 import { eraDef, passable } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
-import { EARTH, idxOn } from '../board.ts';
+import { EARTH, idxOn, tileOn } from '../board.ts';
 import {
   attackableTargets,
   attacksPerTurn,
@@ -282,6 +282,13 @@ export interface World {
    * 不算进来是因为它们人不在、也不会回来——和 v1「换家」那条"着力点"是同一个事实。
    */
   defensible(city: City, skip?: ReadonlySet<string>): DefendOutlook;
+  /**
+   * **能同时打到这座城、又站得下人的格数**（W3 上限，2026-11-26）。
+   *
+   * 这是"一批最多送几个才有用"的几何上限：第 N 个人站上去也打不到城，那他就是排队。
+   * 用"到城的步数 ≤ 我方射程"数出来，不是拍的数；城格本身不算（那是城，不是站位）。
+   */
+  siegeSeats(city: City): number;
   /**
    * **一条线的三个存量**（W1 影子模式，2026-11-26）：能打到城的人 / 还在路上的人 /
    * 这一回合能造出几个。
@@ -1005,6 +1012,40 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     };
   };
 
+  /**
+   * **能同时打到这座城的格数**（W3 上限）：到任一城格的步数 ≤ 我方射程、能站人、不是城格。
+   *
+   * 为什么要它：一批送多少人，除了"送得到多少"（到货率 × 期限），还受"站得开几个"限制。
+   * 40 步的大图上把 28 个人编成一批，多出来的只是排队——S-002 实测过"送 25 个只有 6 个能展开"。
+   */
+  const seatCache = new Map<string, number>();
+  const siegeSeats = (city: City): number => {
+    const hit = seatCache.get(city.id);
+    if (hit !== undefined) return hit;
+    const tiles = cityTiles(city);
+    const inCity = new Set(tiles.map((t) => t.y * s.w + t.x));
+    /* 射程按"这座城能造的最强兵"算——它就是将来站上去的那批人 */
+    const type = bestPerCell(city)?.type;
+    const range = Math.max(1, type ? (utype(s, type).range ?? 1) : 1);
+    /* 从每一格城格出发做一次距离场，取最小（城是 2×2，从左上角算会偏 1~2 格） */
+    const fields = tiles.map((t) => stepFrom({ x: t.x, y: t.y }));
+    /* 按图取格：裸格表永远是地球那张，多图下会静默出错（`lint:boards` 会拦） */
+    let seats = 0;
+    for (let y = 0; y < s.h; y++) {
+      for (let x = 0; x < s.w; x++) {
+        const k = y * s.w + x;
+        if (inCity.has(k)) continue;
+        const terr = tileOn(s, EARTH, x, y)?.terrain;
+        if (!terr || !passable(terr)) continue;
+        let steps = Infinity;
+        for (const f of fields) steps = Math.min(steps, f[k] ?? Infinity);
+        if (steps <= range) seats += 1;
+      }
+    }
+    seatCache.set(city.id, seats);
+    return seats;
+  };
+
   const world: World = {
     me,
     foe,
@@ -1043,6 +1084,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     cityStand,
     defensible,
+    siegeSeats,
     laneStats(ids, city) {
       const split = contactSplit(ids, city);
       return {

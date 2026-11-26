@@ -418,7 +418,8 @@ export interface Constraints {
    * 只观测、不接任何动作。存在的意义是把"来不及到底有多普遍""一波要几手"量出来，
    * 再决定 W2 换不换攻守判据（见 `docs/DESIGN-LANES-WAVES-2026-11-26.md`）。
    */
-  lane?: { front: number; road: number; make: number; engaged: number };
+  /** `seats` = 能同时打到这座城、又站得下人的格数（W3 上限的候选口径，目前只观测） */
+  lane?: { front: number; road: number; make: number; engaged: number; seats?: number };
   /**
    * **发展期 T**（2026-11-25，P3 闸 C 的 C1）：还要几回合才能威胁到对面城。
    *

@@ -2255,7 +2255,10 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     : undefined;
   const lane =
     attackSquads.length > 0 && laneCity
-      ? world.laneStats(attackSquads.flatMap((q) => q.unitIds), laneCity)
+      ? {
+          ...world.laneStats(attackSquads.flatMap((q) => q.unitIds), laneCity),
+          seats: world.siegeSeats(laneCity),
+        }
       : undefined;
   return {
     need,

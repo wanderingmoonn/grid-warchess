@@ -466,7 +466,8 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
       ` · 批 ${waves.length}批(并${merged}光${wiped}撤${withdrawn}失${gone})` +
       `${open.length > 0 ? ` · ${open.slice(-4).map(waveBrief).join(' ; ')}` : ' · 无在途批'}` +
       ` · 本手+${last?.arrivals.at(-1) ?? 0} 堵${last?.stuck ?? 0} 断档${gap?.run ?? 0}/${gap?.total ?? 0}` +
-      ` · 交换(${ex.length}手) 赚${gain} 亏${loss} | 本线 赚${lineGain} 亏${lineLoss}\n`,
+      ` · 交换(${ex.length}手) 赚${gain} 亏${loss} | 本线 赚${lineGain} 亏${lineLoss}` +
+      `${lane?.seats !== undefined ? ` · 站得开 ${lane.seats} 格` : ''}\n`,
   );
   /*
    * **每队一行**（W3.6 第 6 步）：掉的、到的、堵的、还有几手到。
