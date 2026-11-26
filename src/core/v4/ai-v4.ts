@@ -92,7 +92,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     econHome: econHomeMemo(s, me, mem, world),
     eraPlan: eraPlanMemo(s, decision, mem, s.turn),
     /* W1 影子观测：只记，不读 */
-    ...laneMemo(s, world, con, mem, s.turn),
+    ...laneMemo(s, world, con, decision, mem, s.turn),
   };
   writeMemory(s, me, nextMem);
   logLane(s, con, nextMem);
@@ -174,118 +174,256 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
 }
 
 /**
- * **影子观测：交换账 + 波次**（W1，2026-11-26）。
+ * **影子观测：交换账 + 批次 + 断档**（W1.5，2026-11-26）。
  *
- * 只记、不读——这一版**没有任何判断读它**，目的就是先把数打出来（见
- * `docs/DESIGN-LANES-WAVES-2026-11-26.md` 的 W1）。
+ * 只记、不读——这一版仍然**没有任何判断读它**。
  *
  * ── 交换账 ────────────────────────────────────────────────
  *
  * 引擎不报"击杀事件"，所以只能**逐手差分**：上一次见到的单位这一手没了，就按它的
  * **造价**记一笔（不按残血——残血的兵换掉对方一个贵的，仍然算赚，这是用户定的口径）。
+ * 同时把死亡位置记下来，按"离哪条线最近"归到那条线（W1.5 第 2 条：一本总账在两条线时会砍错线）。
  *
  * `DISBAND`（自己拆兵）不会被误算：**v4 根本不拆兵**（`grep DISBAND src/core/v4/` 只有
  * 一处 `forbid`）——用户 2026-11-26 指出。以后如果真加了拆兵，要在这里补一条排除。
  *
- * ── 波次 ──────────────────────────────────────────────────
+ * ── 批次（"一波"= 一批人）──────────────────────────────────
  *
- * 用户 2026-11-26 定的边界：**一波 = 进攻编队从出发（`assemble`→`march`）到第一次能打到城**。
- * "能打到"用 `front > 0` 近似"进入交战"——真正开火还要求有目标，影子阶段先要这个近似，
- * 它至少是确定性的、可复核的。
+ * 第一版记的是"整支主队的一次行军"（一个槽位、按城市认）：后来补的兵被记成同一波的到货，
+ * 于是"一批一批往上送"这件事**根本没被记下来**。现在每个兵记着它属于哪一批（`waveOf`），
+ * 新造出来的兵**开新的一批**；一批结束有三种：到齐（活着的人全进前线）/ 打光 / 撤回。
+ * 已经进前线的人不再属于任何一批——前线是存量，批次只是投送的单位。
+ *
+ * ── 断档 ──────────────────────────────────────────────────
+ *
+ * 一条线"开过、还想着打"的时候，**前线 0 人、路上也 0 人** = 断档（连续几手记一次）。
+ * 它和 `stuck` 是两件事：`stuck` 是路上有货过不来，断档是没货可过。
  */
 function laneMemo(
   s: GameState,
   world: World,
   con: Constraints,
+  decision: Decision,
   mem: V4Memory,
   turn: number,
-): Pick<V4Memory, 'unitSeen' | 'exchange' | 'wave'> {
+): Pick<V4Memory, 'unitSeen' | 'exchange' | 'exchangeByCity' | 'waves' | 'waveOf' | 'lineGap'> {
   const seen = mem.unitSeen ?? {};
   const exchange = mem.exchange ?? [];
-  const prevWave = mem.wave ?? null;
+  /* 深拷贝：这一手会原地改批次，别改到上一手的记忆对象上 */
+  const waves = (mem.waves ?? []).map((w) => ({
+    ...w,
+    alive: [...w.alive],
+    arrivedIds: [...w.arrivedIds],
+    arrivals: [...w.arrivals],
+  }));
+  const byCity = Object.fromEntries(
+    Object.entries(mem.exchangeByCity ?? {}).map(([k, v]) => [k, [...v]]),
+  ) as NonNullable<V4Memory['exchangeByCity']>;
+  const waveOf = { ...(mem.waveOf ?? {}) };
+  const lineGap = { ...(mem.lineGap ?? {}) };
   /*
    * **一手只差分一次**：`currentView` 一手内会被多次重建（每花一笔钱一次），
    * 不设这道门就会把同一批死亡记好几遍。
    */
   if (exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn) {
-    return { unitSeen: seen, exchange, wave: prevWave };
+    return { unitSeen: seen, exchange, exchangeByCity: byCity, waves, waveOf, lineGap };
   }
 
-  const now: Record<string, { type: string; owner: string }> = {};
-  for (const u of s.units) now[u.id] = { type: u.type, owner: u.owner };
+  const now: Record<string, { type: string; owner: string; x: number; y: number }> = {};
+  for (const u of s.units) now[u.id] = { type: u.type, owner: u.owner, x: u.x, y: u.y };
+
+  /* 进行中的线（还没结束的批次所属的城市）——死亡按"离哪条线最近"归属 */
+  const openCities = [...new Set(waves.filter((w) => !w.endTurn).map((w) => w.cityId))]
+    .map((id) => s.cities.find((c) => c.id === id))
+    .filter((c): c is NonNullable<typeof c> => !!c);
+
   let gain = 0;
   let loss = 0;
+  const gainBy: Record<string, number> = {};
+  const lossBy: Record<string, number> = {};
   for (const [id, prev] of Object.entries(seen)) {
     if (now[id]) continue;
     const price = recruitPriceOf(s, prev.owner as PlayerId, utype(s, prev.type)).gold;
-    if (prev.owner === world.me) loss += price;
+    const mine = prev.owner === world.me;
+    if (mine) loss += price;
     else gain += price;
+    /* 位置是老记忆可能没有的字段：没有就只进总账，不硬猜 */
+    if (prev.x === undefined || prev.y === undefined || openCities.length === 0) continue;
+    const near = [...openCities].sort(
+      (a, b) =>
+        Math.abs(a.x - prev.x!) + Math.abs(a.y - prev.y!) - (Math.abs(b.x - prev.x!) + Math.abs(b.y - prev.y!)),
+    )[0]!;
+    if (mine) lossBy[near.id] = (lossBy[near.id] ?? 0) + price;
+    else gainBy[near.id] = (gainBy[near.id] ?? 0) + price;
   }
   const ex = [...exchange, { turn, gain, loss }].slice(-LANE_WINDOW);
+  for (const c of openCities) {
+    byCity[c.id] = [...(byCity[c.id] ?? []), { turn, gain: gainBy[c.id] ?? 0, loss: lossBy[c.id] ?? 0 }].slice(
+      -LANE_WINDOW,
+    );
+  }
 
-  /* 波：出发 = 主队从 assemble 变成 march/siege；到达 = 第一次有人进入前线 */
-  let wave = prevWave;
-  const main = con.squads.find((q) => q.id === 'main' && !!q.cityId);
-  if (wave && wave.arrivedTurn === undefined && (!main || main.cityId !== wave.cityId)) {
-    /* 没到就散了（打光 / 撤退）：按 0 人到达记，看数的时候能区分出来 */
-    wave = { ...wave, arrivedTurn: turn, arrivedMen: 0 };
-  }
-  /* 出发只在"真的开拔"时算；之后的到货要继续记——队伍到了城下会转 siege/hold，不等于这波结束 */
-  if (main && (main.order === 'march' || main.order === 'siege')) {
-    if (!wave || wave.cityId !== main.cityId) {
-      wave = {
-        id: `${main.cityId}-${turn}`,
-        cityId: main.cityId!,
-        startedTurn: turn,
-        men: main.unitIds.length,
-      };
+  /* ── 批次 ① 编成：还没编过批、或上一批已结束的兵 = 新的一批（同一手同一座城只开一批） */
+  /*
+   * **只有"打敌城"的队才算一条线。**
+   *
+   * 守城的队（`hold`，把外面的兵收回城下）也是"一队人有座城"，但它不是投送；
+   * 接管废墟也不是（目标是自己的废墟，不是敌城）。不加这两条，S-012 那种
+   * "一直在守"的题会被记成开了 7 批——数就全废了。
+   */
+  const lines = con.squads.filter((q) => {
+    if (!q.cityId) return false;
+    if (q.order !== 'march' && q.order !== 'siege' && q.order !== 'assemble') return false;
+    const c = s.cities.find((x) => x.id === q.cityId);
+    return !!c && !!c.owner && c.owner !== world.me && c.ruined !== true;
+  });
+  for (const line of lines) {
+    const fresh = line.unitIds.filter((id) => {
+      const wid = waveOf[id];
+      const w = wid ? waves.find((x) => x.id === wid) : undefined;
+      if (!w) return true;
+      /* 换了目标城 → 算新的一批 */
+      if (w.cityId !== line.cityId) return true;
+      /* 线废弃过、现在又重新打这座城 → 也算新的一批 */
+      if (w.end === 'withdrawn') return true;
+      /*
+       * **已经送到的（`merged`）不再重新编批。**
+       * 它们在城下、仍然挂在同一支队里，每手都会出现在 `unitIds` 里；
+       * 拿"上一批结束了"当条件的话，每一手都会开一批"刚出生就到齐"的假批。
+       */
+      return false;
+    });
+    if (fresh.length === 0) continue;
+    const id = `${line.cityId}@${turn}`;
+    let w = waves.find((x) => x.id === id);
+    if (!w) {
+      w = { id, cityId: line.cityId!, bornTurn: turn, men: 0, alive: [], arrivedIds: [], arrivals: [] };
+      waves.push(w);
     }
+    w.men += fresh.length;
+    w.alive = [...new Set([...w.alive, ...fresh])];
+    for (const uid of fresh) waveOf[uid] = id;
   }
-  if (wave && main && main.cityId === wave.cityId) {
+
+  /* ── 批次 ② 逐批推进：**先记到货，再判这一批还开不开** */
+  for (const w of waves) {
+    if (w.endTurn) continue;
+    const city = s.cities.find((c) => c.id === w.cityId);
+    const line = lines.find((q) => q.cityId === w.cityId);
     /*
-     * **通过量**（2026-11-26）：按人去重的"新到货"计数。
-     *
-     * 为什么不能只看"前线现在几个人"：那个数把**到达、伤亡、补人**混在一起了。
-     * 通过量量的是"这一手有几个新人第一次进入前线"——它是**终点边界上的到货率**，
-     * 不需要代码里有"路"这个几何对象。
-     *
-     * 配着 `road`（在途存量）一起看才有意义：
-     *   · 到货 0 + 在途 > 0 → **堵**（路上有货过不来）；
-     *   · 到货 0 + 在途 0   → **没货**（该造兵/该换线，不是通道问题）。
+     * 顺序很重要：**先把这一手的到货记上，再判结束**。
+     * 反过来写，"打到最后一手才进城"的兵永远记不上（S-000 T11：城一被拿下，
+     * 那手的到货就被 `gone` 吞掉了，读出来的"到人"少一半）。
      */
-    const city = s.cities.find((c) => c.id === main.cityId);
-    if (city) {
-      const contact = new Set(world.contacts(main.unitIds, city));
-      const arrived = new Set(wave.arrivedIds ?? []);
-      const fresh = [...contact].filter((id) => !arrived.has(id));
-      for (const id of fresh) arrived.add(id);
-      wave = {
-        ...wave,
-        arrivedIds: [...arrived],
-        arrivals: [...(wave.arrivals ?? []), fresh.length],
-        /* 连续几手"有人在路上、却一个人都没到" —— 通道堵住的直接证据 */
-        stuck: fresh.length === 0 && (con.lane?.road ?? 0) > 0 ? (wave.stuck ?? 0) + 1 : 0,
-        ...(wave.arrivedTurn === undefined && contact.size > 0
-          ? { arrivedTurn: turn, arrivedMen: contact.size }
-          : {}),
-      };
+    const alive = city ? w.alive.filter((id) => !!s.units.find((u) => u.id === id)) : [];
+    const contact = city ? new Set(world.contacts(alive, city)) : new Set<string>();
+    const arrived = new Set(w.arrivedIds);
+    const fresh = [...contact].filter((id) => !arrived.has(id));
+    for (const id of fresh) arrived.add(id);
+    const road = alive.filter((id) => !arrived.has(id)).length;
+    if (line && w.startTurn === undefined && (line.order === 'march' || line.order === 'siege')) w.startTurn = turn;
+    w.alive = alive;
+    w.arrivedIds = [...arrived];
+    if (city && !city.ruined) w.arrivals.push(fresh.length);
+    /* 连续几手"有人在路上、却一个人都没到" = 这一段堵住了（没出发前不算） */
+    w.stuck = w.startTurn !== undefined && fresh.length === 0 && road > 0 ? (w.stuck ?? 0) + 1 : 0;
+
+    /*
+     * 城没了 / 已经不是敌城（打下来了 / 丢了）→ 这条线到此为止，但**不算撤退**。
+     * 这两种要分开记：`gone` 是结果，`withdrawn` 是放弃。
+     */
+    if (!city || city.ruined === true || (city.owner && city.owner === world.me)) {
+      w.end = 'gone';
+      w.endTurn = turn;
+      continue;
+    }
+    /*
+     * 这一手没有指向这座城的队 → **先记一手"没队"，不马上判撤回**。
+     *
+     * 为什么不马上撤：v4 在"打"和"守"之间来回切很常见（敌人贴脸就召回一手，
+     * 下一手又推）。按一手就撤，S-000 会被切成 3 批、每批的到货记录都从零开始，
+     * 读出来的"到人"凭空少一半。连续两首都这样，才算这条线不要了。
+     */
+    if (!line) {
+      w.miss = (w.miss ?? 0) + 1;
+      if (w.miss >= 2) {
+        w.end = 'withdrawn';
+        w.endTurn = turn;
+      }
+      continue;
+    }
+    w.miss = 0;
+
+    if (alive.length === 0) {
+      w.end = 'wiped';
+      w.endTurn = turn;
+    } else if (road === 0) {
+      /* 活着的人都进前线了 → 这一批送完，剩下的事归前线（存量）和交换账 */
+      w.end = 'merged';
+      w.endTurn = turn;
     }
   }
-  return { unitSeen: now, exchange: ex, wave };
+
+  /* ── 断档：线开过、还想着打，但前线 0 人、路上 0 人 */
+  const counts = new Map<string, { front: number; road: number }>();
+  for (const line of lines) {
+    const city = s.cities.find((c) => c.id === line.cityId);
+    if (!city) continue;
+    const st = world.laneStats(line.unitIds, city);
+    counts.set(line.cityId!, { front: st.front + st.engaged, road: st.road });
+  }
+  /* 决定还在打这座城、但这一手连队都没了（人打光了）：这条线仍在，照样算断档 */
+  if (decision.kind === 'press' && decision.cityId && !counts.has(decision.cityId)) {
+    counts.set(decision.cityId, { front: 0, road: 0 });
+  }
+  for (const [cid, v] of counts) {
+    /* "开过"才算断档：这条线一批都没编过（决定说打、实际没人可派）不算 */
+    if (!waves.some((w) => w.cityId === cid)) continue;
+    const g = lineGap[cid] ?? { run: 0, total: 0, worst: 0, noFront: 0 };
+    if (v.front === 0) g.noFront += 1;
+    if (v.front === 0 && v.road === 0) {
+      g.run += 1;
+      g.total += 1;
+      g.worst = Math.max(g.worst, g.run);
+    } else g.run = 0;
+    lineGap[cid] = g;
+  }
+
+  /* ── 只留最后 8 批已结束的（长局里批次数会一直涨；没结束的一律保留） */
+  const done = waves.filter((w) => !!w.endTurn);
+  if (done.length > 8) {
+    const drop = new Set(done.slice(0, done.length - 8).map((w) => w.id));
+    for (let i = waves.length - 1; i >= 0; i--) if (drop.has(waves[i]!.id)) waves.splice(i, 1);
+    for (const [uid, wid] of Object.entries(waveOf)) if (drop.has(wid)) delete waveOf[uid];
+  }
+
+  return { unitSeen: now, exchange: ex, exchangeByCity: byCity, waves, waveOf, lineGap };
 }
 
 /**
  * 把影子观测打成一行（`V4_LANE_LOG`）。
  *
- * 格式固定成一句，便于扫：
- *   `[lane] T=7 front=3 road=4 make=2 · 波 c2 出发T5 8人 → T7 到3人(2手) · 交换(6手) 赚420 亏180`
+ * 读法：
+ *   `[lane] T=9 c2 front=3 接火=3 road=12 make=0 · 批 3批(并1光1) · c2@T1 4/10人·到9 路 · 本手+0 堵0 断档0/0 · 交换(6手) 赚180 亏0 | 本线 赚180 亏0`
+ *
+ * `front/接火/road/make` 是这条线这一手的存量；`批` 是开过几批、其中几批送完几批打光；
+ * 再后面是当前在途那一批（`到N` = 累计到过前线几个人）；`断档 run/累计`；
+ * `交换` 是全图总账，`本线` 是按位置归到这座城的账。
  */
-/** 这一波的通过量：平均每手有几个新人进入前线（不除零） */
-function throughput(w: NonNullable<V4Memory['wave']>): string {
-  const total = w.arrivedIds?.length ?? 0;
-  const turns = (w.arrivals?.length ?? 0) - 1;
-  if (turns <= 0) return '-';
-  return (total / turns).toFixed(1);
+function waveBrief(w: NonNullable<V4Memory['waves']>[number]): string {
+  const tag =
+    w.end === 'merged'
+      ? '并'
+      : w.end === 'wiped'
+        ? '光'
+        : w.end === 'withdrawn'
+          ? '撤'
+          : w.end === 'gone'
+            ? '失'
+            : w.startTurn === undefined
+              ? '集'
+              : '路';
+  return `${w.cityId}@T${w.bornTurn} ${w.alive.length}/${w.men}人·到${w.arrivedIds.length} ${tag}`;
 }
 
 let laneLoggedTurn = -1;
@@ -296,21 +434,27 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
   if (laneLoggedTurn === s.turn) return;
   laneLoggedTurn = s.turn;
   const lane = con.lane;
+  const cid = con.squads.find((q) => !!q.cityId)?.cityId;
   const ex = mem.exchange ?? [];
   const gain = ex.reduce((n, x) => n + x.gain, 0);
   const loss = ex.reduce((n, x) => n + x.loss, 0);
-  const w = mem.wave;
+  const ofLine = (cid ? mem.exchangeByCity?.[cid] : undefined) ?? [];
+  const lineGain = ofLine.reduce((n, x) => n + x.gain, 0);
+  const lineLoss = ofLine.reduce((n, x) => n + x.loss, 0);
+  const waves = (mem.waves ?? []).filter((w) => !cid || w.cityId === cid);
+  const open = waves.filter((w) => !w.endTurn);
+  const merged = waves.filter((w) => w.end === 'merged').length;
+  const wiped = waves.filter((w) => w.end === 'wiped').length;
+  const withdrawn = waves.filter((w) => w.end === 'withdrawn').length;
+  const gone = waves.filter((w) => w.end === 'gone').length;
+  const last = open.at(-1);
+  const gap = cid ? mem.lineGap?.[cid] : undefined;
   process.stderr.write(
-    `[lane] T=${s.turn} front=${lane?.front ?? '-'} 接火=${lane?.engaged ?? '-'} road=${lane?.road ?? '-'} make=${lane?.make ?? '-'}` +
-      ` · 波${
-        w
-          ? ` ${w.cityId} 出发T${w.startedTurn} ${w.men}人 · 到${w.arrivedIds?.length ?? 0}/${w.men}` +
-            ` 均${throughput(w)}/手 本手+${w.arrivals?.at(-1) ?? 0}` +
-            `${w.stuck ? ` 堵${w.stuck}手` : ''}` +
-            `${w.arrivedTurn ? ` 首次T${w.arrivedTurn}` : ' 未接火'}`
-          : ' 无'
-      }` +
-      ` · 交换(${ex.length}手) 赚${gain} 亏${loss}\n`,
+    `[lane] T=${s.turn} ${cid ?? '-'} front=${lane?.front ?? '-'} 接火=${lane?.engaged ?? '-'} road=${lane?.road ?? '-'} make=${lane?.make ?? '-'}` +
+      ` · 批 ${waves.length}批(并${merged}光${wiped}撤${withdrawn}失${gone})` +
+      `${open.length > 0 ? ` · ${open.slice(-4).map(waveBrief).join(' ; ')}` : ' · 无在途批'}` +
+      ` · 本手+${last?.arrivals.at(-1) ?? 0} 堵${last?.stuck ?? 0} 断档${gap?.run ?? 0}/${gap?.total ?? 0}` +
+      ` · 交换(${ex.length}手) 赚${gain} 亏${loss} | 本线 赚${lineGain} 亏${lineLoss}\n`,
   );
 }
 
@@ -529,9 +673,13 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   upgradeBlocked?: string;
   /** W1 影子观测：前线的 / 在途的 / 这回合能造几个 */
   lane?: { front: number; road: number; make: number; engaged: number };
-  /** W1 影子观测：这一波（出发 → 第一次能打到城） */
-  wave?: V4Memory['wave'];
-  /** W1 影子观测：最近 6 手的金币交换 */
+  /** W1.5 影子观测：开过的每一批（`LaneWave`） */
+  waves?: V4Memory['waves'];
+  /** W1.5 影子观测：每条线的断档计数 */
+  lineGap?: V4Memory['lineGap'];
+  /** W1.5 影子观测：每条线各自的交换账 */
+  exchangeByCity?: V4Memory['exchangeByCity'];
+  /** W1 影子观测：最近 6 手的金币交换（全图） */
   exchange?: V4Memory['exchange'];
 } {
   const v = currentView(s, me);
@@ -542,7 +690,9 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
     upgrade: v.con.upgrade,
     upgradeBlocked: v.con.upgradeBlocked,
     lane: v.con.lane,
-    wave: memoryOf(s, me).wave ?? null,
+    waves: memoryOf(s, me).waves ?? [],
+    lineGap: memoryOf(s, me).lineGap ?? {},
+    exchangeByCity: memoryOf(s, me).exchangeByCity ?? {},
     exchange: memoryOf(s, me).exchange ?? [],
   };
 }
@@ -555,7 +705,7 @@ export const V4_MAX_STEPS = AI_MAX_STEPS;
  *
  * 和 v3 一个路子：**只在结论变化时记**，否则 60 手的回放会塞满重复帧。
  * 字段尽量复用 `AiSquadReport` 的语义（count/lead/spread/note），
- * v4 特有的 `want` / `focusId` / `lanes` 顺手带上——复盘面板不认也不会坏。
+ * v4 特有的 `want` / `focusId` / `columns` 顺手带上——复盘面板不认也不会坏。
  * （`tactics.focusId` 是 2026-11-25 之后的写法；没开战术模式的队伍记 null。）
  */
 function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints): void {
@@ -570,7 +720,8 @@ function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constrai
     note: (q.order === 'assemble' ? 'blocked' : 'advance') as 'advance' | 'blocked',
     want: q.want ?? 0,
     focusId: q.tactics?.focusId ?? null,
-    lanes: q.lanes?.length ?? 0,
+    /* 队形分几列（不是战略上的"线"，见 types.ts 的 Squad.columns） */
+    columns: q.columns?.length ?? 0,
   }));
   if (reps.length === 0) return;
   /*

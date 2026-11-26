@@ -169,10 +169,15 @@ export interface Squad {
    * 满足这两条的里面**先挑射程远的**（先手权），射程一样才看价钱。
    * （这里原来写的是"挑最便宜的"——那是错的，代码从来没这么做过，见 8.15。）
    */
-  /** 分路：本队拆成几条走廊（路数由地形宽度决定，见 constrain.planLanes） */
-  lanes?: Array<{ x: number; y: number }>;
-  /** 每个单位走第几条路 */
-  laneOf?: Record<string, number>;
+  /**
+   * **列**：本队分成几股并排走（几股由地形宽度决定，见 `constrain.planColumns`）。
+   *
+   * ⚠️ 名字是"列"不是"线"：这是**队形**，和战略上的"兵线（通往某座城的通道）"
+   * 是两件事。2026-11-26 之前这里叫 `lanes`，把两个概念撞在一起，W1.5 拆开。
+   */
+  columns?: Array<{ x: number; y: number }>;
+  /** 每个单位走第几列 */
+  columnOf?: Record<string, number>;
   /** 这一队要不要寻路绕（目标直线走不通，比如隔着河）：整队一个判断，不按单个兵 */
   detour?: boolean;
   /** 全队最慢的人赶到目标还要几回合（Infinity = 到不了）。出发条件读它 */
@@ -421,6 +426,64 @@ export interface UnitTask {
   cityId?: string;
 }
 
+/**
+ * **一批人（W1.5 起，"一波"= 一批兵）**。
+ *
+ * 第一版记的是"整支主队的一次行军"（一个槽位、按城市认），于是后来补的兵被记成
+ * 同一波的到货——"一批一批往上送"这件事根本没被记下来。现在每一批是一条记录：
+ *
+ *   出生（编进这支队） → 出发（这支队转 march/siege） → 三种结束：
+ *   到齐（活着的人全进前线）/ 打光 / 撤回（线不要了、人被调走）。
+ *
+ * **同一条线允许多批同时在途**；已经进前线的人不再属于任何一批（前线是存量）。
+ * 这份记录只观测、不参与判断（见 `docs/DESIGN-LANES-WAVES` §3）。
+ */
+export interface LaneWave {
+  id: string;
+  cityId: string;
+  bornTurn: number;
+  /** 第一次转 march/siege 的手数（undefined = 还在集结） */
+  startTurn?: number;
+  /** 编进来的人数（只增不减：死掉的人仍算这一批的人） */
+  men: number;
+  /** 还活着的成员（逐手收窄；空 = 打光） */
+  alive: string[];
+  /** 到过前线的人（按人去重） */
+  arrivedIds: string[];
+  /** 每手新到人数（从出生那手开始记） */
+  arrivals: number[];
+  /** 连续几手"在途 > 0 但到货 0"（只在出发后算） */
+  stuck?: number;
+  /** 连续几手这一手没有指向这座城的队（1 手不算撤回：打守转换那种抖动很常见） */
+  miss?: number;
+  endTurn?: number;
+  /**
+   * 结束方式：
+   *   · `merged`    活着的人都进了前线（这批送完）；
+   *   · `wiped`     全灭（人没到就没了）；
+   *   · `withdrawn` 这条线不要了（改守、换目标）；
+   *   · `gone`      目标城已经不是敌城（打下来了 / 丢了）——不是撤退。
+   */
+  end?: 'merged' | 'wiped' | 'withdrawn' | 'gone';
+}
+
+/** 一条线的断档计数（W1.5）：前线 0 人、路上 0 人 = 送不上 */
+export interface LaneGap {
+  /** 当前连续几手 */
+  run: number;
+  /** 全程累计手数 */
+  total: number;
+  /** 最长的那一次 */
+  worst: number;
+  /**
+   * **前线 0 人的手数**（含"路上有人但到不了"）。
+   *
+   * 断档只数"没人也没货"，可真正常见的病是**一直有人在路上、前线却一直是 0**——
+   * 那是"送不上去"，不是"没货"。这两个数要分开看。
+   */
+  noFront: number;
+}
+
 /** `GameState.aiFocus[p].v4` 的形状（见 core/types.ts 里的同名注释） */
 export interface V4Memory {
   /** 承诺：上一次做的决定、哪一手立的、管到第几手 */
@@ -458,34 +521,28 @@ export interface V4Memory {
    */
   eraPlan?: { cityId: string; targetEra: number; since: number } | null;
   /*
-   * ── 影子观测（W1，2026-11-26）────────────────────────────────
+   * ── 影子观测（W1 / W1.5，2026-11-26）──────────────────────────
    *
-   * 这三样**不参与任何判断**，只是为了让"投送"第一次有数可看。
+   * 下面这些**不参与任何判断**，只是为了让"投送"第一次有数可看。
    * 换攻守判据（W2）之前必须先看一段时间的真实曲线。
    */
-  /** 上一次见到的单位（id → 兵种/归属），用来逐手差分出"谁被击杀了" */
-  unitSeen?: Record<string, { type: string; owner: string }>;
-  /** 交换账：最近 6 手的金币收益/损失（按造价，不按残血） */
+  /** 上一次见到的单位（id → 兵种 / 归属 / 位置）。位置只用于把死亡归到最近的那条线 */
+  unitSeen?: Record<string, { type: string; owner: string; x?: number; y?: number }>;
+  /** 交换账（全图）：最近 6 手的金币收益/损失（按造价，不按残血） */
   exchange?: Array<{ turn: number; gain: number; loss: number }>;
-  /** 这一波：从出发到第一次进入前线（能打到城或已接火）。`arrivedTurn` 有值 = 已经交战 */
-  wave?: {
-    id: string;
-    cityId: string;
-    startedTurn: number;
-    men: number;
-    arrivedTurn?: number;
-    arrivedMen?: number;
-    /**
-     * **已经到过前线的人**（按人去重）。通过量靠它算：
-     * "这一手有几个**新人**第一次进入前线"，而不是"前线现在几个人"
-     * ——后者把到达、伤亡、补人混在一起了。
-     */
-    arrivedIds?: string[];
-    /** 每一手的新到货人数（第 0 个 = 出发那一手） */
-    arrivals?: number[];
-    /** 连续几手"在途 > 0 但到货 0" = 通道堵住的直接证据 */
-    stuck?: number;
-  } | null;
+  /**
+   * 交换账**按线分**（W1.5 第 2 条）：`cityId → 最近 6 手`。
+   *
+   * 为什么必须分：只有一本总账时，一条赚 500、另一条亏 800 会显示成"只亏 300"，
+   * 于是砍掉赚钱的那条、继续送亏的那条。W3 开第二条线之前必须先有这个。
+   */
+  exchangeByCity?: Record<string, Array<{ turn: number; gain: number; loss: number }>>;
+  /** 每条线开过的每一批（`LaneWave`）。只有最后 8 批 + 所有没结束的会被保留 */
+  waves?: LaneWave[];
+  /** 事实：这个兵属于哪一批（`unitId → waveId`）。没有 = 还没编过批 */
+  waveOf?: Record<string, string>;
+  /** 每条线的断档计数（`cityId → LaneGap`） */
+  lineGap?: Record<string, LaneGap>;
 }
 
 /** 结构化日志的一条。出了问题先看它，别看代码 */

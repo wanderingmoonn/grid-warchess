@@ -22,38 +22,18 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { ACTIVE as ACTIVE_EXAMS, BRAINS as ALL_BRAINS } from './lib/exam-list.ts';
 
 /**
- * 在册的题。**故意写死**：作废的（S-003、S-007）不进来，
- * 否则每次跑都要重新读一遍 review.md 判断它还算不算数。
- * 加题在这里加一行——这也顺手挡住了"随手多造一道题"。
+ * 在册的题：见 `scripts/lib/exam-list.ts`（唯一一份，`lane-report` 也读它）。
  *
- * 2026-11-25 补齐：原来只写到 S-017，新编号（`字母-档位-序号`）那 14 道没进来，
- * 于是"27 道"一直只能靠手跑。分组只为了读得懂，跑的时候一视同仁。
- *
- * · `S-xxx`：旧题，**只做参考**（太综合），红绿不参与"v4 行不行"的判断；
- * · `E/P/T/D`：四条意图轨（发展 / 打 / 接管 / 守），红了先去决定层、约束层找；
- * · `X`：打分层（集火、让位、靠拢这类跨意图动作），X 红了**不要去看 decide.ts**。
- *
- * 不进来：`S-003`/`S-007`（作废）、`S-014`/`S000L`/`Y-001`（没有 criteria）、
- * `Y-002`（关卡题，判据自己标了 `unusable`，红绿不作数）。
+ * 分组与收录规则写在那里；这里只留一句：`S-xxx` 只做参考，
+ * 判断看 `E/P/T/D/X`；字母 = 这题红了该去哪层修，`X` 是打分层。
  */
-const ACTIVE = [
-  /* 旧题（参考） */
-  'S-000', 'S-001', 'S-002', 'S-004', 'S-005', 'S-006',
-  'S-009', 'S-011', 'S-012', 'S-013', 'S-015', 'S-016', 'S-017',
-  /* 发展 · 打 */
-  'E-1-01', 'E-1-02', 'E-2-01', 'E-2-03', 'E-2-05', 'P-1-01', 'P-1-02', 'P-1-03', 'P-1-04',
-  /* 接管 */
-  'T-1-01', 'T-1-02', 'T-2-01', 'T-2-02',
-  /* 守 */
-  'D-1-01', 'D-1-02', 'D-1-03', 'D-2-01', 'D-2-02',
-  /* 打分层 */
-  'X-1-01', 'X-1-02', 'X-2-01',
-];
+const ACTIVE = ACTIVE_EXAMS;
 
 /** 答题者：空壳 / v1 / v3 / v4 */
-const BRAINS = ['none', 'v1', 'v3', 'v4'] as const;
+const BRAINS = ALL_BRAINS;
 
 const BASE = '.tmp/exam-matrix.json';
 const args = process.argv.slice(2);

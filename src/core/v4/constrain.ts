@@ -594,23 +594,26 @@ function planHorizon(
  *   3. **守城的兵不出去**——`hold` 是约束，不是"倾向"。
  */
 /**
- * 分路：**展开宽度由地形决定**（2026-11-24）。
+ * 分**列**：**展开宽度由地形决定**（2026-11-24）。
  *
  * 判据是地形事实：`world.corridorWidth()` 数"横向能并排站几格"。
- * 宽 ≥5 走三路、≥3 走两路、**窄道（桥/关隘）退回单列**——单列就是原来的行为。
+ * 宽 ≥5 走三列、≥3 走两列、**窄道（桥/关隘）退回单列**——单列就是原来的行为。
  *
  * 上一版不看地形、一律分三路，结果 S-005（桥）过河 4→0、S-000/S-011 一起红。
  * 同一个"展开"，开阔地是对的，窄道是灾难，差别就在宽度。
  *
  * 引导点是**滚动航点**（前沿 + 沿轴 3 格 + 法向偏移），不是城边的固定点——
  * 固定点会让侧翼单位为了"先到点"而绕远（用户原话：绕太远耽误时间）。
+ *
+ * ⚠️ 这是**队形**（一队人分几股并排走），不是战略上的"兵线"。
+ * 2026-11-26 之前它叫 `planLanes`，和"线"撞名，W1.5 改成"列"。
  */
-function planLanes(
+function planColumns(
   s: GameState,
   world: World,
   ids: string[],
   city: { x: number; y: number },
-): { lanes: Array<{ x: number; y: number }>; laneOf: Record<string, number> } | null {
+): { columns: Array<{ x: number; y: number }>; columnOf: Record<string, number> } | null {
   const us = ids.map((id) => s.units.find((u) => u.id === id)).filter((u): u is NonNullable<typeof u> => !!u);
   if (us.length < 6) return null;
 
@@ -648,7 +651,7 @@ function planLanes(
     }
     return p;
   };
-  const lanes = offsets.map((off) =>
+  const columns = offsets.map((off) =>
     snap({
       x: Math.round(front.x + ax * 3 + nx * off),
       y: Math.round(front.y + ay * 3 + ny * off),
@@ -658,11 +661,11 @@ function planLanes(
   const sorted = [...us].sort(
     (a, b) => (a.x - front.x) * nx + (a.y - front.y) * ny - ((b.x - front.x) * nx + (b.y - front.y) * ny),
   );
-  const laneOf: Record<string, number> = {};
+  const columnOf: Record<string, number> = {};
   sorted.forEach((u, i) => {
-    laneOf[u.id] = Math.min(lanes.length - 1, Math.floor((i * lanes.length) / sorted.length));
+    columnOf[u.id] = Math.min(columns.length - 1, Math.floor((i * columns.length) / sorted.length));
   });
-  return { lanes, laneOf };
+  return { columns, columnOf };
 }
 
 /**
@@ -1109,7 +1112,7 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
       cityId: n.city.id,
       want: n.want,
       tactics: planTactics(s, squadIds, true),
-      ...(planLanes(s, world, squadIds, n.city) ?? {}),
+      ...(planColumns(s, world, squadIds, n.city) ?? {}),
     });
   }
   return out;
@@ -1556,7 +1559,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       tactics: planTactics(s, ids, ready && decision.stage === 'clear'),
       /* 分路：只给推进中的队分；路数由地形宽度决定（窄道自动退回单列） */
       detour,
-      ...(ready ? planLanes(s, world, ids, city) ?? {} : {}),
+      ...(ready ? planColumns(s, world, ids, city) ?? {} : {}),
     });
   } else if (decision.kind === 'defend' && city) {
     /* 守：把外面的兵收回城下（这条和 S-004 那道题是同一件事） */
