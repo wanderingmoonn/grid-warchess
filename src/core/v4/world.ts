@@ -988,12 +988,21 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   };
 
   /** 这座城现在买得起的战斗兵（按价升序）。抽成局部函数：`eraLadder` 要在对象建好之前用它 */
-  const affordable = (city: City, gold: number): Array<{ type: string; gold: number }> => {
+  /*
+   * **`needRoom`：要不要按"现在有没有空产兵格"筛**（2026-11-27，S3）。
+   *
+   * 采购和"这一手能造几个"必须按空位筛（没空位就是造不出来）。
+   * 但**升级阶梯不能**——它回答的是"这一代能造多强的兵"，那是时代的属性，
+   * 跟此刻城里挤不挤无关。按空位筛的后果实测过：城格被自己人站满时 `eraLadder` 返回空，
+   * 决定层的 `if (!now) continue` 直接跳过 → **一辈子不升级**（901 局：金 2205、城 3 代、
+   * 对面 5 代，40 多手一次升级都没有）。
+   */
+  const affordable = (city: City, gold: number, needRoom = true): Array<{ type: string; gold: number }> => {
     const out: Array<{ type: string; gold: number }> = [];
     for (const def of Object.values(s.unitTypes)) {
       if (def.category !== 'combat') continue;
       if ((def.era ?? 1) > (city.era ?? 1)) continue;
-      if (recruitSpawnCells(s, city.id, undefined, def.id).length === 0) continue;
+      if (needRoom && recruitSpawnCells(s, city.id, undefined, def.id).length === 0) continue;
       const price = recruitPriceOf(s, me, def).gold;
       if (price <= gold) out.push({ type: def.id, gold: price });
     }
@@ -1010,9 +1019,9 @@ export function buildWorld(s: GameState, me: PlayerId): World {
    * "2 代 + 24 个楼船"算成 2592 战力，比"3 代 + 34 个戟兵"（2550）还高，
    * 于是 E-2-03 里 v4 升了两代就停手、去造一堆开不上岸的船。
    */
-  const bestPerCell = (city: City): { type: string; gold: number; worth: number } | undefined => {
+  const bestPerCell = (city: City, needRoom = true): { type: string; gold: number; worth: number } | undefined => {
     let best: { type: string; gold: number; worth: number } | undefined;
-    for (const o of affordable(city, Number.MAX_SAFE_INTEGER)) {
+    for (const o of affordable(city, Number.MAX_SAFE_INTEGER, needRoom)) {
       if (utype(s, o.type).domain === 'water') continue;
       const w = unitWorthOfType(s, o.type);
       if (!best || w > best.worth) best = { type: o.type, gold: o.gold, worth: w };
@@ -1517,7 +1526,8 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       let cost = 0;
       let acc = 0;
       for (let i = 0; i < 8; i++) {
-        const pick = bestPerCell(cur);
+        /* 阶梯不问"此刻有没有空产兵格"：那是时代的产能，不是当下的挤不挤 */
+        const pick = bestPerCell(cur, false);
         if (!pick) break;
         out.push({ era: cur.era ?? 1, cost, acc, type: pick.type, gold: pick.gold, worth: pick.worth });
         const tgt = upgradeTargetOf(s, cur);

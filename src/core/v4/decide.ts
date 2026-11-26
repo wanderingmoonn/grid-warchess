@@ -372,8 +372,26 @@ function econCandidates(
     const ladder = world.eraLadder(city);
     const now = ladder[0];
     if (!now) continue;
-    /* ③ 钱花得完 → 不叫"钱多"，别升 */
-    if (gold <= cap * left * now.gold) continue;
+    /*
+     * ③ **"值不值"换成战力比价**（S3，2026-11-27）。
+     *
+     * 原来这条是 `gold <= cap × left × 当代最强兵价 → 不升`，意思是"钱花得完就不叫钱多"。
+     * 实测根本不触发：实战里钱每手都被造兵吃掉（12×12 上金常年 0~500），
+     * 那个门槛要 4 格 × 8 手 × 100 金 = 3200，永远够不着 → **一辈子不升代**，
+     * 于是"4 代打 5 代"（用户 2026-11-26 的观察）。
+     *
+     * 现在改成"这笔升级费值不值"：
+     *   · 升级后，接下来 `left` 手造出来的每个兵都换成新一代的兵，
+     *     多出来的战力 = `n × (新一代每格战力 − 现在每格战力)`；
+     *   · 升级费如果拿去造兵，能换的战力 = `升级费 × 现在每格战力 ÷ 现在单价`；
+     *   · **多出来的 > 花掉的** 才升。两边都是"战力"，没有新系数（换算是采购本身的比价）。
+     */
+    const up1 = ladder[1];
+    if (!up1) continue;
+    const nHorizon = Math.min(cap * left, Math.floor(gold / Math.max(1, now.gold)));
+    const gain = nHorizon * (up1.worth - now.worth);
+    const costInPower = (up1.cost * now.worth) / Math.max(1, now.gold);
+    if (!(gain > costInPower)) continue;
 
     let curTotal = Math.min(cap * left, Math.floor(gold / now.gold)) * now.worth;
     for (const step of ladder.slice(1)) {
