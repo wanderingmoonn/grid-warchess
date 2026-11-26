@@ -12772,9 +12772,10 @@ a.btn {
    Canvas-First 桌面战场布局（≥ 921px）
    ==========================================================================
    · 棋盘占满整个可视画布，不再被右侧常驻 340px 灰柱挤窄；
-   · 空闲（idle）态：右下角仅保留紧凑磨砂指挥坞（阵营/战报/说明 + 结束行动）；
-   · 选中（unit / city / tile / dock / star / winner / god）态：右侧平滑弹出
-     磨砂战术浮层卡片，不引起棋盘任何重排或跳动。
+   · 右上角：空闲（idle）态仅浮停紧凑快捷条（阵营 / 战报 / 说明）；
+     选中（unit / city / tile / dock / star / winner / god）态在右上角向下
+     平滑展开磨砂战术浮层卡片，不引起棋盘重排，且与右下角留出安全间距；
+   · 右下角：「结束行动」主按钮始终稳固锚定在视口右下角独立磨砂坞内。
    ========================================================================== */
 
 .desktop-panel-bar {
@@ -12852,29 +12853,42 @@ a.btn {
     height: 100%;
   }
 
+  /* 注意：.side-drawer 自身不挂 backdrop-filter/transform（改由 ::before 承载磨砂），
+     确保内部的 fixed .footer-main（结束行动）始终锚定在视口右下角，与右上角浮层分离。 */
   .side-drawer {
     position: fixed;
+    top: calc(var(--chrome, 50px) + 12px);
     right: 16px;
-    bottom: 16px;
+    bottom: auto;
     z-index: 48;
     border: 1px solid var(--line);
     border-radius: 14px;
     background: var(--hud-glass);
     box-shadow: var(--hud-shadow);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    overflow: hidden;
+    overflow: visible;
     transition: width 0.18s ease, box-shadow 0.18s ease;
   }
 
+  .side-drawer::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    pointer-events: none;
+  }
+
   .side-drawer[data-context='idle'] {
-    top: auto;
-    width: 256px;
-    max-height: 200px;
+    top: calc(var(--chrome, 50px) + 12px);
+    bottom: auto;
+    width: 244px;
+    max-height: 120px;
   }
 
   .side-drawer[data-context='idle'] > .side {
-    padding: 10px;
+    padding: 8px;
     gap: 0;
     overflow: visible;
   }
@@ -12888,17 +12902,35 @@ a.btn {
   }
 
   .side-drawer[data-context='idle'] .side-footer {
-    gap: 8px;
+    position: static;
+    gap: 0;
     margin-top: 0;
     padding: 0;
     border: 0;
     background: transparent;
+    box-shadow: none;
+  }
+
+  /* 结束行动按钮独立常驻视口右下角（不随右上角抽屉开合跳动） */
+  .side-drawer .side-footer .footer-main {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 49;
+    width: 256px;
+    padding: 9px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--hud-glass);
+    box-shadow: var(--hud-shadow);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
   }
 
   .side-drawer:not([data-context='idle']) {
-    top: auto;
-    bottom: 16px;
-    max-height: calc(100dvh - var(--chrome, 50px) - 28px);
+    top: calc(var(--chrome, 50px) + 12px);
+    bottom: auto;
+    max-height: calc(100dvh - var(--chrome, 50px) - 96px);
     width: 336px;
   }
 
@@ -12933,6 +12965,7 @@ a.btn {
     gap: 8px;
     padding: 10px 10px 9px 14px;
     border-bottom: 1px solid var(--line);
+    border-radius: 13px 13px 0 0;
     flex: 0 0 auto;
   }
 
@@ -12948,6 +12981,7 @@ a.btn {
   .side-drawer:not([data-context='idle']) > .side {
     padding: 10px 12px 12px;
     gap: 10px;
+    border-radius: 0 0 13px 13px;
   }
 
   .side-drawer[data-context='unit'] .card-seats,
@@ -12968,14 +13002,28 @@ a.btn {
     display: none;
   }
 
-  .side-drawer:not([data-context='idle']) .side-footer {
-    position: sticky;
-    bottom: -12px;
-    z-index: 4;
-    margin: auto -12px -12px;
+  .side-drawer[data-context='unit'] .side-footer,
+  .side-drawer[data-context='city'] .side-footer,
+  .side-drawer[data-context='tile'] .side-footer {
+    position: static;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .side-drawer[data-context='dock'] .side-footer,
+  .side-drawer[data-context='star'] .side-footer,
+  .side-drawer[data-context='winner'] .side-footer,
+  .side-drawer[data-context='god'] .side-footer {
+    position: static;
+    margin: 2px -12px -12px;
     padding: 10px 12px 12px;
     border-top: 1px solid var(--line);
+    border-radius: 0 0 13px 13px;
     background: var(--panel);
+    box-shadow: none;
   }
 
   .side-drawer:not([data-context='idle']) .side-footer > .panel-fold {
@@ -13004,7 +13052,7 @@ a.btn {
   .side-drawer:not([data-context='idle']) > .combat-preview {
     border: 0;
     border-top: 1px solid var(--line);
-    border-radius: 0;
+    border-radius: 0 0 13px 13px;
     background: var(--panel);
   }
 
@@ -13017,7 +13065,7 @@ a.btn {
 
   .chat-dock {
     right: 16px;
-    bottom: 112px;
+    bottom: 84px;
   }
 }
 
