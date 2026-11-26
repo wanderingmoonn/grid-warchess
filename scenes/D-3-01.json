@@ -1,0 +1,161 @@
+{
+  "id": "D-3-01",
+  "track": "守",
+  "grade": "3 在对抗下",
+  "prev": "—（本格第一道）：两座城、两路同时压过来（2 手 / 3 手），10 个人分两拨刚好一边守得住",
+  "ask": "这一回合你会怎么做？（最多 3 步，按顺序，每步一句为什么）",
+  "size": 12,
+  "startEra": 2,
+  "fog": false,
+  "me": "A",
+  "seed": 51,
+  "gold": {
+    "A": 0,
+    "B": 0
+  },
+  "noIncome": true,
+  "map": [
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............",
+    "............"
+  ],
+  "cities": [
+    {
+      "owner": "A",
+      "x": 1,
+      "y": 10,
+      "era": 3
+    },
+    {
+      "owner": "A",
+      "x": 9,
+      "y": 10,
+      "era": 3
+    },
+    {
+      "owner": "B",
+      "x": 10,
+      "y": 0,
+      "era": 2
+    }
+  ],
+  "units": [
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 2,
+      "y": 6
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 2,
+      "y": 7
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 3,
+      "y": 7
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 8,
+      "y": 4
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 8,
+      "y": 5
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 9,
+      "y": 5
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 3,
+      "y": 6
+    },
+    {
+      "owner": "B",
+      "type": "spearman",
+      "x": 9,
+      "y": 4
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 4,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 5,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 6,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 4,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 5,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 6,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 7,
+      "y": 8
+    },
+    {
+      "owner": "A",
+      "type": "spearman",
+      "x": 7,
+      "y": 9
+    },
+    {
+      "owner": "A",
+      "type": "archer",
+      "x": 5,
+      "y": 7
+    },
+    {
+      "owner": "A",
+      "type": "archer",
+      "x": 6,
+      "y": 7
+    }
+  ]
+}
