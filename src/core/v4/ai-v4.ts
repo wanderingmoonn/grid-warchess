@@ -92,6 +92,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     econHome: econHomeMemo(s, me, mem, world),
     eraPlan: eraPlanMemo(s, decision, mem, s.turn),
     /* W1 影子观测：只记，不读 */
+    bands: con.bands ?? mem.bands,
     ...laneMemo(s, world, con, decision, mem, s.turn),
   };
   writeMemory(s, me, nextMem);
@@ -289,32 +290,22 @@ function laneMemo(
     const c = s.cities.find((x) => x.id === q.cityId);
     return !!c && !!c.owner && c.owner !== world.me && c.ruined !== true;
   });
+  /*
+   * **批 = 编队**（W3.5）：编队 id 就是批 id，编队名册就是这批人的名册。
+   * 编队出发后不改人数，所以一批的人数从出生那一刻就定了，不会每手"滑"。
+   */
   for (const line of lines) {
-    const fresh = line.unitIds.filter((id) => {
-      const wid = waveOf[id];
-      const w = wid ? waves.find((x) => x.id === wid) : undefined;
-      if (!w) return true;
-      /* 换了目标城 → 算新的一批 */
-      if (w.cityId !== line.cityId) return true;
-      /* 线废弃过、现在又重新打这座城 → 也算新的一批 */
-      if (w.end === 'withdrawn') return true;
-      /*
-       * **已经送到的（`merged`）不再重新编批。**
-       * 它们在城下、仍然挂在同一支队里，每手都会出现在 `unitIds` 里；
-       * 拿"上一批结束了"当条件的话，每一手都会开一批"刚出生就到齐"的假批。
-       */
-      return false;
+    if (waves.some((w) => w.id === line.id)) continue;
+    waves.push({
+      id: line.id,
+      cityId: line.cityId!,
+      bornTurn: turn,
+      men: line.unitIds.length,
+      alive: [...line.unitIds],
+      arrivedIds: [],
+      arrivals: [],
     });
-    if (fresh.length === 0) continue;
-    const id = `${line.cityId}@${turn}`;
-    let w = waves.find((x) => x.id === id);
-    if (!w) {
-      w = { id, cityId: line.cityId!, bornTurn: turn, men: 0, alive: [], arrivedIds: [], arrivals: [] };
-      waves.push(w);
-    }
-    w.men += fresh.length;
-    w.alive = [...new Set([...w.alive, ...fresh])];
-    for (const uid of fresh) waveOf[uid] = id;
+    for (const uid of line.unitIds) waveOf[uid] = line.id;
   }
 
   /* ── 批次 ② 逐批推进：**先记到货，再判这一批还开不开** */
@@ -366,12 +357,12 @@ function laneMemo(
     }
     w.miss = 0;
 
+    /*
+     * **只有打光才结束**（W3.5）：编队是"打到死为止"的单位，到了城下不算结束。
+     * 这也是它和"一波人"的区别——人到了就并进前线，队伍还在。
+     */
     if (alive.length === 0) {
       w.end = 'wiped';
-      w.endTurn = turn;
-    } else if (road === 0) {
-      /* 活着的人都进前线了 → 这一批送完，剩下的事归前线（存量）和交换账 */
-      w.end = 'merged';
       w.endTurn = turn;
     }
   }

@@ -20,7 +20,7 @@ import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
 import { bestEraBy, bestProjection, incomeNow, projectEconUntil, projectWithEra, solveEconAll, unitWorth, unitWorthOfType } from './project.ts';
 import type { EraTable } from './project.ts';
-import type { Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
+import type { Band, Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
 import { buildWorld, upgradedCity } from './world.ts';
 import type { World } from './world.ts';
 
@@ -1373,6 +1373,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const keepSet = new Set(keepClear);
 
   const squads: Squad[] = [];
+  /** 这一手在编的进攻编队（要写回记忆，见 `Band`） */
+  let outBands: Band[] | undefined;
 
   /*
    * 守军：每座**真的会被摸到**的城留 2 个最近的兵，任务 hold。留谁按"离城近"排，不按分数。
@@ -1483,76 +1485,77 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     squads.push(...planMains(s, world, threatened.map((i) => i.city), rest.map((u) => u.id)));
   } else if (decision.kind === 'press' && city) {
     /*
-     * **一次只送一批**（W3，2026-11-26）。
+     * **进攻 = 编队**（W3.5，2026-11-26；学 v3 的做法）。
      *
-     * `men` 由决定层给：一批 = 6 手内能走到城下的人数（实测到货 1.2~1.4 人/手）。
-     * 选人只按"离城近"排，取前 `men` 个；**余下的留在后面当预备队**——
-     * 前排死了，下一手它们自动被选中往前走，这就是"一波一波接上"。
+     * 三条硬规矩（用户定）：
+     *   ① 编队**出发后不改人数**——名册定下来就不再往里塞人；
+     *   ② **全战死才撤编**——还剩一个活着就继续打；
+     *   ③ 要补人，就**新组织一队**沿同一条线出发。
      *
-     * 为什么不像以前那样全派：送 25 个只有 6 个能展开（S-002 实测），
-     * 多送的人只是在路上排队，既展不开，也把家底掏空了。
-     *
-     * 原来的 `want`（守军身价 ÷ 我方身价 × 1.5，12 手不缩）在这里退场：
-     * 它算的是"该派几个"，而真正的限制是"一批能送到几个"。
+     * 为什么不能"一条线一个大队"：那样分不清这一队在不在接敌、该不该开战术模式，
+     * 也很容易退化成 v1 那种"全军朝一个地方动"。
      */
-    const all = rest.map((u) => u.id);
-    const cap = Math.max(2, Math.min(decision.men ?? all.length, all.length));
+    const restIds = new Set(rest.map((u) => u.id));
+    /** ① 在编的、还活着的编队（死掉的人从名册里去掉，名册空了就撤编） */
+    const live: Band[] = (mem?.bands ?? [])
+      .filter((b) => b.cityId === city.id)
+      .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => restIds.has(id)) }))
+      .filter((b) => b.unitIds.length > 0);
+    const inBand = new Set(live.flatMap((b) => b.unitIds));
+    const free = rest.filter((u) => !inBand.has(u.id));
+    const bands: Band[] = [...live];
     /*
-     * **已经在城下的人不许被"分批"挤出去。**
+     * ② **什么时候新组一队：前面的队都已经到城下（或全战死）了。**
      *
-     * `men` 管的是"这一次新派几个人"。如果按人数一刀切，前排 10 个人而 `men` 只有 8，
-     * 就会有两个人被落下、原地不动——那不是分批，那是丢人。
-     * 所以：够得着城的人（还差 1 手以内）**无条件留在队里**，上限只卡"后面补上来的"。
+     * 为什么不是"全战死才组"：一队打到最后剩一两个卡在半路，后面就永远不出人了（S-001 实测）。
+     * 为什么不是"每手都组"：新造的兵一手编一队，又回到一人一批的滴灌。
+     * 现在这个条件的意思是：**上一队已经全部展开在城下 → 下一队从后面顶上来**，
+     * 这样"前一波在打、后一波在路上"能同时成立。
      */
-    const us = all
-      .map((id) => s.units.find((u) => u.id === id))
-      .filter((u): u is Unit => !!u)
-      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1));
-    const front = us.filter((u) => world.marchTurns(u, city) <= 1);
-    const room = Math.max(0, cap - front.length);
-    const picked = [...front, ...us.filter((u) => !front.includes(u)).slice(0, room)].map((u) => u.id);
-
-    /*
-     * 出发条件：这一批到得差不多就走；或者整队已经贴到城下（八成人一步能到）。
-     *
-     * 试过"两回合内到城下的人 ≥ want"，那样是循环条件：队伍在城外集结，
-     * 到不了城下就永远凑不够人出发（S-000 从绿变红、S-005 过河 4→3）。
-     */
-    const etas = picked
-      .map((id) => {
+    const anyOnRoad = live.some((b) =>
+      b.unitIds.some((id) => {
         const u = s.units.find((x) => x.id === id);
-        return u ? world.marchTurns(u, city) : Infinity;
-      })
-      .sort((a, b) => a - b);
-    const eta80 = etas[Math.min(etas.length - 1, Math.floor(etas.length * 0.8))] ?? Infinity;
-    const eta = etas[etas.length - 1] ?? Infinity;
-    const ready = picked.length >= cap || eta80 <= 1;
+        return !!u && !world.contacts([id], city).length;
+      }),
+    );
+    if (!anyOnRoad && free.length > 0) {
+      const cap = Math.max(2, Math.min(decision.men ?? free.length, free.length));
+      const pick = [...free]
+        .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
+        .slice(0, cap);
+      bands.push({
+        id: `${city.id}#${s.turn}`,
+        cityId: city.id,
+        formedAt: s.turn,
+        unitIds: pick.map((u) => u.id),
+      });
+    }
 
-    /*
-     * 要不要绕：看**先头那个兵**到城的真实回合数和直线距离差多少。
-     * 隔河时 BFS 会明显更远（S-005 的桥），这时才用寻路挑落点；
-     * 平地上一律直线（用了反而会选斜路绕远，S-011 全队漂到西北角）。
-     */
-    const leadUnit = picked
-      .map((id) => s.units.find((x) => x.id === id))
-      .filter((u): u is NonNullable<typeof u> => !!u)
-      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city))[0];
-    const detour = leadUnit ? world.marchTurns(leadUnit, city) > manhattan(leadUnit, city) + 2 : false;
-    squads.push({
-      id: 'main',
-      /* clear 段打人（march），siege 段砸城；人还没到齐就先收拢 */
-      order: ready ? (decision.stage === 'clear' ? 'march' : 'siege') : 'assemble',
-      unitIds: picked,
-      cityId: city.id,
-      at: ready ? undefined : assemblePoint(s, world, city.id),
-      want: cap,
-      eta: Number.isFinite(eta) ? eta : 99,
-      /* 集火点：这一手全队打同一个。出发前（assemble）也照样选，等于"边收拢边集火" */
-      tactics: planTactics(s, picked, ready && decision.stage === 'clear'),
-      /* 分路：只给推进中的队分；路数由地形宽度决定（窄道自动退回单列） */
-      detour,
-      ...(ready ? planColumns(s, world, picked, city) ?? {} : {}),
-    });
+    for (const b of bands) {
+      const ids = b.unitIds;
+      const us = ids
+        .map((id) => s.units.find((u) => u.id === id))
+        .filter((u): u is Unit => !!u);
+      if (us.length === 0) continue;
+      const etas = us.map((u) => world.marchTurns(u, city)).sort((a, b2) => a - b2);
+      const eta = etas[etas.length - 1] ?? Infinity;
+      const lead = [...us].sort((a, b2) => world.marchTurns(a, city) - world.marchTurns(b2, city))[0];
+      const detour = lead ? world.marchTurns(lead, city) > manhattan(lead, city) + 2 : false;
+      squads.push({
+        id: b.id,
+        /* clear 段打人（march），siege 段砸城 */
+        order: decision.stage === 'clear' ? 'march' : 'siege',
+        unitIds: ids,
+        cityId: city.id,
+        want: ids.length,
+        eta: Number.isFinite(eta) ? eta : 99,
+        /* 战术开关**按编队各自判**：一队在接敌、另一队还在路上，不该互相带开关 */
+        tactics: planTactics(s, ids, decision.stage === 'clear'),
+        detour,
+        ...(planColumns(s, world, ids, city) ?? {}),
+      });
+    }
+    outBands = bands;
   } else if (decision.kind === 'defend' && city) {
     /* 守：把外面的兵收回城下（这条和 S-004 那道题是同一件事） */
     squads.push({
@@ -2028,9 +2031,14 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * **一条线的三个存量**（W1 影子模式）：只在这里算一次，给日志和探针看。
    * 挂在主队上——主队就是这一波（`main` + 目标敌城）。
    */
-  const mainSquad = squads.find((q) => q.id === 'main' && !!q.cityId);
-  const laneCity = mainSquad?.cityId ? s.cities.find((c) => c.id === mainSquad.cityId) : undefined;
-  const lane = mainSquad && laneCity ? world.laneStats(mainSquad.unitIds, laneCity) : undefined;
+  const attackSquads = squads.filter((q) => !!q.cityId && q.order !== 'hold' && q.order !== 'yield');
+  const laneCity = attackSquads[0]?.cityId
+    ? s.cities.find((c) => c.id === attackSquads[0]!.cityId)
+    : undefined;
+  const lane =
+    attackSquads.length > 0 && laneCity
+      ? world.laneStats(attackSquads.flatMap((q) => q.unitIds), laneCity)
+      : undefined;
   return {
     need,
     spendCap,
@@ -2041,6 +2049,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     upgrade: upgradePlan.upgrade,
     upgradeBlocked: upgradePlan.blocked,
     lane,
+    bands: outBands,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

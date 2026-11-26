@@ -376,6 +376,8 @@ export interface Constraints {
   transit?: Record<string, { x: number; y: number }>;
   /** 这一回合不许做的动作类型（比如"这回合不造经济兵"） */
   forbid?: string[];
+  /** 这一手在编的进攻编队（要写回记忆；见 `V4Memory.bands`） */
+  bands?: Band[];
   /**
    * **应急升级**（2026-11-25，P3 闸 A）：哪座城这一手该花钱升一级。
    *
@@ -478,6 +480,25 @@ export interface LaneWave {
   end?: 'merged' | 'wiped' | 'withdrawn' | 'gone';
 }
 
+/**
+ * **一支进攻编队**（W3.5，2026-11-26；思路学 v3）。
+ *
+ * 为什么要它：一支"整条线"的队伍分不清"这一队在不在接敌、该不该展开战术"，
+ * 很容易退化成 v1 那种"全军朝一个地方动"。v3 的做法是**组织多支编队**，
+ * 每支有自己的名册、自己的状态。
+ *
+ * 三条硬规矩（用户 2026-11-26 定）：
+ *   ① **出发后不改人数**：名册定下来就不再往里塞人；
+ *   ② **全战死才撤编**：一个活着就不解散；
+ *   ③ 要补人，就**新组织一队**沿着同一条线出发。
+ */
+export interface Band {
+  id: string;
+  cityId: string;
+  formedAt: number;
+  unitIds: string[];
+}
+
 /** 一条线的断档计数（W1.5）：前线 0 人、路上 0 人 = 送不上 */
 export interface LaneGap {
   /** 当前连续几手 */
@@ -568,6 +589,8 @@ export interface V4Memory {
   waveOf?: Record<string, string>;
   /** 每条线的断档计数（`cityId → LaneGap`） */
   lineGap?: Record<string, LaneGap>;
+  /** **在编的进攻编队**（名册冻结，全战死才撤编，见 `Band`） */
+  bands?: Band[];
   /**
    * 上一手每条线**现在能打到城 / 已接火**的人数（`cityId → 人数`）。
    *
