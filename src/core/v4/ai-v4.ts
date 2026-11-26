@@ -28,7 +28,7 @@ import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
 import { recruitPriceOf, utype } from '../rules.ts';
-import type { Constraints, Decision, V4Memory } from './types.ts';
+import type { BandReport, Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId } from '../types.ts';
 
 interface TurnCache {
@@ -98,7 +98,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
   writeMemory(s, me, nextMem);
   logLane(s, con, nextMem);
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
-  logSquads(s, world.me, decision, con);
+  logSquads(s, world.me, decision, con, nextMem);
   return cache;
 }
 
@@ -324,12 +324,17 @@ function laneMemo(
     const fresh = [...contact].filter((id) => !arrived.has(id));
     for (const id of fresh) arrived.add(id);
     const road = alive.filter((id) => !arrived.has(id)).length;
-    if (line && w.startTurn === undefined && (line.order === 'march' || line.order === 'siege')) w.startTurn = turn;
+    if (line && w.startTurn === undefined && (line.order === 'march' || line.order === 'siege')) {
+      w.startTurn = turn;
+      /* 出发那一刻的预计：用它判"是不是比预计还晚"，避免正常行军被算成堵 */
+      w.eta0 = line.eta;
+    }
     w.alive = alive;
     w.arrivedIds = [...arrived];
     if (city && !city.ruined) w.arrivals.push(fresh.length);
     /* 连续几手"有人在路上、却一个人都没到" = 这一段堵住了（没出发前不算） */
-    w.stuck = w.startTurn !== undefined && fresh.length === 0 && road > 0 ? (w.stuck ?? 0) + 1 : 0;
+    const overdue = w.startTurn !== undefined && s.turn - w.startTurn >= (w.eta0 ?? 0) + 2;
+    w.stuck = overdue && fresh.length === 0 && road > 0 ? (w.stuck ?? 0) + 1 : 0;
 
     /*
      * 城没了 / 已经不是敌城（打下来了 / 丢了）→ 这条线到此为止，但**不算撤退**。
@@ -461,6 +466,25 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
       ` · 本手+${last?.arrivals.at(-1) ?? 0} 堵${last?.stuck ?? 0} 断档${gap?.run ?? 0}/${gap?.total ?? 0}` +
       ` · 交换(${ex.length}手) 赚${gain} 亏${loss} | 本线 赚${lineGain} 亏${lineLoss}\n`,
   );
+  /*
+   * **每队一行**（W3.6 第 6 步）：掉的、到的、堵的、还有几手到。
+   * 这几个数原来在回放里全是 0 占位，所以"哪一队在卡"只能靠猜。
+   */
+  const reps = bandReports(s, con, mem);
+  if (reps.length > 0) {
+    process.stderr.write(
+      `[band] T=${s.turn} ` +
+        reps
+          .map(
+            (r) =>
+              `${r.id}[${r.state === 'forming' ? '集' : (r.order ?? '?')}] ${r.alive}/${r.men}` +
+              ` 掉${r.lost} 到${r.arrived}${r.stuck ? ` 堵${r.stuck}` : ''}` +
+              `${r.turnsToTarget !== undefined ? ` 距${r.turnsToTarget}手` : ''}`,
+          )
+          .join(' · ') +
+        '\n',
+    );
+  }
 }
 
 /**
@@ -686,6 +710,8 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   exchangeByCity?: V4Memory['exchangeByCity'];
   /** W1 影子观测：最近 6 手的金币交换（全图） */
   exchange?: V4Memory['exchange'];
+  /** W3.6 第 6 步：每支编队的体检（纯观测，没人读它做判断） */
+  bands?: BandReport[];
 } {
   const v = currentView(s, me);
   return {
@@ -699,6 +725,7 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
     lineGap: memoryOf(s, me).lineGap ?? {},
     exchangeByCity: memoryOf(s, me).exchangeByCity ?? {},
     exchange: memoryOf(s, me).exchange ?? [],
+    bands: bandReports(s, v.con, memoryOf(s, me)),
   };
 }
 
@@ -713,21 +740,59 @@ export const V4_MAX_STEPS = AI_MAX_STEPS;
  * v4 特有的 `want` / `focusId` / `columns` 顺手带上——复盘面板不认也不会坏。
  * （`tactics.focusId` 是 2026-11-25 之后的写法；没开战术模式的队伍记 null。）
  */
-function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints): void {
-  const reps = con.squads.map((q) => ({
-    id: q.id,
-    state: q.order,
-    count: q.unitIds.length,
-    lead: q.eta ?? 0,
-    spread: 0,
-    stalled: 0,
-    lost: 0,
-    note: (q.order === 'assemble' ? 'blocked' : 'advance') as 'advance' | 'blocked',
-    want: q.want ?? 0,
-    focusId: q.tactics?.focusId ?? null,
-    /* 队形分几列（不是战略上的"线"，见 types.ts 的 Squad.columns） */
-    columns: q.columns?.length ?? 0,
-  }));
+/**
+ * **每队报告**（W3.6 第 6 步，2026-11-26）：纯观测，没有任何判断读它。
+ *
+ * 三个数原来都是 0 占位：`lost`（掉了几个人）、`stalled`（卡了几手）、`lead`（还有几手到）。
+ * 它们分别来自批记录（`waves`，按编队 id 对得上）和这一手现算的距离。
+ */
+function bandReports(
+  s: GameState,
+  con: Constraints,
+  mem: V4Memory,
+): BandReport[] {
+  const waves = mem.waves ?? [];
+  return (mem.bands ?? []).map((b) => {
+    const w = waves.find((x) => x.id === b.id);
+    const sq = con.squads.find((q) => q.id === b.id);
+    const alive = b.unitIds.filter((id) => s.units.some((u) => u.id === id)).length;
+    const men = b.men ?? w?.men ?? b.want ?? b.unitIds.length;
+    return {
+      id: b.id,
+      cityId: b.cityId,
+      men,
+      alive,
+      lost: Math.max(0, men - alive),
+      state: (b.state ?? 'forming') as BandReport['state'],
+      order: sq?.order,
+      turnsToTarget: sq?.eta,
+      stuck: w?.stuck ?? 0,
+      arrived: w?.arrivedIds.length ?? 0,
+      formedAt: b.formedAt,
+    };
+  });
+}
+
+function logSquads(s: GameState, me: PlayerId, decision: Decision, con: Constraints, mem: V4Memory): void {
+  const reports = new Map(bandReports(s, con, mem).map((r) => [r.id, r]));
+  const reps = con.squads.map((q) => {
+    const r = reports.get(q.id);
+    return {
+      id: q.id,
+      state: q.order,
+      count: q.unitIds.length,
+      lead: q.eta ?? 0,
+      spread: 0,
+      /* 卡住几手 / 掉了几个：来自批记录（同一支队的 id 对得上） */
+      stalled: r?.stuck ?? 0,
+      lost: r?.lost ?? 0,
+      note: (q.order === 'assemble' ? 'blocked' : 'advance') as 'advance' | 'blocked',
+      want: q.want ?? 0,
+      focusId: q.tactics?.focusId ?? null,
+      /* 队形分几列（不是战略上的"线"，见 types.ts 的 Squad.columns） */
+      columns: q.columns?.length ?? 0,
+    };
+  });
   if (reps.length === 0) return;
   /*
    * 去重签名要包含**钱和升级**（D6）：这两件事变了而队伍没变时，回放里也该留一条。

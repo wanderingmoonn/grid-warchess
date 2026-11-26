@@ -639,8 +639,20 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         });
       }
     } else if (prev.kind === 'defend') {
-      /* 威胁解除就提前转攻：对面掉到我方 0.6 以下 */
-      if (foeStr >= myStr * 0.6) {
+      /*
+       * **威胁没解除就不转攻。**（W3.6 第 4 步）
+       *
+       * 旧判据是"对面身价掉到我方 0.6 以下就转攻"——那是全局比较，而且**抖**：
+       * 兵一回到家，守军就"够了" → 立刻转攻 → 兵一走，城又没人 → 再转守。
+       * 撤掉"每城留两个守军"之后这个抖动直接让两道题丢城（D-2-02 / P-1-03）：
+       * 守了一手、第二手就全军出城，老家空着被拆。
+       *
+       * 现在只看一件事：**敌人还在不在门口**（`foeEta` ≤ 2 手能摸到城）。
+       * 在，就继续守；走了，才回到"该打还是该发展"的正常判断。
+       */
+      const home = prev.cityId ? s.cities.find((c) => c.id === prev.cityId) : undefined;
+      const atGate = home ? world.foeEta({ x: home.x, y: home.y }) <= 2 : false;
+      if (home && (atGate || !world.defensible(home).hold)) {
         return complete(s, world, mem, {
           kind: 'defend',
           untilTurn: prev.untilTurn,

@@ -475,8 +475,15 @@ export interface LaneWave {
   arrivedIds: string[];
   /** 每手新到人数（从出生那手开始记） */
   arrivals: number[];
-  /** 连续几手"在途 > 0 但到货 0"（只在出发后算） */
+  /**
+   * 连续几手"在途 > 0 但到货 0"（只在出发后算，且要晚于预计到达）。
+   *
+   * 加"晚于预计"这条是因为：出发后前几手当然一个人都到不了，
+   * 不加就每一支队的开头都在报"堵"（S-001 实测 T1 堵 1 手），数就没法用了。
+   */
   stuck?: number;
+  /** 出发那一刻算的"还要几手到"（判"是不是比预计还晚"用） */
+  eta0?: number;
   /** 连续几手这一手没有指向这座城的队（1 手不算撤回：打守转换那种抖动很常见） */
   miss?: number;
   endTurn?: number;
@@ -516,6 +523,12 @@ export interface Band {
   state?: 'forming' | 'marching';
   /** 这支队的**编制人数**（收拢时就按它吸收新兵；够了或超时就出发） */
   want?: number;
+  /**
+   * **累计编进来过多少人**（W3.6 第 6 步）：成立时的人数 + 收拢期吸收的人数。
+   * 用它减"现在还活着几个"才是真正的损失；拿 `want` 或批记录里的人数都算不准
+   * （收拢期会补人，`want` 也可能大于成立时的人数）。
+   */
+  men?: number;
 }
 
 /**
@@ -532,6 +545,35 @@ export interface BandTask {
   order: SquadOrder;
   /** 目标城：`march` / `siege` / `hold` 都有 */
   cityId: string;
+}
+
+/**
+ * **一支编队这一刻的体检**（W3.6 第 6 步，2026-11-26）。
+ *
+ * 纯观测：**没有任何判断读它**。做它是为了让"哪一队在卡住、掉了多少人"第一次能被读出来，
+ * 后面两步（撤守城补丁、采购认编队）才有数可依。
+ */
+export interface BandReport {
+  id: string;
+  cityId: string;
+  /** 编制人数（成立那一刻，之后不因伤亡而缩） */
+  men: number;
+  /** 现在还剩几个（活着，含这一手在让位/守家的） */
+  alive: number;
+  /** 累计掉了几个人 */
+  lost: number;
+  /** 收拢中 / 已出发 */
+  state: 'forming' | 'marching';
+  /** 这一手的任务（决定层给的）；这一手没派出去就没有 */
+  order?: string;
+  /** 离目标城还有几手（这一手现算的） */
+  turnsToTarget?: number;
+  /** 连续几手"路上有人、一个人都没到" = 堵住 */
+  stuck: number;
+  /** 进过前线的人数（到过城下或接过火的） */
+  arrived: number;
+  /** 第几手成立的 */
+  formedAt: number;
 }
 
 /** 一条线的断档计数（W1.5）：前线 0 人、路上 0 人 = 送不上 */

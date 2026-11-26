@@ -383,7 +383,6 @@ function planYield(
  *
  * ── 边界（都踩过）─────────────────────────────────────────────
  *
- *   · **守军不调**：`held` 里的兵是有意守在城下的，把它们调出去等于自己撤防；
  *   · **`hold` 队不当目的地**：召回队的终点就是城，调过去等于让它留在原地，
  *     而且可能把它从外圈拽进城格（反而堵产兵口）；
  *   · **已经在目的地上的不发调令**：那不是"被卡住"，那就是它要站的地方。
@@ -394,7 +393,6 @@ function planTransit(
   decision: Decision,
   squads: Squad[],
   blockers: Unit[],
-  held: Set<string>,
   captureTarget: { x: number; y: number } | undefined,
 ): Record<string, { x: number; y: number }> {
   const out: Record<string, { x: number; y: number }> = {};
@@ -439,7 +437,6 @@ function planTransit(
   if (dests.length === 0) return out;
 
   for (const u of blockers) {
-    if (held.has(u.id)) continue;
     if (!spawnCells.has(u.y * s.w + u.x)) continue; /* 窄道/城圈交给搬迁链（见上） */
     /*
      * 多城分兵时挑**离自己最近**的那支（`marchTurns`，不是直线距离）。
@@ -1420,26 +1417,18 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 不留人不是"不设防"——兵本来就在场，该回防的回合 `defend` 会把他们叫回来；
    * 提前两个回合钉住 2 个人，只是让主力少两个人。
    */
-  const held = new Set<string>();
-  for (const info of world.cities) {
-    if (info.role !== 'threatened' && info.role !== 'home') continue;
-    if (info.foeEta > 1) continue; /* 敌人一时来不了 → 一个都不留 */
-    const guards = world.myCombat
-      .filter((u) => !held.has(u.id))
-      .sort((a, b) => manhattan(a, info.city) - manhattan(b, info.city))
-      .slice(0, 2);
-    for (const g of guards) held.add(g.id);
-    if (guards.length > 0) {
-      squads.push({
-        id: `hold-${info.city.id}`,
-        order: 'hold',
-        unitIds: guards.map((g) => g.id),
-        cityId: info.city.id,
-        /* 守军也要集火（X-1-01 量出来的）：但**不许挪**——离开城就没护甲、也守不住 */
-        tactics: planTactics(s, guards.map((g) => g.id), false),
-      });
-    }
-  }
+  /*
+   * **"每城留 2 个守军"这个补丁撤了**（W3.6 第 4 步，2026-11-26）。
+   *
+   * 它治的是"主力全出去、老家没人看"，但代价是**提前两个回合钉住 2 个人**：
+   *   · S-016（空城、无敌人）8 个兵被扣 2 个，第 4 手城伤只有 33（v1/v3 是 69）；
+   *   · T-1（接管废墟）1 个兵时唯一的兵被扣走，接管根本发不出去；
+   *   · 更要命的是它**不认编队**，却决定编队能拿到谁——编队人数莫名少两个。
+   *
+   * 现在守城由决定层负责：`world.defensible` 判"这座城挡不住"，
+   * 约束层把**回得去的编队**整队改成守（走不回去的继续打），不需要在每座城提前钉人。
+   * 换句话说：不是"永远留两个人"，而是"该回防的时候整队回防"。
+   */
 
   /*
    * **站在关键格上的兵：不在主队里，但有一个任务叫"让开"**（2026-11-25，清 9.14）。
@@ -1454,7 +1443,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 这两个副作用都比"多一个任务名"贵。
    */
   const blockers = world.myCombat.filter((u) => keepSet.has(u.y * s.w + u.x));
-  const rest = world.myCombat.filter((u) => !held.has(u.id) && !keepSet.has(u.y * s.w + u.x));
+  const rest = world.myCombat.filter((u) => !keepSet.has(u.y * s.w + u.x));
 
   /*
    * 两座以上城同时受威胁 → 分兵，每城一支队。
@@ -1582,6 +1571,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         .slice(0, room);
       if (pick.length > 0) {
         forming.unitIds.push(...pick.map((u) => u.id));
+        forming.men = (forming.men ?? forming.unitIds.length - pick.length) + pick.length;
         const taken = new Set(pick.map((u) => u.id));
         free = free.filter((u) => !taken.has(u.id));
       }
@@ -1609,6 +1599,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
          */
         want: bands.length === 0 ? pick.length : Math.max(pick.length, decision.men ?? pick.length),
         state: 'forming',
+        men: pick.length,
         unitIds: pick.map((u) => u.id),
       });
     }
@@ -1633,8 +1624,24 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       const us = ids
         .map((id) => s.units.find((u) => u.id === id))
         .filter((u): u is Unit => !!u);
-      /* 全队这一手都在让位 / 守城：不撤编，等下一手 */
-      if (us.length === 0) continue;
+      /*
+       * 全队这一手都站在关键格上（产兵格/城门口）：不撤编，但**得给个任务**。
+       *
+       * 以前这里直接 `continue`，于是这支队这一手"没有任何任务"——不打架也不动。
+       * P-1-02 实测：两个兵站在产兵格上，从第 6 手站到第 10 手，敌人就在城下，
+       * 一次攻击都没出，`foeLost` 判红。
+       * 现在给一条"回集结点"的任务：既离开了关键格（把产兵口让出来），
+       * 下一手也自然回到 `rest`、恢复正常任务。
+       */
+      if (us.length === 0) {
+        squads.push({
+          id: b.id,
+          order: 'assemble',
+          unitIds: b.unitIds,
+          at: assemblePoint(s, world, city.id),
+        });
+        continue;
+      }
       const etas = us.map((u) => world.marchTurns(u, city)).sort((a, b2) => a - b2);
       const eta = etas[etas.length - 1] ?? Infinity;
       const lead = [...us].sort((a, b2) => world.marchTurns(a, city) - world.marchTurns(b2, city))[0];
@@ -2016,7 +2023,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 否则同一只手会既给它一个"朝前线"的落点、又给它一个"去最近空格"的落点，
    * 两个方向打架，最后一步也不走（那正是 9.18 之前的症状）。
    */
-  const transit = planTransit(s, world, decision, squads, blockers, held, captureTarget);
+  const transit = planTransit(s, world, decision, squads, blockers, captureTarget);
 
   const marched = planMarch(s, world, squads);
   const yieldMoves = planYield(s, world, keepClear, squads, { spawn, exit }, Object.keys(transit));
