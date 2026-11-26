@@ -11,7 +11,15 @@
  * v3 有一半的翻车是"编队自己挑了目标"（配对 4↑8↓）。这里目标的唯一来源是约束层：
  * 单位查不到任务，就什么都不做。
  */
-import { applyAction, attackableTargets, effectiveStats, reachableTiles, siegeTargets, utype } from '../rules.ts';
+import {
+  applyAction,
+  attackableTargets,
+  buildSiteError,
+  effectiveStats,
+  reachableTiles,
+  siegeTargets,
+  utype,
+} from '../rules.ts';
 import type { Action, City, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
@@ -94,6 +102,28 @@ export function actFor(
   if (con.captureId === u.id && con.captureTarget) {
     const step = stepToward(s, u, con.captureTarget, false, world.stepsFrom(con.captureTarget));
     if (step) return { type: 'MOVE', unitId: u.id, x: step.x, y: step.y };
+  }
+
+  /*
+   * ①.42 **架桥：站到建造距离内就 `BUILD`**（W4-4d-3，2026-11-26）。
+   *
+   * 判据全部交给引擎的 `buildSiteError`（地形、类型、链式规则、时代都在里面），
+   * 这里只做一件事：**能不能建那一格**。能就建，建不了就继续朝岸边走（下面的 ④）。
+   *
+   * 一条门槛先自己查：**钱**。`buildSiteError` 不查金币，提一个必然被拒的动作
+   * 会白白烧掉这一手的动作预算（v3 就踩过：AI 一直提"金币不足"的建造）。
+   */
+  {
+    const sqB = squadOf(con, u);
+    const target = sqB?.order === 'build' ? sqB.buildAt : undefined;
+    if (target && (utype(s, u.type).builds ?? []).includes('bridge')) {
+      const def = s.unitTypes['bridge'];
+      const gold = s.players[world.me]?.gold ?? 0;
+      const price = def?.cost ?? 45;
+      if (def && gold >= price && !buildSiteError(s, def, u, target.x, target.y)) {
+        return { type: 'BUILD', unitId: u.id, unitType: 'bridge', x: target.x, y: target.y };
+      }
+    }
   }
 
   /*
@@ -314,7 +344,11 @@ export function actFor(
    * 这里只负责"朝自己那一格走一步"。再留一个按人数判断的开关，
    * 就是在用参数补队形——那条判断应该由"链条会不会交叉"来说话，不是人数。
    */
-  const spot = stepToward(s, u, to, false, world.stepsFrom(to));
+  /*
+   * 工兵（`build`）用 `straight`：同距离的两格优先"更正对目标"的那一格。
+   * 不开的时候它会在桥头来回抖（4d-3 实测：工兵在 (7,8)/(7,9) 交替了 10 多手，桥停在第三格）。
+   */
+  const spot = stepToward(s, u, to, sq.order === 'build', world.stepsFrom(to));
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   return null;
 }

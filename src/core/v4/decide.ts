@@ -16,6 +16,8 @@ import type { City } from '../types.ts';
 import type { BandTask, Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
 import { unitWorth } from './world.ts';
 import { cityTiles, effectiveStats, previewAttack, utype } from '../rules.ts';
+import { passable } from '../config.ts';
+import { EARTH, tileOn } from '../board.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import type { GameState } from '../types.ts';
 
@@ -110,6 +112,31 @@ function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory):
             ? `钱够了，这一手的 ${cost} 金留给重建费，不采购（现有 ${gold}）`
             : `攒 ${cost} 金重建，这一手最多花 ${cap}（现有 ${gold}）`,
       },
+    };
+  }
+
+  /*
+   * ①.5) **架桥期的钱**（W4-4d-3，2026-11-26）。
+   *
+   *   · `seize`：先头部队要去占岸 → 钱**只买战斗兵**（不铺经济）；
+   *   · `build`：工兵已经上来了 → **把桥钱留住**，其余不花（`save`）。
+   *     不这么办的话，钱会在"占岸"那几手全变成兵，工兵到了岸边一分钱都没有
+   *     （临时验证：300 金到第 10 手已经 0，桥一格没铺）。
+   */
+  if (d.kind === 'bridge' && d.bridge) {
+    const city = s.cities.find((c) => c.id === d.bridge!.cityId);
+    const cost = city ? (world.bridgeOutlook(city).cost?.gold ?? 0) : 0;
+    const gold = s.players[world.me]?.gold ?? 0;
+    if (d.bridge.stage === 'build' && cost > 0) {
+      const cap = Math.max(0, gold - cost);
+      return {
+        ...d,
+        spend: { mode: 'save', cap, untilTurn: keep, why: `留 ${cost} 金架桥，这一手最多花 ${cap}（现有 ${gold}）` },
+      };
+    }
+    return {
+      ...d,
+      spend: { mode: 'army', untilTurn: keep, why: '架桥：先头部队先去占岸，钱只买战斗兵' },
     };
   }
 
@@ -774,39 +801,54 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     const dir = o.crossing!.dir;
     const at = { x: o.crossing!.x, y: o.crossing!.y };
     const stand = { x: at.x - dir[0], y: at.y - dir[1] };
+    /*
+     * **战斗兵待的岸**：从 `at` 沿反方向退到第一块"不是桥"的陆地。
+     * 桥铺到第二格之后 `stand` 已经是桥面，战斗兵再往那儿挤就会把工兵顶开
+     * （4d-3 实测：桥停在第二格、工兵在桥头抖了 10 手）。
+     */
+    let bank = { ...stand };
+    for (let i = 0; i < 6; i += 1) {
+      const t = tileOn(s, EARTH, bank.x, bank.y)?.terrain;
+      if (!t || !passable(t)) break;
+      if (t !== 'bridge') break;
+      bank = { x: bank.x - dir[0], y: bank.y - dir[1] };
+    }
+    /*
+     * 再退两格：战斗兵聚在桥头会把工兵挤在外面（4d-3 实测，退了 20 手都没进 buildRange）。
+     * 它们只是"占岸接应"，站远两格一样接应，桥头反而能空出来给工兵。
+     */
+    for (let i = 0; i < 2; i += 1) {
+      const nb = { x: bank.x - dir[0], y: bank.y - dir[1] };
+      const t = tileOn(s, EARTH, nb.x, nb.y)?.terrain;
+      if (!t || !passable(t) || t === 'bridge' || t === 'city') break;
+      bank = nb;
+    }
+    /*
+     * "岸上有没有自己人"要按**战斗兵站的那个岸**（`bank`）算，不是按桥头。
+     * 按桥头算的话，战斗兵一退到岸上（stand 已经变成桥面），就判成"岸上没人"、
+     * 工兵被撤编，桥停在第二格（4d-3 实测）。
+     */
     const onBank = world.myCombat.filter(
-      (u) => Math.abs(u.x - stand.x) + Math.abs(u.y - stand.y) <= 2,
+      (u) => Math.abs(u.x - bank.x) + Math.abs(u.y - bank.y) <= 3,
     ).length;
     /*
-     * **"岸上安全吗"要看两件事，不能只看敌人几步能走过来。**
+     * **只守一条门槛：岸上已有自己人。**
      *
-     * 隔河时敌人的移动距离是无限大（过不来），但他**站对岸就能用远程打到岸边**——
-     * 只看 `foeEta` 会把这种局面判成"安全"，工兵上去照样挨打。
+     * 试过再加两条（敌人两回合内摸不到、没有敌人能打到岸边），用户 2026-11-26 否掉：
+     * 太苛刻，实战里"顶着火力强行架桥"是常事。所以这里只问"岸上有没有人接应"，
+     * 有就上工兵——打不打得过是前线的事，不是架桥这件事的判据。
      */
     const eta = world.foeEta(stand);
-    const shooters = world.foeCombat.filter((f) => {
-      const st = effectiveStats(s, f);
-      return Math.abs(f.x - stand.x) + Math.abs(f.y - stand.y) <= (st.range ?? 1) + 1;
-    }).length;
-    const safe = eta >= 2 && shooters === 0;
-    const stage: 'seize' | 'build' = onBank > 0 && safe ? 'build' : 'seize';
+    const stage: 'seize' | 'build' = onBank > 0 ? 'build' : 'seize';
     return complete(s, world, mem, {
       kind: 'bridge',
       untilTurn: s.turn + horizon,
       cityId: c.id,
-      bridge: { cityId: c.id, stage, at, stand },
+      bridge: { cityId: c.id, stage, at, stand, bank },
       reason:
         stage === 'seize'
-          ? `到 ${c.id} 走不通（${o.why}）；${
-              onBank === 0
-                ? `先头部队先去渡口岸边 (${stand.x},${stand.y}) 占位`
-                : shooters > 0
-                  ? `岸上已有 ${onBank} 人，但 ${shooters} 个敌人能打到岸边，工兵先不上`
-                  : `敌人 ${eta} 回合内会摸到岸边，工兵先不上`
-            }，工兵随后`
-          : `渡口 (${stand.x},${stand.y}) 已有 ${onBank} 个自己人${
-              Number.isFinite(eta) ? `、敌人还要 ${eta} 回合才摸到` : '、附近没有敌人'
-            }，工兵可以上来铺 ${o.cost?.cells ?? '?'} 格`,
+          ? `到 ${c.id} 走不通（${o.why}）；先头部队先去渡口岸边 (${stand.x},${stand.y}) 占位，工兵随后`
+          : `渡口 (${stand.x},${stand.y}) 已有 ${onBank} 个自己人（敌人 ${Number.isFinite(eta) ? `${eta} 回合能到` : '一时来不了'}），工兵上来铺 ${o.cost?.cells ?? '?'} 格`,
     });
   }
 

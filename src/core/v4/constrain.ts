@@ -1160,7 +1160,11 @@ function planMarch(
   const out: Record<string, { x: number; y: number }> = {};
   const order: string[] = [];
   for (const sq of squads) {
-    if (sq.order === 'hold') continue;
+    /*
+     * `hold` 不动；`build` 也不走方阵——工兵通常只有 1~2 人，按方块排队会一直在
+     * "收拢"、绕着渡口转（4d-2 实测）。它们由打分层朝岸边一步一格走。
+     */
+    if (sq.order === 'hold' || sq.order === 'build') continue;
     const base = squadBase(s, sq);
     if (!base) continue;
     const units = sq.unitIds
@@ -1423,11 +1427,40 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * **只加这一格，不加桥面**——桥面要能走（4c 刚放开）。
    */
   if (decision.kind === 'bridge' && decision.bridge) {
-    const st = decision.bridge.stand;
-    const k0 = st.y * s.w + st.x;
-    if (!keepSet.has(k0)) {
-      keepClear.push(k0);
-      keepSet.add(k0);
+    /*
+     * **给工兵腾一条走廊，不是一格**（W4-4d-3，2026-11-26）。
+     *
+     * 只留落脚点不够：岸上十几个人挤在桥头，工兵（移动力 2）走到离桥头 2 格就没地方落脚，
+     * 每一手都在原地抖（实测：桥停在第二格，工兵在 (6,7)/(7,8) 抖了 20 手）。
+     * 所以把**从岸到桥头这一条**（沿铺桥方向）每格的八邻都列进关键格，
+     * 让位机制会把整条通道清出来。
+     *
+     * 只在架桥期间生效；水面/山本来就站不上，多列没有副作用。
+     */
+    const b0 = decision.bridge.bank;
+    const s0 = decision.bridge.stand;
+    const dx = Math.sign(s0.x - b0.x);
+    const dy = Math.sign(s0.y - b0.y);
+    let cx = b0.x;
+    let cy = b0.y;
+    for (let i = 0; i < 10; i += 1) {
+      for (const [ox, oy] of [
+        [0, 0], [1, 0], [-1, 0], [0, 1], [0, -1],
+        [1, 1], [1, -1], [-1, 1], [-1, -1],
+      ] as const) {
+        const x = cx + ox;
+        const y = cy + oy;
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        const k = y * s.w + x;
+        if (!keepSet.has(k)) {
+          keepClear.push(k);
+          keepSet.add(k);
+        }
+      }
+      if (cx === s0.x && cy === s0.y) break;
+      if (dx === 0 && dy === 0) break;
+      cx += dx;
+      cy += dy;
     }
   }
 
@@ -1492,15 +1525,42 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 允许它站在桥上继续走；其余（守家的、让位的、散兵）照旧驱离。
    * 只对**桥面**放宽，城格（产兵口）不动——堵产兵口是真的不出兵。
    */
-  const marching = new Set(
-    (mem?.bands ?? [])
-      .filter((b) => world.foeCities.some((c) => c.id === b.cityId))
-      .flatMap((b) => b.unitIds),
-  );
   const onBridge = (u: Unit): boolean => tileOn(s, boardIdOf(u), u.x, u.y)?.terrain === 'bridge';
-  const passing = (u: Unit): boolean => marching.has(u.id) && onBridge(u);
-  const blockers = world.myCombat.filter((u) => keepSet.has(u.y * s.w + u.x) && !passing(u));
-  const rest = world.myCombat.filter((u) => !keepSet.has(u.y * s.w + u.x) || passing(u));
+  /*
+   * **桥面和桥头都算"在过桥"**（W4-4d-3，2026-11-26）。
+   *
+   * 关键格里包含桥头那一格陆地，于是兵走到桥头就被"让开"赶下来，永远上不了桥
+   * （实测：桥通 20 手，12 个兵一个都没上桥）。
+   * 判据不再要求"人在编队名册里"：新造的兵一脚踩上桥头同样会卡住。
+   */
+  const nearBridge = (u: Unit): boolean => {
+    const b = boardIdOf(u);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      if (tileOn(s, b, u.x + dx, u.y + dy)?.terrain === 'bridge') return true;
+    }
+    return false;
+  };
+  const passing = (u: Unit): boolean => onBridge(u) || nearBridge(u);
+  /*
+   * **工兵也要让路**（W4-4d-3，2026-11-26）。
+   *
+   * 只数战斗兵时，桥铺通、工兵撤编之后它们就"没有任务"，站在桥头/桥面上一动不动，
+   * 把唯一的过道堵死（实测：桥通了 20 手，12 个兵一个都没上桥）。
+   * 把工兵也算进"挡路的人"，搬迁计划会把它们挪到旁边去。
+   */
+  const blockers = [...world.myCombat, ...world.myBuilders].filter(
+    (u) => keepSet.has(u.y * s.w + u.x) && !passing(u),
+  );
+  /*
+   * **桥面上的人一律有任务**（W4-4d-3，2026-11-26）。
+   *
+   * 关键格的本意是"不许停"，桥面也在里面（保护过道）。但兵一旦踩上桥面，
+   * 下一手就被 `rest` 排除 → 不再出队 → 站在桥上原地不动，把唯一的通道堵死
+   * （实测：桥通 20 手，12 个兵一个都没上桥）。
+   * 桥面是**过道**不是停留点：站在上面的人照常出队、继续走，走完自然离开。
+   * （`passing` 那个版本还要求"人在编队名册里"，新造的兵一脚踩上去就卡住了。）
+   */
+  const rest = world.myCombat.filter((u) => !keepSet.has(u.y * s.w + u.x) || onBridge(u));
 
   /*
    * 两座以上城同时受威胁 → 分兵，每城一支队。
@@ -1780,19 +1840,24 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     const bands = liveBandsOf(mem, null, aliveIds);
     const inBand = new Set(bands.flatMap((b) => b.unitIds));
 
-    /** 一支队去渡口：任务 march、目标点 = 岸 */
-    const pushToBank = (id: string, ids: string[], want?: number): void => {
+    /** 一支队去渡口：任务 march、目标点 = 给的点（战斗兵用陆地岸，工兵用桥头） */
+    const pushToBank = (
+      id: string,
+      ids: string[],
+      want?: number,
+      to: { x: number; y: number } = decision.bridge!.bank,
+    ): void => {
       if (ids.length === 0) return;
       const us = ids
         .map((uid) => s.units.find((u) => u.id === uid))
         .filter((u): u is Unit => !!u);
       if (us.length === 0) return;
-      const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, st)), 0);
+      const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, to)), 0);
       squads.push({
         id,
         order: 'march',
         unitIds: ids,
-        at: st,
+        at: to,
         want: want ?? ids.length,
         eta: Number.isFinite(eta) ? eta : 99,
         tactics: planTactics(s, ids, true),
@@ -1856,7 +1921,25 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
           cityId: decision.bridge.cityId,
           formedAt: prev?.formedAt ?? s.turn,
         };
-        pushToBank(outBuildBand.id, pick, 2);
+        /*
+         * 工兵的任务是 `build`，不是 `march`：目标点 = 岸（可站），
+         * 要修的那一格单独给（水面，站不上去）。**它不走方阵**——`planMarch` 跳过 build 队，
+         * 由打分层一步一格朝岸边走，到建造距离内就 `BUILD`。
+         */
+        const eta = pick.reduce((n, id) => {
+          const b = s.units.find((x) => x.id === id);
+          return b ? Math.max(n, world.marchTurns(b, st)) : n;
+        }, 0);
+        squads.push({
+          id: outBuildBand.id,
+          order: 'build',
+          unitIds: pick,
+          at: st,
+          buildAt: decision.bridge.at,
+          want: 2,
+          eta: Number.isFinite(eta) ? eta : 99,
+          tactics: planTactics(s, pick, false),
+        });
       }
     }
   } else if (decision.kind === 'defend' && city) {

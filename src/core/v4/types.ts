@@ -133,8 +133,17 @@ export interface Decision {
   bridge?: {
     cityId: string;
     stage: 'seize' | 'build';
+    /** 这一手要修的那一格（水面） */
     at: { x: number; y: number };
+    /** 工兵的落脚点 = `at` 往回一格；桥往前推进时它会变成**桥面** */
     stand: { x: number; y: number };
+    /**
+     * **战斗兵待的陆地岸**（W4-4d-3）：从 `at` 沿反方向退到第一块不是桥的陆地。
+     *
+     * 不能拿 `stand` 当战斗兵的目标：桥一推进，`stand` 就变成桥面，
+     * 战斗兵也想站上去，把工兵挤开（4d-3 实测：桥停在第二格、工兵在桥头抖了 10 手）。
+     */
+    bank: { x: number; y: number };
   };
   /**
    * **每队一条任务**（W3.6 第 3c 步）：在编的每支编队这一手做什么。
@@ -182,7 +191,14 @@ export type SquadOrder =
    *
    * **2026-11-25 加（清 9.18）：这个任务现在带方向。** 见 `Constraints.transit`。
    */
-  | 'yield';
+  | 'yield'
+  /**
+   * **架桥**（W4-4d-3，2026-11-26）：走到渡口的岸边，能建就 `BUILD`。
+   *
+   * 只给工兵用。它不走方阵（`planMarch` 直接跳过）：工兵通常就 1~2 个人，
+   * 按方块排队反而会一直在"收拢"、绕着渡口转（4d-2 实测）。
+   */
+  | 'build';
 
 export interface Squad {
   id: string;
@@ -192,6 +208,8 @@ export interface Squad {
   at?: { x: number; y: number };
   /** march / siege 的目标城 */
   cityId?: string;
+  /** `build` 队要修的那一格（水面）；站到它 `buildRange` 以内就能建 */
+  buildAt?: { x: number; y: number };
   /** 目标人数：按目标城守军算，成立时定下，之后不因伤亡而缩（见 V4Memory.squad） */
   want?: number;
   /**

@@ -495,6 +495,18 @@ function logLane(s: GameState, world: World, con: Constraints, mem: V4Memory): v
    * **每队一行**（W3.6 第 6 步）：掉的、到的、堵的、还有几手到。
    * 这几个数原来在回放里全是 0 占位，所以"哪一队在卡"只能靠猜。
    */
+  /* 工兵这一手的目标（W4-4d-3 观测）：岸点 → 要修的那一格，以及它现在站哪 */
+  const bq = con.squads.find((q) => q.order === 'build');
+  if (bq) {
+    const pos = bq.unitIds
+      .map((id) => s.units.find((u) => u.id === id))
+      .filter((u): u is Unit => !!u)
+      .map((u) => `${u.x},${u.y}`)
+      .join(' ');
+    process.stderr.write(
+      `[build] T=${s.turn} 岸(${bq.at?.x ?? '-'},${bq.at?.y ?? '-'}) 建(${bq.buildAt?.x ?? '-'},${bq.buildAt?.y ?? '-'}) 工兵@${pos}\n`,
+    );
+  }
   const reps = bandReports(s, world, con, mem);
   if (reps.length > 0) {
     process.stderr.write(
@@ -723,7 +735,15 @@ export function aiNextActionV4(
    * 结果架桥分支把工兵编进队伍、给了目标点，它却一步没动（临时验证：第 8 手还在城里）。
    * 排在最后：战斗兵先动，工兵跟在后面。
    */
-  for (const u of [...combatOrder, ...econOrder, ...world.myBuilders]) {
+  /*
+   * **工兵排在最前面**（W4-4d-3，2026-11-26）。
+   *
+   * 排最后时，岸上的战斗兵先把位置占满，工兵最后动、一格都挤不进去
+   * （临时验证：第 13 手起工兵在 (7,8) 站了 20 多手，桥停在第一格）。
+   * 架桥期间**工兵先占位**，战斗兵再让——这也是"让路"真正的落点：
+   * 不是把路清出来等工兵，而是让工兵先站。
+   */
+  for (const u of [...world.myBuilders, ...combatOrder, ...econOrder]) {
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.moved) continue;
     const a = actFor(s, world, con, live);
