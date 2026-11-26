@@ -81,9 +81,10 @@ import type { City, GameState, PlayerId, Unit } from '../types.ts';
  * ── 新公式（对着参照兵算，参数由标定表拟合）────────────────
  *
  *   每回合伤害 dmg(u→r) = 单发伤害（`previewAttack`，带护甲/破甲）× 一回合几发
- *   能活几回合  tank     = 我的血 ÷ r 的每回合伤害            （r 打不动我 → 99）
+ *   能活几回合  tank     = 我的血 ÷ r 的每回合伤害 + 1.0 × 我的护甲 × r 的每回合发数
+ *                          （护甲是按发减伤，等价于"多挨几发"；低攻高甲的兵靠这一项才不吃亏）
  *   白打回合    stand    = r 要走进我射程才还手：(GAP − r 射程) ÷ r 移动力（我射程更远时才有）
- *   战力        power    = dmg × (0.3 × tank + 1.0 × stand) ×（我射程更远 ? 1.1 : 1）
+ *   战力        power    = dmg × (0.1 × tank + 1.0 × stand)
  *
  * 参数是用 `scripts/fit-combat-formula.ts` 拟合标定表得来的（网格搜，方向一致率 88%）：
  * 标定表 = 同代每一对兵在引擎里正反各打一次、按净胜人数排名。**表是真相，公式是拟合**；
@@ -103,11 +104,12 @@ export function unitWorthOfType(s: GameState, typeId: string): number {
 }
 
 /** 拟合出来的三个参数（见上面的注释；动它要跑 `fit-combat-formula` 对表） */
-const W_HP = 0.3;
+const W_HP = 0.1;
 const W_STAND = 1;
-const W_RANGE = 1.1;
+/** 护甲当"额外血量"的权重（S3c）：护甲按发减伤，对多发小伤害的敌人特别有效 */
+const W_ARMOR = 1;
 /** 典型接敌距离（格）：射程的价值取决于"对面要走进来几步"，这是唯一标定出来的"场面"参数 */
-const GAP = 5;
+const GAP = 7;
 
 /** 这一代当参照的兵种：最贵 / 最厚 / 射程最远（都按设计数据挑，不做战力排序，所以不会循环） */
 const refsCache = new Map<number, string[]>();
@@ -144,16 +146,13 @@ function combatPower(s: GameState, type: string, ref: string): number {
   const mine = dpsOf(s, type, ref);
   if (mine <= 0) return 0;
   const theirs = dpsOf(s, ref, type);
-  const tank = theirs <= 0 ? 99 : (utype(s, type).maxHp ?? 1) / theirs;
+  const armorTerm = W_ARMOR * (utype(s, type).armor ?? 0) * attacksPerTurn(s, { id: '__w3', owner: s.current, type: ref, x: 0, y: 0, hp: 1 } as Unit);
+  const tank = (theirs <= 0 ? 99 : (utype(s, type).maxHp ?? 1) / theirs) + armorTerm;
   const myRange = utype(s, type).range ?? 1;
   const refRange = utype(s, ref).range ?? 1;
   let stand = 0;
-  let far = 1;
-  if (myRange > refRange) {
-    stand = Math.ceil(Math.max(0, GAP - refRange) / Math.max(1, utype(s, ref).move ?? 2));
-    far = W_RANGE;
-  }
-  return mine * (W_HP * tank + W_STAND * stand) * far;
+  if (myRange > refRange) stand = Math.ceil(Math.max(0, GAP - refRange) / Math.max(1, utype(s, ref).move ?? 2));
+  return mine * (W_HP * tank + W_STAND * stand);
 }
 
 /** 一个已存在单位的身价：按剩余血量打折 */

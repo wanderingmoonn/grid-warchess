@@ -400,6 +400,11 @@ function econCandidates(
      * 金币↔战力的换算用的就是这城现在"一金买多少战力"（`now.worth / now.gold`）。
      */
     const perPower = now.worth / Math.max(1, now.gold);
+    /*
+     * `left` 不是"考题窗口"，是**这一仗大概还要几手**：从最近的城走到对面城要几步（地形算的）。
+     * 实战里也有这个数（双方的城就在图上），所以它可以用；但**不能把它当期限**——
+     * 它的用途只有一个：把"每手多出来的收益"摊成总量。用户 2026-11-27 提醒过这点。
+     */
     const nHorizon = Math.min(cap * left, Math.floor(gold / Math.max(1, now.gold)));
     const gainArmy = nHorizon * (up1.worth - now.worth);
     const gainEcon = (up1.income - now.income) * left;
