@@ -15,11 +15,12 @@
  * 我们**不碰规则层任何一行**：`createMatch` / `applyAction` / `ai.ts` 都是现成接口。
  */
 import { UNIT_TYPES } from '../core/config.ts';
-import { applyAction } from '../core/rules.ts';
+import { applyAction, maxHpOf } from '../core/rules.ts';
 import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { LevelDef } from '../core/level.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import type { ArmyEntry, BattleInit, BattleResult } from './types.ts';
+import { expForRank, setCultivationExp } from '../core/cultivation/progression.ts';
 import { CULTIVATORS, DEFENSE_UNIT_DEFS, growthOf } from './data.ts';
 import { makeRng } from './rng.ts';
 
@@ -27,8 +28,14 @@ const VARIANT = 'rg:';
 
 /** 变体兵种的 id 里带着原始兵种 */
 export function baseTypeOf(type: string): string {
-  if (!type.startsWith(VARIANT)) return type;
-  return type.slice(VARIANT.length).split('@')[0] as string;
+  /*
+   * 变体可以**套娃**：境界加成先套一层（`rg:qi-cultivator@…`），我方加成
+   * 再套一层（`rg:rg:qi-cultivator@…@…`）。所以要一层层剥，不能只剥一次——
+   * 只剥一次会得到 `rg:qi-cultivator` 这种"半个 id"，拿去查表永远查不到。
+   */
+  let t = type;
+  while (t.startsWith(VARIANT)) t = t.slice(VARIANT.length).split('@')[0] as string;
+  return t;
 }
 
 /** 给我军注册"带加成"的兵种变体，返回变体 id */
@@ -311,7 +318,22 @@ function makeLevel(init: BattleInit): {
       ? { x: (citiesA[0] as Cell).x + 1, y: Math.max(1, (citiesA[0] as Cell).y - 2) }
       : { x: Math.floor(w / 2), y: h - 2 };
   const allyAnchor: Cell | null = allyCity
-    ? { x: Math.min(w - 2, (citiesB[0] as Cell).x + 3), y: Math.max(1, (citiesB[0] as Cell).y - 2) }
+    ? (() => {
+        const city = citiesB[0] as Cell;
+        /*
+         * 友军摆在**城前 4~5 格**（大约全图 55% 高度），不是城门口。
+         *
+         * 上一版是 `city.y - 2`：15×15 的图上等于贴着城墙站，AI 又只会
+         * "有目标才挪"，于是整场都在家门口看戏——守军的塔和墙反倒成了
+         * 唯一在打的东西。往前推几格之后，它在中间那条线上接敌：
+         * 既不缩在城里，也够不到对面的出兵点。
+         */
+        const mid = Math.round(h * 0.55);
+        return {
+          x: Math.min(w - 2, city.x + 3),
+          y: Math.max(1, Math.min(city.y - 2, mid)),
+        };
+      })()
     : null;
   const enemyAnchors: Cell[] = allyCity
     ? [{ x: Math.floor(w / 2), y: 1 }]
@@ -671,25 +693,79 @@ export function buildBattle(init: BattleInit): GameState {
   /*
    * ---- 修真：境界加成（简化口径） ----
    *
-   * 完整的修炼要有真元、法术、经验与突破，demo 不跑那一套；这里按时代钟
-   * 给修士一个固定的攻/血加成，等价于"开局就已经是筑基/金丹"。
-   * 只加人，不加法器（法器不是人，没有境界）。
+   * 本体里境界管的是真元、法术段数、射程……那套在肉鸽里跑不全，所以这里
+   * 折算成"每级 +3 攻 / +8 血"。只加修士，不加法器（法器不是人）。
    *
-   * 注意加的是**本局私有的兵种表**（`createMatch` 每局复制一份），
-   * 所以两边同享、不会污染别的局。
+   * **不再改全图共用的兵种表**：两边境界不一样（敌人按时代钟、玩家按自己
+   * 修出来的修为），改表会让同一种修士在两边都变强。改成逐单位套变体。
    */
-  if (init.rank > 0) {
-    for (const id of Object.keys(s.unitTypes)) {
-      if (!CULTIVATORS.has(id)) continue;
-      const def = s.unitTypes[id];
-      if (!def) continue;
-      def.atk += init.rank * 3;
-      def.maxHp += init.rank * 8;
+  const playerRank = init.playerRank ?? init.rank;
+  const buffRank = (u: Unit, rank: number): void => {
+    if (rank <= 0) return;
+    if (!CULTIVATORS.has(baseTypeOf(u.type))) return;
+    u.type = variantOf(s, u.type, rank * 3, 0, 0, rank * 8);
+    u.hp = s.unitTypes[u.type]?.maxHp ?? u.hp;
+  };
+  for (const u of s.units) {
+    if (u.hp <= 0) continue;
+    buffRank(u, u.owner === 'A' ? playerRank : init.rank);
+  }
+
+  /*
+   * ---- 敌方长老：一个强的带几个弱的 ----
+   *
+   * 一排同境界的修士不像"宗门"，像一个班。让最贵的那个当长老：攻 +25%、
+   * 血 +35%、甲 +1（都是增量，移动不动），境界按本层钟；其余修士压到钟下
+   * 两级——打掉长老，剩下的就好清。（试过 +50% / 甲 +2 / 高两级，太碾压。）
+   */
+  if (init.elderType) {
+    const foes = s.units.filter((u) => u.owner !== 'A' && u.hp > 0);
+    const elder = foes.find((u) => baseTypeOf(u.type) === init.elderType);
+    if (elder) {
+      const d = s.unitTypes[elder.type];
+      if (d) {
+        elder.type = variantOf(
+          s,
+          elder.type,
+          Math.round(d.atk * 0.25),
+          0,
+          1,
+          Math.round(d.maxHp * 0.35),
+        );
+        elder.hp = s.unitTypes[elder.type]?.maxHp ?? elder.hp;
+        // 名字上挂个"长老"：不然玩家看不出这一只和旁边三只有什么不一样
+        const ed = s.unitTypes[elder.type];
+        if (ed) ed.name = `${ed.name}·长老`;
+      }
+      setCultivationExp(elder, expForRank(Math.min(9, init.rank)));
     }
-    for (const u of s.units) {
-      if (!CULTIVATORS.has(u.type)) continue;
-      u.hp = s.unitTypes[u.type]?.maxHp ?? u.hp;
+    for (const u of foes) {
+      if (u === elder) continue;
+      if (!CULTIVATORS.has(baseTypeOf(u.type))) continue;
+      setCultivationExp(u, expForRank(Math.max(0, init.rank - 2)));
     }
+  }
+
+  /*
+   * ---- 玩家修士：把跨战斗保留的修为灌回去 ----
+   *
+   * 这是"修为跨战斗"的另一半（另一半在 `resultOf` 里把经验捞出来）。
+   * 灌的是 exp，境界由引擎自己反推——不自己算，免得两套阈值对不上。
+   */
+  for (const u of s.units) {
+    if (u.owner !== 'A') continue;
+    const type = baseTypeOf(u.type);
+    if (!CULTIVATORS.has(type)) continue;
+    /*
+     * 起手至少是**本层钟给的那个境界**（不然玩家修士的境界是 0，而敌人
+     * 按钟是 3——同一场里对面会法术、会溅射，你连真元都没有，一回合被清空）。
+     * 存下来的修为如果更高，就用存下来的：这就是"跨战斗保留"。
+     */
+    // 境界 R 的门槛是 `expForRank(R-1)`——差一位就是白送一级，别写成 R
+    const base = init.rank > 0 ? expForRank(init.rank - 1) : 0;
+    const saved = init.cultivation?.[type] ?? 0;
+    const exp = Math.max(base, saved);
+    if (exp > 0) setCultivationExp(u, exp);
   }
 
   /*
@@ -821,13 +897,24 @@ export function buildBattle(init: BattleInit): GameState {
    */
   if (init.defenseScale) {
     const k = init.defenseScale;
+    /*
+     * 直接改**本局私有**的兵种表，不套变体。
+     *
+     * 工事的缩放两边用同一个系数，套变体没有意义，反而会把 `u.type` 改成
+     * `rg:cultivation-spirit-tower@…`——而核心认建筑也只认 id（塔的充能、
+     * 阵法的判定全按 id 比）。本局兵种表是 `createMatch` 复制的，改了不外泄。
+     */
+    const ids = new Set(
+      s.units.filter((u) => s.unitTypes[u.type]?.category === 'building').map((u) => u.type),
+    );
+    for (const id of ids) {
+      const def = s.unitTypes[id];
+      if (!def) continue;
+      def.atk = Math.max(0, Math.round(def.atk * k.atk));
+      def.maxHp = Math.max(1, Math.round(def.maxHp * k.hp));
+    }
     for (const u of s.units) {
-      const def = s.unitTypes[u.type];
-      if (!def || def.category !== 'building') continue;
-      const dAtk = Math.round(def.atk * (k.atk - 1));
-      const dHp = Math.round(def.maxHp * (k.hp - 1));
-      if (dAtk === 0 && dHp === 0) continue;
-      u.type = variantOf(s, u.type, dAtk, 0, 0, dHp);
+      if (s.unitTypes[u.type]?.category !== 'building') continue;
       u.hp = s.unitTypes[u.type]?.maxHp ?? u.hp;
     }
   }
@@ -848,6 +935,39 @@ export function buildBattle(init: BattleInit): GameState {
       if (s.unitTypes[u.type]?.category !== 'building') continue;
       u.hp = Math.max(1, Math.round(u.hp * k));
     }
+  }
+
+  /*
+   * ---- 带伤进场 ----
+   *
+   * 上一战活下来的人不是满血：`init.wounds` 里存的是各类兵战后的平均血量
+   * 比例（已经加过 `HEAL_PER_BATTLE` 那一份恢复）。这里必须放在**所有**
+   * 改 hp 的步骤之后，否则会被后面的 `u.hp = v.maxHp` 抹平。
+   */
+  if (init.wounds) {
+    for (const u of s.units) {
+      if (u.owner !== 'A') continue;
+      const ratio = init.wounds[baseTypeOf(u.type)];
+      if (ratio === undefined || ratio >= 1) continue;
+      const max = s.unitTypes[u.type]?.maxHp ?? u.hp;
+      u.hp = Math.max(1, Math.round(max * Math.max(0.05, ratio)));
+    }
+  }
+
+  /*
+   * 守城战的友军（B）：**压到中场去，但不追到对面出兵点**。
+   *
+   * 默认 `auto` 对"有城的席位"是守家逻辑，友军于是全程贴着城墙看戏——
+   * 城最后还是被一波波啃掉。`rush` 让它主动往前顶；真正防止它冲过头的是
+   * 关卡的 `cohesion` / `riskAversion`（见 `level.ai`），不是这条指令。
+   */
+  if (init.allyCity) {
+    s.orderDirectives = {
+      ...(s.orderDirectives ?? {}),
+      // 给个明确方向（朝上 = 朝攻方来的方向）：只说 `rush` 时它只在
+      // "眼前有目标"才往前走，攻方还没进射程的那些回合就原地站着。
+      B: { strategy: 'rush', target: { dx: 0, dy: -1 } },
+    };
   }
 
   s.players.A.gold = init.playerGold;
@@ -969,8 +1089,41 @@ export function survivorsOf(s: GameState): ArmyEntry[] {
   return [...map.entries()].map(([type, count]) => ({ type, count }));
 }
 
+/**
+ * 一场战斗的结算数据。
+ *
+ * 除了"谁活下来"，还捞两样**要跨战斗带走**的东西：
+ *   · `wounds`      —— 每类兵战后的平均血量比例（下一场带伤开打）；
+ *   · `cultivation` —— 每类修士的最高修为（下一场灌回境界）。
+ * 这两样都在这里算，因为这里才拿得到逐单位的 hp / exp。
+ */
 export function resultOf(s: GameState, win: boolean): BattleResult {
-  return { win, survivors: survivorsOf(s), gold: s.players.A.gold, turns: s.turn };
+  const mine = s.units.filter((u) => u.owner === 'A' && u.hp > 0);
+  const wounds: Record<string, number> = {};
+  const cultivation: Record<string, number> = {};
+  const agg = new Map<string, { hp: number; max: number }>();
+  for (const u of mine) {
+    const type = baseTypeOf(u.type);
+    // 用 `maxHpOf`（含境界/突破带来的临时上限），别用兵种表里的静态值
+    const max = Math.max(1, maxHpOf(s, u));
+    const g = agg.get(type) ?? { hp: 0, max: 0 };
+    g.hp += u.hp;
+    g.max += Math.max(1, max);
+    agg.set(type, g);
+    if (CULTIVATORS.has(type)) {
+      const exp = (u.custom?.exp as number | undefined) ?? 0;
+      cultivation[type] = Math.max(cultivation[type] ?? 0, exp);
+    }
+  }
+  for (const [type, g] of agg) wounds[type] = Math.min(1, g.hp / Math.max(1, g.max));
+  return {
+    win,
+    survivors: survivorsOf(s),
+    gold: s.players.A.gold,
+    turns: s.turn,
+    wounds,
+    cultivation,
+  };
 }
 
 /** 应用一个动作；失败时原样返回，调用方决定是提示还是重试 */

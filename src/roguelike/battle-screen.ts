@@ -13,7 +13,7 @@
  */
 import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../core/ai.ts';
 import { DEFAULT_BUDGET } from '../core/ai-meta.ts';
-import { attackableTargets, heroSkillsOf, maxHpOf, reachableTiles, siegeTargets, unitById, unitsOf, utype } from '../core/rules.ts';
+import { attackableTargets, heroSkillsOf, isAirborne, maxHpOf, reachableTiles, siegeTargets, unitById, unitsAt, unitsOf, utype } from '../core/rules.ts';
 import { describeUnit, unitStatLine } from '../core/info.ts';
 import { playerView } from '../core/fog.ts';
 import { cellAtPoint, renderBoard } from '../ui/board.ts';
@@ -64,6 +64,17 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
    */
   let pendingSkill: { unitId: string; skillId: string; targeting: 'point' | 'direction' } | null = null;
   let skillAim: number[] = [];
+  /**
+   * 强制模式（照抄本体）：`move` = 点哪格就走上去，`attack` = 点哪格就开火。
+   *
+   * 为什么需要它：空中单位和地面单位**可以叠在同一格**（引擎按层判占位），
+   * 而"点这一格"只能有一个意思。没有强制模式时，地勤兵压在飞行兵身上，
+   * 你就永远选不到下面那个、也永远挪不上去——这就是"我方空地做不到重合"。
+   * 本体用 Alt / Shift + 两个按钮解决，这里照搬，只去掉肉鸽用不上的部分。
+   */
+  let forceMode: 'move' | 'attack' | null = null;
+  /** 同一格连点翻页：记上一次点的格子与翻到第几个 */
+  let pick: { key: number; ids: string[]; index: number } | null = null;
 
   host.innerHTML = `
     <div class="rg-battle">
@@ -74,6 +85,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
         </div>
         <div class="rg-battle-hud" id="rg-hud"></div>
         <div class="rg-battle-btns">
+          <button class="rg-btn ghost mini" data-act="force-move" id="rg-force-move" title="按 Alt 点格子 = 临时用一次">强制移动 <kbd>Alt</kbd></button>
+          <button class="rg-btn ghost mini" data-act="force-attack" id="rg-force-attack" title="按 Shift 点格子 = 临时用一次">强制攻击 <kbd>Shift</kbd></button>
           <button class="rg-btn ghost" data-act="undo" id="rg-undo">撤回</button>
           <button class="rg-btn" data-act="end">结束回合</button>
           <button class="rg-btn ghost" data-act="quit">认输</button>
@@ -119,6 +132,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   const skillEl = host.querySelector<HTMLElement>('#rg-skills');
   const tipEl = host.querySelector<HTMLElement>('#rg-tip');
   const undoBtn = host.querySelector<HTMLButtonElement>('#rg-undo');
+  const forceMoveBtn = host.querySelector<HTMLButtonElement>('#rg-force-move');
+  const forceAttackBtn = host.querySelector<HTMLButtonElement>('#rg-force-attack');
   if (!boardEl || !hudEl || !armyEl || !foeEl || !tipEl || !undoBtn || !hoverEl || !skillEl) {
     throw new Error('战斗界面结构缺失');
   }
@@ -231,6 +246,65 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
 
   function selected(): Unit | undefined {
     return selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
+  }
+
+  /**
+   * 这一格上压着哪些单位，按渲染顺序排（空中 → 地面 → 建筑）。
+   *
+   * 和 board.ts 的绘制顺序一致：眼睛看到谁在上面，第一下点就该选中谁，
+   * 再点一下往下翻。`unitsAt` 认的是"覆盖格"，所以 2×2 的建筑也对。
+   */
+  function stackAt(x: number, y: number): Unit[] {
+    const rank = (u: Unit): number => {
+      if (utype(state, u.type).category === 'building') return 2;
+      return isAirborne(state, u) ? 0 : 1;
+    };
+    return unitsAt(state, x, y)
+      .filter((u) => u.hp > 0)
+      .sort((a, b) => rank(a) - rank(b));
+  }
+
+  /**
+   * 点这一格到底选中谁：同格连点就是往下翻一层。
+   * `preferTarget`（强制攻击）时优先挑"我能打的"——飞行兵停在敌人头顶时，
+   * 按 Shift 点的意思一定是打脚下那个，不是选中自己的兵。
+   */
+  function pickUnitAt(x: number, y: number, preferTarget: boolean): Unit | undefined {
+    const list = stackAt(x, y);
+    if (list.length === 0) {
+      pick = null;
+      return undefined;
+    }
+    const key = y * state.w + x;
+    const ids = list.map((u) => u.id);
+    if (preferTarget) {
+      const hit = list.find((u) => targets.includes(u.id));
+      if (hit) {
+        pick = { key, ids, index: list.indexOf(hit) };
+        return hit;
+      }
+    }
+    if (!pick || pick.key !== key) {
+      pick = { key, ids, index: 0 };
+      return list[0];
+    }
+    const cur = pick;
+    const same = cur.ids.length === ids.length && ids.every((id, i) => id === cur.ids[i]);
+    if (!same) {
+      pick = { key, ids, index: 0 };
+      return list[0];
+    }
+    cur.index = (cur.index + 1) % ids.length;
+    return list[cur.index];
+  }
+
+  /** 走不上这一格时给一句原因——静默没反应比报错更让人困惑 */
+  function moveRefusal(x: number, y: number, unit: Unit): string {
+    const blockers = stackAt(x, y).filter((u) => u.id !== unit.id);
+    if (blockers.length > 0) {
+      return `这一格被「${utype(state, (blockers[0] as Unit).type).name}」占着，走不上去`;
+    }
+    return '这一格不在可达范围里';
   }
 
   /** 重新算"这个兵还能去哪、打谁"：移动过的只剩攻击，打过的两样都没有 */
@@ -382,7 +456,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
           const poor = state.players.A.gold < cost;
           return `<div class="rg-neutral-row">
             <span class="n">${escapeHtml(d.name)}<i>${u.hp}/${maxHpOf(state, u)} · 身价 ${utype(state, u.type).cost ?? 0}</i></span>
-            <button class="rg-btn mini" data-recruit="${u.id}" ${poor || idle ? 'disabled' : ''}>招募 ${cost}</button>
+            <button class="rg-btn mini" data-parley="${u.id}" ${poor || idle ? 'disabled' : ''}>招募 ${cost}</button>
             <button class="rg-btn ghost mini" data-dismiss="${u.id}" ${idle ? 'disabled' : ''}>请走</button>
           </div>`;
         })
@@ -392,12 +466,20 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     tipEl!.innerHTML = hintText();
     renderSkills();
     undoBtn!.disabled = busy || state.current !== 'A' || undoStack.length === 0;
+    // 强制模式的按钮：扣住时高亮，再点一次退出
+    forceMoveBtn?.classList.toggle('armed', forceMode === 'move');
+    forceAttackBtn?.classList.toggle('armed', forceMode === 'attack');
+    const canAct = !busy && !finished && state.current === 'A';
+    if (forceMoveBtn) forceMoveBtn.disabled = !canAct;
+    if (forceAttackBtn) forceAttackBtn.disabled = !canAct;
   }
 
   function hintText(): string {
     if (finished) return '这一战已经结束。';
     if (pendingSkill) return '正在选技能落点：点高亮格施法，点别处取消。';
     if (busy || state.current !== 'A') return '对面在想。';
+    if (forceMode === 'move') return '强制移动：点可达格就走上去（压在别人身上也行）· 再点一次按钮退出。';
+    if (forceMode === 'attack') return '强制攻击：点目标就开火（含身下那个）· 再点一次按钮退出。';
     const unit = selected();
     if (!unit) {
       const head =
@@ -619,13 +701,48 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       act({ type: 'HERO_SKILL', unitId, skillId, targetX: x, targetY: y });
       return;
     }
-    const clicked = state.units.find((u) => u.x === x && u.y === y && u.hp > 0);
+    const mouse = e instanceof MouseEvent ? e : null;
+    const wantMove = forceMode === 'move' || mouse?.altKey === true;
+    const wantAttack = forceMode === 'attack' || mouse?.shiftKey === true;
+    const cell = y * state.w + x;
+    const unit = selected();
+
+    /*
+     * 强制移动 / 强制攻击：这一下只按那一个动词解释，绝不落到"选中"上去。
+     * 这是"空地叠在一格就动不了"的正解——不然压在格子上那枚棋子总把话抢走。
+     */
+    if (wantMove) {
+      if (!unit) {
+        flashTip('先选中一个兵，再点强制移动');
+        return;
+      }
+      if (reach.includes(cell)) {
+        act({ type: 'MOVE', unitId: unit.id, x, y });
+        return;
+      }
+      flashTip(moveRefusal(x, y, unit));
+      return;
+    }
+    if (wantAttack) {
+      if (!unit) {
+        flashTip('先选中一个兵，再点强制攻击');
+        return;
+      }
+      const hit = stackAt(x, y).find((u) => targets.includes(u.id));
+      if (hit) {
+        act({ type: 'ATTACK', unitId: unit.id, targetId: hit.id, x, y });
+        return;
+      }
+      flashTip(unit.acted ? '它这一回合已经打过了' : '这一格没有能打的目标');
+      return;
+    }
+
+    const clicked = pickUnitAt(x, y, false);
     if (clicked && clicked.owner === 'A') {
       selectedId = clicked.id;
       render();
       return;
     }
-    const unit = selected();
     if (unit) {
       if (clicked && targets.includes(clicked.id)) {
         act({ type: 'ATTACK', unitId: unit.id, targetId: clicked.id, x, y });
@@ -636,9 +753,12 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
         act({ type: 'SIEGE', unitId: unit.id, cityId: city.id, x, y });
         return;
       }
-      const idx = y * state.w + x;
-      if (reach.includes(idx)) {
+      if (reach.includes(cell)) {
         act({ type: 'MOVE', unitId: unit.id, x, y });
+        return;
+      }
+      if (clicked && clicked.owner !== 'A') {
+        flashTip(moveRefusal(x, y, unit));
         return;
       }
     }
@@ -670,6 +790,18 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       }
       return;
     }
+    if (act0 === 'force-move') {
+      forceMode = forceMode === 'move' ? null : 'move';
+      pick = null;
+      render();
+      return;
+    }
+    if (act0 === 'force-attack') {
+      forceMode = forceMode === 'attack' ? null : 'attack';
+      pick = null;
+      render();
+      return;
+    }
     if (act0 === 'undo') {
       undo();
       return;
@@ -685,7 +817,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       castSkill(skillId);
       return;
     }
-    const rec = target?.closest<HTMLElement>('[data-recruit]')?.dataset.recruit;
+    const rec = target?.closest<HTMLElement>('[data-parley]')?.dataset.parley;
     if (rec) {
       const u = state.units.find((x) => x.id === rec);
       if (u) recruitNeutral(u);

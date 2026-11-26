@@ -136,6 +136,22 @@ export interface RunState {
   /** 本层的 boss 已经打过 */
   bossDone: boolean;
   /**
+   * **跨战斗保留的修为**：兵种 id → 经验值（只对修士有意义）。
+   *
+   * 本体里修士打坐/厮杀都会涨修为，境界（炼气→筑基→金丹……）跟着涨；
+   * 但肉鸽每场战斗都是新建一局，那份经验一出战斗就没了。这里把它存下来，
+   * 下一场重建修士时再灌回去——「跨战斗保留」就是这一存一灌。
+   * 存的是**同类里最高的那个**：队伍里有几个修士时，跟着老兵走。
+   */
+  cultivation: Record<string, number>;
+  /**
+   * **上一战留下的伤**：兵种 id → 下一场开局的 hp 比例（0~1）。
+   *
+   * 以前每场都是满血开打，所以"打得惨"只体现在死人上。现在活下来的人
+   * 带着伤进下一场，战后只按比例回一点（`HEAL_PER_BATTLE`），换层才回满。
+   */
+  wounds: Record<string, number>;
+  /**
    * 本层还能救回几个阵亡单位（随军医官）。
    *
    * 每层重置为 2：这场藏品如果按"每战返 1 人"算，一局二十多场就是二十多个人，
@@ -218,6 +234,24 @@ export interface BattleInit {
   /** 本场临时兵 */
   tempUnits: ArmyEntry[];
   /**
+   * 玩家修士的境界（由 `RunState.cultivation` 换算）。
+   *
+   * 敌人的境界一直用 `rank`（时代钟给的），玩家这一侧现在改成"自己修到几级
+   * 就是几级"——修出来的境界可以超过同层的钟。不填就退回 `rank`。
+   */
+  playerRank?: number;
+  /** 跨战斗保留的修为：type → exp（见 `RunState.cultivation`） */
+  cultivation?: Record<string, number>;
+  /** 上一战留下的伤：type → 开局的 hp 比例（见 `RunState.wounds`） */
+  wounds?: Record<string, number>;
+  /**
+   * 敌方"长老"的兵种 id（`enemyTypes` 里那一个）。
+   *
+   * 修真世界的合理编成是"一个强的带几个弱的"，而不是一排同境界的修士。
+   * 这个兵会被额外加体格与境界，其余修士往下压——见 `buildBattle`。
+   */
+  elderType?: string;
+  /**
    * **中立单位**（不主动攻击、AI 也不打它，但被打会反击）。
    *
    * 实现方式：占一个隐藏席位 C，并把它编进 B 的队里——AI 眼里它是友军，
@@ -238,4 +272,8 @@ export interface BattleResult {
   /** 打完时还剩多少金（战场里造兵花掉的要扣回去） */
   gold: number;
   turns: number;
+  /** 战后每类兵的平均血量比例（下一场照这个开打） */
+  wounds?: Record<string, number>;
+  /** 战后每类修士的最高修为（跨战斗保留） */
+  cultivation?: Record<string, number>;
 }

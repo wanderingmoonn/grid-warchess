@@ -20,6 +20,7 @@ import {
   STRATEGIES,
   packsForUnit,
   growthOf,
+  CULTIVATORS,
   eventById,
   pickEnemyTypes,
   relicById,
@@ -27,6 +28,7 @@ import {
   unitName,
 } from './data.ts';
 import type { DecisionOption, LayerTheme, WorldId } from './data.ts';
+import { expForRank } from '../core/cultivation/progression.ts';
 import { makeRng } from './rng.ts';
 import type { Rng } from './rng.ts';
 import type {
@@ -62,6 +64,28 @@ const CATALOG: Record<string, import('../core/types.ts').UnitTypeDef> = {
 // 四种世界各自带来的兵（奇想的飞龙、修真的法器……）也要能查到造价
 for (const w of Object.values(WORLDS)) Object.assign(CATALOG, expansionUnitsFor(w.theme.expansions));
 const costOf = (id: string): number => CATALOG[id]?.cost ?? 0;
+
+/**
+ * 战后恢复的比例：活下来的人每打一场只回这么多血（占最大生命的比例）。
+ *
+ * 换层回满（见 `nextLayer`）——一层之内是"带着伤连着打"，一层结束才整补。
+ * 定 0.4 的理由：大多数战斗结束时幸存者在 60%~90% 血，0.4 足够把他们拉回
+ * 满血附近；只有"惨胜"（剩 20%~40%）才会把伤带进下一场。它惩罚的是硬拼，
+ * 不是正常打法。
+ */
+export const HEAL_PER_BATTLE = 0.4;
+
+/** 经验 → 境界（和引擎的 `expForRank` 用同一张表，别自己另立一套阈值） */
+export function rankOfExp(exp: number): number {
+  let r = 0;
+  while (r < 9 && exp >= expForRank(r)) r += 1;
+  return r;
+}
+
+/** 给界面层用：查一个兵种的完整定义（含扩展包） */
+export function unitDefOf(type: string): import('../core/types.ts').UnitTypeDef | undefined {
+  return CATALOG[type];
+}
 
 /**
  * 英雄：本体规则里**同一方场上只能有一个**，第一次招它还要付解锁费。
@@ -371,6 +395,9 @@ export function startRun(seed: number, strategyId: string): RunState {
     clock: 0,
     buffs: emptyBuffs(),
     bossDone: false,
+    // 修为与伤都不跨层：修为留着（跨战斗），伤在换层时回满
+    cultivation: {},
+    wounds: {},
     reviveLeft: 0,
     log: [`开局：${strategy.name}，${armyText(army)}`],
     over: null,
@@ -919,7 +946,14 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const allyArmy: ArmyEntry[] = [];
   const allyDefense: ArmyEntry[] = [];
   if (isSpecial) {
-    const allyCount = 2 + run.layer;
+    /*
+     * 友军的编制：`3 + 层数`。
+     *
+     * 上一版是 `2 + 层数`（L2 只有 4 个人），实测第 4 轮就被攻方清空，
+     * 城只能靠塔和墙硬撑——玩家看到的"友军在家附近看着"其实一半是
+     * "友军已经死光了"。多给一个人，它才撑得到你打完。
+     */
+    const allyCount = 4 + run.layer;
     const allyBudget = enemyScale(run.layer, 'special', allyCount, pool, clockForScale, power).budget * 0.7;
     allyArmy.push(...toArmy(sanitizeAir(pickEnemyTypes(pool, allyBudget, valueOf, allyCount, isHero), run, theme)));
     allyDefense.push({ type: def.tower, count: 1 }, ...(def.wall ? [{ type: def.wall, count: 1 }] : []));
@@ -1002,6 +1036,20 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     ],
     world: run.world,
     rank: WORLDS[run.world].rankOf?.(clockForScale) ?? 0,
+    /*
+     * 玩家这一侧的境界：**时代钟给的下限**与**自己修出来的**取高的那个。
+     *
+     * 修士是唯一"越打越强"的兵种：一场仗打下来涨的修为存进 `run.cultivation`，
+     * 境界可以超过同层的钟——这正是修真线该有的样子（别人换代，你修仙）。
+     */
+    playerRank: Math.max(
+      WORLDS[run.world].rankOf?.(clockForScale) ?? 0,
+      ...Object.values(run.cultivation).map(rankOfExp),
+      0,
+    ),
+    cultivation: { ...run.cultivation },
+    wounds: { ...run.wounds },
+    elderType: pickElder(run, kept),
     bonusAtk: bonus.atk,
     bonusArmor: bonus.armor,
     bonusHp: bonus.hp,
@@ -1028,6 +1076,19 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   };
 }
 
+/**
+ * 修真世界的敌方编成：从中挑一个当"长老"。
+ *
+ * 一排同境界的修士不像宗门，像一个班。挑**最贵的那个修士**当长老，
+ * `buildBattle` 会给他额外体格与境界，其余修士压到钟以下。
+ */
+function pickElder(run: RunState, types: string[]): string | undefined {
+  if (run.world !== 'cultivation') return undefined;
+  const cults = types.filter((t) => CULTIVATORS.has(t));
+  if (cults.length < 2) return undefined;
+  return cults.reduce((best, t) => (costOf(t) > costOf(best) ? t : best), cults[0] as string);
+}
+
 export function bossFor(run: RunState, seed: number): { node: RoomNode; init: BattleInit } {
   const theme = themeOf(run);
   const rng = makeRng((seed ^ 0x51ed270b) >>> 0);
@@ -1046,6 +1107,24 @@ export function finishBattle(run: RunState, result: BattleResult): string[] {
 
   run.army = result.survivors.map((a) => ({ ...a }));
   run.gold = Math.max(0, result.gold);
+
+  /*
+   * 伤：活下来的人带着伤进下一场，每战只回 `HEAL_PER_BATTLE`。
+   * 阵亡的人已经不在 `survivors` 里了，他们那一条自然消失。
+   */
+  const wounds: Record<string, number> = {};
+  for (const [type, ratio] of Object.entries(result.wounds ?? {})) {
+    wounds[type] = Math.min(1, ratio + HEAL_PER_BATTLE);
+  }
+  run.wounds = wounds;
+
+  /*
+   * 修为：**只涨不落**。同类修士取最高的那个——老兵不死，只是凋零，
+   * 他修出来的境界留在队伍里。
+   */
+  for (const [type, exp] of Object.entries(result.cultivation ?? {})) {
+    run.cultivation[type] = Math.max(run.cultivation[type] ?? 0, exp);
+  }
 
   /*
    * 这里**不再自动收编**。
@@ -1404,6 +1483,8 @@ export function nextLayer(run: RunState, seed: number): boolean {
   run.clock = 0;
   run.bossDone = false;
   run.reviveLeft = run.relics.includes('medic') ? 2 : 0;
+  // 换层整补：伤在这一层里带着，进下一层就回满了（修为不重置）
+  run.wounds = {};
   run.buffs = emptyBuffs();
   const rng = makeRng((seed ^ (layer * 0x2545f491)) >>> 0);
   run.plan = planLayer(layer, rng, themeFor(run.world, layer));

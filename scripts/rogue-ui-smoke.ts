@@ -69,6 +69,15 @@ const nowDoors = root.querySelectorAll('.rg-step.now .rg-door');
 check(nowDoors.length === 2, '当前步有两扇门');
 check(!root.querySelector('.rg-bossrow'), '没走完 10 步时不显示层末会战');
 
+// 局外检视栏：军队 / 藏品 / 待生效 / 行记（2026-11-26 从一行文字扩成四块）
+const inspect = root.querySelector('.rg-inspect');
+check(!!inspect, '局外有检视栏');
+check(
+  ['军队', '藏品', '待生效', '行记'].every((t) => inspect?.textContent?.includes(t)),
+  '检视栏列出军队/藏品/待生效/行记',
+);
+check((inspect?.querySelectorAll('.rg-armyrow').length ?? 0) > 0, '军队逐条列出兵种属性');
+
 console.log('\n[3] 进战斗：界面元素齐全，认输能回到结算');
 {
   click(root.querySelector('.rg-step.now .rg-door:not([disabled])'));
@@ -78,7 +87,23 @@ console.log('\n[3] 进战斗：界面元素齐全，认输能回到结算');
   check(root.querySelectorAll('.rg-unitrow').length > 0, '列出了我军单位');
   check(!!root.querySelector('[data-act="end"]'), '有结束回合按钮');
   check(!!root.querySelector('[data-act="undo"]'), '有撤回按钮');
-  check(!root.querySelector('[data-recruit]'), '没有招募面板（玩家没城）');
+  /*
+   * 「玩家没城 → 没有招募面板」。只查招募面板本身，别拿「外人」卡的
+   * data-parley 当探针：常规战斗有 34% 概率刷出中立单位，那是随机的，
+   * 放这儿会让断言偶发失败（外人卡由 [6] 单独测）。
+   */
+  check(!root.querySelector('[data-recruit], .rg-recruit, #rg-recruit'), '没有招募面板（玩家没城）');
+  // 强制模式：空地叠同格要靠强制移动 / 强制攻击，照抄本体的两个按钮
+  const forceMove = root.querySelector('[data-act="force-move"]');
+  const forceAttack = root.querySelector('[data-act="force-attack"]');
+  check(!!forceMove && !!forceAttack, '有强制移动/强制攻击按钮');
+  click(forceMove);
+  check(forceMove?.classList.contains('armed') === true, '点强制移动后按钮亮起');
+  click(forceMove);
+  check(forceMove?.classList.contains('armed') === false, '再点一次退出强制模式');
+  click(forceAttack);
+  check(forceAttack?.classList.contains('armed') === true, '强制攻击也能亮起');
+  click(forceAttack);
   check(root.querySelectorAll('#rg-board .tile').length > 0, '棋盘格子已渲染');
   check(root.querySelectorAll('#rg-board .unit').length > 0, '棋子已渲染');
   click(root.querySelector('[data-act="quit"]'));
@@ -240,8 +265,8 @@ console.log('\n[6] 战场两侧的"外人"：场外交涉');
     return m ? Number(m[1]) : -1;
   };
   const goldBefore = goldOf();
-  const rec = rows[0]?.querySelector<HTMLButtonElement>('[data-recruit]');
-  const recId = rec?.dataset.recruit;
+  const rec = rows[0]?.querySelector<HTMLButtonElement>('[data-parley]');
+  const recId = rec?.dataset.parley;
   check(!!rec && !rec.disabled, '钱够的时候招募按钮可点');
   click(rec ?? null);
   await wait(10);

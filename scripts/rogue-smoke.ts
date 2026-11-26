@@ -33,7 +33,7 @@ import {
 } from '../src/roguelike/run.ts';
 import { DECISIONS, DEFENSE_UNIT_DEFS, EVENTS, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
 import { attackableTargets, isEliminated, sameTeam, utype } from '../src/core/rules.ts';
-import { buildBattle, outcomeOf, resultOf, spawnWave, step, survivorsOf } from '../src/roguelike/battle.ts';
+import { baseTypeOf, buildBattle, outcomeOf, resultOf, spawnWave, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
 import type { LayerId, RoomKind, RunState } from '../src/roguelike/types.ts';
 
@@ -369,7 +369,8 @@ console.log('\n[7] 第二层的四种世界（正史 / 军备 / 奇想 / 修真�
   // 固定一个修士上场，专门看境界加成（随机编成不一定抽到人）
   init2.enemyTypes = ['qi-cultivator'];
   const s2 = buildBattle(init2);
-  const qi = s2.units.find((u) => u.type === 'qi-cultivator');
+  // 修士现在会套"境界变体"（rg:qi-cultivator@…），按基础 id 找
+  const qi = s2.units.find((u) => baseTypeOf(u.type) === 'qi-cultivator');
   if (qi) {
     const def = utype(s2, qi.type);
     check(def.atk > 10, '修真修士吃到境界加成（基础攻 10）', `atk=${def.atk}`);

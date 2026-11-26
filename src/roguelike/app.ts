@@ -4,8 +4,9 @@
  * 全部是一块 DOM 反复重写，不引框架。房间图、金币、军队这些状态都活在
  * `RunState` 里，这里只负责"显示它、把点击变成对它的修改"。
  */
-import { STRATEGIES, armyText, eventById, relicById, themeOf, unitName } from './run.ts';
-import { WORLDS } from './data.ts';
+import { STRATEGIES, armyText, eventById, relicById, relicDesc, rankOfExp, themeOf, unitDefOf, unitName } from './run.ts';
+import { CULTIVATORS, WORLDS } from './data.ts';
+import { REALMS } from '../core/cultivation/progression.ts';
 import type { WorldId } from './data.ts';
 import {
   applyDecision,
@@ -31,7 +32,7 @@ import {
 } from './run.ts';
 import { makeRng, randomSeed } from './rng.ts';
 import type { Rng } from './rng.ts';
-import type { BattleResult, Effect, RewardOption, RoomNode, RunState } from './types.ts';
+import type { ArmyEntry, BattleResult, Effect, RewardOption, RoomNode, RunState } from './types.ts';
 
 let run: RunState | null = null;
 /** 退出回标题（由 mount.ts 传进来；地址直开时也有） */
@@ -107,6 +108,56 @@ function beginRun(root: HTMLElement, strategyId: string): void {
 
 // ------------------------------------------------------------------ 层地图
 
+/**
+ * 局外面板里的一行兵。
+ *
+ * 以前这里只有一行 `armyText`（"戈兵×3、弓手×2"），属性、境界、伤一概看不见——
+ * 玩家要在"买兵 / 换兵 / 走哪条路"上做决定，却看不到手里这些兵到底是什么。
+ * 现在把**能查到的都写出来**，不再需要点进战斗才认得出自己的队伍。
+ */
+function armyRow(r: RunState, entry: ArmyEntry): string {
+  const def = unitDefOf(entry.type);
+  const name = def?.name ?? unitName(entry.type);
+  const stats = !def
+    ? ''
+    : def.category === 'building'
+      ? `攻 ${def.atk} · 耐久 ${def.maxHp}`
+      : `攻 ${def.atk} · 甲 ${def.armor} · 血 ${def.maxHp} · 射 ${def.range} · 移 ${def.move}`;
+  let realm = '';
+  if (CULTIVATORS.has(entry.type)) {
+    // 修士的境界 = 时代钟给的下限与修出来的取高者（和 `battleFor` 一个口径）
+    const base = WORLDS[r.world].rankOf?.(r.clock) ?? 0;
+    const rank = Math.max(base, rankOfExp(r.cultivation[entry.type] ?? 0));
+    realm = `<i class="rg-realm">${REALMS[Math.max(0, Math.min(9, rank))] ?? '凡人'}</i>`;
+  }
+  const wound = r.wounds[entry.type];
+  const hurt =
+    wound !== undefined && wound < 0.995
+      ? `<i class="rg-hurt">伤 ${Math.round(wound * 100)}%</i>`
+      : '';
+  const tag = def?.hero ? '<i class="rg-hero">英雄</i>' : '';
+  return `<div class="rg-armyrow">
+    <span class="n">${escapeHtml(name)}${entry.count > 1 ? ` ×${entry.count}` : ''}</span>
+    <b>${stats}</b>${realm}${tag}${hurt}
+  </div>`;
+}
+
+/** "下一战生效"的那几条加成，翻成人话 */
+function buffRows(r: RunState): string[] {
+  const b = r.buffs;
+  const out: string[] = [];
+  if (b.atk) out.push(`我军攻击 +${b.atk}`);
+  if (b.armor) out.push(`我军护甲 +${b.armor}`);
+  if (b.hp) out.push(`我军最大生命 +${b.hp}`);
+  if (b.move) out.push(`我军移动 +${b.move}`);
+  if (b.enemyCut) out.push(`敌军少 ${b.enemyCut} 个兵`);
+  if (b.enemyHp) out.push(`敌军开场掉 ${Math.round(b.enemyHp * 100)}% 血`);
+  if (b.cityDamage) out.push(`敌城耐久 −${Math.round(b.cityDamage * 100)}%`);
+  if (b.defenseDamage) out.push(`敌工事 −${Math.round(b.defenseDamage * 100)}%`);
+  if (b.tempUnits) out.push(`临时兵 +${b.tempUnits} 个`);
+  return out;
+}
+
 function showMap(root: HTMLElement): void {
   if (!run) return;
   cleanup();
@@ -162,16 +213,35 @@ function showMap(root: HTMLElement): void {
         <div class="rg-steps">${rows}${bossRow}</div>
         <aside class="rg-inspect">
           <div class="rg-side-card">
-            <h4>军队</h4>
-            <p class="rg-armytext">${armyText(r.army)}</p>
+            <h4>军队（${armyCount(r.army)}）</h4>
+            <div class="rg-armylist">${
+              r.army.length === 0
+                ? '<p class="rg-dim">一个兵都没有。</p>'
+                : r.army.map((a) => armyRow(r, a)).join('')
+            }</div>
           </div>
           <div class="rg-side-card">
             <h4>藏品（${r.relics.length}）</h4>
-            <p class="rg-dim">${
+            <div class="rg-reliclist">${
               r.relics.length === 0
-                ? '还没有。'
-                : r.relics.map((id) => `${relicById(id)?.name ?? id}`).join('、')
-            }</p>
+                ? '<p class="rg-dim">还没有。</p>'
+                : r.relics
+                    .map(
+                      (id) =>
+                        `<div class="rg-relicrow"><b>${escapeHtml(relicById(id)?.name ?? id)}</b><span>${escapeHtml(
+                          relicDesc(id, r.layer),
+                        )}</span></div>`,
+                    )
+                    .join('')
+            }</div>
+          </div>
+          <div class="rg-side-card">
+            <h4>待生效</h4>
+            <div class="rg-bufflist">${
+              buffRows(r).length === 0
+                ? '<p class="rg-dim">没有待生效的加成。下一战从头打。</p>'
+                : buffRows(r).map((t) => `<div class="rg-buffrow">${escapeHtml(t)}</div>`).join('')
+            }</div>
           </div>
           <div class="rg-side-card grow">
             <h4>行记</h4>
