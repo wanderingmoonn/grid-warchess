@@ -644,16 +644,42 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     }
   }
 
-  /* 1) 自家城被压着，且兵力不占优 → 守 */
+  /*
+   * 1) **有城挡不住 → 守**（W3.6 第 3b 步，2026-11-26）。
+   *
+   * 旧判据是"对面总身价 > 我 ×0.9 就守"——那是**全军比较**，回答不了"这一座城要不要救"：
+   * 兵都在对面城下时总身价可能还占优，可老家已经要塌了。
+   * 现在读服务层算好的那一份（`world.defensible`）：守军 + 这座城的产能，挡不挡得住来犯；
+   * 时间窗就是"城还能撑几轮"，所以赶不到的人不算守军、也不用来犯。
+   * 最急的排前面（`rounds` 小的先救）。
+   */
   const threatened = world.cities.filter((c) => c.role === 'threatened' || c.role === 'home');
-  if (threatened.length > 0 && foeStr > myStr * 0.9) {
-    /* 离敌军最近的先救；`foeEta` 是"敌人几回合能摸到它"，越小越急 */
-    const worst = threatened.sort((a, b) => a.foeEta - b.foeEta)[0]!;
+  /*
+   * **守军里不算"已经被派去别处进攻的人"。**
+   *
+   * 它们在别人的城下，既不在家、也不会回来（回不回得来由计划层按距离判）。
+   * 不算进来之前，D-1-01 开局会把 2 个正在攻城的兵算成守军（身价 236 = 来犯 236），
+   * 判成"挡得住"→ 不守 → 6 手丢城。
+   */
+  const committedTo = (cityId: string): Set<string> =>
+    new Set(
+      (mem?.bands ?? [])
+        .filter((b) => b.cityId !== cityId && world.foeCities.some((f) => f.id === b.cityId))
+        .flatMap((b) => b.unitIds),
+    );
+  const losing = threatened
+    .map((c) => ({ info: c, out: world.defensible(c.city, committedTo(c.city.id)) }))
+    .filter((x) => !x.out.hold)
+    .sort((a, b) => a.out.rounds - b.out.rounds || a.info.foeEta - b.info.foeEta);
+  if (losing.length > 0) {
+    const { info, out } = losing[0]!;
     return complete(s, world, mem, {
       kind: 'defend',
       untilTurn: s.turn + horizon,
-      cityId: worst.city.id,
-      reason: `对面身价 ${Math.round(foeStr)} > 我 ${Math.round(myStr)}，${worst.city.id} ${Number.isFinite(worst.foeEta) ? `${worst.foeEta} 回合内会被摸到` : '最靠前'}，先守`,
+      cityId: info.city.id,
+      reason: `${info.city.id} ${
+        Number.isFinite(out.rounds) ? `${out.rounds} 轮内会塌` : '正在被压'
+      }：${out.why}，先守`,
     });
   }
 

@@ -154,6 +154,31 @@ export interface CityStand {
 }
 
 /**
+ * **这座城守得住吗**（W3.6 第 3b 步，2026-11-26）。
+ *
+ * 用户定的口径：判据是"**现有守城部队 + 这座城自己的产能，挡不住**"，
+ * 不是"全军总身价被压到对手的几成"——后者是全军比较，回答不了"这一座城要不要救"。
+ */
+export interface DefendOutlook {
+  /** 挡得住 = 守军身价 + 窗口内能补出来的身价 ≥ 来犯身价 */
+  hold: boolean;
+  /** 城还能撑几轮（`Infinity` = 没人打得塌） */
+  rounds: number;
+  /** 判据用的时间窗（轮）——只数这个窗口内赶得到的人，产能也只在这个窗口内累计 */
+  window: number;
+  /** 这个窗口内赶得到的我方战斗单位身价 */
+  defWorth: number;
+  /** 这个窗口内能造出来的兵折成身价 */
+  makeWorth: number;
+  /** 这个窗口内赶得到的敌方战斗单位身价 */
+  foeWorth: number;
+  /** 有几个敌人的伤害真的落得到城上 */
+  threats: number;
+  /** 一句话，进决定理由 */
+  why: string;
+}
+
+/**
  * **一个时代的一步**（D4a）。`eraLadder(城)` 的返回值。
  *
  * 它是**枚举**，不是选择：这里只回答"如果升到这一代，累计要花多少、那一代每格能放多强的兵"。
@@ -248,6 +273,15 @@ export interface World {
    * 顺带给出"升一级之后还能撑几轮"。见 `CityStand`。
    */
   cityStand(city: City): CityStand;
+  /**
+   * **守得住吗**：守军 + 产能 vs 来犯，时间窗 = 城还能撑几轮。
+   * 一处实现，两个读者：决定层判"要不要守"、计划层判"这支队回不回得去"。
+   */
+  /**
+   * `skip` = **不算守军的人**（已经被编队派去进攻别人的兵）。
+   * 不算进来是因为它们人不在、也不会回来——和 v1「换家」那条"着力点"是同一个事实。
+   */
+  defensible(city: City, skip?: ReadonlySet<string>): DefendOutlook;
   /**
    * **一条线的三个存量**（W1 影子模式，2026-11-26）：能打到城的人 / 还在路上的人 /
    * 这一回合能造出几个。
@@ -899,6 +933,78 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     return best;
   };
 
+  /**
+   * **这座城一手能造几个兵**：空产兵格 × 钱买得起几个。
+   * 一处实现，两个读者：`laneStats.make` 与 `defensible` 的产能项。
+   */
+  const makeAt = (city: City): number => {
+    const tiles = cityTiles(city);
+    const free = tiles.filter((p) => !s.units.some((x) => x.x === p.x && x.y === p.y)).length;
+    const price = bestPerCell(city)?.gold ?? 0;
+    const gold = s.players[me]?.gold ?? 0;
+    return price > 0 ? Math.min(free, Math.floor(gold / price)) : 0;
+  };
+
+  /**
+   * **守得住吗**（W3.6 第 3b 步，2026-11-26）。
+   *
+   * 两件事都用现成的数，**不新拍系数**：
+   *   · 时间窗 = `cityStand.rounds`（这座城按现在的火力还能撑几轮）——
+   *     只能在这个窗口内赶到的人，才算得上"守军"或"威胁"；
+   *   · 产能 = 一手能造几个 × 窗口，但被"钱总共买得起几个"卡住（钱是存量，不是每轮都有）。
+   *
+   * 判据只有一句：**守军身价 + 产能身价 ≥ 来犯身价 → 挡得住。**
+   * 没有"几成""几倍"这种倍数——那是要调参的，而这里两边都是金币。
+   */
+  const defensible = (city: City, skip?: ReadonlySet<string>): DefendOutlook => {
+    const stand = cityStand(city);
+    if (stand.threats === 0) {
+      return {
+        hold: true,
+        rounds: Infinity,
+        window: 0,
+        defWorth: 0,
+        makeWorth: 0,
+        foeWorth: 0,
+        threats: 0,
+        why: '没人打得着这座城',
+      };
+    }
+    const window = Math.min(6, Number.isFinite(stand.rounds) ? Math.max(1, stand.rounds) : 6);
+    const inWindow = (u: Unit): boolean =>
+      !skip?.has(u.id) && world.marchTurns(u, city) <= window;
+    const defWorth = myCombat.reduce((n, u) => n + (inWindow(u) ? unitWorth(s, u) : 0), 0);
+    const foeWorth = foeCombat.reduce((n, u) => n + (inWindow(u) ? unitWorth(s, u) : 0), 0);
+    const cell = bestPerCell(city);
+    const price = cell?.gold ?? 0;
+    const afford = price > 0 ? Math.floor((s.players[me]?.gold ?? 0) / price) : 0;
+    const supply = price > 0 ? Math.min(makeAt(city) * window, afford) : 0;
+    const makeWorth = supply * (cell?.worth ?? 0);
+    /*
+     * **判据：守军自己要占优，才算挡得住。**
+     *
+     * 产能只回答"守不守得住"（差多少、能不能补上），**不进这个不等式**——
+     * 理由有两条，都是实测出来的：
+     *   · 产能是"只要你肯花钱就有"的承诺：把它算进来，钱多就永远"挡得住"，
+     *     于是既不回头也不放弃（P-1-01：300 金能造 3 个戟兵，判成挡得住 →
+     *     去发展造农民 → 两个戟兵把老家拆了）；
+     *   · 打平也算挡不住：守方没有任何余量时，正确的动作是收队，不是继续在外面打
+     *     （D-1-01：开局 4 对 4，判"挡得住"继续攻城，6 手丢城）。
+     */
+    const hold = defWorth > foeWorth;
+    const money = `守军 ${Math.round(defWorth)} + ${window} 轮补 ${supply} 个（${Math.round(makeWorth)}）`;
+    return {
+      hold,
+      rounds: stand.rounds,
+      window,
+      defWorth,
+      makeWorth,
+      foeWorth,
+      threats: stand.threats,
+      why: `${money} ${hold ? '≥' : '<'} 来犯 ${Math.round(foeWorth)}`,
+    };
+  };
+
   const world: World = {
     me,
     foe,
@@ -936,14 +1042,15 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       return roleMap.get(city.id) ?? 'safe';
     },
     cityStand,
+    defensible,
     laneStats(ids, city) {
       const split = contactSplit(ids, city);
-      const tiles = cityTiles(city);
-      const free = tiles.filter((p) => !s.units.some((x) => x.x === p.x && x.y === p.y)).length;
-      const price = bestPerCell(city)?.gold ?? 0;
-      const gold = s.players[me]?.gold ?? 0;
-      const make = price > 0 ? Math.min(free, Math.floor(gold / price)) : 0;
-      return { front: split.front.length, road: split.road.length, make, engaged: split.engaged.length };
+      return {
+        front: split.front.length,
+        road: split.road.length,
+        make: makeAt(city),
+        engaged: split.engaged.length,
+      };
     },
     contacts(ids, city) {
       const split = contactSplit(ids, city);

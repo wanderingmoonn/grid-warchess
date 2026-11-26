@@ -1379,9 +1379,13 @@ function planMarch(
  * "四成"只对已出发的队生效——收拢中的队本来就小，按四成判会把刚成军的两三个人
  * 立刻判死，于是每手重建一支新队（编号一直变）。
  */
-function liveBandsOf(mem: V4Memory | undefined, cityId: string, aliveIds: Set<string>): Band[] {
+function liveBandsOf(
+  mem: V4Memory | undefined,
+  cityId: string | null,
+  aliveIds: Set<string>,
+): Band[] {
   return (mem?.bands ?? [])
-    .filter((b) => b.cityId === cityId)
+    .filter((b) => cityId === null || b.cityId === cityId)
     .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => aliveIds.has(id)) }))
     .filter((b) => b.unitIds.length > 0)
     .filter(
@@ -1655,15 +1659,66 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     }
     outBands = bands;
   } else if (decision.kind === 'defend' && city) {
-    /* 守：把外面的兵收回城下（这条和 S-004 那道题是同一件事） */
-    squads.push({
-      id: 'recall',
-      order: 'hold',
-      unitIds: rest.map((u) => u.id),
-      cityId: city.id,
-      /* 召回：先回城（S-004 的规矩），所以只给集火、不给挪位 */
-      tactics: planTactics(s, rest.map((u) => u.id), false),
-    });
+    /*
+     * **守：编队整队召回；太远的继续打**（W3.6 第 3b 步，2026-11-26）。
+     *
+     * 以前这里无条件把 `rest` 全部收成一支 `recall`——正在攻城的编队被顶掉，
+     * 名册成孤儿（和"攻城后编队消失"是同一个病）。
+     *
+     * 现在按编队处理，判据只有一条：**回得去吗**。
+     *   · 回得去 → 这支队任务改"守"，目标改自家城，名册不动；
+     *   · 回不去 → 不切任务，继续打它原来的城。
+     * "回得去"用距离场算（`marchTurns`），期限用"城还能撑几轮"（`defensible.rounds`）——
+     * 没有"8 格以内"这种死数字。用户 2026-11-26：队伍太远就不必切换任务。
+     */
+    const restIds = new Set(rest.map((u) => u.id));
+    const aliveIds = new Set(world.myCombat.map((u) => u.id));
+    const out = world.defensible(city);
+    const deadline = Number.isFinite(out.rounds) ? Math.max(1, out.rounds) : Infinity;
+    const bands = liveBandsOf(mem, null, aliveIds);
+    for (const b of bands) {
+      const target = s.cities.find((c) => c.id === b.cityId);
+      /* 只处理"正在打敌城"的队：守家的、接管的、目标已不属于敌人的都不谈转守 */
+      if (!target || target.ruined === true || (target.owner && target.owner === world.me)) continue;
+      const ids = b.unitIds.filter((id) => restIds.has(id));
+      if (ids.length === 0) continue;
+      const us = ids
+        .map((id) => s.units.find((u) => u.id === id))
+        .filter((u): u is Unit => !!u);
+      /* 全队一起走：取最慢的那个（骑兵不能把步兵丢在后面） */
+      const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, city)), 0);
+      if (eta <= deadline) {
+        squads.push({
+          id: b.id,
+          order: 'hold',
+          unitIds: ids,
+          cityId: city.id,
+          /* 召回：先回城（S-004 的规矩），所以只给集火、不给挪位 */
+          tactics: planTactics(s, ids, false),
+        });
+      } else {
+        squads.push({
+          id: b.id,
+          order: 'march',
+          unitIds: ids,
+          cityId: b.cityId,
+          want: b.want ?? ids.length,
+          tactics: planTactics(s, ids, true),
+        });
+      }
+    }
+    /* 不在编队里的兵（刚造的、守家的）照旧收回城下 */
+    const inBand = new Set(bands.flatMap((b) => b.unitIds));
+    const recallIds = rest.filter((u) => !inBand.has(u.id)).map((u) => u.id);
+    if (recallIds.length > 0) {
+      squads.push({
+        id: 'recall',
+        order: 'hold',
+        unitIds: recallIds,
+        cityId: city.id,
+        tactics: planTactics(s, recallIds, false),
+      });
+    }
   } else {
     const at = assemblePoint(s, world, world.myCities[0]?.id ?? '');
     squads.push({ id: 'main', order: 'assemble', unitIds: rest.map((u) => u.id), at });
