@@ -15,6 +15,7 @@ import { ERA2_UNIT_SPECS } from './angled-units-era2.ts';
 import { ERA3_UNIT_SPECS } from './angled-units-era3.ts';
 import { ERA4_UNIT_SPECS } from './angled-units-era4.ts';
 import { ERA5_UNIT_SPECS } from './angled-units-era5.ts';
+import { ERA6_UNIT_SPECS } from './angled-units-era6.ts';
 
 export interface AngledUnitPaintOpts {
   typeId: string;
@@ -104,6 +105,7 @@ const BUILTIN_UNIT_SPECS = {
   ...ERA3_UNIT_SPECS,
   ...ERA4_UNIT_SPECS,
   ...ERA5_UNIT_SPECS,
+  ...ERA6_UNIT_SPECS,
 };
 const customPainters = new Map<string, AngledUnitPainter>();
 
