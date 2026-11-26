@@ -9,7 +9,7 @@
  *
  * 所以 v4 先把这个工具做对：**必须做的事不参与打分**。
  */
-import { boardIdOf, boardOf, tileOn } from '../board.ts';
+import { EARTH, boardIdOf, boardOf, tileOn } from '../board.ts';
 import { passable } from '../config.ts';
 import { attackableTargets, cityTiles, effectiveStats, previewAttack, produceAt, reachableTiles, recruitCost, recruitSpawnCells, threatTiles } from '../rules.ts';
 import { occupantAt, utype } from '../rules.ts';
@@ -2116,14 +2116,75 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         });
       }
     } else if (loose.length > 0) {
-      const recallIds = loose.map((u) => u.id);
-      squads.push({
-        id: 'recall',
-        order: 'hold',
-        unitIds: recallIds,
-        cityId: city.id,
-        tactics: planTactics(s, recallIds, false),
-      });
+      /*
+       * **适当主动防御**（2026-11-26 23:40，用户定）。
+       *
+       * 原来的守 = 全钉在城格上等敌人来打。城格只有 n×n 个，站进去的人还得跟产兵格抢地方，
+       * 而且"站着挨打"本身不产生任何输出（`D-3-01` 实测：10 个人全在城里，8 个敌人
+       * 一个一个把城打穿；人手答案是迎上去在城外打）。
+       *
+       * 现在分两拨，名额是一个能数的数：**城里留 2 个**（吃 +3 护甲、占住城格），
+       * 其余站到**城与敌人之间**（城心朝最近敌人 2 格），在敌人贴城之前先接火。
+       * 只有 `loose` 的人数超过 2 才分——人不够时行为一个字不变。
+       */
+      const insideMax = 2;
+      /*
+       * **只在敌人还没贴脸时才出城迎击**（2026-11-26 23:45）。
+       *
+       * 敌人已经站在城下时，城格的 +3 护甲就是唯一的便宜，这时候分人出去等于白送
+       * （实测 `D-1-01`/`D-1-03`：4 个人守城，分成 2 里 2 外之后两道题一起翻红）。
+       * 判据用的还是那个数：城的 `foeEta <= 1` = 敌人下一手就能摸到。
+       */
+      const atGate = (world.cities.find((c) => c.city.id === city.id)?.foeEta ?? Infinity) <= 1;
+      const sortedLoose = [...loose].sort(
+        (a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1),
+      );
+      if (atGate || sortedLoose.length <= insideMax) {
+        const recallIds = sortedLoose.map((u) => u.id);
+        squads.push({
+          id: 'recall',
+          order: 'hold',
+          unitIds: recallIds,
+          cityId: city.id,
+            tactics: planTactics(s, recallIds, false),
+        });
+      } else {
+        const stay = sortedLoose.slice(0, insideMax).map((u) => u.id);
+        const outIds = sortedLoose.slice(insideMax).map((u) => u.id);
+        squads.push({
+          id: 'hold',
+          order: 'hold',
+          unitIds: stay,
+          cityId: city.id,
+          tactics: planTactics(s, stay, false),
+        });
+        /*
+         * 迎击位：城心朝最近敌人的方向退 2 格（走不过去就退 1 格）。
+         * 站那儿的意义是"敌人到城下之前先接火"，不是"多走两步好看"。
+         */
+        const foe = [...world.foeCombat].sort(
+          (a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1),
+        )[0];
+        const n = city.size ?? 2;
+        const cx = city.x + Math.floor(n / 2);
+        const cy = city.y + Math.floor(n / 2);
+        const dx = foe ? Math.sign(foe.x - cx) : 0;
+        const dy = foe ? Math.sign(foe.y - cy) : 0;
+        const far = { x: cx + dx * 2, y: cy + dy * 2 };
+        const near = { x: cx + dx, y: cy + dy };
+        /* 用 `boardOf` 拿这张图（多图下不能写死地球） */
+        const okFar = passable(tileOn(s, EARTH, far.x, far.y)?.terrain ?? 'water');
+        const at = foe && okFar ? far : foe ? near : undefined;
+        squads.push({
+          id: 'guard',
+          order: at ? 'march' : 'hold',
+          unitIds: outIds,
+          cityId: city.id,
+          ...(at ? { at } : {}),
+          want: outIds.length,
+          tactics: planTactics(s, outIds, true),
+        });
+      }
     }
   } else {
     /*
