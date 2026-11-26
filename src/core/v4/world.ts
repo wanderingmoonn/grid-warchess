@@ -179,6 +179,26 @@ export interface DefendOutlook {
 }
 
 /**
+ * **这条路过不过得去、过不去要从哪架桥**（W4-4d-1，2026-11-26；只观测）。
+ *
+ * 学 v3 的三条口径：
+ *   · **判据只有"走不走得通"**（地形连通性），不数"造了几座桥"——
+ *     认桥数量时 8 座桥有 0 座真的接通（在湖里填、在河湾抄近路）；
+ *   · 渡口取**最窄**的那一段水面，不是"我脚下最近的水面"（后者会在湖心架桥）；
+ *   · 铺桥要**接着上次的方向**，所以渡口带方向。
+ */
+export interface BridgeOutlook {
+  /** 走得到吗：我方有单位能走到城下（地形连通性，不看桥的数量） */
+  reach: boolean;
+  /** 走不到时：最窄的渡口。`dir` = 铺桥方向（从 `x,y` 往对岸） */
+  crossing?: { x: number; y: number; dir: [number, number]; cells: number };
+  /** 铺完要几格、多少钱、多少工时（木桥；时代高了可换石桥/钢桥，这里先按最便宜算） */
+  cost?: { cells: number; gold: number; work: number };
+  /** 一句话，进日志/理由 */
+  why: string;
+}
+
+/**
  * **一个时代的一步**（D4a）。`eraLadder(城)` 的返回值。
  *
  * 它是**枚举**，不是选择：这里只回答"如果升到这一代，累计要花多少、那一代每格能放多强的兵"。
@@ -282,6 +302,8 @@ export interface World {
    * 不算进来是因为它们人不在、也不会回来——和 v1「换家」那条"着力点"是同一个事实。
    */
   defensible(city: City, skip?: ReadonlySet<string>): DefendOutlook;
+  /** **过不过得去、过不去从哪架桥**（W4-4d-1；目前只观测，没有判断读它） */
+  bridgeOutlook(city: City): BridgeOutlook;
   /**
    * **能同时打到这座城、又站得下人的格数**（W3 上限，2026-11-26）。
    *
@@ -1046,6 +1068,128 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     return seats;
   };
 
+  /**
+   * **我方所有单位出发的距离场（按格计步）**——一次算好给三处共用：
+   * `canReach`（走不走得通）、`crossingOf`（渡口离我们多远）。
+   * 源取"我的战斗兵 + 经济兵"，一个都没有时退回我方城的格子。
+   */
+  let myFieldCache: Float64Array | undefined;
+  const myStepField = (): Float64Array => {
+    if (myFieldCache) return myFieldCache;
+    const src = [...myCombat, ...myEcon];
+    const seeds =
+      src.length > 0
+        ? src.map((u) => u.y * s.w + u.x)
+        : myCities.map((c) => c.y * s.w + c.x);
+    myFieldCache = distanceField(s, seeds, { perTurn: 1 }).dist;
+    return myFieldCache;
+  };
+
+  const reachCache = new Map<string, boolean>();
+  /**
+   * **走得到这座城吗**：城的 2×2 格 + 外面一圈里，有没有一格在我的距离场里是有限的。
+   * 水面走不通（`passable('water')` 为假），所以断河时这里一定是 `false`。
+   */
+  const canReach = (city: City): boolean => {
+    const hit = reachCache.get(city.id);
+    if (hit !== undefined) return hit;
+    const f = myStepField();
+    const size = city.size ?? 2;
+    let ok = false;
+    for (let y = city.y - 1; y <= city.y + size && !ok; y += 1) {
+      for (let x = city.x - 1; x <= city.x + size && !ok; x += 1) {
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        if (Number.isFinite(f[y * s.w + x])) ok = true;
+      }
+    }
+    reachCache.set(city.id, ok);
+    return ok;
+  };
+
+  const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+  const crossCache = new Map<string, BridgeOutlook>();
+
+  /**
+   * **最窄的渡口在哪**（学 v3 的 `crossingPointOf`）。
+   *
+   * 遍历每一格水面/沼泽，对四个方向各问一次：
+   *   · 身后那一格必须是**能走的地**（岸，或者已经铺好的桥）；
+   *   · 朝前数连续的"能架桥的格"（水/沼泽），数到岸为止——数不出来（河太宽）就跳过。
+   * 选法：**格数最少优先**，同格数再比"从我方到岸 + 从对岸到敌城"的步数之和。
+   * 不这么选就会在湖心架桥、在河湾抄近路（v3 的实测）。
+   */
+  const bridgeOutlook = (city: City): BridgeOutlook => {
+    const hit = crossCache.get(city.id);
+    if (hit) return hit;
+    if (canReach(city)) {
+      const out: BridgeOutlook = { reach: true, why: '走得到，不用架桥' };
+      crossCache.set(city.id, out);
+      return out;
+    }
+    const my = myStepField();
+    const size = city.size ?? 2;
+    const center = { x: city.x + Math.floor(size / 2), y: city.y + Math.floor(size / 2) };
+    const toFoe = stepFrom(center);
+    let best: { x: number; y: number; dir: [number, number]; cells: number; score: number } | null = null;
+    for (let y = 0; y < s.h; y += 1) {
+      for (let x = 0; x < s.w; x += 1) {
+        const here = tileOn(s, EARTH, x, y)?.terrain;
+        if (here !== 'water' && here !== 'marsh') continue;
+        for (const [dx, dy] of DIRS4) {
+          const bx = x - dx;
+          const by = y - dy;
+          if (bx < 0 || by < 0 || bx >= s.w || by >= s.h) continue;
+          const back = tileOn(s, EARTH, bx, by)?.terrain;
+          if (!back || !passable(back) || back === 'city') continue;
+          /* 朝前数：连续的"能架桥的格"，到岸为止；超过 4 格说明这条不是窄口 */
+          let cells = 0;
+          let cx = x;
+          let cy = y;
+          let far: { x: number; y: number } | null = null;
+          for (let k = 0; k < 4; k += 1) {
+            if (cx < 0 || cy < 0 || cx >= s.w || cy >= s.h) break;
+            const t = tileOn(s, EARTH, cx, cy)?.terrain;
+            if (!t) break;
+            if (passable(t)) {
+              far = { x: cx, y: cy };
+              break;
+            }
+            if (t !== 'water' && t !== 'marsh') break;
+            cells += 1;
+            cx += dx;
+            cy += dy;
+          }
+          if (!far || cells === 0) continue;
+          const fromMe = my[by * s.w + bx] ?? Infinity;
+          const onward = toFoe[far.y * s.w + far.x] ?? Infinity;
+          if (!Number.isFinite(fromMe) || !Number.isFinite(onward)) continue;
+          const score = fromMe + onward;
+          if (!best || cells < best.cells || (cells === best.cells && score < best.score)) {
+            best = { x, y, dir: [dx, dy], cells, score };
+          }
+        }
+      }
+    }
+    if (!best) {
+      const out: BridgeOutlook = { reach: false, why: '走不到，也找不到能架桥的窄口（河太宽/没有岸）' };
+      crossCache.set(city.id, out);
+      return out;
+    }
+    const bridgeDef = utype(s, 'bridge');
+    const out: BridgeOutlook = {
+      reach: false,
+      crossing: { x: best.x, y: best.y, dir: best.dir, cells: best.cells },
+      cost: {
+        cells: best.cells,
+        gold: best.cells * (bridgeDef.cost ?? 45),
+        work: best.cells * (bridgeDef.buildCost ?? 8),
+      },
+      why: `走不到，最窄的渡口在 (${best.x},${best.y}) 朝 ${best.dir[0] > 0 ? '东' : best.dir[0] < 0 ? '西' : best.dir[1] > 0 ? '南' : '北'}，要铺 ${best.cells} 格`,
+    };
+    crossCache.set(city.id, out);
+    return out;
+  };
+
   const world: World = {
     me,
     foe,
@@ -1084,6 +1228,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     cityStand,
     defensible,
+    bridgeOutlook,
     siegeSeats,
     laneStats(ids, city) {
       const split = contactSplit(ids, city);

@@ -438,6 +438,20 @@ function waveBrief(w: NonNullable<V4Memory['waves']>[number]): string {
   return `${w.cityId}@T${w.bornTurn} ${w.alive.length}/${w.men}人·到${w.arrivedIds.length} ${tag}`;
 }
 
+/**
+ * **这一手"这条路过不过得去"的一句话**（W4-4d-1，2026-11-26）。
+ *
+ * 完全是观测：`world.bridgeOutlook` 只被这里读，没有任何判断用它。
+ * 目标城取"这一手有队伍要去的敌城"，没有队伍时取最近的敌城。
+ */
+function bridgeText(s: GameState, world: World, con: Constraints): string {
+  const target =
+    s.cities.find((c) => c.id === con.squads.find((q) => !!q.cityId)?.cityId) ?? world.foeCities[0];
+  if (!target) return '';
+  const o = world.bridgeOutlook(target);
+  return ` · 桥 ${o.why}${o.cost ? `（${o.cost.gold} 金 / ${o.cost.work} 工时）` : ''}`;
+}
+
 let laneLoggedTurn = -1;
 
 function logLane(s: GameState, world: World, con: Constraints, mem: V4Memory): void {
@@ -467,7 +481,10 @@ function logLane(s: GameState, world: World, con: Constraints, mem: V4Memory): v
       `${open.length > 0 ? ` · ${open.slice(-4).map(waveBrief).join(' ; ')}` : ' · 无在途批'}` +
       ` · 本手+${last?.arrivals.at(-1) ?? 0} 堵${last?.stuck ?? 0} 断档${gap?.run ?? 0}/${gap?.total ?? 0}` +
       ` · 交换(${ex.length}手) 赚${gain} 亏${loss} | 本线 赚${lineGain} 亏${lineLoss}` +
-      `${lane?.seats !== undefined ? ` · 站得开 ${lane.seats} 格` : ''}\n`,
+      `${lane?.seats !== undefined ? ` · 站得开 ${lane.seats} 格` : ''}` +
+      /* W4-4d-1：这条路过不过得去、过不去要从哪架桥（只观测，没有任何判断读它） */
+      `${bridgeText(s, world, con)}` +
+      '\n',
   );
   /*
    * **每队一行**（W3.6 第 6 步）：掉的、到的、堵的、还有几手到。
