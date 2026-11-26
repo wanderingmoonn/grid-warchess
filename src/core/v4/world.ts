@@ -266,6 +266,14 @@ export interface World {
    */
   laneStats(ids: string[], city: City): { front: number; road: number; make: number; engaged: number };
   /**
+   * **已经到"前线"的那批人是谁**（W1，2026-11-26）：能打到城的 + 已接火的。
+   *
+   * 为什么要有"是谁"而不只是"几个"：**通过量必须按人去重**。
+   * 一条线的通过量不是几何量（代码里没有"路"这个对象），它是在**终点边界上**量的到货率：
+   * 这一手有多少个**新的**人第一次进入前线。只看"前线人数"会把它和伤亡、补人混在一起。
+   */
+  contacts(ids: string[], city: City): string[];
+  /**
    * **升级阶梯**（D4a）：从当前代往上，每一代"累计升级价 + 每格最强的兵 + 单价"。
    *
    * 只枚举，不选。决定层拿它去比"哪一代的总战力最大"（闸 B 的判据）。
@@ -715,6 +723,32 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   /* 认领表的原料算一次就够（一场棋里问很多遍），算完缓存 */
   let spotCache: EconSpot[] | null = null;
 
+  /**
+   * 把一批人分成"能打到城 / 已接火 / 还在路上"三份（W1）。
+   *
+   * 一处实现，两个读者：`laneStats` 数人数，`contacts` 交名字（通过量按人去重要用）。
+   * 口径：`engaged` 只算**原地**能打到敌兵，不含"走一步再打"——那会偏乐观。
+   */
+  const contactSplit = (ids: string[], city: City): { front: string[]; engaged: string[]; road: string[] } => {
+    const tiles = cityTiles(city);
+    const front: string[] = [];
+    const engaged: string[] = [];
+    const road: string[] = [];
+    for (const id of ids) {
+      const u = s.units.find((x) => x.id === id);
+      if (!u) continue;
+      const range = Math.max(1, effectiveStats(s, u).range ?? 1);
+      const field = stepFrom({ x: u.x, y: u.y });
+      let steps = Infinity;
+      for (const t of tiles) steps = Math.min(steps, field[t.y * s.w + t.x] ?? Infinity);
+      const atCity = Number.isFinite(steps) && steps <= range;
+      if (atCity) front.push(id);
+      if (attackableTargets(s, u).length > 0) engaged.push(id);
+      else if (!atCity) road.push(id);
+    }
+    return { front, engaged, road };
+  };
+
   /*
    * ── 这座城还能撑几轮（D3，2026-11-26）─────────────────────────
    *
@@ -903,29 +937,17 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     },
     cityStand,
     laneStats(ids, city) {
+      const split = contactSplit(ids, city);
       const tiles = cityTiles(city);
-      let front = 0;
-      let road = 0;
-      let engaged = 0;
-      for (const id of ids) {
-        const u = s.units.find((x) => x.id === id);
-        if (!u) continue;
-        const range = Math.max(1, effectiveStats(s, u).range ?? 1);
-        const field = stepFrom({ x: u.x, y: u.y });
-        let steps = Infinity;
-        for (const t of tiles) steps = Math.min(steps, field[t.y * s.w + t.x] ?? Infinity);
-        const atCity = Number.isFinite(steps) && steps <= range;
-        if (atCity) front += 1;
-        /* 原地能打到敌兵 = 已经接火（不算"走一步再打"，那会偏乐观） */
-        const hitting = attackableTargets(s, u).length > 0;
-        if (hitting) engaged += 1;
-        if (!atCity && !hitting) road += 1;
-      }
       const free = tiles.filter((p) => !s.units.some((x) => x.x === p.x && x.y === p.y)).length;
       const price = bestPerCell(city)?.gold ?? 0;
       const gold = s.players[me]?.gold ?? 0;
       const make = price > 0 ? Math.min(free, Math.floor(gold / price)) : 0;
-      return { front, road, make, engaged };
+      return { front: split.front.length, road: split.road.length, make, engaged: split.engaged.length };
+    },
+    contacts(ids, city) {
+      const split = contactSplit(ids, city);
+      return [...split.front, ...split.engaged];
     },
     corridorWidth(p, toward) {
       const dx = Math.sign(toward.x - p.x);

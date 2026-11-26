@@ -120,13 +120,28 @@ for (const c of v.world.myCities) {
   const mem = (s.aiFocus?.[ME]?.v4 ?? {}) as { wave?: unknown; exchange?: Array<{ gain: number; loss: number }> };
   const lane = v.con.lane;
   const w = mem.wave as
-    | { cityId: string; startedTurn: number; men: number; arrivedTurn?: number; arrivedMen?: number }
+    | {
+        cityId: string;
+        startedTurn: number;
+        men: number;
+        arrivedTurn?: number;
+        arrivedMen?: number;
+        arrivedIds?: string[];
+        arrivals?: number[];
+        stuck?: number;
+      }
     | undefined;
   const ex = mem.exchange ?? [];
   console.log('\n兵线（只观测）：');
   console.log(`  前线 ${lane?.front ?? '-'} · 在途 ${lane?.road ?? '-'} · 这回合能造 ${lane?.make ?? '-'}`);
   console.log(
-    `  波：${w ? `${w.cityId} 出发 T${w.startedTurn} ${w.men} 人${w.arrivedTurn ? ` → T${w.arrivedTurn} 到 ${w.arrivedMen} 人` : ' 在路上'}` : '（无）'}`,
+    `  波：${
+      w
+        ? `${w.cityId} 出发 T${w.startedTurn} ${w.men} 人 · 到 ${w.arrivedIds?.length ?? 0}/${w.men}` +
+          `（本手 +${w.arrivals?.at(-1) ?? 0}${w.stuck ? `，堵 ${w.stuck} 手` : ''}）` +
+          `${w.arrivedTurn ? ` · 首次接火 T${w.arrivedTurn}` : ''}`
+        : '（无）'
+    }`,
   );
   console.log(
     `  交换（最近 ${ex.length} 手）：赚 ${ex.reduce((n, x) => n + x.gain, 0)} / 亏 ${ex.reduce((n, x) => n + x.loss, 0)}`,

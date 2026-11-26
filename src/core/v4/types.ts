@@ -467,7 +467,7 @@ export interface V4Memory {
   unitSeen?: Record<string, { type: string; owner: string }>;
   /** 交换账：最近 6 手的金币收益/损失（按造价，不按残血） */
   exchange?: Array<{ turn: number; gain: number; loss: number }>;
-  /** 这一波：从出发到第一次能打到城。`arrivedTurn` 有值 = 已经进入交战 */
+  /** 这一波：从出发到第一次进入前线（能打到城或已接火）。`arrivedTurn` 有值 = 已经交战 */
   wave?: {
     id: string;
     cityId: string;
@@ -475,6 +475,16 @@ export interface V4Memory {
     men: number;
     arrivedTurn?: number;
     arrivedMen?: number;
+    /**
+     * **已经到过前线的人**（按人去重）。通过量靠它算：
+     * "这一手有几个**新人**第一次进入前线"，而不是"前线现在几个人"
+     * ——后者把到达、伤亡、补人混在一起了。
+     */
+    arrivedIds?: string[];
+    /** 每一手的新到货人数（第 0 个 = 出发那一手） */
+    arrivals?: number[];
+    /** 连续几手"在途 > 0 但到货 0" = 通道堵住的直接证据 */
+    stuck?: number;
   } | null;
 }
 

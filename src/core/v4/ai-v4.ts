@@ -223,19 +223,52 @@ function laneMemo(
   }
   const ex = [...exchange, { turn, gain, loss }].slice(-LANE_WINDOW);
 
-  /* 波：出发 = 主队从 assemble 变成 march/siege；到达 = 第一次有人能打到城 */
+  /* 波：出发 = 主队从 assemble 变成 march/siege；到达 = 第一次有人进入前线 */
   let wave = prevWave;
   const main = con.squads.find((q) => q.id === 'main' && !!q.cityId);
   if (wave && wave.arrivedTurn === undefined && (!main || main.cityId !== wave.cityId)) {
     /* 没到就散了（打光 / 撤退）：按 0 人到达记，看数的时候能区分出来 */
     wave = { ...wave, arrivedTurn: turn, arrivedMen: 0 };
   }
+  /* 出发只在"真的开拔"时算；之后的到货要继续记——队伍到了城下会转 siege/hold，不等于这波结束 */
   if (main && (main.order === 'march' || main.order === 'siege')) {
     if (!wave || wave.cityId !== main.cityId) {
-      wave = { id: `${main.cityId}-${turn}`, cityId: main.cityId!, startedTurn: turn, men: main.unitIds.length };
-    } else if (wave.arrivedTurn === undefined && (con.lane?.front ?? 0) + (con.lane?.engaged ?? 0) > 0) {
-      /* "到"= 能打到城的 + 已经接火的（守军先打起来也算到了） */
-      wave = { ...wave, arrivedTurn: turn, arrivedMen: con.lane!.front + con.lane!.engaged };
+      wave = {
+        id: `${main.cityId}-${turn}`,
+        cityId: main.cityId!,
+        startedTurn: turn,
+        men: main.unitIds.length,
+      };
+    }
+  }
+  if (wave && main && main.cityId === wave.cityId) {
+    /*
+     * **通过量**（2026-11-26）：按人去重的"新到货"计数。
+     *
+     * 为什么不能只看"前线现在几个人"：那个数把**到达、伤亡、补人**混在一起了。
+     * 通过量量的是"这一手有几个新人第一次进入前线"——它是**终点边界上的到货率**，
+     * 不需要代码里有"路"这个几何对象。
+     *
+     * 配着 `road`（在途存量）一起看才有意义：
+     *   · 到货 0 + 在途 > 0 → **堵**（路上有货过不来）；
+     *   · 到货 0 + 在途 0   → **没货**（该造兵/该换线，不是通道问题）。
+     */
+    const city = s.cities.find((c) => c.id === main.cityId);
+    if (city) {
+      const contact = new Set(world.contacts(main.unitIds, city));
+      const arrived = new Set(wave.arrivedIds ?? []);
+      const fresh = [...contact].filter((id) => !arrived.has(id));
+      for (const id of fresh) arrived.add(id);
+      wave = {
+        ...wave,
+        arrivedIds: [...arrived],
+        arrivals: [...(wave.arrivals ?? []), fresh.length],
+        /* 连续几手"有人在路上、却一个人都没到" —— 通道堵住的直接证据 */
+        stuck: fresh.length === 0 && (con.lane?.road ?? 0) > 0 ? (wave.stuck ?? 0) + 1 : 0,
+        ...(wave.arrivedTurn === undefined && contact.size > 0
+          ? { arrivedTurn: turn, arrivedMen: contact.size }
+          : {}),
+      };
     }
   }
   return { unitSeen: now, exchange: ex, wave };
@@ -247,6 +280,14 @@ function laneMemo(
  * 格式固定成一句，便于扫：
  *   `[lane] T=7 front=3 road=4 make=2 · 波 c2 出发T5 8人 → T7 到3人(2手) · 交换(6手) 赚420 亏180`
  */
+/** 这一波的通过量：平均每手有几个新人进入前线（不除零） */
+function throughput(w: NonNullable<V4Memory['wave']>): string {
+  const total = w.arrivedIds?.length ?? 0;
+  const turns = (w.arrivals?.length ?? 0) - 1;
+  if (turns <= 0) return '-';
+  return (total / turns).toFixed(1);
+}
+
 let laneLoggedTurn = -1;
 
 function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
@@ -261,7 +302,14 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
   const w = mem.wave;
   process.stderr.write(
     `[lane] T=${s.turn} front=${lane?.front ?? '-'} 接火=${lane?.engaged ?? '-'} road=${lane?.road ?? '-'} make=${lane?.make ?? '-'}` +
-      ` · 波${w ? ` ${w.cityId} 出发T${w.startedTurn} ${w.men}人${w.arrivedTurn ? ` → T${w.arrivedTurn} 到${w.arrivedMen}人(${w.arrivedTurn - w.startedTurn}手)` : ' 在路上'}` : ' 无'}` +
+      ` · 波${
+        w
+          ? ` ${w.cityId} 出发T${w.startedTurn} ${w.men}人 · 到${w.arrivedIds?.length ?? 0}/${w.men}` +
+            ` 均${throughput(w)}/手 本手+${w.arrivals?.at(-1) ?? 0}` +
+            `${w.stuck ? ` 堵${w.stuck}手` : ''}` +
+            `${w.arrivedTurn ? ` 首次T${w.arrivedTurn}` : ' 未接火'}`
+          : ' 无'
+      }` +
       ` · 交换(${ex.length}手) 赚${gain} 亏${loss}\n`,
   );
 }
