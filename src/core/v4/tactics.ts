@@ -24,6 +24,7 @@ import {
 import type { Action, City, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
+import { unitWorthOfType } from './world.ts';
 
 /**
  * **所有距离用曼哈顿距离**（`|dx| + |dy|`）：游戏里移动是四邻，斜着走一步要花两步，
@@ -761,42 +762,6 @@ export function recruitAction(
      *    没敌人时按**血 → 攻 → 价格**（通用强度），有敌人时按**射程 → 血 → 攻 → 价格**。
      * ③ 兜底保留"攻击最高的"不变。理由没变：打不穿也总比完全不还手强。
      */
-    const foeRange = need?.range ?? 0;
-    const byRange = (a: { type: string; gold: number }, b: { type: string; gold: number }): number => {
-      const da = utype(s, a.type);
-      const db = utype(s, b.type);
-      /*
-       * **"先手"= 射程压过对面**，不是"射程大"。压不过就没有先手可言，
-       * 这时候射程 3 和射程 1 一样得挨打，该比的是血（血薄的会被溅射一次清掉）。
-       * S-011 实测：造射程 3 的弓手（22 血）去冲射程 5 的炮，一发就没了。
-       */
-      /*
-       * **射程 ≥ 对面**就算"不吃亏"（2026-11-25 从 `>` 改成 `>=`）。
-       *
-       * `>` 会把"同射程对射"判成"没有先手"，于是火枪（射程 4）在和步枪兵（射程 4）
-       * 对阵时输给戟兵（射程 2、血厚）——实测 P-1-03 里 v4 因此造了 3 个戟兵。
-       * 同射程下谁先动是站位问题，但"不用走进对面射程就能还手"这件事是确定的，
-       * 所以它该算优势。
-       */
-      const oa = (da.range ?? 1) >= foeRange ? 1 : 0;
-      const ob = (db.range ?? 1) >= foeRange ? 1 : 0;
-      return (
-        (ob - oa) ||
-        ((db.maxHp ?? 0) - (da.maxHp ?? 0)) ||
-        ((db.atk ?? 0) - (da.atk ?? 0)) ||
-        a.gold - b.gold
-      );
-    };
-    /* 没有具体对手时，"先手权"没有意义——按通用强度挑，价格仍然垫底 */
-    const byBulk = (a: { type: string; gold: number }, b: { type: string; gold: number }): number => {
-      const da = utype(s, a.type);
-      const db = utype(s, b.type);
-      return (
-        ((db.maxHp ?? 0) - (da.maxHp ?? 0)) ||
-        ((db.atk ?? 0) - (da.atk ?? 0)) ||
-        a.gold - b.gold
-      );
-    };
     /*
      * **`ok` 为空有两种原因，处理完全不同**（2026-11-25，P2-2b 踩出来的）：
      *
@@ -838,23 +803,27 @@ export function recruitAction(
     const firstArmy = world.myCombat.length === 0;
     const allowedToPad = need ? need.canPad && (!firstArmy || !anyGood) : false;
     /*
-     * **池内按哪个数比，看瓶颈**（2026-11-25，P2-2c）。
+     * **池内只剩一个数：相对战力 ÷ 分母**（S2，2026-11-27）。
      *
-     * · 守城（`cell`）：比"每格输出"——一格能打出多少。城就 4 格，钱再多也放不下第五个，
-     *   所以"更强"胜过"更划算"；同分才退回 P1 的字典序（先手 → 血 → 攻 → 价）。
-     * · 其余（`gold`）：**保持 P1 的排序不变**（射程 → 血 → 攻 → 价）。
-     *   "每金"不写成 `输出 ÷ 价格`：P1 实测过，一除价格就选回 1 代民兵。
+     * 原来两条排序：守城按"每格输出"（`need.perCell`），其余按 P1 的字典序（射程→血→攻→价）。
+     * 两条各算一遍强弱，同一手采购里出现两种"更强"，谁对说不清。
+     * 现在只有一个数：**相对战力**（`unitWorthOfType`），分母由瓶颈决定（格子紧不除、钱紧除单价）。
      */
-    const byCell = (a: { type: string; gold: number }, b: { type: string; gold: number }): number =>
-      (need!.perCell[b.type] ?? 0) - (need!.perCell[a.type] ?? 0) || byRange(a, b);
+    const pickScore = (o: { type: string; gold: number }): number => {
+      const worth = unitWorthOfType(s, o.type);
+      const divisor = need?.bottleneck === 'cell' ? 1 : Math.max(1, o.gold);
+      return worth / divisor;
+    };
+    const byScore = (a: { type: string; gold: number }, b: { type: string; gold: number }): number =>
+      pickScore(b) - pickScore(a) || a.gold - b.gold || (a.type < b.type ? -1 : a.type > b.type ? 1 : 0);
     const pick =
       ok.length > 0
-        ? [...ok].sort(need?.bottleneck === 'cell' ? byCell : byRange)
+        ? [...ok].sort(byScore)
         : need
           ? allowedToPad
-            ? [...opts].sort((a, b) => (utype(s, b.type).atk ?? 0) - (utype(s, a.type).atk ?? 0))
+            ? [...opts].sort(byScore)
             : []
-          : [...opts].sort(byBulk);
+          : [...opts].sort(byScore);
     for (const opt of pick) {
       const a: Action = { type: 'RECRUIT', cityId: info.city.id, unitType: opt.type };
       const r = applyAction(s, a);

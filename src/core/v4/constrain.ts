@@ -2361,29 +2361,6 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * P1 实测过——价格一做分母就选回 1 代民兵（S-001 造 21 个、S-002 造 45 个）。
    * 钱是瓶颈的时候，正确做法是"**买得起的最强**"，不是"性价比最高"。见 `V4-CODE-MAP` 9.19。
    */
-  const perCell: Record<string, number> = {};
-  if (mainFoe) {
-    for (const d of Object.values(s.unitTypes)) {
-      if (d.category !== 'combat') continue;
-      const probe = {
-        id: '__probe3',
-        owner: s.current,
-        type: d.id,
-        x: mainFoe.x,
-        y: mainFoe.y,
-        hp: d.maxHp,
-      } as Unit;
-      const dmg = previewAttack(s, probe, mainFoe).toDefender; /* 我打它 */
-      if (dmg <= 0) {
-        perCell[d.id] = 0;
-        continue;
-      }
-      /* 方向别反：攻方是敌人。0 伤害（够不着/打不动）= 它永远打不死我，按 99 发算 */
-      const hit = previewAttack(s, mainFoe, probe).toDefender;
-      const hits = hit <= 0 ? 99 : Math.max(1, Math.ceil((d.maxHp ?? 1) / hit));
-      perCell[d.id] = dmg * hits;
-    }
-  }
   /*
    * 瓶颈只有两种，**由"钱够不够填满格子"判**，不是打分：
    *
@@ -2405,8 +2382,18 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const bestPrice = usable
     .filter((t) => survivable.includes(t))
     .reduce((n, t) => Math.max(n, utype(s, t).cost ?? 0), 0);
+  /*
+   * **瓶颈只看"钱够不够把空着的产兵格填满"，与决定类型无关**（S2，2026-11-27）。
+   *
+   * 原来是 `decision.kind === 'defend' && 钱 ≥ 城格数 × 最强兵价`，于是"4000 金 + 4 格"
+   * 的进攻局面被判成钱紧、按每金买便宜的，战力被摊薄（`E-2-03`/`E-2-05` 实测翻红）。
+   * 现在按用户原话判：**钱买得起的东西装不进空着的格子 = 格子紧**。
+   */
+  const freeCells = city
+    ? cityTiles(city).filter((p) => !s.units.some((u) => u.x === p.x && u.y === p.y)).length
+    : cityCells;
   const bottleneck: 'cell' | 'gold' =
-    decision.kind === 'defend' && cityCells > 0 && bestPrice > 0 && (s.players[world.me]?.gold ?? 0) >= cityCells * bestPrice
+    freeCells > 0 && bestPrice > 0 && (s.players[world.me]?.gold ?? 0) >= freeCells * bestPrice
       ? 'cell'
       : 'gold';
 
@@ -2449,7 +2436,6 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
           /* 对面最大射程：压不过它就没有"先手"，排序要改比血（见 tactics 的 byRange） */
           range: foes.reduce((n, u) => Math.max(n, effectiveStats(s, u).range ?? 1), 0),
           bottleneck,
-          perCell,
         }
       : undefined;
 
