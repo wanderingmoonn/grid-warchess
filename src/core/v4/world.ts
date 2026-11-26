@@ -56,6 +56,7 @@ import {
   attackableTargets,
   attacksPerTurn,
   cityTiles,
+  previewAttack,
   damageToCity,
   effectiveStats,
   rebuildCost,
@@ -67,17 +68,92 @@ import {
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
 
 /**
- * **身价**：一个兵种值多少（决定层的强弱、采购口径、发展投影都读它）。
+ * **身价 = 相对战力**（2026-11-27 换，S1）。
  *
- * 公式 `攻 + 血 + 射程×4`。射程乘 4 是唯一写死的系数——一格射程约等于
- * 4 点属性的价值（能先手、能不吃反击地站住）。动它要跑全量题库。
+ * ── 旧公式为什么废掉 ────────────────────────────────────
  *
- * 为什么放在服务层：它被三层同时读，以前住在投影模块（`project.ts`）里，
- * 结果是"想用身价就得先依赖投影"。它是个事实，不是投影的一部分。
+ * 旧的是 `攻 + 血 + 射程×4`：没有护甲、没有多段，速度当没有，
+ * 射程拍一个 4 的系数。实测（`scripts/probe-duel-table.ts`，引擎里真打）：
+ * 1 代 民兵 45 / 戈兵 46 / 弓手 45 **三个同分**，真打是弓手 **3 : 0 : 0** 全胜；
+ * 5 代火炮（射程 5）压过坦克（射程 3）。换句话说，旧尺子**分不出强弱**，
+ * 那"守的时候买错兵"就是必然的。
+ *
+ * ── 新公式（对着参照兵算，参数由标定表拟合）────────────────
+ *
+ *   每回合伤害 dmg(u→r) = 单发伤害（`previewAttack`，带护甲/破甲）× 一回合几发
+ *   能活几回合  tank     = 我的血 ÷ r 的每回合伤害            （r 打不动我 → 99）
+ *   白打回合    stand    = r 要走进我射程才还手：(GAP − r 射程) ÷ r 移动力（我射程更远时才有）
+ *   战力        power    = dmg × (0.3 × tank + 1.0 × stand) ×（我射程更远 ? 1.1 : 1）
+ *
+ * 参数是用 `scripts/fit-combat-formula.ts` 拟合标定表得来的（网格搜，方向一致率 88%）：
+ * 标定表 = 同代每一对兵在引擎里正反各打一次、按净胜人数排名。**表是真相，公式是拟合**；
+ * 动参数要回去对表。
+ *
+ * **参照兵用组、不找"最强"**（用户 2026-11-27 定）：同代陆军里 最贵 / 最厚 / 射程最远 三个，
+ * 战力取**平均**。（取"最小"试过：远程兵被自己拖死——参照组里"射程最远"那个就是它自己，
+ * 对着自己算没有白打回合，1 代弓手排到最后。所以改成平均。）
+ *
+ * 为什么还放在服务层：三层同时读它（守城、升级阶梯、采购、分兵额度），它是事实不是投影。
  */
 export function unitWorthOfType(s: GameState, typeId: string): number {
-  const d = utype(s, typeId);
-  return (d.atk ?? 0) + (d.maxHp ?? 0) + (d.range ?? 1) * 4;
+  const era = utype(s, typeId).era ?? 1;
+  const vals = worthRefs(s, era).map((r) => combatPower(s, typeId, r));
+  if (vals.length === 0) return 0;
+  return vals.reduce((n, x) => n + x, 0) / vals.length;
+}
+
+/** 拟合出来的三个参数（见上面的注释；动它要跑 `fit-combat-formula` 对表） */
+const W_HP = 0.3;
+const W_STAND = 1;
+const W_RANGE = 1.1;
+/** 典型接敌距离（格）：射程的价值取决于"对面要走进来几步"，这是唯一标定出来的"场面"参数 */
+const GAP = 5;
+
+/** 这一代当参照的兵种：最贵 / 最厚 / 射程最远（都按设计数据挑，不做战力排序，所以不会循环） */
+const refsCache = new Map<number, string[]>();
+function worthRefs(s: GameState, era: number): string[] {
+  const hit = refsCache.get(era);
+  if (hit) return hit;
+  const ids = Object.values(s.unitTypes)
+    .filter((d) => d.category === 'combat' && (d.domain ?? 'land') !== 'water' && (d.era ?? 1) === era)
+    .map((d) => d.id);
+  if (ids.length === 0) return [];
+  const pick = (key: (t: string) => number): string =>
+    [...ids].sort((a, b) => key(b) - key(a) || (a < b ? -1 : 1))[0]!;
+  const out = [
+    ...new Set([
+      pick((t) => utype(s, t).cost ?? 0),
+      pick((t) => utype(s, t).maxHp ?? 0),
+      pick((t) => utype(s, t).range ?? 1),
+    ]),
+  ];
+  refsCache.set(era, out);
+  return out;
+}
+
+/** 某兵种对某参照兵的"每回合伤害"（带护甲/破甲/多段） */
+function dpsOf(s: GameState, type: string, foe: string): number {
+  const me = { id: '__w1', owner: s.current, type, x: 0, y: 0, hp: utype(s, type).maxHp ?? 1 } as Unit;
+  const you = { id: '__w2', owner: s.current, type: foe, x: 1, y: 0, hp: utype(s, foe).maxHp ?? 1 } as Unit;
+  const one = previewAttack(s, me, you).toDefender;
+  return Math.max(0, one) * attacksPerTurn(s, me);
+}
+
+/** 相对战力：死之前能打出多少伤害（对这一个参照兵） */
+function combatPower(s: GameState, type: string, ref: string): number {
+  const mine = dpsOf(s, type, ref);
+  if (mine <= 0) return 0;
+  const theirs = dpsOf(s, ref, type);
+  const tank = theirs <= 0 ? 99 : (utype(s, type).maxHp ?? 1) / theirs;
+  const myRange = utype(s, type).range ?? 1;
+  const refRange = utype(s, ref).range ?? 1;
+  let stand = 0;
+  let far = 1;
+  if (myRange > refRange) {
+    stand = Math.ceil(Math.max(0, GAP - refRange) / Math.max(1, utype(s, ref).move ?? 2));
+    far = W_RANGE;
+  }
+  return mine * (W_HP * tank + W_STAND * stand) * far;
 }
 
 /** 一个已存在单位的身价：按剩余血量打折 */
