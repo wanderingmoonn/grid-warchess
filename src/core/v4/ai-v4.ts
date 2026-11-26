@@ -206,7 +206,10 @@ function laneMemo(
   decision: Decision,
   mem: V4Memory,
   turn: number,
-): Pick<V4Memory, 'unitSeen' | 'exchange' | 'exchangeByCity' | 'waves' | 'waveOf' | 'lineGap'> {
+): Pick<
+  V4Memory,
+  'unitSeen' | 'exchange' | 'exchangeByCity' | 'waves' | 'waveOf' | 'lineGap' | 'lineFront'
+> {
   const seen = mem.unitSeen ?? {};
   const exchange = mem.exchange ?? [];
   /* 深拷贝：这一手会原地改批次，别改到上一手的记忆对象上 */
@@ -226,7 +229,15 @@ function laneMemo(
    * 不设这道门就会把同一批死亡记好几遍。
    */
   if (exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn) {
-    return { unitSeen: seen, exchange, exchangeByCity: byCity, waves, waveOf, lineGap };
+    return {
+      unitSeen: seen,
+      exchange,
+      exchangeByCity: byCity,
+      waves,
+      waveOf,
+      lineGap,
+      lineFront: mem.lineFront ?? {},
+    };
   }
 
   const now: Record<string, { type: string; owner: string; x: number; y: number }> = {};
@@ -258,9 +269,10 @@ function laneMemo(
   }
   const ex = [...exchange, { turn, gain, loss }].slice(-LANE_WINDOW);
   for (const c of openCities) {
-    byCity[c.id] = [...(byCity[c.id] ?? []), { turn, gain: gainBy[c.id] ?? 0, loss: lossBy[c.id] ?? 0 }].slice(
-      -LANE_WINDOW,
-    );
+    byCity[c.id] = [
+      ...(byCity[c.id] ?? []),
+      { turn, gain: gainBy[c.id] ?? 0, loss: lossBy[c.id] ?? 0, hp: c.hp },
+    ].slice(-LANE_WINDOW);
   }
 
   /* ── 批次 ① 编成：还没编过批、或上一批已结束的兵 = 新的一批（同一手同一座城只开一批） */
@@ -376,6 +388,8 @@ function laneMemo(
   if (decision.kind === 'press' && decision.cityId && !counts.has(decision.cityId)) {
     counts.set(decision.cityId, { front: 0, road: 0 });
   }
+  const lineFront: Record<string, number> = {};
+  for (const [cid, v] of counts) lineFront[cid] = v.front;
   for (const [cid, v] of counts) {
     /* "开过"才算断档：这条线一批都没编过（决定说打、实际没人可派）不算 */
     if (!waves.some((w) => w.cityId === cid)) continue;
@@ -397,7 +411,7 @@ function laneMemo(
     for (const [uid, wid] of Object.entries(waveOf)) if (drop.has(wid)) delete waveOf[uid];
   }
 
-  return { unitSeen: now, exchange: ex, exchangeByCity: byCity, waves, waveOf, lineGap };
+  return { unitSeen: now, exchange: ex, exchangeByCity: byCity, waves, waveOf, lineGap, lineFront };
 }
 
 /**

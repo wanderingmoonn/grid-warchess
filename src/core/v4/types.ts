@@ -536,13 +536,35 @@ export interface V4Memory {
    * 为什么必须分：只有一本总账时，一条赚 500、另一条亏 800 会显示成"只亏 300"，
    * 于是砍掉赚钱的那条、继续送亏的那条。W3 开第二条线之前必须先有这个。
    */
-  exchangeByCity?: Record<string, Array<{ turn: number; gain: number; loss: number }>>;
+  exchangeByCity?: Record<
+    string,
+    Array<{
+      turn: number;
+      gain: number;
+      loss: number;
+      /**
+       * 这一手那座城的血量（W2 要用）。
+       *
+       * 为什么血量要记在账上：窗口里**两边都没死人**时，判据是"城有没有掉血"——
+       * 掉了 ≥1 点是砸墙的收益，一点没掉才是"卡住"。没有这个数，`0 ≥ 0` 会把僵住判成赚。
+       */
+      hp?: number;
+    }>
+  >;
   /** 每条线开过的每一批（`LaneWave`）。只有最后 8 批 + 所有没结束的会被保留 */
   waves?: LaneWave[];
   /** 事实：这个兵属于哪一批（`unitId → waveId`）。没有 = 还没编过批 */
   waveOf?: Record<string, string>;
   /** 每条线的断档计数（`cityId → LaneGap`） */
   lineGap?: Record<string, LaneGap>;
+  /**
+   * 上一手每条线**现在能打到城 / 已接火**的人数（`cityId → 人数`）。
+   *
+   * 它是"这条线现在还有人在打"的事实，W2 判"卡住"要用：卡住的前提是**人就在城下、
+   * 却什么都没换到**；人打光了 / 退回来了，那不是卡住，是"该送新的一批"。
+   * 没有这个数，一条线一旦停过就永远被判卡住（S-001 实测：T5 亏一次，40 手不再进攻）。
+   */
+  lineFront?: Record<string, number>;
 }
 
 /** 结构化日志的一条。出了问题先看它，别看代码 */

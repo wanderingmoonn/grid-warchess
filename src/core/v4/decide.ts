@@ -290,6 +290,77 @@ function upgradeOf(s: GameState, world: World, mem: V4Memory | undefined, d: Dec
   return econCandidates(s, world, mem, gold);
 }
 
+/**
+ * **一条线的账：这一路到底换到东西没有**（W2，2026-11-26）。
+ *
+ * 口径（`DESIGN-LANES-WAVES` §4）：
+ *   · 窗口 = 最近 6 手（和 `DECIDE_HORIZON` 同尺度），**按窗口看，不按累计看**；
+ *   · 有交换：`Σ敌方被击杀造价 ≥ Σ我方被击杀造价` → 赚，否则亏；
+ *   · 没交换：看城血，掉了 ≥1 点算赚（砸墙也是收益），一点没掉 → **卡住**；
+ *   · 窗口里连记录都没有、也从没接火 → `unknown`（还没得判，不能当亏损）。
+ *
+ * 为什么"没接火"必须单独一种：把 `0 ≥ 0` 判成亏，它会永远不敢开第一枪——
+ * 那不是判据严，是死锁。
+ */
+export type LineVerdict = 'earn' | 'lose' | 'stalled' | 'unknown';
+
+export interface LineLedger {
+  verdict: LineVerdict;
+  gain: number;
+  loss: number;
+  /** 窗口内城血掉了多少（>0 = 砸到了墙） */
+  hpDrop: number;
+}
+
+function lineLedger(s: GameState, mem: V4Memory | undefined, city: City): LineLedger {
+  const rows = (mem?.exchangeByCity?.[city.id] ?? []).filter((r) => r.turn > s.turn - DECIDE_HORIZON);
+  const gain = rows.reduce((n, r) => n + r.gain, 0);
+  const loss = rows.reduce((n, r) => n + r.loss, 0);
+  const hpStart = rows.find((r) => r.hp !== undefined)?.hp;
+  const hpDrop = hpStart === undefined ? 0 : Math.max(0, hpStart - city.hp);
+  if (gain + loss > 0) return { verdict: gain >= loss ? 'earn' : 'lose', gain, loss, hpDrop };
+  if (hpDrop > 0) return { verdict: 'earn', gain, loss, hpDrop };
+  /*
+   * **接过火、还什么都没换到 → 卡住；还没接火 / 刚接火 → 还没得判。**
+   *
+   * ⚠️ 两道门都是为了不让"还没发生的事"被判成"卡住"：
+   *
+   *   ① "接火"不能拿"出发"（`startTurn`）代替——走在路上当然既没交换也没掉血。
+   *      S-016 实测：按出发判，T1 出发、T3 判卡住、T5 全军撤回。
+   *   ② 刚接火的那一两手也不能判——走到城下的第一手还没来得及打。要求**接触满半个期限**
+   *      （`DECIDE_HORIZON / 2` = 3 手）。E-2-03 实测：T9 刚贴到城、T11 就被判卡住，
+   *      部队掉头回去造农民，一道"钱变成什么"的题因此翻红。
+   */
+  const firstArrival = (mem?.waves ?? [])
+    .filter((w) => w.cityId === city.id)
+    .map((w) => {
+      const k = w.arrivals.findIndex((n) => n > 0);
+      return k < 0 ? Infinity : w.bornTurn + k;
+    });
+  const contactTurns = firstArrival.length > 0 ? s.turn - Math.min(...firstArrival) : 0;
+  /*
+   * ③ **人得还在城下**。人都打光了 / 退回来了，那不是"卡住"，是"该送新的一批"——
+   * 按前者判，一条线停过一次就永远卡住，再也起不来（S-001 实测：T5 亏一次，40 手不进攻）。
+   */
+  const atCity = (mem?.lineFront?.[city.id] ?? 0) > 0;
+  if (atCity && contactTurns >= Math.ceil(DECIDE_HORIZON / 2)) {
+    return { verdict: 'stalled', gain, loss, hpDrop };
+  }
+  return { verdict: 'unknown', gain, loss, hpDrop };
+}
+
+/** 账本的一句话（进决定理由，回放里能直接读出来） */
+function ledgerText(city: City, l: LineLedger): string {
+  if (l.verdict === 'earn') {
+    return l.gain + l.loss > 0
+      ? `6 手账 赚 ${l.gain} / 亏 ${l.loss}（赚）`
+      : `6 手没死人，${city.id} 掉了 ${l.hpDrop} 点血（算赚）`;
+  }
+  if (l.verdict === 'lose') return `6 手账 赚 ${l.gain} / 亏 ${l.loss}（亏）`;
+  if (l.verdict === 'stalled') return `6 手没交换、${city.id} 一点血没掉（卡住）`;
+  return '还没接火，没有账可看';
+}
+
 /** 兵力对比（按"身价"不按个数：一个四代兵不等于一个民兵） */
 function strength(s: GameState, sideUnits: GameState['units']): number {
   let n = 0;
@@ -365,7 +436,6 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
    */
   const prev = mem?.decision;
   if (prev && s.turn <= prev.untilTurn) {
-    const ratio = myStr / Math.max(1, foeStr);
     if (prev.kind === 'press') {
       const cityAlive = !!prev.cityId && world.foeCities.some((c) => c.id === prev.cityId);
       /*
@@ -374,8 +444,25 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
        */
       const ruin = prev.cityId ? s.cities.find((c) => c.id === prev.cityId && c.ruined) : undefined;
       if (ruin) return takeoverDecision(s, world, mem, ruin);
-      /* 打不动了就提前收手：兵力比跌破 1.0（原来是 1.25 才进） */
-      if (cityAlive && ratio >= 1.0) {
+      /*
+       * **还能不能接着推：看账，不看兵力比**（W2，2026-11-26）。
+       *
+       * 旧的是"跌破 1.0 就退"，于是兵越打越少、越少越不敢推，永远攒不回 1.25。
+       * 现在：这条线还在赚（或还没接火）就继续；亏了 / 卡住了才收手。
+       */
+      const line = prev.cityId ? s.cities.find((c) => c.id === prev.cityId) : undefined;
+      const ledger = line ? lineLedger(s, mem, line) : undefined;
+      /*
+       * **只有"卡住"才停**，亏不停。
+       *
+       * 为什么：用户 2026-11-26 的口径是"**允许短期小亏**"——6 手窗口里一次净亏
+       * 不该让全军掉头。实测代价：改成"亏就停"之后，S-001 每 6 手打一次、亏一次、
+       * 回去造 6 手，40 手打不完；S-005 更直接——T9 净亏 125 就撤，桥头一丢再也上不去。
+       *
+       * "亏"在这一层只影响**换不换线**（见下面挑目标的循环：不往亏的城开新线），
+       * "降预算"要等 W3 的"每批多少人"才有落点（现在没有预算这个旋钮）。
+       */
+      if (cityAlive && ledger && ledger.verdict !== 'stalled') {
         return complete(s, world, mem, {
           kind: 'press',
           untilTurn: prev.untilTurn,
@@ -393,7 +480,32 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
           reason: inherit(prev.reason),
         });
       }
-    } else if (ratio < 1.25) {
+    } else if (prev.kind === 'takeover' && myStr / Math.max(1, foeStr) < 1.25) {
+      /*
+       * 接管废墟的**旧判据原样保留**：打不过就先别进去。
+       *
+       * W2 只换"推 / 不推"，接管不属于投送。这条原来是靠兜底的 `ratio < 1.25`
+       * 顺手实现的；把兜底收窄之后它跟着丢了，S-015（经济选型）实测：每手都说
+       * "钱够了，派兵入驻"，但派出去的人一直走不到，`save` 模式把经济全停了。
+       * 注意 `Math.max(1, foeStr)` 不能省：看不见敌人时 foeStr = 0，写成
+       * `myStr < foeStr × 1.25` 永远不成立，就和旧行为分叉了（S-015 实测）。
+       */
+      return complete(s, world, mem, {
+        kind: 'expand',
+        untilTurn: prev.untilTurn,
+        reason: inherit(prev.reason),
+      });
+    } else if (
+      prev.kind === 'expand' &&
+      !world.foeCities.some((c) => lineLedger(s, mem, c).verdict === 'earn')
+    ) {
+      /*
+       * 发展期照旧走完自己的期限：只有"某条线真的在赚"才提前结束发展去加码。
+       * （旧的提前退出条件是"兵力比 < 1.25"，那等于用总量比较替代"这仗值不值得打"。）
+       *
+       * ⚠️ 这条**只对 `expand` 生效**。原来写成"不是 press 也不是 defend"的兜底，
+       * 于是接管废墟（`takeover`）也被它接过去换成"发展"——T-2-01 的入驻就是这么没的。
+       */
       return complete(s, world, mem, {
         kind: 'expand',
         untilTurn: prev.untilTurn,
@@ -436,46 +548,69 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     if (near) return takeoverDecision(s, world, mem, near);
   }
 
-  /* 2) 我明显更强、且有敌城 → 推 */
-  if (world.foeCities.length > 0 && myStr > foeStr * 1.25) {
-    /* 挑最近的敌城打，不挑"血最少"的：跑不动的城打不下来 */
-    const target = [...world.foeCities].sort(
-      (a, b) => world.marchTurns({ x: a.x, y: a.y }, { x: world.myCombat[0]?.x ?? 0, y: world.myCombat[0]?.y ?? 0 })
-        - world.marchTurns({ x: b.x, y: b.y }, { x: world.myCombat[0]?.x ?? 0, y: world.myCombat[0]?.y ?? 0 }),
-    )[0]!;
-    /*
-     * **先清场、再砸城。**
-     *
-     * 判据：目标城周围还有没有"够得着这座城"的守军（它自己的移动力 + 射程）。
-     * 有 → `clear`（全队打人，不砸城）；清干净 → `siege`（全队攻城）。
-     *
-     * 这是从 S-002 的人手答案量出来的：人类前四波（3/5/7/9 手）25 次攻击全是打人、
-     * 0 次攻城，第 11 手才开始砸。v4 原来没有这个分段，"能打谁打谁"，
-     * 结果既没清完场也没砸城（15 手 SIEGE 0 次）。
-     */
-    const guards = world.foeCombat.filter((f) => {
-      const st = effectiveStats(s, f);
-      return (
-        Math.abs(f.x - target.x) + Math.abs(f.y - target.y) <=
-        (st.range ?? 1) + (st.move ?? 2)
-      );
-    });
-    return complete(s, world, mem, {
-      kind: 'press',
-      stage: guards.length > 0 ? 'clear' : 'siege',
-      untilTurn: s.turn + horizon,
-      cityId: target.id,
-      reason:
-        guards.length > 0
-          ? `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍；${target.id} 周围还有 ${guards.length} 个守军，先清场`
-          : `我身价 ${Math.round(myStr)} > 对面 ${Math.round(foeStr)} 的 1.25 倍；${target.id} 城下已清空，开始攻城`,
-    });
+  /*
+   * 2) **能打就打：判据是"这条路换到钱没有"，不是"我比敌人多 25%"**（W2，2026-11-26）。
+   *
+   * 旧判据的毛病：兵少了就不打。可打消耗战恰恰是"兵少了也该上"——用一队人的命
+   * 换城血是划算的。门槛在，它就永远攒不回 1.25 倍，永远不打。
+   *
+   * 现在按顺序试最近的敌城：
+   *   · 这条线在赚 / 还没接火 → 打它；
+   *   · 亏了 / 卡住 → **换一条**（两座敌城时试下一座）；都亏就不打，回去攒。
+   *
+   * ⚠️ 唯一的门槛是**编队下限：至少 1 个战斗兵**。这不是"兵力比"，是"没有兵就没法开线"。
+   * （原来想写 2，E-2-03 实测不行：那道题场上只有 1 个兵、敌人看不见，
+   *   旧判据 `1 > 0×1.25` 会开打，下限写 2 就永远不打、发展期被经济兵吃满。）
+   * W3 会用"每波成本 × 产能"把它换掉（`DESIGN-LANES-WAVES` §5）。
+   */
+  if (world.foeCities.length > 0 && world.myCombat.length >= 1) {
+    const from = { x: world.myCombat[0]?.x ?? 0, y: world.myCombat[0]?.y ?? 0 };
+    const targets = [...world.foeCities].sort(
+      (a, b) => world.marchTurns(from, { x: a.x, y: a.y }) - world.marchTurns(from, { x: b.x, y: b.y }),
+    );
+    for (const target of targets) {
+      const ledger = lineLedger(s, mem, target);
+      if (ledger.verdict === 'lose' || ledger.verdict === 'stalled') continue;
+      /*
+       * **先清场、再砸城。**
+       *
+       * 判据：目标城周围还有没有"够得着这座城"的守军（它自己的移动力 + 射程）。
+       * 有 → `clear`（全队打人，不砸城）；清干净 → `siege`（全队攻城）。
+       *
+       * 这是从 S-002 的人手答案量出来的：人类前四波（3/5/7/9 手）25 次攻击全是打人、
+       * 0 次攻城，第 11 手才开始砸。
+       */
+      const guards = world.foeCombat.filter((f) => {
+        const st = effectiveStats(s, f);
+        return (
+          Math.abs(f.x - target.x) + Math.abs(f.y - target.y) <=
+          (st.range ?? 1) + (st.move ?? 2)
+        );
+      });
+      return complete(s, world, mem, {
+        kind: 'press',
+        stage: guards.length > 0 ? 'clear' : 'siege',
+        untilTurn: s.turn + horizon,
+        cityId: target.id,
+        reason: `${ledgerText(target, ledger)}；${
+          guards.length > 0 ? `${target.id} 周围还有 ${guards.length} 个守军，先清场` : `${target.id} 城下已清空，开始攻城`
+        }`,
+      });
+    }
   }
 
-  /* 3) 其它情况：发展 */
+  /* 3) 其它情况：发展（没有能打的线：兵不够，或每条线都亏/卡住） */
   return complete(s, world, mem, {
     kind: 'expand',
     untilTurn: s.turn + horizon,
-    reason: `身价 ${Math.round(myStr)} : ${Math.round(foeStr)}，不占优，先攒兵攒钱`,
+    reason:
+      world.myCombat.length === 0
+        ? '手上一个战斗兵都没有，先发展'
+        : `能打的线都亏或卡住了（${world.foeCities
+            .map((c) => {
+              const l = lineLedger(s, mem, c);
+              return `${c.id} ${l.verdict === 'lose' ? `亏 ${l.gain}/${l.loss}` : `卡住 ${l.gain}/${l.loss}`}`;
+            })
+            .join('；')}），先攒兵攒钱`,
   });
 }
