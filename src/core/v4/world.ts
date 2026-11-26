@@ -315,6 +315,14 @@ export interface EraStep {
   gold: number;
   /** 它的每格战力（`unitWorthOfType`） */
   worth: number;
+  /**
+   * **这一代城的收入/轮**（`eraDef(era).cityIncome`）——升级的**延迟收益**之一（S3b）。
+   *
+   * 升级是件多功能的事（用户 2026-11-27）：立刻生效的是城的护甲和回血，
+   * 延迟生效的是"能造更强的经济单位和军事单位"。城血/护甲在 `EraStep` 之外的
+   * `cityStand().roundsAfterUpgrade` 里；这里补的是"经济"那一路。
+   */
+  income: number;
 }
 
 export interface World {
@@ -1529,7 +1537,15 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         /* 阶梯不问"此刻有没有空产兵格"：那是时代的产能，不是当下的挤不挤 */
         const pick = bestPerCell(cur, false);
         if (!pick) break;
-        out.push({ era: cur.era ?? 1, cost, acc, type: pick.type, gold: pick.gold, worth: pick.worth });
+        out.push({
+          era: cur.era ?? 1,
+          cost,
+          acc,
+          type: pick.type,
+          gold: pick.gold,
+          worth: pick.worth,
+          income: eraDef(cur.era ?? 1).cityIncome,
+        });
         const tgt = upgradeTargetOf(s, cur);
         if (!tgt || tgt.cost === null || tgt.blocked) break;
         cost = tgt.cost;

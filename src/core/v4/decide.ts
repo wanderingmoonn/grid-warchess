@@ -14,7 +14,7 @@
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
 import type { BandTask, Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
-import { unitWorth } from './world.ts';
+import { unitWorth, upgradedCity } from './world.ts';
 import { cityTiles, effectiveStats, previewAttack, utype } from '../rules.ts';
 import { passable } from '../config.ts';
 import { EARTH, tileOn } from '../board.ts';
@@ -388,9 +388,31 @@ function econCandidates(
      */
     const up1 = ladder[1];
     if (!up1) continue;
+    /*
+     * **升级是三笔收益，一起折成战力**（S3b，2026-11-27；用户：升级是多功能的）。
+     *
+     *   ① 军事（延迟）：升完之后这 `left` 手造出来的兵都更强
+     *        = n × (新一代每格战力 − 现在每格战力)
+     *   ② 经济（延迟）：城每轮多产的金 × 剩余手数（金币 → 战力按现在的比价换算）
+     *   ③ 存活（立刻）：挨打时城多撑的轮数 × 每轮收入（多活的轮数就是多出来的经济时间）
+     *
+     * 三笔加起来和"这笔钱拿去造兵能换的战力"比，**大的才升**。没有新系数：
+     * 金币↔战力的换算用的就是这城现在"一金买多少战力"（`now.worth / now.gold`）。
+     */
+    const perPower = now.worth / Math.max(1, now.gold);
     const nHorizon = Math.min(cap * left, Math.floor(gold / Math.max(1, now.gold)));
-    const gain = nHorizon * (up1.worth - now.worth);
-    const costInPower = (up1.cost * now.worth) / Math.max(1, now.gold);
+    const gainArmy = nHorizon * (up1.worth - now.worth);
+    const gainEcon = (up1.income - now.income) * left;
+    /* 立刻那笔：城挨打才有意义 */
+    const upCity = upgradedCity(s, city);
+    const roundsNow = world.defensible(city).rounds;
+    const roundsUp = upCity ? world.defensible(upCity).rounds : roundsNow;
+    const extraRounds =
+      Number.isFinite(roundsNow) && Number.isFinite(roundsUp) ? Math.max(0, roundsUp - roundsNow) : 0;
+    const gainHold = extraRounds * up1.income;
+    const gain = (gainArmy + (gainEcon + gainHold) * perPower) | 0;
+    /* 换算方向别反：`perPower` 是"一金买多少战力"，所以"这笔钱值多少战力" = 费用 × perPower */
+    const costInPower = Math.round(up1.cost * perPower);
     if (!(gain > costInPower)) continue;
 
     let curTotal = Math.min(cap * left, Math.floor(gold / now.gold)) * now.worth;
@@ -407,7 +429,7 @@ function econCandidates(
         cost: ladder[1]!.cost,
         label: `第${step.era}代`,
         rounds: { now: 0, after: 0 },
-        why: `钱花不完（${gold} > ${cap}格×${left}手×${now.gold}），升到第${step.era}代后这 ${left} 手能造 ${n} 个${utype(s, step.type).name}（每格 ${Math.round(step.worth)}，现在 ${Math.round(now.worth)}）→ 战力 ${Math.round(total)} 对 ${Math.round(n * now.worth)}`,
+        why: `升到第${step.era}代：军事 +${Math.round(gainArmy)}（每格 ${Math.round(now.worth)}→${Math.round(up1.worth)}）、经济 +${Math.round(gainEcon)} 金×${left} 手、多撑 ${extraRounds} 轮 → 合计 ${gain} 战力 vs 升级费折 ${costInPower}（金 ${gold}）`,
       };
     }
   }
