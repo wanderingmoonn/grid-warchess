@@ -248,6 +248,20 @@ export interface World {
    */
   cityStand(city: City): CityStand;
   /**
+   * **一条线的三个存量**（W1 影子模式，2026-11-26）：能打到城的人 / 还在路上的人 /
+   * 这一回合能造出几个。
+   *
+   * 只观测，不接任何判断——它存在的意义是先把数打出来，看"来不及"到底有多普遍、
+   * 一波到底几手（见 `docs/DESIGN-LANES-WAVES-2026-11-26.md` 的 W1）。
+   *
+   * 口径：
+   *   · `front`：`ids` 里到任意一格城的**步数 ≤ 自己的射程**（这一回合就能开火）；
+   *   · `road`：走得到但还够不着（在途）；
+   *   · `make`：空产兵格 × 钱够几个（取小）。这是"每回合能造出几个"的上限，
+   *     钱和格子任一不够都算。
+   */
+  laneStats(ids: string[], city: City): { front: number; road: number; make: number };
+  /**
    * **升级阶梯**（D4a）：从当前代往上，每一代"累计升级价 + 每格最强的兵 + 单价"。
    *
    * 只枚举，不选。决定层拿它去比"哪一代的总战力最大"（闸 B 的判据）。
@@ -884,6 +898,27 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       return roleMap.get(city.id) ?? 'safe';
     },
     cityStand,
+    laneStats(ids, city) {
+      const tiles = cityTiles(city);
+      let front = 0;
+      let road = 0;
+      for (const id of ids) {
+        const u = s.units.find((x) => x.id === id);
+        if (!u) continue;
+        const range = Math.max(1, effectiveStats(s, u).range ?? 1);
+        const field = stepFrom({ x: u.x, y: u.y });
+        let steps = Infinity;
+        for (const t of tiles) steps = Math.min(steps, field[t.y * s.w + t.x] ?? Infinity);
+        if (!Number.isFinite(steps)) continue;
+        if (steps <= range) front += 1;
+        else road += 1;
+      }
+      const free = tiles.filter((p) => !s.units.some((x) => x.x === p.x && x.y === p.y)).length;
+      const price = bestPerCell(city)?.gold ?? 0;
+      const gold = s.players[me]?.gold ?? 0;
+      const make = price > 0 ? Math.min(free, Math.floor(gold / price)) : 0;
+      return { front, road, make };
+    },
     corridorWidth(p, toward) {
       const dx = Math.sign(toward.x - p.x);
       const dy = Math.sign(toward.y - p.y);

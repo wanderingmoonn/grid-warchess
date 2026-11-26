@@ -378,6 +378,13 @@ export interface Constraints {
    */
   upgradeBlocked?: string;
   /**
+   * **一条线的三个存量**（W1 影子模式，2026-11-26）：能打到城的人 / 在途的人 / 这回合能造几个。
+   *
+   * 只观测、不接任何动作。存在的意义是把"来不及到底有多普遍""一波要几手"量出来，
+   * 再决定 W2 换不换攻守判据（见 `docs/DESIGN-LANES-WAVES-2026-11-26.md`）。
+   */
+  lane?: { front: number; road: number; make: number };
+  /**
    * **发展期 T**（2026-11-25，P3 闸 C 的 C1）：还要几回合才能威胁到对面城。
    *
    * 它是"经济发展到第几手"的期限——再晚出发，对面就升完本了（低代打高代）。
@@ -450,6 +457,25 @@ export interface V4Memory {
    * 没人读的字段——v3 的 `econUntil` 就是这么烂掉的。）
    */
   eraPlan?: { cityId: string; targetEra: number; since: number } | null;
+  /*
+   * ── 影子观测（W1，2026-11-26）────────────────────────────────
+   *
+   * 这三样**不参与任何判断**，只是为了让"投送"第一次有数可看。
+   * 换攻守判据（W2）之前必须先看一段时间的真实曲线。
+   */
+  /** 上一次见到的单位（id → 兵种/归属），用来逐手差分出"谁被击杀了" */
+  unitSeen?: Record<string, { type: string; owner: string }>;
+  /** 交换账：最近 6 手的金币收益/损失（按造价，不按残血） */
+  exchange?: Array<{ turn: number; gain: number; loss: number }>;
+  /** 这一波：从出发到第一次能打到城。`arrivedTurn` 有值 = 已经进入交战 */
+  wave?: {
+    id: string;
+    cityId: string;
+    startedTurn: number;
+    men: number;
+    arrivedTurn?: number;
+    arrivedMen?: number;
+  } | null;
 }
 
 /** 结构化日志的一条。出了问题先看它，别看代码 */

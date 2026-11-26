@@ -110,6 +110,29 @@ for (const c of v.world.myCities) {
   if (st.incoming.length > 0) console.log(`     每轮齐射 ${st.incoming.join(' / ')}`);
 }
 
+/*
+ * **兵线（W1 影子观测，2026-11-26）**：三存量 + 这一波 + 交换账。
+ * 只打印，不参与任何判断。时间序列看 `V4_LANE_LOG=1` 跑整局。
+ * 注意：探针用 v1 把局面推到第 N 手，所以 `波 / 交换` 是空的（那是 v4 自己记的），
+ * 只有 `lane` 是当下算的。
+ */
+{
+  const mem = (s.aiFocus?.[ME]?.v4 ?? {}) as { wave?: unknown; exchange?: Array<{ gain: number; loss: number }> };
+  const lane = v.con.lane;
+  const w = mem.wave as
+    | { cityId: string; startedTurn: number; men: number; arrivedTurn?: number; arrivedMen?: number }
+    | undefined;
+  const ex = mem.exchange ?? [];
+  console.log('\n兵线（只观测）：');
+  console.log(`  前线 ${lane?.front ?? '-'} · 在途 ${lane?.road ?? '-'} · 这回合能造 ${lane?.make ?? '-'}`);
+  console.log(
+    `  波：${w ? `${w.cityId} 出发 T${w.startedTurn} ${w.men} 人${w.arrivedTurn ? ` → T${w.arrivedTurn} 到 ${w.arrivedMen} 人` : ' 在路上'}` : '（无）'}`,
+  );
+  console.log(
+    `  交换（最近 ${ex.length} 手）：赚 ${ex.reduce((n, x) => n + x.gain, 0)} / 亏 ${ex.reduce((n, x) => n + x.loss, 0)}`,
+  );
+}
+
 console.log('\n城的角色：');
 for (const c of v.world.cities) {
   console.log(`  ${c.city.id} ${c.role.padEnd(11)} 离敌城 ${Number.isFinite(c.distToFoeCity) ? c.distToFoeCity + ' 回合' : '走不到'} · 守军潜力 ${c.defenders}`);

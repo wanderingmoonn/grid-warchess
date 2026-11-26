@@ -2029,6 +2029,13 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 被否时带一句话出去（`upgradeBlocked`），否则回放里只看得见"这一手什么也没升"。
    */
   const upgradePlan = planUpgrade(s, world, need, gold, decision.upgrade);
+  /*
+   * **一条线的三个存量**（W1 影子模式）：只在这里算一次，给日志和探针看。
+   * 挂在主队上——主队就是这一波（`main` + 目标敌城）。
+   */
+  const mainSquad = squads.find((q) => q.id === 'main' && !!q.cityId);
+  const laneCity = mainSquad?.cityId ? s.cities.find((c) => c.id === mainSquad.cityId) : undefined;
+  const lane = mainSquad && laneCity ? world.laneStats(mainSquad.unitIds, laneCity) : undefined;
   return {
     need,
     spendCap,
@@ -2038,6 +2045,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     horizon,
     upgrade: upgradePlan.upgrade,
     upgradeBlocked: upgradePlan.blocked,
+    lane,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

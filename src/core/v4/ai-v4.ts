@@ -27,7 +27,7 @@ import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
-import { utype } from '../rules.ts';
+import { recruitPriceOf, utype } from '../rules.ts';
 import type { Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId } from '../types.ts';
 
@@ -44,6 +44,12 @@ interface TurnCache {
 }
 
 let cache: TurnCache | null = null;
+
+/**
+ * 影子观测的窗口（手）。和 `DECIDE_HORIZON` 同尺度：一个决定期内看一次账，
+ * 允许短期小亏，长期大亏才动（用户 2026-11-26 定的口径）。
+ */
+const LANE_WINDOW = 6;
 
 const keyOf = (s: GameState, me: PlayerId): string =>
   `${s.turn}:${s.current}:${s.units.length}:${s.players[me]?.gold ?? 0}:${s.cities.length}`;
@@ -79,13 +85,17 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
   const mem = memoryOf(s, me);
   const decision = decide(view, world, mem);
   const con = constrain(view, world, decision, mem);
-  writeMemory(s, me, {
+  const nextMem: V4Memory = {
     decision: { ...decision, since: s.turn },
     squad: squadMemo(con, mem, s.turn),
     econSince: econSinceMemo(s, me, mem),
     econHome: econHomeMemo(s, me, mem, world),
     eraPlan: eraPlanMemo(s, decision, mem, s.turn),
-  });
+    /* W1 影子观测：只记，不读 */
+    ...laneMemo(s, world, con, mem, s.turn),
+  };
+  writeMemory(s, me, nextMem);
+  logLane(s, con, nextMem);
   cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
   logSquads(s, world.me, decision, con);
   return cache;
@@ -164,6 +174,98 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
 }
 
 /**
+ * **影子观测：交换账 + 波次**（W1，2026-11-26）。
+ *
+ * 只记、不读——这一版**没有任何判断读它**，目的就是先把数打出来（见
+ * `docs/DESIGN-LANES-WAVES-2026-11-26.md` 的 W1）。
+ *
+ * ── 交换账 ────────────────────────────────────────────────
+ *
+ * 引擎不报"击杀事件"，所以只能**逐手差分**：上一次见到的单位这一手没了，就按它的
+ * **造价**记一笔（不按残血——残血的兵换掉对方一个贵的，仍然算赚，这是用户定的口径）。
+ *
+ * 已知不精确：`DISBAND`（自己拆兵）也会被算成"损失"。v4 只在推城时禁 DISBAND，
+ * 其余时候拆兵极少；影子阶段先这样，等数出来再看要不要单独标。
+ *
+ * ── 波次 ──────────────────────────────────────────────────
+ *
+ * 用户 2026-11-26 定的边界：**一波 = 进攻编队从出发（`assemble`→`march`）到第一次能打到城**。
+ * "能打到"用 `front > 0` 近似"进入交战"——真正开火还要求有目标，影子阶段先要这个近似，
+ * 它至少是确定性的、可复核的。
+ */
+function laneMemo(
+  s: GameState,
+  world: World,
+  con: Constraints,
+  mem: V4Memory,
+  turn: number,
+): Pick<V4Memory, 'unitSeen' | 'exchange' | 'wave'> {
+  const seen = mem.unitSeen ?? {};
+  const exchange = mem.exchange ?? [];
+  const prevWave = mem.wave ?? null;
+  /*
+   * **一手只差分一次**：`currentView` 一手内会被多次重建（每花一笔钱一次），
+   * 不设这道门就会把同一批死亡记好几遍。
+   */
+  if (exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn) {
+    return { unitSeen: seen, exchange, wave: prevWave };
+  }
+
+  const now: Record<string, { type: string; owner: string }> = {};
+  for (const u of s.units) now[u.id] = { type: u.type, owner: u.owner };
+  let gain = 0;
+  let loss = 0;
+  for (const [id, prev] of Object.entries(seen)) {
+    if (now[id]) continue;
+    const price = recruitPriceOf(s, prev.owner as PlayerId, utype(s, prev.type)).gold;
+    if (prev.owner === world.me) loss += price;
+    else gain += price;
+  }
+  const ex = [...exchange, { turn, gain, loss }].slice(-LANE_WINDOW);
+
+  /* 波：出发 = 主队从 assemble 变成 march/siege；到达 = 第一次有人能打到城 */
+  let wave = prevWave;
+  const main = con.squads.find((q) => q.id === 'main' && !!q.cityId);
+  if (wave && wave.arrivedTurn === undefined && (!main || main.cityId !== wave.cityId)) {
+    /* 没到就散了（打光 / 撤退）：按 0 人到达记，看数的时候能区分出来 */
+    wave = { ...wave, arrivedTurn: turn, arrivedMen: 0 };
+  }
+  if (main && (main.order === 'march' || main.order === 'siege')) {
+    if (!wave || wave.cityId !== main.cityId) {
+      wave = { id: `${main.cityId}-${turn}`, cityId: main.cityId!, startedTurn: turn, men: main.unitIds.length };
+    } else if (wave.arrivedTurn === undefined && (con.lane?.front ?? 0) > 0) {
+      wave = { ...wave, arrivedTurn: turn, arrivedMen: con.lane!.front };
+    }
+  }
+  return { unitSeen: now, exchange: ex, wave };
+}
+
+/**
+ * 把影子观测打成一行（`V4_LANE_LOG`）。
+ *
+ * 格式固定成一句，便于扫：
+ *   `[lane] T=7 front=3 road=4 make=2 · 波 c2 出发T5 8人 → T7 到3人(2手) · 交换(6手) 赚420 亏180`
+ */
+let laneLoggedTurn = -1;
+
+function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
+  if (!process.env.V4_LANE_LOG) return;
+  /* 一手只打一行：`currentView` 一手内会被重建多次（每花一笔钱一次） */
+  if (laneLoggedTurn === s.turn) return;
+  laneLoggedTurn = s.turn;
+  const lane = con.lane;
+  const ex = mem.exchange ?? [];
+  const gain = ex.reduce((n, x) => n + x.gain, 0);
+  const loss = ex.reduce((n, x) => n + x.loss, 0);
+  const w = mem.wave;
+  process.stderr.write(
+    `[lane] T=${s.turn} front=${lane?.front ?? '-'} road=${lane?.road ?? '-'} make=${lane?.make ?? '-'}` +
+      ` · 波${w ? ` ${w.cityId} 出发T${w.startedTurn} ${w.men}人${w.arrivedTurn ? ` → T${w.arrivedTurn} 到${w.arrivedMen}人(${w.arrivedTurn - w.startedTurn}手)` : ' 在路上'}` : ' 无'}` +
+      ` · 交换(${ex.length}手) 赚${gain} 亏${loss}\n`,
+  );
+}
+
+/**
  * 记"这一局决定升到第几代"（D5）。
  *
  * 它替代的是原来那道 `world.myCombat.length === 0` 的门——那道门治的是**漂移**
@@ -203,6 +305,7 @@ function isLiveCity(s: GameState, cityId: string): boolean {
 /** 给探针清缓存用（换局时调一次） */
 export function resetV4(): void {
   cache = null;
+  laneLoggedTurn = -1;
 }
 
 /**
@@ -375,6 +478,12 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   upgrade?: NonNullable<Constraints['upgrade']>;
   /** 决定层说要升、但计划层否掉了——为什么（D6） */
   upgradeBlocked?: string;
+  /** W1 影子观测：前线的 / 在途的 / 这回合能造几个 */
+  lane?: { front: number; road: number; make: number };
+  /** W1 影子观测：这一波（出发 → 第一次能打到城） */
+  wave?: V4Memory['wave'];
+  /** W1 影子观测：最近 6 手的金币交换 */
+  exchange?: V4Memory['exchange'];
 } {
   const v = currentView(s, me);
   return {
@@ -383,6 +492,9 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
     keepClearList: v.con.keepClear,
     upgrade: v.con.upgrade,
     upgradeBlocked: v.con.upgradeBlocked,
+    lane: v.con.lane,
+    wave: memoryOf(s, me).wave ?? null,
+    exchange: memoryOf(s, me).exchange ?? [],
   };
 }
 
