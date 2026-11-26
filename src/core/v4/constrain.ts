@@ -256,6 +256,31 @@ function planYield(
   const targets = keepClear.filter(
     (k) => (need.spawn && cityCells.has(k)) || (need.exit && !cityCells.has(k)),
   );
+  /*
+   * **挨打时也要腾一格产兵**（2026-11-26 22:50，用户指出的第 3 条）。
+   *
+   * `keepClear` 在挨打时（`foeEta <= 1`）把城格**整块豁免**了——守军站进城能吃 +3 护甲，
+   * 这没错；但经济单位也跟着蹲进去，城格只有 4 个，蹲 2~3 个经济单位 + 1~2 个守军就满了，
+   * `recruitSpawnCells` 返回空，**有钱也造不出兵**（900 局实测：T10 手上 238 金、城内 3~4 格全占）。
+   *
+   * 这里只补一件能数的事：**挨打 + 城格站满 + 里面有非战斗单位** → 把那**一格**加进赶人名单。
+   * 只赶非战斗单位：战斗兵那一格是他们用护甲换来的，抢回来会让城更容易塌
+   * （D-2-02 实测：无条件留一格之后守军少进一个，第 6 手城就没了）。
+   */
+  if (need.spawn) {
+    for (const info of world.cities) {
+      if (info.foeEta > 1) continue;
+      const tiles = cityTiles(info.city).map((t) => t.y * s.w + t.x);
+      const occ = tiles
+        .map((k) => ({ k, u: occupantAt(s, k % s.w, Math.floor(k / s.w)) }))
+        .filter((x): x is { k: number; u: Unit } => !!x.u && x.u.owner === world.me);
+      /* 没站满就不用赶（产兵格本来还有空）；全是守军也不动（那是护甲） */
+      if (occ.length < tiles.length) continue;
+      const squatter = occ.find((x) => utype(s, x.u.type).category !== 'combat');
+      if (!squatter || targets.includes(squatter.k)) continue;
+      targets.push(squatter.k);
+    }
+  }
   if (targets.length === 0) return [];
   const N = s.w * s.h;
 
