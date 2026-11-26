@@ -257,6 +257,8 @@ export interface World {
   /** 战斗 / 经济单位，按"离敌人由近到远"排好序（上层不用再排） */
   myCombat: Unit[];
   myEcon: Unit[];
+  /** 我方的建造单位（`category === 'builder'`）——架桥要它们 */
+  myBuilders: Unit[];
   foeCombat: Unit[];
   /** 这几格必须空出来（产兵格 + 城门口），约束层会读它 */
   keepClear: number[];
@@ -597,6 +599,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   const foeCities = s.cities.filter((c) => c.owner === foe);
   const myCombat = s.units.filter((u) => u.owner === me && utype(s, u.type).category === 'combat');
   const myEcon = s.units.filter((u) => u.owner === me && utype(s, u.type).category === 'economy');
+  const myBuilders = s.units.filter((u) => u.owner === me && utype(s, u.type).category === 'builder');
   const foeCombat = s.units.filter((u) => u.owner === foe && utype(s, u.type).category === 'combat');
 
   const move = baseMove(s, me);
@@ -1202,6 +1205,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       (a, b) => (foeCities.length ? distToNearestFoeCity(a) - distToNearestFoeCity(b) : 0),
     ),
     myEcon,
+    myBuilders,
     foeCombat,
     keepClear: [...new Set(keepClear)],
     turnsFrom(p) {

@@ -197,6 +197,8 @@ function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory):
  * （`DESIGN-LANES-WAVES` §0 的分工：选择在决定层、可行性在计划层）。
  */
 function bandTasksOf(world: World, mem: V4Memory | undefined, d: BareDecision): BandTask[] {
+  /* 架桥时所有战斗兵的目标是"渡口的岸"，不是某座城——统一交给计划层的 bridge 分支安排 */
+  if (d.kind === 'bridge') return [];
   const out: BandTask[] = [];
   for (const b of mem?.bands ?? []) {
     if (b.unitIds.length === 0) continue;
@@ -750,6 +752,62 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
       return da - db;
     })[0];
     if (near) return takeoverDecision(s, world, mem, near);
+  }
+
+  /*
+   * 1.5) **走不到那座城 → 先架桥**（W4-4d-2，2026-11-26）。
+   *
+   * 判据只有一条（学 v3）：**地形连通性走不到**。桥一通这里自然不成立，立刻回到"打"。
+   * 分两个阶段，顺序是用户定的——**工兵不许跑在部队前面**，否则它在河边会被守军打死：
+   *
+   *   · `seize`：先头部队去渡口的岸上占位（这一步只有战斗兵动）；
+   *   · `build`：岸上已经有自己人、且敌人**两回合内摸不到**渡口，才让工兵上来。
+   *
+   * 只挑**没变废墟**的敌城：废墟走得到（地形可通行），不需要桥；而且废墟要办的是接管。
+   */
+  const bridgeTargets = world.foeCities
+    .filter((c) => !c.ruined)
+    .map((c) => ({ c, o: world.bridgeOutlook(c) }))
+    .filter((x) => !x.o.reach && !!x.o.crossing);
+  if (bridgeTargets.length > 0) {
+    const { c, o } = bridgeTargets[0]!;
+    const dir = o.crossing!.dir;
+    const at = { x: o.crossing!.x, y: o.crossing!.y };
+    const stand = { x: at.x - dir[0], y: at.y - dir[1] };
+    const onBank = world.myCombat.filter(
+      (u) => Math.abs(u.x - stand.x) + Math.abs(u.y - stand.y) <= 2,
+    ).length;
+    /*
+     * **"岸上安全吗"要看两件事，不能只看敌人几步能走过来。**
+     *
+     * 隔河时敌人的移动距离是无限大（过不来），但他**站对岸就能用远程打到岸边**——
+     * 只看 `foeEta` 会把这种局面判成"安全"，工兵上去照样挨打。
+     */
+    const eta = world.foeEta(stand);
+    const shooters = world.foeCombat.filter((f) => {
+      const st = effectiveStats(s, f);
+      return Math.abs(f.x - stand.x) + Math.abs(f.y - stand.y) <= (st.range ?? 1) + 1;
+    }).length;
+    const safe = eta >= 2 && shooters === 0;
+    const stage: 'seize' | 'build' = onBank > 0 && safe ? 'build' : 'seize';
+    return complete(s, world, mem, {
+      kind: 'bridge',
+      untilTurn: s.turn + horizon,
+      cityId: c.id,
+      bridge: { cityId: c.id, stage, at, stand },
+      reason:
+        stage === 'seize'
+          ? `到 ${c.id} 走不通（${o.why}）；${
+              onBank === 0
+                ? `先头部队先去渡口岸边 (${stand.x},${stand.y}) 占位`
+                : shooters > 0
+                  ? `岸上已有 ${onBank} 人，但 ${shooters} 个敌人能打到岸边，工兵先不上`
+                  : `敌人 ${eta} 回合内会摸到岸边，工兵先不上`
+            }，工兵随后`
+          : `渡口 (${stand.x},${stand.y}) 已有 ${onBank} 个自己人${
+              Number.isFinite(eta) ? `、敌人还要 ${eta} 回合才摸到` : '、附近没有敌人'
+            }，工兵可以上来铺 ${o.cost?.cells ?? '?'} 格`,
+    });
   }
 
   /*

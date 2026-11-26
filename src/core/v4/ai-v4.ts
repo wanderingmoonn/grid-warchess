@@ -95,6 +95,8 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     eraPlan: eraPlanMemo(s, decision, mem, s.turn),
     /* W1 影子观测：只记，不读 */
     bands: con.bands ?? mem.bands,
+    /* 工兵队：只有架桥那一条分支会写；别的决定里是 undefined，等于撤编 */
+    buildBand: con.buildBand,
     ...laneMemo(s, world, con, decision, mem, s.turn),
   };
   writeMemory(s, me, nextMem);
@@ -449,7 +451,10 @@ function bridgeText(s: GameState, world: World, con: Constraints): string {
     s.cities.find((c) => c.id === con.squads.find((q) => !!q.cityId)?.cityId) ?? world.foeCities[0];
   if (!target) return '';
   const o = world.bridgeOutlook(target);
-  return ` · 桥 ${o.why}${o.cost ? `（${o.cost.gold} 金 / ${o.cost.work} 工时）` : ''}`;
+  /* 只有真的派出工兵了才报"工兵上"；没有建造单位时报"先占岸"（阶段是意图，未必有人） */
+  const stage = con.buildBand ? 'build' : con.bridgeStage === 'seize' ? 'seize' : undefined;
+  return ` · 桥 ${o.why}${o.cost ? `（${o.cost.gold} 金 / ${o.cost.work} 工时）` : ''}` +
+    (stage ? ` · ${stage === 'seize' ? '先占岸' : '工兵上'}` : '');
 }
 
 let laneLoggedTurn = -1;
@@ -711,7 +716,14 @@ export function aiNextActionV4(
   const combatOrder = [...world.myCombat].sort(
     (a, b) => (combatRank.get(a.id) ?? 1e9) - (combatRank.get(b.id) ?? 1e9),
   );
-  for (const u of [...combatOrder, ...econOrder]) {
+  /*
+   * **建造单位也要派动作**（W4-4d-2，2026-11-26）。
+   *
+   * 以前这里只有"战斗兵 + 经济兵"，而工兵是第三类（`category === 'builder'`）——
+   * 结果架桥分支把工兵编进队伍、给了目标点，它却一步没动（临时验证：第 8 手还在城里）。
+   * 排在最后：战斗兵先动，工兵跟在后面。
+   */
+  for (const u of [...combatOrder, ...econOrder, ...world.myBuilders]) {
     const live = s.units.find((x) => x.id === u.id);
     if (!live || live.moved) continue;
     const a = actFor(s, world, con, live);
@@ -752,7 +764,8 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   const v = currentView(s, me);
   return {
     decision: v.decision,
-    squads: v.con.squads.map((q) => ({ id: q.id, order: q.order, n: q.unitIds.length })),
+    /* `ids` 只给诊断用（看清楚一支队到底装了谁）；判断一律只看 id/order/n */
+    squads: v.con.squads.map((q) => ({ id: q.id, order: q.order, n: q.unitIds.length, ids: q.unitIds })),
     keepClearList: v.con.keepClear,
     upgrade: v.con.upgrade,
     upgradeBlocked: v.con.upgradeBlocked,

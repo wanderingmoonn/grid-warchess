@@ -21,7 +21,7 @@
  */
 
 /** 决定层能做的三种事。**只有这三种**，想加第四种先证明前三种表达不了它 */
-export type DecisionKind = 'expand' | 'press' | 'defend' | 'takeover';
+export type DecisionKind = 'expand' | 'press' | 'defend' | 'takeover' | 'bridge';
 
 /**
  * 接管废墟的三个子阶段。**顺序是硬的**：先清场，再攒钱，最后入驻。
@@ -122,6 +122,20 @@ export interface Decision {
   men?: number;
   /** 一支编队的**最小规模**（凑够打死一个守军）；不够就先不编队，避免一个一个送 */
   menMin?: number;
+  /**
+   * **架桥**（W4-4d-2，2026-11-26）：`kind === 'bridge'` 时才有值。
+   *
+   * 两个阶段，判据在决定层，坐标在服务层（`world.bridgeOutlook`）：
+   *   · `seize`：**先头部队先占住渡口的岸**——工兵比部队先到河边就会被守军打死；
+   *   · `build`：岸上已经有自己人、且敌人两回合内摸不到渡口，才让工兵上来。
+   * `at` = 第一格水面（将来要架桥的起点），`stand` = 工兵站的那一格岸。
+   */
+  bridge?: {
+    cityId: string;
+    stage: 'seize' | 'build';
+    at: { x: number; y: number };
+    stand: { x: number; y: number };
+  };
   /**
    * **每队一条任务**（W3.6 第 3c 步）：在编的每支编队这一手做什么。
    *
@@ -388,6 +402,10 @@ export interface Constraints {
   forbid?: string[];
   /** 这一手在编的进攻编队（要写回记忆；见 `V4Memory.bands`） */
   bands?: Band[];
+  /** 这一手在编的工兵队（架桥用；桥通了/没桥可修就不写，等于撤编） */
+  buildBand?: V4Memory['buildBand'];
+  /** 架桥到了哪一段（只看日志用）：先占岸 / 工兵上 */
+  bridgeStage?: 'seize' | 'build';
   /**
    * **采购要造到多少人**（W3.6 第 5 步）：在编队的编制之和 + 一支预备队。
    *
@@ -685,6 +703,13 @@ export interface V4Memory {
   lineGap?: Record<string, LaneGap>;
   /** **在编的进攻编队**（名册冻结，全战死才撤编，见 `Band`） */
   bands?: Band[];
+  /**
+   * **在编的工兵队**（W4-4d-2，2026-11-26）：最多一支，1~2 人。
+   *
+   * 单独记而不是塞进 `bands`：`liveBandsOf` 是按"战斗兵"过滤的，工兵会被它删掉。
+   * 桥通了就撤编；没桥可修也撤编（不许一支工兵永远占着名额）。
+   */
+  buildBand?: { id: string; unitIds: string[]; cityId: string; formedAt: number };
   /**
    * 上一手每条线**现在能打到城 / 已接火**的人数（`cityId → 人数`）。
    *

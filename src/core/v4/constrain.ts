@@ -1415,12 +1415,29 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const city = decision.cityId ? s.cities.find((c) => c.id === decision.cityId) : undefined;
   const keepClear = [...world.keepClear];
   const keepSet = new Set(keepClear);
+  /*
+   * **架桥时先把工兵要站的那一格空出来**（W4-4d-2，2026-11-26）。
+   *
+   * 用户指出的"让路"：过河部队很可能正好堵在造桥点上（一格桥旁边就那么几格）。
+   * 把那一格列进 `keepClear`，现有的让位机制（`yield`）会把人挪开，工兵才有地方站。
+   * **只加这一格，不加桥面**——桥面要能走（4c 刚放开）。
+   */
+  if (decision.kind === 'bridge' && decision.bridge) {
+    const st = decision.bridge.stand;
+    const k0 = st.y * s.w + st.x;
+    if (!keepSet.has(k0)) {
+      keepClear.push(k0);
+      keepSet.add(k0);
+    }
+  }
 
   const squads: Squad[] = [];
   /** 这一手在编的进攻编队（要写回记忆，见 `Band`） */
   let outBands: Band[] | undefined;
   /** 采购要造到多少人（编制之和 + 一批）；没有编队时不设上限 */
   let outBandNeed: Constraints['bandNeed'];
+  /** 在编的工兵队（架桥用；桥通了就不写，等于撤编） */
+  let outBuildBand: Constraints['buildBand'];
   /** 决定层给这支编队的任务（W3.6 第 3c 步）：意图在这儿，走不走得通由下面判 */
   const taskOf = (bandId: string) => (decision.bandTasks ?? []).find((t) => t.bandId === bandId);
 
@@ -1744,6 +1761,103 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         keep: bands.reduce((n, b) => n + (b.want ?? b.unitIds.length), 0),
         men: decision.men ?? 0,
       };
+    }
+  } else if (decision.kind === 'bridge' && decision.bridge) {
+    /*
+     * **架桥：先头部队占岸，工兵后到**（W4-4d-2，2026-11-26）。
+     *
+     * 用户定的顺序：工兵先跑到河边会被守军打死，所以
+     *   · `seize`：只有战斗兵动——按现有的编队名册去渡口的岸上列阵；
+     *   · `build`：岸上有自己人、敌人两回合摸不到，才把工兵放出去。
+     *
+     * 战斗兵的目标是一个**点**（`at`），不是城——城在河对岸，走不过去。
+     * 所以这一支的 `cityId` 留空、只给 `at`，`squadBase` 会优先用它。
+     */
+    const st = decision.bridge.stand;
+    const stage = decision.bridge.stage;
+    const restIds = new Set(rest.map((u) => u.id));
+    const aliveIds = new Set(world.myCombat.map((u) => u.id));
+    const bands = liveBandsOf(mem, null, aliveIds);
+    const inBand = new Set(bands.flatMap((b) => b.unitIds));
+
+    /** 一支队去渡口：任务 march、目标点 = 岸 */
+    const pushToBank = (id: string, ids: string[], want?: number): void => {
+      if (ids.length === 0) return;
+      const us = ids
+        .map((uid) => s.units.find((u) => u.id === uid))
+        .filter((u): u is Unit => !!u);
+      if (us.length === 0) return;
+      const eta = us.reduce((n, u) => Math.max(n, world.marchTurns(u, st)), 0);
+      squads.push({
+        id,
+        order: 'march',
+        unitIds: ids,
+        at: st,
+        want: want ?? ids.length,
+        eta: Number.isFinite(eta) ? eta : 99,
+        tactics: planTactics(s, ids, true),
+      });
+    };
+
+    if (bands.length === 0) {
+      /*
+       * 还没编过队：现成的战斗兵一起过去（开局第一波）。
+       * 同时**把这批人记成一支编队**——不记的话，桥没架好之前 `[band]` 一直是空的，
+       * 回放里看不出"哪批人在河边站着"，下一手也只能当"没编过队"重新来一遍。
+       */
+      const ids = rest.map((u) => u.id);
+      pushToBank('main', ids);
+      if (ids.length > 0) {
+        outBands = [
+          {
+            id: 'main',
+            cityId: decision.bridge.cityId,
+            formedAt: s.turn,
+            unitIds: ids,
+            state: 'marching',
+            want: ids.length,
+            men: ids.length,
+          },
+        ];
+      }
+    } else {
+      /*
+       * 名册里的队去岸边；不在名册里的兵并进同一支（**不能另建一支同名的 `main`**——
+       * 上一版就撞了：`main:11` 和 `main:2` 两支同 id 的队在场上，谁也不知道谁是谁）。
+       */
+      const leftover = rest.filter((u) => !inBand.has(u.id)).map((u) => u.id);
+      const hasMain = bands.some((b) => b.id === 'main');
+      for (const b of bands) {
+        const own = b.unitIds.filter((id) => restIds.has(id));
+        pushToBank(b.id, b.id === 'main' ? [...own, ...leftover] : own, b.want);
+      }
+      if (!hasMain && leftover.length > 0) pushToBank('main', leftover);
+      outBands = bands;
+    }
+
+    /*
+     * 工兵：**只在 `build` 阶段放出去**，而且最多 2 个、按离渡口近的挑。
+     * 它们不进 `bands`（那是战斗编队），单独记在 `buildBand` 里，桥通了就撤。
+     */
+    if (stage === 'build' && world.myBuilders.length > 0) {
+      const prev = mem?.buildBand;
+      const alive = (prev?.unitIds ?? []).filter((id) => world.myBuilders.some((b) => b.id === id));
+      const pick =
+        alive.length > 0
+          ? alive
+          : [...world.myBuilders]
+              .sort((a, b) => world.marchTurns(a, st) - world.marchTurns(b, st) || (a.id < b.id ? -1 : 1))
+              .slice(0, 2)
+              .map((b) => b.id);
+      if (pick.length > 0) {
+        outBuildBand = {
+          id: prev?.id ?? `build-${s.turn}`,
+          unitIds: pick,
+          cityId: decision.bridge.cityId,
+          formedAt: prev?.formedAt ?? s.turn,
+        };
+        pushToBank(outBuildBand.id, pick, 2);
+      }
     }
   } else if (decision.kind === 'defend' && city) {
     /*
@@ -2335,6 +2449,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     upgradeBlocked: upgradePlan.blocked,
     lane,
     bands: outBands,
+    buildBand: outBuildBand,
+    bridgeStage: decision.kind === 'bridge' ? decision.bridge?.stage : undefined,
     bandNeed: outBandNeed,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
