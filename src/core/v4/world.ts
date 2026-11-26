@@ -304,8 +304,16 @@ export interface World {
    * 不算进来是因为它们人不在、也不会回来——和 v1「换家」那条"着力点"是同一个事实。
    */
   defensible(city: City, skip?: ReadonlySet<string>): DefendOutlook;
-  /** **过不过得去、过不去从哪架桥**（W4-4d-1；目前只观测，没有判断读它） */
+  /** **过不过得去、过不去从哪架桥**（W4-4d-1） */
   bridgeOutlook(city: City): BridgeOutlook;
+  /**
+   * **这条路依赖桥吗**（W4-4d-3，2026-11-26）：**忽略已经铺好的桥面**再问一次连通性。
+   *
+   * 走不到 → 说明"必须过桥"，那就得给修桥留钱：实战里桥被打塌、反复重修是常事，
+   * 而 v4 之前会把钱在"打得顺"的那几手全变成兵，桥一塌一分钱都拿不出来
+   * （`P-4-03` 实测：900 金在桥通后的 10 手里造了 8 个兵，桥被打掉后修不起）。
+   */
+  needsBridge(city: City): boolean;
   /**
    * **能同时打到这座城、又站得下人的格数**（W3 上限，2026-11-26）。
    *
@@ -1206,6 +1214,49 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     return out;
   };
 
+  const needsCache = new Map<string, boolean>();
+  /**
+   * **忽略桥面**的连通性（W4-4d-3）。
+   *
+   * 和 `canReach` 用的是同一个问题，只是把"桥面"当成水——因为桥会塌，
+   * 依赖桥的路随时可能断。断得起 = 要留修桥的钱。
+   */
+  const needsBridge = (city: City): boolean => {
+    const hit = needsCache.get(city.id);
+    if (hit !== undefined) return hit;
+    const src = [...myCombat, ...myBuilders, ...myEcon];
+    const seeds =
+      src.length > 0 ? src.map((u) => u.y * s.w + u.x) : myCities.map((c) => c.y * s.w + c.x);
+    const seen = new Set<number>(seeds);
+    const q = [...seeds];
+    for (let h = 0; h < q.length; h += 1) {
+      const k = q[h]!;
+      const x = k % s.w;
+      const y = (k - x) / s.w;
+      for (const [dx, dy] of DIRS4) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= s.w || ny >= s.h) continue;
+        const nk = ny * s.w + nx;
+        if (seen.has(nk)) continue;
+        const t = tileOn(s, EARTH, nx, ny)?.terrain;
+        if (!t || !passable(t) || t === 'bridge') continue;
+        seen.add(nk);
+        q.push(nk);
+      }
+    }
+    const size = city.size ?? 2;
+    let ok = false;
+    for (let y = city.y - 1; y <= city.y + size && !ok; y += 1) {
+      for (let x = city.x - 1; x <= city.x + size && !ok; x += 1) {
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        if (seen.has(y * s.w + x)) ok = true;
+      }
+    }
+    needsCache.set(city.id, !ok);
+    return !ok;
+  };
+
   const world: World = {
     me,
     foe,
@@ -1246,6 +1297,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     cityStand,
     defensible,
     bridgeOutlook,
+    needsBridge,
     siegeSeats,
     laneStats(ids, city) {
       const split = contactSplit(ids, city);

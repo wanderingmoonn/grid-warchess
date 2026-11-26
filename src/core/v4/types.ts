@@ -424,6 +424,8 @@ export interface Constraints {
   buildBand?: V4Memory['buildBand'];
   /** 架桥到了哪一段（只看日志用）：先占岸 / 工兵上 */
   bridgeStage?: 'seize' | 'build';
+  /** **采购要留出来的修桥钱**（这条路依赖桥时 = 一格桥价）；0 = 不用留 */
+  reserveGold?: number;
   /**
    * **采购要造到多少人**（W3.6 第 5 步）：在编队的编制之和 + 一支预备队。
    *
