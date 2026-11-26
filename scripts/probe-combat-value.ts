@@ -41,6 +41,14 @@ const argOf = (name: string, dflt: string): string => {
 };
 const ERA = Number(argOf('era', '3'));
 const GOLD = Number(argOf('gold', '400'));
+/**
+ * **前线上限**（S0，2026-11-27）：一回合里"最多几个人能打到同一个目标"。
+ *
+ * 用户的经验值：**野战 4~6**；守城看地形（有时更小，被包围时说不清）——所以这里做成参数，
+ * 默认 6。近战按这个数排队；**远程不排队**（射程内都打得到）——射程的价值就在这里，
+ * 上一版探针没有这一条，所以"等量斥候 vs 等量弓手"算出来是斥候赢。
+ */
+const FRONTAGE = Number(argOf('frontage', '6'));
 
 const s: GameState = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 1 }, 900);
 const probe = (type: string): Unit =>
@@ -89,6 +97,10 @@ const duelWin = (a: string, b: string): boolean => {
  * 等金群战（集火模型）：两边各买满预算，每回合把伤害砸在对面一个人身上。
  * 只是数，不是引擎模拟——用来回答"人多但弱"和"人少但强"谁赢。
  */
+/** 这一回合这一方能有几个人输出：近战排队，远程不排 */
+const attackers = (alive: number, type: string): number =>
+  (utype(s, type).range ?? 1) >= 2 ? alive : Math.min(alive, FRONTAGE);
+
 const squadFight = (
   a: string,
   b: string,
@@ -106,14 +118,14 @@ const squadFight = (
   const db = dps(b, a);
   for (let round = 1; round <= 400; round++) {
     /* A 先手（射程远的白打），每回合把伤害全砸在 B 身上（集火） */
-    bPool -= na * da;
+    bPool -= attackers(na, a) * da;
     if (bPool <= 0) return { na: Math.ceil(aPool / hpA), nb: 0, win: 'A', rounds: round };
     nb = Math.ceil(bPool / hpB);
     if (free > 0) {
       free -= 1;
       continue;
     }
-    aPool -= nb * db;
+    aPool -= attackers(nb, b) * db;
     if (aPool <= 0) return { na: 0, nb: Math.ceil(bPool / hpB), win: 'B', rounds: round };
     na = Math.ceil(aPool / hpA);
   }
@@ -177,7 +189,7 @@ console.log('单挑胜场排名：' + rank.map((t) => `${utype(s, t).name}(${ids
 
 /* ── ③ 群战（集火）：等金 和 等量 两种 ───────────────────── */
 const names = (t: string) => utype(s, t).name ?? t;
-console.log(`\n等金群战（${GOLD} 金，集火模型）：`);
+console.log(`\n等金群战（${GOLD} 金，集火模型，前线上限 ${FRONTAGE}）：`);
 const pairs: Array<[string, string]> = [];
 for (const x of rows) for (const y of rows) if (x.t !== y.t) pairs.push([x.t, y.t]);
 let mismatch = 0;
@@ -197,9 +209,13 @@ for (const [a, b] of pairs) {
 console.log(`  与"新战力/金"不一致的场次：${mismatch} / ${pairs.length}`);
 console.log(lines.join('\n'));
 
-console.log(`\n等量群战（各 6 个，集火模型）：`);
+console.log(`\n等量群战（集火 + 前线上限 ${FRONTAGE}）：`);
 for (const [a, b] of [['scout', 'archer'], ['militia', 'archer'], ['scout', 'militia']] as Array<[string, string]>) {
   if (!rows.some((x) => x.t === a) || !rows.some((x) => x.t === b)) continue;
-  const r = squadFight(a, b, 6, 6);
-  console.log(`  ${names(a)}×6 vs ${names(b)}×6 → ${names(r.win === 'A' ? a : b)} 赢，剩 ${r.left ?? (r.win === 'A' ? r.na : r.nb)} 个（${r.rounds} 回合）`);
+  for (const n of [6, 12, 20]) {
+    const r = squadFight(a, b, n, n);
+    console.log(
+      `  ${names(a)}×${n} vs ${names(b)}×${n} → ${names(r.win === 'A' ? a : b)} 赢，剩 ${r.win === 'A' ? r.na : r.nb} 个（${r.rounds} 回合）`,
+    );
+  }
 }
