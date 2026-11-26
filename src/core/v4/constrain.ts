@@ -1367,6 +1367,30 @@ function planMarch(
   return { steps: out, order };
 }
 
+/**
+ * **在编的编队**（W3.6 第 2 步）：名册只因为"人死了"缩小，**不因为站错格子被踢出去**。
+ *
+ * 以前的写法是"名册 ∩ 这一手能派的人"，而那份名单里没有两种人：
+ *   · 站在关键格上的（产兵格、城门口、桥头）——新兵出生就在产兵格上，
+ *     于是"刚编进队的兵下一手就消失了"；队里的人走过关键格也会被静默删掉。
+ * "这一手能派谁"和"这队还剩下谁"是两件事，以前被混成了一个。
+ *
+ * 撤编只有三种（第 2 步定的）：全灭 / **已出发**且存活不到编制四成 / 没有敌城可打。
+ * "四成"只对已出发的队生效——收拢中的队本来就小，按四成判会把刚成军的两三个人
+ * 立刻判死，于是每手重建一支新队（编号一直变）。
+ */
+function liveBandsOf(mem: V4Memory | undefined, cityId: string, aliveIds: Set<string>): Band[] {
+  return (mem?.bands ?? [])
+    .filter((b) => b.cityId === cityId)
+    .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => aliveIds.has(id)) }))
+    .filter((b) => b.unitIds.length > 0)
+    .filter(
+      (b) =>
+        (b.state ?? 'forming') === 'forming' ||
+        b.unitIds.length / Math.max(1, b.want ?? b.unitIds.length) >= 0.4,
+    );
+}
+
 export function constrain(s: GameState, world: World, decision: Decision, mem?: V4Memory): Constraints {
   const city = decision.cityId ? s.cities.find((c) => c.id === decision.cityId) : undefined;
   const keepClear = [...world.keepClear];
@@ -1475,12 +1499,45 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       )[0];
       if (pick) captureId = pick.id;
     }
-    squads.push({
-      id: 'main',
-      order: decision.stage === 'clear' ? 'march' : 'hold',
-      unitIds: rest.filter((u) => u.id !== captureId).map((u) => u.id),
-      cityId: city.id,
-    });
+    /*
+     * **打空了就原地转任务：整队保留，只换任务名**（W3.6 第 3a 步，2026-11-26）。
+     *
+     * 以前这里无条件新建一支 `main`：记忆里的编队名册还在，但没有任何队伍对应它们，
+     * 成了孤儿——下一手按目标城一对就全被丢掉（用户看到的"攻城之后编队全部消失"）。
+     *
+     * 现在：目标城没变（还是这座城，只是从敌城变成废墟），所以
+     *   · 任务从"攻城"改成"清场推进"（`march`），清干净后改"守"（`hold`）；
+     *   · **名册、编号、人数都不动**，只是这一手的任务换了。
+     * 这是所有转换里最便宜的一种：城没变，站位不用重排。
+     */
+    const restIds = new Set(rest.map((u) => u.id));
+    const aliveIds = new Set(world.myCombat.map((u) => u.id));
+    const bands = liveBandsOf(mem, city.id, aliveIds);
+    const inBand = new Set(bands.flatMap((b) => b.unitIds));
+    for (const b of bands) {
+      const ids = b.unitIds.filter((id) => restIds.has(id) && id !== captureId);
+      if (ids.length === 0) continue;
+      squads.push({
+        id: b.id,
+        order: decision.stage === 'clear' ? 'march' : 'hold',
+        unitIds: ids,
+        cityId: city.id,
+        want: b.want ?? ids.length,
+      });
+    }
+    /*
+     * 不在编队里的兵（刚造的、原本守城的、被留下让位的）照旧编一支 `main`——
+     * 少这一条，接管期就会有一批人站着不动（旧行为是"所有人都在 main 里"）。
+     */
+    const restMain = rest.filter((u) => !inBand.has(u.id) && u.id !== captureId).map((u) => u.id);
+    if (restMain.length > 0) {
+      squads.push({
+        id: 'main',
+        order: decision.stage === 'clear' ? 'march' : 'hold',
+        unitIds: restMain,
+        cityId: city.id,
+      });
+    }
   } else if (threatened.length >= 2 && rest.length >= threatened.length * 2) {
     squads.push(...planMains(s, world, threatened.map((i) => i.city), rest.map((u) => u.id)));
   } else if (decision.kind === 'press' && city) {
@@ -1497,31 +1554,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      */
     const restIds = new Set(rest.map((u) => u.id));
     const aliveIds = new Set(world.myCombat.map((u) => u.id));
-    /**
-     * ① **在编的编队**：名册只因为"人死了"缩小，**不因为站错格子被踢出去**。
-     *
-     * 以前的写法是"名册 ∩ rest"，而 `rest` 里没有两种人：
-     *   · 站在关键格上的（产兵格、城门口、桥头）——新兵出生就在产兵格上，
-     *     于是"刚编进队的兵下一手就消失了"；队里的人走过关键格也会被静默删掉。
-     * `rest` 只是"这一手能派出去的人"，**不是"编队还剩下谁"**——这两件事被混成了一个。
-     *
-     * 撤编（W3.6 第 2 步）：只有三种情况撤
-     *   · 全灭；· 存活不到编制的四成（v3 的 `SQUAD_DISBAND_RATIO`）；
-     *   · 没有敌城可打（决定层根本不会走到 press，等于自动作废）。
-     */
-    const live: Band[] = (mem?.bands ?? [])
-      .filter((b) => b.cityId === city.id)
-      .map((b) => ({ ...b, unitIds: b.unitIds.filter((id) => aliveIds.has(id)) }))
-      .filter((b) => b.unitIds.length > 0)
-      /*
-       * "存活不到四成"只对**已经出发**的队生效：收拢中的队本来就小，
-       * 按四成判会把刚成军的两三个人立刻判死，于是每手重建一支新队（ID 一直变）。
-       */
-      .filter(
-        (b) =>
-          (b.state ?? 'forming') === 'forming' ||
-          b.unitIds.length / Math.max(1, b.want ?? b.unitIds.length) >= 0.4,
-      );
+    /** ① **在编的编队**（口径见 `liveBandsOf`）：名册只因为人死了缩小 */
+    const live: Band[] = liveBandsOf(mem, city.id, aliveIds);
     const inBand = new Set(live.flatMap((b) => b.unitIds));
     let free = rest.filter((u) => !inBand.has(u.id));
     const minSize = Math.max(1, decision.menMin ?? 1);
