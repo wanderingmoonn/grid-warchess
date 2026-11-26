@@ -420,59 +420,132 @@ export const STRATEGIES: Strategy[] = [
     passive: '我军全体移动 +1',
   },
   /*
-   * ---- 试验型（2026-11-26）----
+   * ---- 试验型（2026-11-26 重做）----
    *
-   * 这两条是"把后面的东西提前给你"，**强度没调**：高两代的兵和英雄在
-   * 第一层是降维打击，而敌方编成只跟人数走（你人少，它更少）。
-   * 放出来是为了先摸手感——数值和代价等试完再定。
-   * 代价先给"穷"：新家伙要钱，开局少一截。
+   * 上一版是"满编的完全体提前发下来"，在第一层就是降维打击（实测神圣骑士长
+   * 护甲 14，第一层的兵打它每下 1 点）。现在改成**成长型**：
+   *
+   *   · 进第一层时是半成品（数值见 `GROWTH_UNITS`）；
+   *   · **每层末成长一次**，到它自己所属的时代（第 3 层）才是完全体；
+   *   · 成长幅度参照各层敌军的"人均价值"（L1 28 / L2 65 / L3 178 金），
+   *     但比那条曲线缓——只有三层，而"完全体"是个固定靶，真要按 2.3 倍
+   *     一级地涨，第一层就得砍到 1/5，一个兵打两个兵根本活不下来。
+   *
+   * 既然起手弱了，上一版给的"敌方 +1 人 / 预算 ×1.35~1.6"的补偿也一起撤掉。
    */
   {
     id: 'vanguard',
     name: '试验队',
-    sub: '上面发下来的新枪，没人会用',
+    sub: '上面发下来的新家伙，没人会用',
     tag: '试验',
-    gold: 120,
-    enemyBonus: 1,
-    power: 1.35,
+    gold: 150,
     army: [
-      { type: 'rifleman', count: 1 },
+      { type: 'tank', count: 1 },
       { type: 'militia', count: 2 },
       { type: 'archer', count: 1 },
     ],
-    passive: '开局带 1 个高两代的兵（步枪兵）',
+    passive: '带一件还在试验的家伙（坦克）：每层末成长，第 3 层才是完全体',
   },
   {
     id: 'champion',
     name: '英雄',
-    sub: '一个人就是一支队伍',
+    sub: '一个人就是一支队伍——现在只是半个',
     tag: '试验',
-    gold: 80,
-    enemyBonus: 1,
-    power: 1.6,
-    army: [
-      { type: 'holy-knight-lord', count: 1 },
-      { type: 'militia', count: 2 },
-    ],
-    passive: '开局带 1 位英雄（神圣骑士长）',
+    // 一个人就是一支队伍，钱是你唯一能"添人"的路子，所以比别的方略宽一点
+    gold: 220,
+    army: [{ type: 'holy-knight-lord', count: 1 }],
+    passive: '只有这一位英雄：第 1 层末成长一次，第 2 层长成完全体（e4）',
   },
 ];
 
 /**
- * 兵种 → 它来自哪个扩展包。
+ * 兵种 → 它需要开哪几个扩展包。
  *
- * 试验型方略会带"这一层本来不该有"的兵（奇想的英雄、后面的枪）。
+ * 试验型方略会带"这一层本来不该有"的兵（奇想的英雄、后面的坦克）。
  * `createMatch` 只注册**已开启扩展**的兵种，不把包带上的话，部署时会被
  * 当成"不存在的兵"直接跳过——玩家点了英雄，场上却只有两个民兵。
+ *
+ * 注意**前置包**：圣剑勇者在 `fantasy` 里，但它 `requiresPack: 'pack-contemporary'`，
+ * 只开 fantasy 是拿不到它的（`expansionUnitsFor` 会把这种兵滤掉）。
+ * 上一版只记了"第一个见到它的包"，于是英雄一个人都没上场。
  */
-export const UNIT_PACK: Record<string, string> = (() => {
-  const out: Record<string, string> = {};
-  for (const e of EXPANSIONS) for (const u of e.units ?? []) out[u.id] = e.id;
-  return out;
-})();
+export function packsForUnit(type: string): string[] {
+  for (const e of EXPANSIONS) {
+    const u = (e.units ?? []).find((x) => x.id === type);
+    if (!u) continue;
+    return u.requiresPack ? [e.id, u.requiresPack] : [e.id];
+  }
+  return [];
+}
 
 export function strategyById(id: string): Strategy {
   return STRATEGIES.find((s) => s.id === id) ?? (STRATEGIES[0] as Strategy);
+}
+
+/**
+ * 成长型单位：试验队 / 英雄开局带的那一件"还没长成的东西"。
+ *
+ * 为什么要有这张表：把 e5–e6 的兵直接丢进第一层是降维打击（敌方人均价值
+ * 只有 28 金），可要是按"敌方人均价值"的曲线（28 → 65 → 178，每层 ×2.3）
+ * 去砍，第一层就只剩完全体的 1/5——一个兵打两个兵，活不下来。
+ * 所以三档是**手调的**：以"能单挑同层两个兵"为下限，以完全体为上限。
+ *
+ *   atk / hp / armor 分开走：
+ *     · 攻和血大致同步（伤害是 `atk − armor`，血是它的分母）；
+ *     · **护甲压得最狠**——减法公式里护甲是超线性的，第一层给到完全体的
+ *       1/3 就已经"打不动"了。
+ *
+ * `fullAt` = 它自己所属的时代到达的那一层：到这一层就是完全体，不再长。
+ * （英雄是 e4 → 第 2 层长满；坦克是 e5 → 第 3 层长满。）
+ */
+export interface GrowthSpec {
+  /** 长成完全体的层（1–3） */
+  fullAt: number;
+  /** 各层的攻击系数，索引 0 = 第一层 */
+  atk: number[];
+  hp: number[];
+  armor: number[];
+  /**
+   * 移动力系数（可选）。半成品"走不利索"。
+   *
+   * 这一条是给**远程英雄**准备的：攻/血/甲砍下去它照样能一边退一边打，
+   * 对面永远摸不到（实测残血 100%）。把移动一起压住，它才需要真的接战。
+   */
+  move?: number[];
+}
+
+export const GROWTH_UNITS: Record<string, GrowthSpec> = {
+  /*
+   * 神圣骑士长：e4，完全体 36 攻 / 170 血 / 14 甲 / 移 2 / **近战**。
+   *
+   * 为什么英雄必须是近战：这个引擎里"打完还能走"，远程只要移动力不落下风
+   * 就能一直退着打（实测圣剑勇者 射 3 移 4，从第一层到第三层**一滴血没掉**）。
+   * 所以英雄只能是 range 1 的，才不会变成"无敌的放风筝机器"。
+   *
+   * e4 的时代是第 2 层 → 它只长一次，第 2 层就是完全体；第 3 层要靠你自己
+   * 补的兵跟它并肩（这也符合"到它自己的时代就长满了"）。
+   */
+  'holy-knight-lord': { fullAt: 2, atk: [0.55, 1, 1], hp: [0.6, 1, 1], armor: [0.4, 1, 1] },
+  // 坦克：e5，完全体 56 攻 / 88 血 / 10 甲 / 移 3 / 射 3 —— e5 的时代是第 3 层，长两次
+  tank: { fullAt: 3, atk: [0.46, 0.7, 1], hp: [0.5, 0.72, 1], armor: [0.36, 0.62, 1] },
+};
+
+/** 这个兵种在某一层的成熟度；不是成长型就返回 null */
+export function growthOf(
+  type: string,
+  layer: number,
+): { atk: number; hp: number; armor: number; move: number; step: number; fullAt: number } | null {
+  const g = GROWTH_UNITS[type];
+  if (!g) return null;
+  const i = Math.max(0, Math.min(g.atk.length - 1, layer - 1));
+  return {
+    atk: g.atk[i] ?? 1,
+    hp: g.hp[i] ?? 1,
+    armor: g.armor[i] ?? 1,
+    move: g.move?.[i] ?? 1,
+    step: i + 1,
+    fullAt: g.fullAt,
+  };
 }
 
 /**

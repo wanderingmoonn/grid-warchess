@@ -211,5 +211,103 @@ console.log('\n[5] 战斗屏的技能栏');
   host.remove();
 }
 
+console.log('\n[6] 战场两侧的"外人"：场外交涉');
+{
+  /*
+   * 中立单位挪到两侧之后，战斗屏右侧多一张「外人」卡：可以直接花钱把人
+   * 招进来（战后留在队里），也可以请它走开。这一节验的是那条链路：
+   * 卡片出现 → 点招募 → 我方多一个人、金币扣掉、卡片少一行。
+   */
+  const { startRun, battleFor } = await import('../src/roguelike/run.ts');
+  const { mountBattle } = await import('../src/roguelike/battle-screen.ts');
+  const run = startRun(20, 'frontier');
+  run.layer = 1;
+  run.world = 'base';
+  run.gold = 600;
+  run.army = [{ type: 'ge', count: 4 }, { type: 'archer', count: 2 }];
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const stop = mountBattle(host, battleFor(run, { kind: 'battle', title: '遭遇战', sub: '' }, 20), {
+    onDone: () => {},
+  });
+  const card = host.querySelector<HTMLElement>('#rg-neutral-card');
+  check(!!card && !card.hidden, '有中立单位时出现「外人」卡');
+  const rows = [...host.querySelectorAll<HTMLElement>('.rg-neutral-row')];
+  check(rows.length === 2, '两个外人各一行', String(rows.length));
+  const mineBefore = host.querySelectorAll('.rg-unitrow').length;
+  const goldOf = (): number => {
+    const m = /金\s*(\d+)/.exec(host.querySelector('#rg-hud')?.textContent?.replace(/\s+/g, ' ') ?? '');
+    return m ? Number(m[1]) : -1;
+  };
+  const goldBefore = goldOf();
+  const rec = rows[0]?.querySelector<HTMLButtonElement>('[data-recruit]');
+  const recId = rec?.dataset.recruit;
+  check(!!rec && !rec.disabled, '钱够的时候招募按钮可点');
+  click(rec ?? null);
+  await wait(10);
+  check(host.querySelectorAll('.rg-unitrow').length === mineBefore + 1, '招募之后我方多一个人');
+  check(
+    !!recId && !!host.querySelector(`.rg-unitrow[data-unit="${recId}"]`),
+    '招进来的人出现在我军列表里（不再是"外人"）',
+  );
+  check(host.querySelectorAll('.rg-neutral-row').length === rows.length - 1, '「外人」少一行');
+  check(goldBefore - goldOf() === 170, '招募扣的是标价（170 金）', `${goldBefore} → ${goldOf()}`);
+  const hud = host.querySelector('#rg-hud')?.textContent ?? '';
+  check(/金\s*\d+/.test(hud), '顶栏能看到金币', hud.replace(/\s+/g, ' ').slice(0, 80));
+  // 撤回：钱和人都要退回去（交涉是唯一"改 state 不经过规则层"的操作，得单独验）
+  host.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  await wait(10);
+  check(goldOf() === goldBefore, 'Ctrl+Z 把招募的钱退回来', `${goldOf()} vs ${goldBefore}`);
+  check(
+    host.querySelectorAll('.rg-neutral-row').length === rows.length,
+    'Ctrl+Z 把人也退回去（又变回"外人"）',
+    String(host.querySelectorAll('.rg-neutral-row').length),
+  );
+  for (let i = 0; i < rows.length; i += 1) {
+    const dis = host.querySelector<HTMLButtonElement>('[data-dismiss]');
+    if (dis) click(dis);
+    await wait(6);
+  }
+  check(host.querySelectorAll('.rg-neutral-row').length === 0, '请走之后卡片空掉');
+  stop();
+  host.remove();
+}
+
+console.log('\n[7] 成长型英雄：角标、属性卡、第 2 层长满');
+{
+  const { startRun, battleFor } = await import('../src/roguelike/run.ts');
+  const { mountBattle } = await import('../src/roguelike/battle-screen.ts');
+  const mount = (layer: 1 | 2 | 3) => {
+    const run = startRun(20, 'champion');
+    run.layer = layer;
+    run.world = 'fantasy';
+    const host = doc.createElement('div');
+    doc.body.appendChild(host);
+    const stop = mountBattle(host, battleFor(run, { kind: 'battle', title: 't', sub: '' }, 20), {
+      onDone: () => {},
+    });
+    return { host, stop };
+  };
+  const a = mount(1);
+  const badge = a.host.querySelector('.rg-grow');
+  check(!!badge && badge.textContent?.includes('1/2'), '第一层：我军列表里有「成长 1/2」', badge?.textContent ?? '无');
+  const one = a.host.querySelector('.rg-unitrow');
+  check(a.host.querySelectorAll('.rg-unitrow').length === 1, '英雄开局我军只有一行');
+  check((one?.textContent ?? '').includes('神圣骑士长'), '那一行就是英雄');
+  // 属性卡里也要说明它在成长期
+  const piece = a.host.querySelector('.unit');
+  piece?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+  await wait(4);
+  const card = a.host.querySelector('#rg-hovercard')?.textContent ?? '';
+  check(card.includes('成长期'), '属性卡写明"成长期 1/2"', card.slice(0, 40));
+  a.stop();
+  a.host.remove();
+
+  const b = mount(2);
+  check(!b.host.querySelector('.rg-grow'), '第二层：长满了，角标消失');
+  b.stop();
+  b.host.remove();
+}
+
 console.log(failures === 0 ? '\n全部通过。' : `\n有 ${failures} 项没通过。`);
 if (failures > 0) process.exitCode = 1;

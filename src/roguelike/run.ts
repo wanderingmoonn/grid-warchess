@@ -18,7 +18,8 @@ import {
   RELICS,
   REST_OPTIONS,
   STRATEGIES,
-  UNIT_PACK,
+  packsForUnit,
+  growthOf,
   eventById,
   pickEnemyTypes,
   relicById,
@@ -996,7 +997,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     expansions: [
       ...new Set([
         ...theme.expansions,
-        ...run.army.map((a) => UNIT_PACK[a.type]).filter((id): id is string => Boolean(id)),
+        ...run.army.flatMap((a) => packsForUnit(a.type)),
       ]),
     ],
     world: run.world,
@@ -1009,15 +1010,16 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     cityDamage: bonus.cityDamage,
     tempUnits,
     /*
-     * 中立单位：约三分之一的普通/精英/攻坚关里站一个"不惹事"的东西。
+     * 中立单位：约三分之一的普通/精英/攻坚关里站**两个**"不惹事"的东西，
+     * 一左一右贴着战场边缘（2026-11-26 从正中挪过去的）。
      *
-     * 它不主动攻击、AI 也不打它，但玩家打它会挨反击——先做成一个可观察的
-     * 实验：看它会不会挡路、会不会被误伤、值不值得为它绕路。
+     * 它不主动攻击、AI 也不打它，但玩家打它会挨反击；玩家也可以在场外
+     * 跟它"交涉"（战斗屏右侧多一张卡）。先做成一个可观察的实验。
      * 守城战不放（三席已经够挤）；层末不放（boss 战不该有第三方）。
      */
     neutral:
       !isSpecial && !isBoss && seed % 100 < 34
-        ? [{ type: run.layer === 1 ? 'knight' : run.layer === 2 ? 'rifleman' : 'squad', count: 1 }]
+        ? [{ type: run.layer === 1 ? 'knight' : run.layer === 2 ? 'rifleman' : 'squad', count: 2 }]
         : [],
     relics: [...run.relics],
     strategyId: run.strategyId,
@@ -1414,6 +1416,23 @@ export function nextLayer(run: RunState, seed: number): boolean {
    * 而不是进门就被换掉。旧兵留在队里当老兵，怎么处理由玩家选。
    */
   const notes: string[] = [];
+  /*
+   * 成长型单位（试验队 / 英雄）：**进层就是"又长了一次"**，在这里说一声。
+   *
+   * 成长不是状态，而是 `layer` 的函数（见 `data.ts` 的 `growthOf`），
+   * 所以不需要在存档里记等级；只需要在换层时报一句，让玩家知道
+   * "刚才那个半成品现在长成什么样了"。
+   */
+  for (const type of new Set(run.army.map((a) => a.type))) {
+    const now = growthOf(type, layer);
+    const was = growthOf(type, layer - 1);
+    if (!now || now.step === was?.step) continue;
+    notes.push(
+      now.step >= now.fullAt
+        ? `${unitName(type)} 长成了完全体`
+        : `${unitName(type)} 又长了一截（${now.step}/${now.fullAt}）`,
+    );
+  }
   for (const id of run.relics) {
     const e = relicById(id)?.effect;
     if (!e) continue;
@@ -1448,7 +1467,7 @@ export {
   RELICS,
   REST_OPTIONS,
   STRATEGIES,
-  UNIT_PACK,
+  packsForUnit,
   eventById,
   relicById,
   strategyById,

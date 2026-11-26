@@ -477,6 +477,45 @@
 .rg-unitrow.done {
   opacity: 0.55;
 }
+/* 成长型单位的角标（试验队 / 英雄）：它是这一局里唯一"越打越强"的东西 */
+.rg-grow {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e8dcc4;
+  color: #7a5a1e;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+/* 外人：两侧的中立单位，场外交涉 */
+.rg-neutral-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e0d8c6;
+}
+.rg-neutral-row:last-child {
+  border-bottom: 0;
+}
+.rg-neutral-row .n {
+  flex: 1 1 100%;
+  font-weight: 600;
+}
+.rg-neutral-row .n i {
+  margin-left: 6px;
+  color: #837b6b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
+.rg-btn.mini {
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+}
 /* 技能栏：一个兵一行按钮，和本体的"指挥官技能"同一个手感 */
 .rg-skills {
   display: flex;

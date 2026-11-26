@@ -20,7 +20,8 @@ import { cellAtPoint, renderBoard } from '../ui/board.ts';
 import type { BoardUi } from '../ui/board.ts';
 import type { AiBudget } from '../core/ai-meta.ts';
 import type { Action, GameState, Unit } from '../core/types.ts';
-import { buildBattle, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
+import { buildBattle, baseTypeOf, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
+import { growthOf } from './data.ts';
 import type { BattleInit, BattleResult } from './types.ts';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
@@ -92,6 +93,10 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
             <h4>战况</h4>
             <div id="rg-foes" class="rg-foes"></div>
           </div>
+          <div class="rg-side-card" id="rg-neutral-card" hidden>
+            <h4>外人</h4>
+            <div id="rg-neutral" class="rg-foes"></div>
+          </div>
           <div class="rg-side-card">
             <h4>技能</h4>
             <div id="rg-skills" class="rg-skills"></div>
@@ -109,6 +114,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   const hudEl = host.querySelector<HTMLElement>('#rg-hud');
   const armyEl = host.querySelector<HTMLElement>('#rg-army');
   const foeEl = host.querySelector<HTMLElement>('#rg-foes');
+  const neutralCardEl = host.querySelector<HTMLElement>('#rg-neutral-card');
+  const neutralEl = host.querySelector<HTMLElement>('#rg-neutral');
   const skillEl = host.querySelector<HTMLElement>('#rg-skills');
   const tipEl = host.querySelector<HTMLElement>('#rg-tip');
   const undoBtn = host.querySelector<HTMLButtonElement>('#rg-undo');
@@ -121,6 +128,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const def = utype(state, u.type);
     const lines = describeUnit(state, def, u.owner, u);
     const hp = `${u.hp}/${maxHpOf(state, u)}`;
+    const base = baseTypeOf(u.type);
+    const grow = growthOf(base, init.layer);
     const side =
       u.owner === 'A'
         ? '我方'
@@ -132,7 +141,71 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     return `<div class="rg-hc-head"><b>${escapeHtml(def.name)}</b><i>${side}</i></div>
       <div class="rg-hc-hp"><span style="width:${Math.max(0, Math.min(100, (u.hp / Math.max(1, maxHpOf(state, u))) * 100))}%"></span><em>${hp}</em></div>
       <div class="rg-hc-stats">${escapeHtml(unitStatLine(def))}</div>
+      ${
+        grow && grow.step < grow.fullAt
+          ? `<div class="rg-hc-line">成长期 ${grow.step}/${grow.fullAt}：它自己的时代还在第 ${grow.fullAt} 层，每层末长一次。</div>`
+          : ''
+      }
       ${lines.map((l) => `<div class="rg-hc-line">${escapeHtml(l)}</div>`).join('')}`;
+  }
+
+  /** 跟"外人"打交道的价钱：身价的 1.8 倍，取整到 10 */
+  function recruitCost(type: string): number {
+    const c = utype(state, type).cost ?? 0;
+    return Math.max(20, Math.round((c * 1.8) / 10) * 10);
+  }
+
+  /** 场外的中立单位（守城战里的 C 是攻方，不能算进来） */
+  function neutrals(): Unit[] {
+    if (!init.neutral || init.neutral.length === 0 || init.allyCity) return [];
+    return state.units.filter((u) => u.owner === 'C' && u.hp > 0);
+  }
+
+  /**
+   * 交涉：花钱把它招进来。
+   *
+   * 它**战后会留在队里**（`survivorsOf` 按 owner 收人），所以这不是"借用一回合"，
+   * 是雇一个兵——价格按身价 1.8 倍定，和商店的 1.15 倍相比贵了三成，
+   * 买的是"当场多一个能打的"，不是便宜货。
+   */
+  function recruitNeutral(u: Unit): void {
+    if (busy || finished || state.current !== 'A') return;
+    const cost = recruitCost(u.type);
+    if (state.players.A.gold < cost) {
+      flashTip(`钱不够：招他得 ${cost} 金`);
+      return;
+    }
+    /*
+     * 这里**必须造一个新 state**，不能就地改。
+     *
+     * 撤回转的是引用：就地改的话，刚才压进栈的那份"回忆"也跟着变了，
+     * Ctrl+Z 退回去会发现钱已经扣了、人也已经是我们的人了。
+     */
+    undoStack.push(state);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    state = {
+      ...state,
+      units: state.units.map((x) =>
+        x.id === u.id ? { ...x, owner: 'A' as const, moved: false, acted: false } : x,
+      ),
+      players: {
+        ...state.players,
+        A: { ...state.players.A, gold: state.players.A.gold - cost },
+      },
+    };
+    render();
+    flashTip(`${utype(state, u.type).name} 入了队（−${cost} 金）`);
+  }
+
+  /** 交涉：请它走开（不花钱，但也没有兵） */
+  function dismissNeutral(u: Unit): void {
+    if (busy || finished || state.current !== 'A') return;
+    undoStack.push(state);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    // 同上：造新 state，别让撤回栈里的那份跟着被改掉
+    state = { ...state, units: state.units.filter((x) => x.id !== u.id) };
+    render();
+    flashTip('它走开了');
   }
 
   boardEl.addEventListener('mouseover', (e) => {
@@ -252,6 +325,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
         init.allyCity ? ` · 友 <b>${allies}</b>${allyWorks > 0 ? `（工事 ${allyWorks}）` : ''}` : ''
       } · 敌 <b>${foes}</b>${foeWorks > 0 ? `（工事 ${foeWorks}）` : ''}</span>
       ${init.holdRounds > 0 ? `<span>还有 <b>${left}</b> 波</span>` : ''}
+      <span>金 <b>${state.players.A.gold}</b></span>
       <span>${state.current === 'A' ? (busy ? '对方行动中…' : '轮到你') : '对方行动中…'}</span>`;
 
     armyEl!.innerHTML =
@@ -264,8 +338,17 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
               const cls = u.id === selectedId ? 'sel' : '';
               const done = u.moved && u.acted ? 'done' : '';
               const where = u.moved && !u.acted ? '已移动' : u.acted ? '已行动' : `${u.x},${u.y}`;
+              /*
+               * 成长型单位挂一个"成长 n/m"的角标：它是这一局里唯一会**越打越强**
+               * 的东西，玩家得知道自己带的是半成品，而不是一个弱的英雄。
+               */
+              const grow = growthOf(baseTypeOf(u.type), init.layer);
+              const badge =
+                grow && grow.step < grow.fullAt
+                  ? `<i class="rg-grow">成长 ${grow.step}/${grow.fullAt}</i>`
+                  : '';
               return `<button class="rg-unitrow ${cls} ${done}" data-unit="${u.id}">
-                <span class="n">${escapeHtml(d.name)}</span>
+                <span class="n">${escapeHtml(d.name)}${badge}</span>
                 <span class="s">${u.hp}/${maxHpOf(state, u)} · ${where}</span>
               </button>`;
             })
@@ -279,6 +362,32 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
         : `<p class="rg-dim">还剩 ${foes} 个敌人${foeWorks > 0 ? `、${foeWorks} 处工事` : ''}${
             bCities > 0 ? `、${bCities} 座城` : ''
           }。</p>`;
+
+    /*
+     * 外人：两侧路过的中立单位。
+     *
+     * 这里做的是"场外交涉"——不占回合、不走棋盘，点一下就行：
+     *   · 招募：花钱，它当场变成我方的兵（战后留在队里）；
+     *   · 请走：不花钱，把它从场上拿掉（不想为它绕路，或者怕被它挡道）。
+     * 都是直接改 state，所以**压一次撤回栈**：Ctrl+Z 能连同钱一起退回来。
+     */
+    const ns = neutrals();
+    if (neutralCardEl && neutralEl) {
+      neutralCardEl.hidden = ns.length === 0;
+      const idle = state.current !== 'A' || busy || finished;
+      neutralEl.innerHTML = ns
+        .map((u) => {
+          const d = utype(state, u.type);
+          const cost = recruitCost(u.type);
+          const poor = state.players.A.gold < cost;
+          return `<div class="rg-neutral-row">
+            <span class="n">${escapeHtml(d.name)}<i>${u.hp}/${maxHpOf(state, u)} · 身价 ${utype(state, u.type).cost ?? 0}</i></span>
+            <button class="rg-btn mini" data-recruit="${u.id}" ${poor || idle ? 'disabled' : ''}>招募 ${cost}</button>
+            <button class="rg-btn ghost mini" data-dismiss="${u.id}" ${idle ? 'disabled' : ''}>请走</button>
+          </div>`;
+        })
+        .join('');
+    }
 
     tipEl!.innerHTML = hintText();
     renderSkills();
@@ -574,6 +683,18 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const skillId = target?.closest<HTMLElement>('[data-skill]')?.dataset.skill;
     if (skillId) {
       castSkill(skillId);
+      return;
+    }
+    const rec = target?.closest<HTMLElement>('[data-recruit]')?.dataset.recruit;
+    if (rec) {
+      const u = state.units.find((x) => x.id === rec);
+      if (u) recruitNeutral(u);
+      return;
+    }
+    const dis = target?.closest<HTMLElement>('[data-dismiss]')?.dataset.dismiss;
+    if (dis) {
+      const u = state.units.find((x) => x.id === dis);
+      if (u) dismissNeutral(u);
       return;
     }
     const unitId = target?.closest<HTMLElement>('[data-unit]')?.dataset.unit;

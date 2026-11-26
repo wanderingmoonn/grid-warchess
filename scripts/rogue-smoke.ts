@@ -790,8 +790,14 @@ console.log('\n[15] 中立单位：不主动、AI 不打、被打会还手、不
   const init = battleFor(r, { kind: 'battle', title: 't', sub: '' }, 20);
   check((init.neutral?.length ?? 0) > 0, '这一关有中立单位', JSON.stringify(init.neutral));
   const s = buildBattle(init);
-  const n = s.units.find((u) => u.owner === 'C');
-  check(!!n, '中立单位在场');
+  const allC = s.units.filter((u) => u.owner === 'C');
+  check(allC.length === 2, '中立单位有两个（一左一右）', String(allC.length));
+  check(
+    allC.some((u) => u.x <= 2) && allC.some((u) => u.x >= s.w - 3),
+    '一个贴左边、一个贴右边，不挡中间的道',
+    allC.map((u) => `${u.x},${u.y}`).join(' '),
+  );
+  const n = allC[0];
   check(sameTeam(s, 'B', 'C') && !sameTeam(s, 'A', 'C'), 'AI 视它为友军，玩家与它不同队');
   if (n) {
     const a = s.units.find((u) => u.owner === 'A' && s.unitTypes[u.type]?.category === 'combat');
@@ -824,23 +830,61 @@ console.log('\n[15] 中立单位：不主动、AI 不打、被打会还手、不
 }
 
 // ---------------------------------------------------------------- 16. 试验型方略
-console.log('\n[16] 试验型方略：高代兵 / 英雄开局');
+console.log('\n[16] 试验型方略：成长型英雄 / 成长型坦克');
 {
   const v = startRun(81, 'vanguard');
-  check(v.gold === 120, '试验队开局 120 金', String(v.gold));
+  check(v.gold === 150, '试验队开局 150 金', String(v.gold));
   const vs = buildBattle(battleFor(v, { kind: 'battle', title: 't', sub: '' }, 7));
   check(
-    vs.units.some((u) => u.owner === 'A' && vs.unitTypes[u.type]?.name === '步枪兵'),
-    '试验队能带出高两代的兵',
+    vs.units.some((u) => u.owner === 'A' && vs.unitTypes[u.type]?.name === '坦克'),
+    '试验队能带出高两代的兵（坦克）',
   );
 
   const h = startRun(82, 'champion');
-  check(h.gold === 80, '英雄队开局 80 金', String(h.gold));
+  check(h.gold === 220, '英雄队开局 220 金（一个人要花钱添人）', String(h.gold));
+  check(h.army.length === 1 && h.army[0]?.count === 1, '英雄开局只有一个人', JSON.stringify(h.army));
   const hs = buildBattle(battleFor(h, { kind: 'battle', title: 't', sub: '' }, 7));
   check(
-    hs.units.some((u) => u.owner === 'A' && hs.unitTypes[u.type]?.hero === true),
+    hs.units.filter((u) => u.owner === 'A').length === 1 &&
+      hs.units.some((u) => u.owner === 'A' && hs.unitTypes[u.type]?.hero === true),
     '英雄队能带出英雄（且兵种包已开）',
   );
+
+  /*
+   * 成长：同一个兵，层数越高越强，到它自己的时代是 1（完全体）。
+   * 用 battleFor 的三个层去量，不看公式看结果。
+   */
+  const heroAt = (layer: LayerId) => {
+    const r = startRun(83, 'champion');
+    r.layer = layer;
+    const st = buildBattle(battleFor(r, { kind: 'battle', title: 't', sub: '' }, 9));
+    const u = st.units.find((x) => x.owner === 'A');
+    return u ? utype(st, u.type) : null;
+  };
+  const h1 = heroAt(1);
+  const h2 = heroAt(2);
+  const h3 = heroAt(3);
+  check(!!h1 && !!h2 && h1.atk < h2.atk && h1.maxHp < h2.maxHp, '英雄第 1 层是半成品', `${h1?.atk}/${h2?.atk}`);
+  check(!!h2 && !!h3 && h2.atk === h3.atk && h2.maxHp === h3.maxHp, '英雄在第 2 层（e4 的时代）就长满了', `${h2?.atk}/${h3?.atk}`);
+  check(!!h2 && h2.atk === 36 && h2.maxHp === 170, '完全体就是它自己的数值（36/170）', `${h2?.atk}/${h2?.maxHp}`);
+
+  const tankAt = (layer: LayerId) => {
+    const r = startRun(84, 'vanguard');
+    r.layer = layer;
+    const st = buildBattle(battleFor(r, { kind: 'battle', title: 't', sub: '' }, 9));
+    const u = st.units.find((x) => x.owner === 'A' && st.unitTypes[x.type]?.name === '坦克');
+    return u ? utype(st, u.type) : null;
+  };
+  const t1 = tankAt(1);
+  const t3 = tankAt(3);
+  check(!!t1 && !!t3 && t1.atk < t3.atk && t3.atk === 56, '坦克第 1 层是半成品、第 3 层是 56 攻', `${t1?.atk}/${t3?.atk}`);
+  check((t1?.armor ?? 0) < (t3?.armor ?? 0), '护甲也一起长（减法公式里它最要紧）', `${t1?.armor}/${t3?.armor}`);
+
+  // 进层时要在行记里说一声"它长大了"
+  const gr = startRun(85, 'champion');
+  gr.layer = 1;
+  nextLayer(gr, 7);
+  check(gr.log.some((l) => l.includes('完全体')), '进第 2 层时提示英雄长成完全体', gr.log.slice(-3).join(' / '));
 }
 
 console.log(

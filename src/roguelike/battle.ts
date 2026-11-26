@@ -20,13 +20,13 @@ import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { LevelDef } from '../core/level.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import type { ArmyEntry, BattleInit, BattleResult } from './types.ts';
-import { CULTIVATORS, DEFENSE_UNIT_DEFS } from './data.ts';
+import { CULTIVATORS, DEFENSE_UNIT_DEFS, growthOf } from './data.ts';
 import { makeRng } from './rng.ts';
 
 const VARIANT = 'rg:';
 
 /** 变体兵种的 id 里带着原始兵种 */
-function baseTypeOf(type: string): string {
+export function baseTypeOf(type: string): string {
   if (!type.startsWith(VARIANT)) return type;
   return type.slice(VARIANT.length).split('@')[0] as string;
 }
@@ -334,26 +334,40 @@ function makeLevel(init: BattleInit): {
    */
   const SLACK = 6;
   /*
-   * 中立单位：放在地图正中附近的空地，谁都不挡、谁都不挨着。
+   * 中立单位：站在**战场两侧**（左右边缘、半高），不挡中间那条冲线的路。
+   *
+   * 上一版放在正中：两边都得绕着它走，而且它一被误伤就把仇恨带偏。
+   * 挪到两侧之后它才像"路过的人"——你可以专门绕过去搭理它，也可以当没看见。
    * 先占格子再铺地形，和别的单位一个口径。
    */
   const neutralCells: Cell[] = [];
   const neutralCount = init.neutral?.reduce((n, a) => n + a.count, 0) ?? 0;
   if (neutralCount > 0) {
-    const cx = Math.floor(w / 2);
-    const cy = Math.floor(h / 2);
-    for (let r = 0; r <= Math.max(w, h) && neutralCells.length < neutralCount; r += 1) {
-      for (let dy = -r; dy <= r && neutralCells.length < neutralCount; dy += 1) {
-        for (let dx = -r; dx <= r && neutralCells.length < neutralCount; dx += 1) {
-          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-          const x = cx + dx;
-          const y = cy + dy;
-          if (x < 0 || y < 0 || x >= w || y >= h) continue;
-          if (blocked.has(`${x},${y}`)) continue;
-          blocked.add(`${x},${y}`);
-          neutralCells.push({ x, y });
+    const mid = Math.floor(h / 2);
+    const anchors: Cell[] = [
+      { x: 1, y: mid },
+      { x: w - 2, y: mid },
+      { x: 1, y: mid + 2 },
+      { x: w - 2, y: mid - 2 },
+    ];
+    const free = (c: Cell): boolean =>
+      c.x >= 0 && c.y >= 0 && c.x < w && c.y < h && !blocked.has(`${c.x},${c.y}`);
+    for (let i = 0; i < neutralCount; i += 1) {
+      const a = anchors[i % anchors.length] as Cell;
+      let picked: Cell | null = null;
+      for (let r = 0; r <= Math.max(w, h) && !picked; r += 1) {
+        for (let dy = -r; dy <= r && !picked; dy += 1) {
+          for (let dx = -r; dx <= r && !picked; dx += 1) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+            const c = { x: a.x + dx, y: a.y + dy };
+            if (!free(c)) continue;
+            picked = c;
+          }
         }
       }
+      if (!picked) break;
+      blocked.add(`${picked.x},${picked.y}`);
+      neutralCells.push(picked);
     }
   }
 
@@ -747,7 +761,26 @@ export function buildBattle(init: BattleInit): GameState {
      * 一家独大"的来源。现在它变成"让步兵和弓手跟得上"，骑兵不吃这份加成。
      */
     const addMove = (def && def.move <= 3 ? init.bonusMoveSlow : 0) + moveUp;
-    u.type = variantOf(s, u.type, atk, addMove, init.bonusArmor, init.bonusHp);
+    /*
+     * 成长型单位（试验队 / 英雄）：进场的不是完全体，按层折算。
+     *
+     * 折算写成"系数 − 1"的**差量**，和攻/甲/血的加成走同一套变体机制——
+     * 不需要另注册兵种，也不用改 `unitTypes` 这张全图共用的表。
+     * 第 3 层（它自己的时代）系数是 1，差量为 0，等于没这条。
+     */
+    const grow = growthOf(baseTypeOf(u.type), init.layer);
+    const growAtk = grow ? Math.round((def?.atk ?? 0) * (grow.atk - 1)) : 0;
+    const growHp = grow ? Math.round((def?.maxHp ?? 0) * (grow.hp - 1)) : 0;
+    const growArmor = grow ? Math.round((def?.armor ?? 0) * (grow.armor - 1)) : 0;
+    const growMove = grow ? Math.round((def?.move ?? 0) * (grow.move - 1)) : 0;
+    u.type = variantOf(
+      s,
+      u.type,
+      atk + growAtk,
+      addMove + growMove,
+      init.bonusArmor + growArmor,
+      init.bonusHp + growHp,
+    );
     const v = s.unitTypes[u.type];
     if (v) u.hp = v.maxHp;
   }
