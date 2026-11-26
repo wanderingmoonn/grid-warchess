@@ -1400,6 +1400,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const squads: Squad[] = [];
   /** 这一手在编的进攻编队（要写回记忆，见 `Band`） */
   let outBands: Band[] | undefined;
+  /** 采购要造到多少人（编制之和 + 一批）；没有编队时不设上限 */
+  let outBandNeed: Constraints['bandNeed'];
   /** 决定层给这支编队的任务（W3.6 第 3c 步）：意图在这儿，走不走得通由下面判 */
   const taskOf = (bandId: string) => (decision.bandTasks ?? []).find((t) => t.bandId === bandId);
 
@@ -1669,6 +1671,16 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       });
     }
     outBands = bands;
+    /*
+     * **缺口回传采购**（W3.6 第 5 步）：在编队的编制之和 + 一支预备队。
+     * 采购按这个数发单：补满编制、再留一批，不再"能造就一直造"。
+     */
+    if (bands.length > 0) {
+      outBandNeed = {
+        keep: bands.reduce((n, b) => n + (b.want ?? b.unitIds.length), 0),
+        men: decision.men ?? 0,
+      };
+    }
   } else if (decision.kind === 'defend' && city) {
     /*
      * **守：编队整队召回；太远的继续打**（W3.6 第 3b 步，2026-11-26）。
@@ -2256,6 +2268,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     upgradeBlocked: upgradePlan.blocked,
     lane,
     bands: outBands,
+    bandNeed: outBandNeed,
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,

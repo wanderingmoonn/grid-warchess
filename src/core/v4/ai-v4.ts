@@ -41,6 +41,8 @@ interface TurnCache {
   tried: Set<string>;
   /** 这一回合已经造了几个兵。**必须有上限**，否则钱会被换成兵、一个兵都不走 */
   recruits: number;
+  /** 这一手造的**战斗兵**几个（采购按编队缺口发单时用它算余量） */
+  combatRecruits: number;
 }
 
 let cache: TurnCache | null = null;
@@ -97,7 +99,7 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
   };
   writeMemory(s, me, nextMem);
   logLane(s, con, nextMem);
-  cache = { key, world, decision, con, tried: new Set(), recruits: 0 };
+  cache = { key, world, decision, con, tried: new Set(), recruits: 0, combatRecruits: 0 };
   logSquads(s, world.me, decision, con, nextMem);
   return cache;
 }
@@ -478,6 +480,7 @@ function logLane(s: GameState, con: Constraints, mem: V4Memory): void {
           .map(
             (r) =>
               `${r.id}[${r.state === 'forming' ? '集' : (r.order ?? '?')}] ${r.alive}/${r.men}` +
+              `${r.want > r.alive ? `(缺${r.want - r.alive})` : ''}` +
               ` 掉${r.lost} 到${r.arrived}${r.stuck ? ` 堵${r.stuck}` : ''}` +
               `${r.turnsToTarget !== undefined ? ` 距${r.turnsToTarget}手` : ''}`,
           )
@@ -632,16 +635,28 @@ export function aiNextActionV4(
      * 所以这一步 33 道题的读数必须一字不变。
      */
     const sp = view.decision.spend;
+    /*
+     * **采购按编队缺口发单**（W3.6 第 5 步，2026-11-26）。
+     *
+     * 试过"按编制封顶"（编制之和 + 一支预备队就停），**实测不行**：E-2-03 是一道
+     * "把 4000 金变成战力"的题，场上只有两个 1 人小队、编制也是 1，封顶 5 个就停了，
+     * 部队战力 897 → 454，直接翻红。
+     * 结论：**编制是"最少要几个"，不是"最多造几个"**——采购该按缺口补员、按产兵格刹车，
+     * 不该拿编制去封顶。"缺员时优先造兵"那条在决定层的 `withSpend` 里做。
+     */
+    const army = recruitAction(s, world, con.need, con.spendCap);
     const rec =
       sp.mode === 'save'
         ? null
         : sp.mode === 'econOnly'
           ? recruitEcon(s, world, con)
           : sp.mode === 'econThenArmy'
-            ? recruitEcon(s, world, con) ?? recruitAction(s, world, con.need, con.spendCap)
-            : recruitAction(s, world, con.need, con.spendCap);
+            ? recruitEcon(s, world, con) ?? army
+            : army;
     if (usable(rec)) {
       view.recruits += 1;
+      /* 只记战斗兵：经济兵不占编队的编制 */
+      if (rec.type === 'RECRUIT' && rec.unitType !== con.econNext?.type) view.combatRecruits += 1;
       return rec;
     }
   }
@@ -712,6 +727,8 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   exchange?: V4Memory['exchange'];
   /** W3.6 第 6 步：每支编队的体检（纯观测，没人读它做判断） */
   bands?: BandReport[];
+  /** W3.6 第 5 步：采购要造到多少人（编制之和 + 一支预备队） */
+  bandNeed?: Constraints['bandNeed'];
 } {
   const v = currentView(s, me);
   return {
@@ -726,6 +743,7 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
     exchangeByCity: memoryOf(s, me).exchangeByCity ?? {},
     exchange: memoryOf(s, me).exchange ?? [],
     bands: bandReports(s, v.con, memoryOf(s, me)),
+    bandNeed: v.con.bandNeed,
   };
 }
 
@@ -761,6 +779,7 @@ function bandReports(
       id: b.id,
       cityId: b.cityId,
       men,
+      want: b.want ?? men,
       alive,
       lost: Math.max(0, men - alive),
       state: (b.state ?? 'forming') as BandReport['state'],

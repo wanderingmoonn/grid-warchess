@@ -55,7 +55,21 @@ type BareDecision = Omit<Decision, 'spend'>;
  * 重建费那份钱是**决定的一部分**（"攒够 248 再进城"），不是采购时临时想起来的数。
  * 约束层只负责把它传给打分层，不再自己算第二遍。
  */
-function withSpend(s: GameState, world: World, d: BareDecision): Decision {
+/**
+ * **编队还缺几个人**（W3.6 第 5 步）：在编队的编制之和 − 现在还活着的人数。
+ *
+ * 只数"已出发"的队：收拢中的队本来就按编制在补，不该再喊缺人（否则永远在补兵）。
+ */
+function bandGap(s: GameState, mem: V4Memory | undefined): number {
+  return (mem?.bands ?? [])
+    .filter((b) => (b.state ?? 'forming') === 'marching')
+    .reduce((n, b) => {
+      const alive = b.unitIds.filter((id) => s.units.some((u) => u.id === id)).length;
+      return n + Math.max(0, (b.want ?? b.unitIds.length) - alive);
+    }, 0);
+}
+
+function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory): Decision {
   /*
    * **"看不见敌人"要把能开火的建筑算进去**（2026-11-26，P-2-01 逼出来的）。
    *
@@ -94,6 +108,26 @@ function withSpend(s: GameState, world: World, d: BareDecision): Decision {
           d.stage === 'enter'
             ? `钱够了，这一手的 ${cost} 金留给重建费，不采购（现有 ${gold}）`
             : `攒 ${cost} 金重建，这一手最多花 ${cap}（现有 ${gold}）`,
+      },
+    };
+  }
+
+  /*
+   * **② 前面插一条：编队缺员时，先补兵**（W3.6 第 5 步，2026-11-26）。
+   *
+   * "采购认编队"落在这一句上：编队报的缺口（编制 − 现在几个人）不为零，说明前线有人
+   * 在死、后面没人接。这时候还按"先经济、再补兵"排，等于看着它打光。
+   *
+   * 只改**排序**（经济兵让位给战斗兵），不加任何系数：缺口是数出来的，
+   * 有缺口就先兵，没缺口照旧走原来的模式。
+   */
+  if (d.kind === 'expand' && bandGap(s, mem) > 0) {
+    return {
+      ...d,
+      spend: {
+        mode: 'army',
+        untilTurn: keep,
+        why: `编队还缺 ${bandGap(s, mem)} 个人，先补兵（不先铺经济）`,
       },
     };
   }
@@ -185,7 +219,7 @@ function bandTasksOf(world: World, mem: V4Memory | undefined, d: BareDecision): 
 }
 
 function complete(s: GameState, world: World, mem: V4Memory | undefined, d: BareDecision): Decision {
-  const dec = withSpend(s, world, d);
+  const dec = withSpend(s, world, d, mem);
   return { ...dec, upgrade: upgradeOf(s, world, mem, dec), bandTasks: bandTasksOf(world, mem, dec) };
 }
 
