@@ -3242,6 +3242,9 @@ export function attackableTargets(s: GameState, unit: Unit): Unit[] {
   return s.units.filter(
     (u) =>
       u.owner !== unit.owner &&
+      // 同盟：友军不能被列为目标（AI 的候选表也走这里，少了这条它会反复
+      // 提一个"不能攻击友军"的动作，把回合耗在队友身上）
+      !sameTeam(s, unit.owner, u.owner) &&
       canStrike(s, unit, u) &&
       // 看得见才打得到（开雾时才管）。派生的候选列表和真正的校验共用这一条，
       // 否则 AI 会提一个必被拒的动作，界面也会画一个点不动的红框。
@@ -3261,6 +3264,7 @@ export function siegeTargets(s: GameState, unit: Unit): City[] {
   // 和野战用同一条规则，不另开一套。
   return s.cities.filter((c) => {
     if (c.owner === unit.owner) return false;
+    if (sameTeam(s, c.owner, unit.owner)) return false;
     // 城只在地球上；月球上的部队没有城可砸。同一条"几何只看同一张图"。
     if (boardIdOf(c) !== boardIdOf(unit)) return false;
     // 废墟不用再砸：它已经没有耐久可打，接下来该做的是派兵进去

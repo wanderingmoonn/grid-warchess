@@ -74,14 +74,14 @@ function showStart(root: HTMLElement): void {
       <section class="rg-strategies">
         ${STRATEGIES.map(
           (s) => `<button class="rg-strategy" data-strategy="${s.id}">
-            <b>${s.name}</b>
+            <b>${s.name}${s.tag ? `<u class="rg-strat-tag">${s.tag}</u>` : ''}</b>
             <i>${s.sub}</i>
             <span>${armyText(s.army)}</span>
             <em>${s.passive}</em>
           </button>`,
         ).join('')}
       </section>
-      <p class="rg-note">选一个方略出发。开局 180 金、三层房图随机、敌人编成随时代钟变硬。</p>
+      <p class="rg-note">选一个方略出发。开局 80–180 金（方略不同）、三层房图随机、敌人编成随时代钟变硬。</p>
     </div>`;
 
   // 用 onclick 而不是 addEventListener：回到开局页会重跑这一段，

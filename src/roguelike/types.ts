@@ -166,11 +166,22 @@ export interface BattleInit {
    * 玩家只有守城战（special）才有城，所以这一项仍然是敌方的。
    */
   enemyCityCount: 0 | 1 | 2;
-  /** 玩家有没有城（只有守城战有：你要守的就是它） */
+  /**
+   * 玩家（A 席）有没有城。
+   *
+   * 2026-11-26 起守城战改成三席：城在**友军 B 席**手里，玩家只作为支援入场，
+   * 所以这个字段在守城战里是 false。留着它是给"玩家自己守城"的老关卡。
+   */
   playerCity: boolean;
+  /** 守城战：友军（B 席）有没有城（有城才有城防、才有"守满 N 轮"的目标） */
+  allyCity: boolean;
+  /** 守城战：友军自带的守军 */
+  allyArmy: ArmyEntry[];
+  /** 守城战：友军城边的工事（塔/墙） */
+  allyDefense: ArmyEntry[];
   /** 敌方的防御工事：摆在城边 / 阵地上的塔与墙（空数组 = 没有） */
   enemyDefense: ArmyEntry[];
-  /** 玩家侧的防御工事（守城战给一座塔一段墙） */
+  /** 玩家侧的防御工事（老关卡用；守城战现在归友军） */
   playerDefense: ArmyEntry[];
   /** 守城战：守住这么多轮就算赢（0 = 不是守城战） */
   holdRounds: number;
@@ -206,6 +217,13 @@ export interface BattleInit {
   cityDamage: number;
   /** 本场临时兵 */
   tempUnits: ArmyEntry[];
+  /**
+   * **中立单位**（不主动攻击、AI 也不打它，但被打会反击）。
+   *
+   * 实现方式：占一个隐藏席位 C，并把它编进 B 的队里——AI 眼里它是友军，
+   * 不会去碰；玩家和它不同队，可以打；它自己永远不行动。
+   */
+  neutral?: ArmyEntry[];
   relics: string[];
   strategyId: string;
   seed: number;

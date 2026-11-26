@@ -13,6 +13,7 @@
  */
 import type { LayerId, EventDef, ArmyEntry } from './types.ts';
 import { expansionUnitsFor } from '../core/setup.ts';
+import { EXPANSIONS } from '../core/expansions.ts';
 
 /** 兵种中文名 */
 export const UNIT_NAME: Record<string, string> = {
@@ -374,6 +375,14 @@ export interface Strategy {
   sub: string;
   army: ArmyEntry[];
   passive: string;
+  /** 开局金币（缺省 180）：试验型方略会穷一点 */
+  gold?: number;
+  /** 角标：`试验` 表示强度没调，先放出来试 */
+  tag?: string;
+  /** 试验型的补偿：敌方多几个人（你带了不该带的东西，对面也加派了人手） */
+  enemyBonus?: number;
+  /** 试验型的补偿：敌方预算乘这个系数 */
+  power?: number;
 }
 
 export const STRATEGIES: Strategy[] = [
@@ -410,7 +419,57 @@ export const STRATEGIES: Strategy[] = [
     ],
     passive: '我军全体移动 +1',
   },
+  /*
+   * ---- 试验型（2026-11-26）----
+   *
+   * 这两条是"把后面的东西提前给你"，**强度没调**：高两代的兵和英雄在
+   * 第一层是降维打击，而敌方编成只跟人数走（你人少，它更少）。
+   * 放出来是为了先摸手感——数值和代价等试完再定。
+   * 代价先给"穷"：新家伙要钱，开局少一截。
+   */
+  {
+    id: 'vanguard',
+    name: '试验队',
+    sub: '上面发下来的新枪，没人会用',
+    tag: '试验',
+    gold: 120,
+    enemyBonus: 1,
+    power: 1.35,
+    army: [
+      { type: 'rifleman', count: 1 },
+      { type: 'militia', count: 2 },
+      { type: 'archer', count: 1 },
+    ],
+    passive: '开局带 1 个高两代的兵（步枪兵）',
+  },
+  {
+    id: 'champion',
+    name: '英雄',
+    sub: '一个人就是一支队伍',
+    tag: '试验',
+    gold: 80,
+    enemyBonus: 1,
+    power: 1.6,
+    army: [
+      { type: 'holy-knight-lord', count: 1 },
+      { type: 'militia', count: 2 },
+    ],
+    passive: '开局带 1 位英雄（神圣骑士长）',
+  },
 ];
+
+/**
+ * 兵种 → 它来自哪个扩展包。
+ *
+ * 试验型方略会带"这一层本来不该有"的兵（奇想的英雄、后面的枪）。
+ * `createMatch` 只注册**已开启扩展**的兵种，不把包带上的话，部署时会被
+ * 当成"不存在的兵"直接跳过——玩家点了英雄，场上却只有两个民兵。
+ */
+export const UNIT_PACK: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const e of EXPANSIONS) for (const u of e.units ?? []) out[u.id] = e.id;
+  return out;
+})();
 
 export function strategyById(id: string): Strategy {
   return STRATEGIES.find((s) => s.id === id) ?? (STRATEGIES[0] as Strategy);

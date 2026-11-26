@@ -46,6 +46,12 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   let enemyRecruited = 0;
   /** 守城战：下一波还没到的那一波 */
   let waveIdx = 0;
+  /** 三席守城：B 是友军、C 是攻方；两席局敌人仍是 B */
+  const foeSeat = init.allyCity ? ('C' as const) : ('B' as const);
+  /** 这一局几个席位：回合按"每人一次"算，不能写死 /2 */
+  const hiddenSeats = state.config.level?.seats?.hidden?.length ?? 0;
+  const seats = Math.max(1, (state.config.playerCount ?? 2) - hiddenSeats);
+  const roundsNow = (): number => Math.ceil(state.turn / seats);
   /**
    * 正在等落点的技能。
    *
@@ -115,7 +121,15 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const def = utype(state, u.type);
     const lines = describeUnit(state, def, u.owner, u);
     const hp = `${u.hp}/${maxHpOf(state, u)}`;
-    return `<div class="rg-hc-head"><b>${escapeHtml(def.name)}</b><i>${u.owner === 'A' ? '我方' : '敌方'}</i></div>
+    const side =
+      u.owner === 'A'
+        ? '我方'
+        : init.allyCity && u.owner === 'B'
+          ? '友军'
+          : !init.allyCity && u.owner === 'C'
+            ? '中立'
+            : '敌方';
+    return `<div class="rg-hc-head"><b>${escapeHtml(def.name)}</b><i>${side}</i></div>
       <div class="rg-hc-hp"><span style="width:${Math.max(0, Math.min(100, (u.hp / Math.max(1, maxHpOf(state, u))) * 100))}%"></span><em>${hp}</em></div>
       <div class="rg-hc-stats">${escapeHtml(unitStatLine(def))}</div>
       ${lines.map((l) => `<div class="rg-hc-line">${escapeHtml(l)}</div>`).join('')}`;
@@ -211,19 +225,22 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     };
     renderBoard(boardEl as HTMLElement, playerView(state, 'A'), ui);
 
-    const rounds = Math.ceil(state.turn / 2);
+    const rounds = roundsNow();
     /*
      * 人数只数**战斗单位**：守城战时玩家有塔和墙，它们不是"人"，
      * 混进"我 5"里会让人以为还剩五个兵，其实只剩三个。
      */
-    const combatOf = (owner: 'A' | 'B'): number =>
+    const combatOf = (owner: 'A' | 'B' | 'C' | 'D'): number =>
       unitsOf(state, owner).filter((u) => state.unitTypes[u.type]?.category === 'combat').length;
-    const worksOf = (owner: 'A' | 'B'): number =>
+    const worksOf = (owner: 'A' | 'B' | 'C' | 'D'): number =>
       unitsOf(state, owner).filter((u) => state.unitTypes[u.type]?.category === 'building').length;
     const mine = combatOf('A');
     const myWorks = worksOf('A');
-    const foes = combatOf('B');
-    const foeWorks = worksOf('B');
+    // 三席：B 是友军、C 是敌人；两席：B 就是敌人
+    const allies = init.allyCity ? combatOf('B') : 0;
+    const allyWorks = init.allyCity ? worksOf('B') : 0;
+    const foes = combatOf(foeSeat);
+    const foeWorks = worksOf(foeSeat);
     const timer =
       init.holdRounds > 0
         ? `<span>守 <b>${Math.min(rounds, init.holdRounds)}</b>/${init.holdRounds} 轮</span>`
@@ -231,9 +248,9 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const left = init.waves.filter((w) => w.atRound > rounds).length;
     hudEl!.innerHTML = `
       ${timer}
-      <span>我 <b>${mine}</b>${myWorks > 0 ? `（工事 ${myWorks}）` : ''} · 敌 <b>${foes}</b>${
-        foeWorks > 0 ? `（工事 ${foeWorks}）` : ''
-      }</span>
+      <span>我 <b>${mine}</b>${myWorks > 0 ? `（工事 ${myWorks}）` : ''}${
+        init.allyCity ? ` · 友 <b>${allies}</b>${allyWorks > 0 ? `（工事 ${allyWorks}）` : ''}` : ''
+      } · 敌 <b>${foes}</b>${foeWorks > 0 ? `（工事 ${foeWorks}）` : ''}</span>
       ${init.holdRounds > 0 ? `<span>还有 <b>${left}</b> 波</span>` : ''}
       <span>${state.current === 'A' ? (busy ? '对方行动中…' : '轮到你') : '对方行动中…'}</span>`;
 
@@ -254,7 +271,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
             })
             .join('');
 
-    const bCities = state.cities.filter((c) => c.owner === 'B' && !c.ruined).length;
+    // 敌人手里的城：三席守城战里 B 是友军，不能把它的城算成敌人的
+    const bCities = state.cities.filter((c) => c.owner === foeSeat && !c.ruined).length;
     foeEl!.innerHTML =
       foes === 0 && foeWorks === 0
         ? '<p class="rg-dim">对面已经没人了。</p>'
@@ -375,7 +393,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const outcome = outcomeOf(state, init);
     if (!outcome) {
       // 超时：小图打到二十几轮还没结果，就是"两边都不想打"
-      if (Math.ceil(state.turn / 2) > init.roundLimit) {
+      if (roundsNow() > init.roundLimit) {
         finished = true;
         flashTip('拖太久了：这一战按撤退算。');
         window.setTimeout(() => {
@@ -401,9 +419,9 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     let came = false;
     while (waveIdx < init.waves.length) {
       const wave = init.waves[waveIdx] as BattleInit['waves'][number];
-      if (wave.atRound > Math.ceil(state.turn / 2)) break;
+      if (wave.atRound > roundsNow()) break;
       waveIdx += 1;
-      const units = spawnWave(state, wave.types, init.seed ^ (waveIdx * 7919));
+      const units = spawnWave(state, wave.types, init.seed ^ (waveIdx * 7919), foeSeat);
       if (units.length === 0) continue;
       came = true;
       flashTip(`第 ${waveIdx + 1} 波到了：${units.length} 个兵`);
@@ -422,39 +440,45 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
      * 玩家没有城，本来就没法补；让对面能补就是单方面加血——实测攻坚关里
      * 敌人每两回合摸出一个民兵，玩家再能打也磨不过。`AiBudget` 就是现成的闸门。
      */
-    /*
-     * 有城的关卡允许敌人补员（最多 init.enemyRecruit 个），没城的关卡一个都不给——
-     * 那是"开局编队"的仗。补员要占它的金币，所以城是有价值的，但撑不了无限磨。
-     */
     const budget: AiBudget = {
       ...DEFAULT_BUDGET,
       // 整场总量，不是每回合：额度减掉已经补过的，补满就再也不补
       maxRecruit: Math.max(0, init.enemyRecruit - enemyRecruited),
       maxUpgrade: 0,
     };
-    const rejected = new Set<string>();
-    for (let i = 0; i < AI_MAX_STEPS; i += 1) {
-      if (disposed || finished || state.current !== 'B' || outcomeOf(state, init)) break;
-      const action = aiNextAction(state, budget, rejected);
-      if (!action) break;
-      const r = step(state, action);
-      if (!r.ok) {
-        rejected.add(aiActionKey(action));
-        continue;
+    /*
+     * 三席局里"对面"不止一家：A 交棒之后要依次跑完 B（友军）和 C（攻方），
+     * 直到轮回 A 为止。用 `state.current` 当循环条件，席位数由关卡决定，
+     * 两席局的行为一个字没变。
+     */
+    while (!disposed && !finished && state.current !== 'A' && !outcomeOf(state, init)) {
+      const seat = state.current;
+      const rejected = new Set<string>();
+      for (let i = 0; i < AI_MAX_STEPS; i += 1) {
+        if (disposed || finished || state.current !== seat || outcomeOf(state, init)) break;
+        const action = aiNextAction(state, budget, rejected);
+        if (!action) break;
+        const r = step(state, action);
+        if (!r.ok) {
+          rejected.add(aiActionKey(action));
+          continue;
+        }
+        rejected.clear();
+        state = r.state;
+        if (action.type === 'RECRUIT') {
+          budget.recruited += 1;
+          enemyRecruited += 1;
+        }
+        if (action.type === 'UPGRADE') budget.upgraded += 1;
+        render();
+        await sleep(40);
       }
-      rejected.clear();
-      state = r.state;
-      if (action.type === 'RECRUIT') {
-        budget.recruited += 1;
-        enemyRecruited += 1;
+      if (!disposed && !finished && state.current === seat && !outcomeOf(state, init)) {
+        const end = step(state, { type: 'END_TURN' });
+        if (!end.ok) break;
+        state = end.state;
       }
-      if (action.type === 'UPGRADE') budget.upgraded += 1;
       render();
-      await sleep(40);
-    }
-    if (!disposed && !finished && state.current === 'B' && !outcomeOf(state, init)) {
-      const end = step(state, { type: 'END_TURN' });
-      if (end.ok) state = end.state;
     }
     busy = false;
     arrivalWaves();
@@ -561,7 +585,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
 
   arrivalWaves();
   render();
-  if (state.current === 'B') void runAi();
+  if (state.current !== 'A') void runAi();
 
   return () => {
     disposed = true;

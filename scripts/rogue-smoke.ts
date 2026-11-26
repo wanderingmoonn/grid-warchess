@@ -32,7 +32,7 @@ import {
   STEPS_PER_LAYER,
 } from '../src/roguelike/run.ts';
 import { DECISIONS, DEFENSE_UNIT_DEFS, EVENTS, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
-import { isEliminated, utype } from '../src/core/rules.ts';
+import { attackableTargets, isEliminated, sameTeam, utype } from '../src/core/rules.ts';
 import { buildBattle, outcomeOf, resultOf, spawnWave, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
 import type { LayerId, RoomKind, RunState } from '../src/roguelike/types.ts';
@@ -413,39 +413,40 @@ console.log('\n[8] 精英战有塔、层末有城有塔、守城战有城守得�
 
   const spInit = battleFor(run, { kind: 'special', title: '守城战', sub: '', special: { faction: 0, name: '守墙人', unit: 'knight' } }, 6);
   const sp = buildBattle(spInit);
-  check(sp.cities.filter((c) => c.owner === 'A').length === 1, '守城战：玩家第一次有城');
-  check(sp.cities.find((c) => c.owner === 'A')!.maxHp > 45, '守城战：城被加固过', `maxHp=${sp.cities.find((c) => c.owner === 'A')!.maxHp}`);
+  check(sp.cities.filter((c) => c.owner === 'B').length === 1, '守城战：城在友军 B 手里');
+  const allyCity = sp.cities.find((c) => c.owner === 'B');
+  check(!!allyCity && allyCity.maxHp > 45, '守城战：友军的城被加固过', `maxHp=${allyCity?.maxHp}`);
   check(
-    sp.units.filter((u) => u.owner === 'A' && sp.unitTypes[u.type]?.category === 'building').length >= 1,
-    '守城战：玩家有一座塔',
+    sp.units.filter((u) => u.owner === 'B' && sp.unitTypes[u.type]?.category === 'building').length >= 1,
+    '守城战：友军城边有工事',
   );
-  check(spInit.holdRounds > 0 && spInit.waves.length >= 2, '守城战：有回合目标与至少两波援军');
+  check(spInit.holdRounds > 0 && spInit.waves.length >= 3, '守城战：有回合目标与至少三波援军');
   check(spInit.holdRounds === 6 + run.layer, '守城轮数按层给（L1 七轮）', String(spInit.holdRounds));
   check(spInit.enemyDoctrine === 'rush', '守城战的敌人是来攻城的（rush）');
 
-  // 波次真的能上场
-  const before = sp.units.filter((u) => u.owner === 'B').length;
-  const wave = spawnWave(sp, spInit.waves[0]!.types, 77);
-  check(wave.length > 0 && sp.units.filter((u) => u.owner === 'B').length > before, '波次能把新兵摆到场上');
+  // 波次真的能上场（第三席 C = 攻方）
+  const before = sp.units.filter((u) => u.owner === 'C').length;
+  const wave = spawnWave(sp, spInit.waves[0]!.types, 77, 'C');
+  check(wave.length > 0 && sp.units.filter((u) => u.owner === 'C').length > before, '波次能把新兵摆到场上');
   check(wave.every((u) => u.y <= 3), '波次从地图上沿进场', wave.map((u) => `${u.x},${u.y}`).join(' '));
 
   /*
    * 守满 N 轮：把回合拨到"第 N 轮结束"，再让双方各走一次。
    * 判的是"已经打完的轮数"（floor(turn/2)），所以拨到 2N-1 起手正好。
    */
-  sp.turn = spInit.holdRounds * 2 - 1;
+  // 三席：一轮 = 三次行动。拨到"第 N 轮最后一次行动"之前，走完就满 N 轮
+  sp.turn = spInit.holdRounds * 3 - 1;
   sp.current = 'A';
   const e1 = step(sp, { type: 'END_TURN' });
-  const e2 = e1.ok ? step(e1.state, { type: 'END_TURN' }) : e1;
   check(
-    e1.ok && e2.ok && outcomeOf(e2.state, spInit) === 'win',
+    e1.ok && outcomeOf(e1.state, spInit) === 'win',
     '守到 N 轮之后判玩家赢',
-    `turn=${e2.state.turn} outcome=${outcomeOf(e2.state, spInit)}`,
+    `turn=${e1.ok ? e1.state.turn : '-'} outcome=${e1.ok ? outcomeOf(e1.state, spInit) : '-'}`,
   );
 
   // 城被砸平：哪怕人还在，也算没守住
   const razed = buildBattle(spInit);
-  const ownCity = razed.cities.find((c) => c.owner === 'A');
+  const ownCity = razed.cities.find((c) => c.owner === 'B');
   if (ownCity) ownCity.ruined = true;
   check(outcomeOf(razed, spInit) === 'lose', '城被砸平就算输（哪怕人还在）');
 }
@@ -752,6 +753,94 @@ console.log('\n[13] 我方金币计入敌方编成、工事换成守军编制');
   sp.army = [{ type: 'berserker', count: 5 }];
   const spInit = battleFor(sp, { kind: 'special', title: 't', sub: '' }, 11);
   check(spInit.enemyDefense.length === 0, '守城战的攻方没有工事编制');
+}
+
+// ---------------------------------------------------------------- 14. 三席守城
+console.log('\n[14] 守城战：三席、城在友军手里、攻方加波');
+{
+  const r = startRun(61, 'frontier');
+  r.layer = 2;
+  r.world = 'fantasy';
+  r.army = [{ type: 'berserker', count: 3 }, { type: 'elf-archer', count: 3 }];
+  const init = battleFor(r, { kind: 'special', title: '守城战', sub: 't' }, 4242);
+  check(init.allyCity === true && init.playerCity === false, '守城战：城在友军 B 手里，玩家无城');
+  check(init.allyArmy.length > 0 && init.allyDefense.length > 0, '友军自带守军与工事', `${init.allyArmy.length}/${init.allyDefense.length}`);
+  check(init.waves.length === 3 && init.waves[0]?.atRound === 2, '攻方四波（开场 + 2/4/6 轮）', JSON.stringify(init.waves.map((w) => w.atRound)));
+
+  const s = buildBattle(init);
+  check(s.config.playerCount === 3, '三席', String(s.config.playerCount));
+  check(s.cities.some((c) => c.owner === 'B' && !c.ruined), '城归友军 B');
+  check(JSON.stringify(s.config.level?.seats?.teams) === JSON.stringify([['A', 'B'], ['C']]), 'A/B 同盟、C 单列');
+  check(s.units.some((u) => u.owner === 'C'), '攻方 C 在场上');
+  check(s.config.holdWinner === true, '守城战自己判胜负（不让引擎按全灭收场）');
+  check(
+    s.units.filter((u) => u.owner === 'B' && s.unitTypes[u.type]?.category === 'combat').length > 0,
+    '友军有兵（不是光一座城）',
+  );
+}
+
+// ---------------------------------------------------------------- 15. 中立单位
+console.log('\n[15] 中立单位：不主动、AI 不打、被打会还手、不参与胜负');
+{
+  const r = startRun(91, 'frontier');
+  r.layer = 1;
+  r.world = 'base';
+  r.gold = 0;
+  r.army = [{ type: 'ge', count: 4 }, { type: 'archer', count: 2 }];
+  const init = battleFor(r, { kind: 'battle', title: 't', sub: '' }, 20);
+  check((init.neutral?.length ?? 0) > 0, '这一关有中立单位', JSON.stringify(init.neutral));
+  const s = buildBattle(init);
+  const n = s.units.find((u) => u.owner === 'C');
+  check(!!n, '中立单位在场');
+  check(sameTeam(s, 'B', 'C') && !sameTeam(s, 'A', 'C'), 'AI 视它为友军，玩家与它不同队');
+  if (n) {
+    const a = s.units.find((u) => u.owner === 'A' && s.unitTypes[u.type]?.category === 'combat');
+    const b = s.units.find((u) => u.owner === 'B' && s.unitTypes[u.type]?.category === 'combat');
+    if (a) {
+      a.x = n.x;
+      a.y = n.y + 1;
+      check(attackableTargets(s, a).some((t) => t.id === n.id), '玩家能把它列为目标');
+    }
+    if (b) {
+      b.x = n.x;
+      b.y = n.y - 1;
+      check(!attackableTargets(s, b).some((t) => t.id === n.id), 'AI 不会把它列为目标');
+    }
+    // 打它一下：它要还手
+    if (a) {
+      const beforeHp = a.hp;
+      const hit = step(s, { type: 'ATTACK', unitId: a.id, targetId: n.id, x: n.x, y: n.y });
+      check(hit.ok && (hit.state.units.find((u) => u.id === a.id)?.hp ?? 0) < beforeHp, '攻击中立单位会遭到反击');
+    }
+    check((s.config.level?.seats?.hidden ?? []).includes('C'), '中立单位躲在"隐藏席位"里（不占回合）');
+  }
+
+  // 胜负不把中立算进去：打光 B，A 仍然赢
+  const win = buildBattle(init);
+  for (const u of win.units) if (u.owner === 'B') u.hp = 0;
+  win.units = win.units.filter((u) => u.hp > 0);
+  const end = step(win, { type: 'END_TURN' });
+  check(end.ok && end.state.winner === 'A' && end.state.units.some((u) => u.owner === 'C'), '中立单位不挡胜利');
+}
+
+// ---------------------------------------------------------------- 16. 试验型方略
+console.log('\n[16] 试验型方略：高代兵 / 英雄开局');
+{
+  const v = startRun(81, 'vanguard');
+  check(v.gold === 120, '试验队开局 120 金', String(v.gold));
+  const vs = buildBattle(battleFor(v, { kind: 'battle', title: 't', sub: '' }, 7));
+  check(
+    vs.units.some((u) => u.owner === 'A' && vs.unitTypes[u.type]?.name === '步枪兵'),
+    '试验队能带出高两代的兵',
+  );
+
+  const h = startRun(82, 'champion');
+  check(h.gold === 80, '英雄队开局 80 金', String(h.gold));
+  const hs = buildBattle(battleFor(h, { kind: 'battle', title: 't', sub: '' }, 7));
+  check(
+    hs.units.some((u) => u.owner === 'A' && hs.unitTypes[u.type]?.hero === true),
+    '英雄队能带出英雄（且兵种包已开）',
+  );
 }
 
 console.log(

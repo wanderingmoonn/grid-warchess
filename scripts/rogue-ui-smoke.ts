@@ -57,7 +57,8 @@ console.log('\n[1] 开局');
 bootRogue(root);
 check(!!root.querySelector('.rg-start'), '显示方略选择');
 const cards = root.querySelectorAll('.rg-strategy');
-check(cards.length === 3, '三个方略都在');
+check(cards.length >= 3, '方略卡片都在', `${cards.length} 个`);
+check(root.querySelectorAll('.rg-strat-tag').length >= 2, '试验型方略有角标');
 
 console.log('\n[2] 房间图');
 click(cards[0] as Element);

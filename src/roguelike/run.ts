@@ -18,6 +18,7 @@ import {
   RELICS,
   REST_OPTIONS,
   STRATEGIES,
+  UNIT_PACK,
   eventById,
   pickEnemyTypes,
   relicById,
@@ -208,6 +209,13 @@ export function armyCost(army: ArmyEntry[]): number {
   return army.reduce((n, a) => n + costOf(a.type) * a.count, 0);
 }
 
+/** string[] → ArmyEntry[]（同型号合并） */
+function toArmy(types: string[]): ArmyEntry[] {
+  const m = new Map<string, number>();
+  for (const t of types) m.set(t, (m.get(t) ?? 0) + 1);
+  return [...m.entries()].map(([type, count]) => ({ type, count }));
+}
+
 export function armyText(army: ArmyEntry[]): string {
   if (army.length === 0) return '（空）';
   return army.map((a) => `${unitName(a.type)}×${a.count}`).join('、');
@@ -355,7 +363,7 @@ export function startRun(seed: number, strategyId: string): RunState {
     world: 'base',
     layer: 1,
     step: 0,
-    gold: 180,
+    gold: strategy.gold ?? 180,
     army,
     relics: [],
     plan: planLayer(1, rng, themeFor('base', 1)),
@@ -759,6 +767,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const isBoss = node.kind === 'boss';
   const isSpecial = node.kind === 'special';
   const myCount = armyCount(run.army);
+  const strat = strategyById(run.strategyId);
   const idx = isBoss ? 3 : node.kind === 'siege' ? 2 : node.kind === 'elite' ? 1 : 0;
   /*
    * 敌人池按时代钟分三段（不再是"当代 / 高代"两段）：
@@ -838,7 +847,8 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
    */
   const structures = enemyDefense.reduce((n, d) => n + d.count, 0);
   const defenseCrew = structures > 0 ? Math.max(1, Math.ceil(structures / 2)) : 0;
-  const headcount = enemyHeadcount(node.kind, run.layer, myCount) + goldHeads + defenseCrew;
+  const headcount =
+    enemyHeadcount(node.kind, run.layer, myCount) + goldHeads + defenseCrew + (strat.enemyBonus ?? 0);
 
   /*
    * 地图要跟人数一起长。
@@ -854,7 +864,13 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
 
   const clockForScale = isBoss ? STEPS_PER_LAYER : run.clock;
-  const power = WORLDS[run.world].power ?? 1;
+  /*
+   * 世界难度 × 试验型方略的补偿系数。
+   *
+   * 试验队带着四代枪、英雄队带着一个 470 造价的英雄进第一层——不给对面
+   * 加派点人手，这两条就是"点一下就赢"，试不出任何手感。
+   */
+  const power = (WORLDS[run.world].power ?? 1) * (strat.power ?? 1);
   const scale = enemyScale(run.layer, node.kind, headcount, pool, clockForScale, power);
 
   /*
@@ -892,22 +908,36 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   let enemyTypes = sanitizeAir(pickEnemyTypes(pool, troopBudget, valueOf, troopHead, isHero), run, theme);
   let holdRounds = 0;
   let roundLimit: number;
+  /*
+   * 守城战：**三席**。
+   *
+   * A = 玩家（支援，无城）、B = 友军（有城、自带守军与工事）、C = 攻方。
+   * 城在 B 手里，玩家只负责补位——这是"帮别人守"该有的样子：城不是你的，
+   * 兵也不是你的。攻方因此要更强（守方多了一席），波次从 3 波加到 4 波。
+   */
+  const allyArmy: ArmyEntry[] = [];
+  const allyDefense: ArmyEntry[] = [];
   if (isSpecial) {
+    const allyCount = 2 + run.layer;
+    const allyBudget = enemyScale(run.layer, 'special', allyCount, pool, clockForScale, power).budget * 0.7;
+    allyArmy.push(...toArmy(sanitizeAir(pickEnemyTypes(pool, allyBudget, valueOf, allyCount, isHero), run, theme)));
+    allyDefense.push({ type: def.tower, count: 1 }, ...(def.wall ? [{ type: def.wall, count: 1 }] : []));
+
     /*
-     * 攻城的一侧总人数要**多于守军**：他们必须顶着塔和墙往上冲，少于守军
-     * 就只是来送死。所以按"你 + 层数"来算，再分 4 : 3 : 3。
+     * 攻方：人数 = 你 + 盟友 + 层数，分 4 波（开场 / 第 2 / 第 4 / 第 6 轮），
+     * 每波预算再 ×1.15——两家人守一座城，攻方不加强就只是来送死。
      */
-    const push = Math.max(4, myCount + run.layer + 1);
-    const w1 = Math.max(2, Math.ceil(push * 0.4));
-    const w2 = Math.max(2, Math.ceil(push * 0.3));
-    const w3 = Math.max(2, Math.ceil(push * 0.3));
-    const waveTypes = [w1, w2, w3].map((n) => {
+    const push = Math.max(6, myCount + allyCount + run.layer + 1);
+    const shares = [0.4, 0.2, 0.2, 0.2];
+    const waveTypes = shares.map((share) => {
+      const n = Math.max(2, Math.ceil(push * share));
       const sc = enemyScale(run.layer, 'special', n, pool, clockForScale, power);
-      return sanitizeAir(pickEnemyTypes(pool, sc.budget, valueOf, n, isHero), run, theme);
+      return sanitizeAir(pickEnemyTypes(pool, sc.budget * 1.15, valueOf, n, isHero), run, theme);
     });
     enemyTypes = waveTypes[0] as string[];
-    if (waveTypes[1]?.length) waves.push({ atRound: 3, types: waveTypes[1] });
-    if (waveTypes[2]?.length) waves.push({ atRound: 6, types: waveTypes[2] });
+    if (waveTypes[1]?.length) waves.push({ atRound: 2, types: waveTypes[1] });
+    if (waveTypes[2]?.length) waves.push({ atRound: 4, types: waveTypes[2] });
+    if (waveTypes[3]?.length) waves.push({ atRound: 6, types: waveTypes[3] });
     holdRounds = 6 + run.layer;
     roundLimit = holdRounds + 3;
   } else {
@@ -919,12 +949,8 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const cut = Math.min(Math.max(0, enemyTypes.length - 1), bonus.enemyCut);
   const kept = cut > 0 ? enemyTypes.slice(0, enemyTypes.length - cut) : enemyTypes;
   const tempUnits: ArmyEntry[] = bonus.tempUnits > 0 ? [{ type: cheapestOf(theme), count: bonus.tempUnits }] : [];
-  const playerDefense: ArmyEntry[] = isSpecial
-    ? def.wall
-      ? [{ type: def.tower, count: 1 }, { type: def.wall, count: 1 }]
-      : // 没有真墙的时代（正史）：给两座塔，而不是塞一座产兵的军营
-        [{ type: def.tower, count: 2 }]
-    : [];
+  // 守城战的工事归友军 B；玩家是支援，没有城也就没有自己的工事
+  const playerDefense: ArmyEntry[] = [];
 
   return {
     kind: node.kind,
@@ -937,7 +963,10 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     playerArmy: run.army.map((a) => ({ ...a })),
     playerGold: run.gold,
     enemyCityCount,
-    playerCity: isSpecial,
+    playerCity: false,
+    allyCity: isSpecial,
+    allyArmy,
+    allyDefense,
     enemyDefense,
     playerDefense,
     holdRounds,
@@ -957,9 +986,19 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     enemyTypes: kept,
     enemyGold: enemyCityCount > 0 ? scale.gold : 0,
     // 有城 / 有阵地的敌人守，没城的抢攻；守城战的敌人是来攻城的
-    enemyRecruit: isBoss ? 2 : enemyCityCount > 0 ? 1 : 0,
+    // 守城战的攻方没有城、也不补员；守军（B）靠开局编制，不刷兵
+    enemyRecruit: isSpecial ? 0 : isBoss ? 2 : enemyCityCount > 0 ? 1 : 0,
     enemyDoctrine: isSpecial || node.kind === 'battle' ? 'rush' : 'boom',
-    expansions: theme.expansions,
+    /*
+     * 试验型方略会带"这一层本来没有"的兵（英雄来自奇想包、步枪兵是四代）。
+     * 部队里出现的包必须一起开，否则部署时查不到兵种、那个人直接消失。
+     */
+    expansions: [
+      ...new Set([
+        ...theme.expansions,
+        ...run.army.map((a) => UNIT_PACK[a.type]).filter((id): id is string => Boolean(id)),
+      ]),
+    ],
     world: run.world,
     rank: WORLDS[run.world].rankOf?.(clockForScale) ?? 0,
     bonusAtk: bonus.atk,
@@ -969,6 +1008,17 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     bonusMoveSlow: bonus.moveSlow,
     cityDamage: bonus.cityDamage,
     tempUnits,
+    /*
+     * 中立单位：约三分之一的普通/精英/攻坚关里站一个"不惹事"的东西。
+     *
+     * 它不主动攻击、AI 也不打它，但玩家打它会挨反击——先做成一个可观察的
+     * 实验：看它会不会挡路、会不会被误伤、值不值得为它绕路。
+     * 守城战不放（三席已经够挤）；层末不放（boss 战不该有第三方）。
+     */
+    neutral:
+      !isSpecial && !isBoss && seed % 100 < 34
+        ? [{ type: run.layer === 1 ? 'knight' : run.layer === 2 ? 'rifleman' : 'squad', count: 1 }]
+        : [],
     relics: [...run.relics],
     strategyId: run.strategyId,
     seed,
@@ -1398,6 +1448,7 @@ export {
   RELICS,
   REST_OPTIONS,
   STRATEGIES,
+  UNIT_PACK,
   eventById,
   relicById,
   strategyById,

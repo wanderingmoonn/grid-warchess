@@ -67,6 +67,19 @@
   justify-content: center;
   flex-wrap: wrap;
 }
+.rg-strat-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #b3541e;
+  color: #fff8ea;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  vertical-align: 1px;
+}
 .rg-tag {
   font-size: 13px;
   font-weight: 400;
