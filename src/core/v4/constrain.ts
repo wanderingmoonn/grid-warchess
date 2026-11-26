@@ -1482,45 +1482,35 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   } else if (threatened.length >= 2 && rest.length >= threatened.length * 2) {
     squads.push(...planMains(s, world, threatened.map((i) => i.city), rest.map((u) => u.id)));
   } else if (decision.kind === 'press' && city) {
-    const ids = rest.map((u) => u.id);
     /*
-     * `want`：打这座城要几个人。
+     * **一次只送一批**（W3，2026-11-26）。
      *
-     * 口径是"目标城的守军身价 ÷ 我方平均单位身价 × 1.5"，夹在 4~12。
-     * 不按固定配额（v3 试过乘数，三次调参把胜局调成平局），也不按"总兵力比"
-     * （v3 的注释：敌方一个兵都看不见时比值反而最大，越是空城越要凑满编）。
+     * `men` 由决定层给：一批 = 6 手内能走到城下的人数（实测到货 1.2~1.4 人/手）。
+     * 选人只按"离城近"排，取前 `men` 个；**余下的留在后面当预备队**——
+     * 前排死了，下一手它们自动被选中往前走，这就是"一波一波接上"。
+     *
+     * 为什么不像以前那样全派：送 25 个只有 6 个能展开（S-002 实测），
+     * 多送的人只是在路上排队，既展不开，也把家底掏空了。
+     *
+     * 原来的 `want`（守军身价 ÷ 我方身价 × 1.5，12 手不缩）在这里退场：
+     * 它算的是"该派几个"，而真正的限制是"一批能送到几个"。
      */
-    const guard = world.foeCombat.filter((u) => manhattan(u, city) <= 6);
-    /*
-     * 采购门槛：从守军身上读出"要造什么样的兵"。
-     * 挨不住一发（hp ≤ 敌方单发）的兵是白送；三发打不穿的兵是白来。
-     */
-
-    const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
-    const avg = ids.length > 0
-      ? ids.reduce((n, id) => {
-          const u = s.units.find((x) => x.id === id);
-          return n + (u ? unitWorth(s, u) : 0);
-        }, 0) / ids.length
-      : 1;
-    const freshWant = Math.max(4, Math.min(12, Math.round((guardStr / Math.max(1, avg)) * 1.5)));
-
-    /*
-     * 成立时定下的 `want` **不因为伤亡而缩**（存进记忆）。
-     * 不这样的话，人一死 want 跟着降，队伍就永远"刚好够"，越打越小。
-     */
-    const memo = mem?.squad;
-    const keepWant = memo && memo.cityId === city.id && s.turn - memo.formedAt <= 12 ? memo.want : freshWant;
+    const all = rest.map((u) => u.id);
+    const cap = Math.max(2, Math.min(decision.men ?? all.length, all.length));
+    const picked = [...all]
+      .map((id) => s.units.find((u) => u.id === id))
+      .filter((u): u is Unit => !!u)
+      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
+      .slice(0, cap)
+      .map((u) => u.id);
 
     /*
-     * 出发条件：**两回合内能站到城下的人够不够**，不看"总人数够不够"。
+     * 出发条件：这一批到得差不多就走；或者整队已经贴到城下（八成人一步能到）。
      *
-     * 一开始写的是 `人数 >= want`，结果 25 个兵一字长蛇阵也立刻开拔——
-     * 人数够不等于队形到齐，先到的几个照样被各个击破（S-002：0 城伤、损失 22）。
-     *
-     * 现在看 eta80（八成人的行军回合）。这是纯几何判断，不需要记"我等了几回合"。
+     * 试过"两回合内到城下的人 ≥ want"，那样是循环条件：队伍在城外集结，
+     * 到不了城下就永远凑不够人出发（S-000 从绿变红、S-005 过河 4→3）。
      */
-    const etas = ids
+    const etas = picked
       .map((id) => {
         const u = s.units.find((x) => x.id === id);
         return u ? world.marchTurns(u, city) : Infinity;
@@ -1528,20 +1518,14 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       .sort((a, b) => a - b);
     const eta80 = etas[Math.min(etas.length - 1, Math.floor(etas.length * 0.8))] ?? Infinity;
     const eta = etas[etas.length - 1] ?? Infinity;
-    /*
-     * 够数就走；或者整队已经贴到城下（八成人一步能到）。
-     *
-     * 试过"两回合内到城下的人 ≥ want"，那样是循环条件：队伍在城外集结，
-     * 到不了城下就永远凑不够人出发（S-000 从绿变红、S-005 过河 4→3）。
-     */
-    const ready = ids.length >= keepWant || eta80 <= 1;
+    const ready = picked.length >= cap || eta80 <= 1;
 
     /*
      * 要不要绕：看**先头那个兵**到城的真实回合数和直线距离差多少。
      * 隔河时 BFS 会明显更远（S-005 的桥），这时才用寻路挑落点；
      * 平地上一律直线（用了反而会选斜路绕远，S-011 全队漂到西北角）。
      */
-    const leadUnit = ids
+    const leadUnit = picked
       .map((id) => s.units.find((x) => x.id === id))
       .filter((u): u is NonNullable<typeof u> => !!u)
       .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city))[0];
@@ -1550,16 +1534,16 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       id: 'main',
       /* clear 段打人（march），siege 段砸城；人还没到齐就先收拢 */
       order: ready ? (decision.stage === 'clear' ? 'march' : 'siege') : 'assemble',
-      unitIds: ids,
+      unitIds: picked,
       cityId: city.id,
       at: ready ? undefined : assemblePoint(s, world, city.id),
-      want: keepWant,
+      want: cap,
       eta: Number.isFinite(eta) ? eta : 99,
       /* 集火点：这一手全队打同一个。出发前（assemble）也照样选，等于"边收拢边集火" */
-      tactics: planTactics(s, ids, ready && decision.stage === 'clear'),
+      tactics: planTactics(s, picked, ready && decision.stage === 'clear'),
       /* 分路：只给推进中的队分；路数由地形宽度决定（窄道自动退回单列） */
       detour,
-      ...(ready ? planColumns(s, world, ids, city) ?? {} : {}),
+      ...(ready ? planColumns(s, world, picked, city) ?? {} : {}),
     });
   } else if (decision.kind === 'defend' && city) {
     /* 守：把外面的兵收回城下（这条和 S-004 那道题是同一件事） */

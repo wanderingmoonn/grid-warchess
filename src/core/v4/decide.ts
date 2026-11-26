@@ -343,10 +343,66 @@ function lineLedger(s: GameState, mem: V4Memory | undefined, city: City): LineLe
    * 按前者判，一条线停过一次就永远卡住，再也起不来（S-001 实测：T5 亏一次，40 手不进攻）。
    */
   const atCity = (mem?.lineFront?.[city.id] ?? 0) > 0;
-  if (atCity && contactTurns >= Math.ceil(DECIDE_HORIZON / 2)) {
+  /*
+   * 门槛用**整个期限**（6 个"手"，= 双方各 3 回），不是半个。
+   * `s.turn` 是玩家手数（我、敌各走一次算两手），按半个算只有 1.5 个自己的回合——
+   * S-000 实测：T3 刚接火，T5 就判卡住，全军掉头去发展。
+   */
+  if (atCity && contactTurns >= DECIDE_HORIZON) {
     return { verdict: 'stalled', gain, loss, hpDrop };
   }
   return { verdict: 'unknown', gain, loss, hpDrop };
+}
+
+/**
+ * **一批送几个人**（W3，2026-11-26）。
+ *
+ * 口径：一批 = **6 手内能走到城下的人数** = 这条线实测的到货率 × 期限。
+ * 实测下来三条长局都是 1.2~1.4 人/手（`DESIGN-LANES-WAVES` §1），所以还没有数据时
+ * 用 8（= 1.33 × 6）。
+ *
+ * 为什么不用"守军身价 ÷ 我方身价 × 1.5"：那个公式的输入是**敌人有多强**，
+ * 输出是"该派几个"；可真正的限制是"一批能送到几个"——送 25 个只有 6 个能展开
+ * （S-002 实测）。多送的人只是在路上排队，不如留在后面当预备队。
+ *
+ * `min(standing, …)` 是硬上限：手上没有那么多兵就是没有。
+ * `max(2, …)` 是下限：一个兵不叫一批。
+ */
+function batchMen(mem: V4Memory | undefined, city: City, standing: number, supply: number): number {
+  const waves = (mem?.waves ?? []).filter((w) => w.cityId === city.id && w.arrivedIds.length > 0);
+  let arrived = 0;
+  let turns = 0;
+  for (const w of waves) {
+    const first = w.arrivals.findIndex((n) => n > 0);
+    const last = w.arrivals.length - 1;
+    arrived += w.arrivedIds.length;
+    turns += Math.max(1, last - Math.max(0, first) + 1);
+  }
+  /** 没有到货记录 → 用实测的默认到货率（1.33 人/手） */
+  const rate = turns > 0 ? arrived / turns : 1.33;
+  const useful = Math.round(rate * DECIDE_HORIZON);
+  /*
+   * **留多少人当预备队，取决于这段时间能补多少人**（`supply` = 每回合能造几个 × 期限）。
+   *
+   * 产能是 0 的时候一个人都不留：后面根本不会有人来，扣着兵只是让前线更薄
+   * （S-001 实测：18 个兵按 8 个一批送，40 手打不完；产能为 0 时改成全送就回去了）。
+   * 产能 12 的时候最多留 12 个顶上来。
+   */
+  return Math.min(standing, Math.max(Math.max(2, useful), standing - Math.max(0, supply)));
+}
+
+/**
+ * **这 6 手能补几个兵** = 每回合能造几个 × 期限。
+ *
+ * 产能读的是自家城这一手的真实值（空格 × 钱买得起几个），不是"钱除以单价"的估算。
+ * 钱不够时它自然掉到 0——那意味着**后面不会有人来**，这时候扣着兵不派没有任何好处。
+ */
+function supplyPerHorizon(world: World): number {
+  const home = world.myCities[0];
+  if (!home) return 0;
+  const ids = world.myCombat.map((u) => u.id);
+  const make = world.laneStats(ids, home).make;
+  return make * DECIDE_HORIZON;
 }
 
 /** 账本的一句话（进决定理由，回放里能直接读出来） */
@@ -462,11 +518,13 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
        * "亏"在这一层只影响**换不换线**（见下面挑目标的循环：不往亏的城开新线），
        * "降预算"要等 W3 的"每批多少人"才有落点（现在没有预算这个旋钮）。
        */
-      if (cityAlive && ledger && ledger.verdict !== 'stalled') {
+      if (cityAlive && ledger && ledger.verdict !== 'stalled' && line) {
         return complete(s, world, mem, {
           kind: 'press',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
+          /* 每批重算（W3）：上一批打光了，下一批该多大由现在的到货率说了算 */
+          men: batchMen(mem, line, world.myCombat.length, supplyPerHorizon(world)),
           reason: inherit(prev.reason),
         });
       }
@@ -592,6 +650,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         stage: guards.length > 0 ? 'clear' : 'siege',
         untilTurn: s.turn + horizon,
         cityId: target.id,
+        men: batchMen(mem, target, world.myCombat.length, supplyPerHorizon(world)),
         reason: `${ledgerText(target, ledger)}；${
           guards.length > 0 ? `${target.id} 周围还有 ${guards.length} 个守军，先清场` : `${target.id} 城下已清空，开始攻城`
         }`,
