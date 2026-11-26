@@ -190,6 +190,13 @@ type Stat = {
   meCities: number;
   /** 敌方还剩几座活城（废墟不算）。「把对方打到没有城」才是收尾的终点 */
   foeCities: number;
+  /**
+   * **v4 记忆里已经开过几批**（W3，2026-11-26）。
+   *
+   * 判据要能数"第二波有没有组织起来"——人数、城血、击杀都只能间接推。
+   * 只有 v4 自己记着"这是第几批"；别的答题者（v1/v3/空壳）没有这个记忆，读出来是 0。
+   */
+  batches: number;
 };
 const record = new Map<number, Stat>();
 const cityMinHp: Record<string, number> = {};
@@ -245,6 +252,7 @@ function capture(s: GameState): void {
     alive: s.units.length,
     meCities: s.cities.filter((c) => c.owner === ME && !c.ruined).length,
     foeCities: s.cities.filter((c) => c.owner === FOE && !c.ruined).length,
+    batches: (((s.aiFocus?.[ME]?.v4 ?? {}) as { waves?: unknown[] }).waves ?? []).length,
   });
 
   // 损失：消失的单位里，剔掉自己拆掉的（拆单位是回收，不是伤亡）
@@ -402,6 +410,13 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
       const lowOk = c.min === undefined || n >= c.min;
       const highOk = c.max === undefined || n <= c.max;
       return { ok: lowOk && highOk, got: `${key.split(':')[1]} ${n} 个` };
+    }
+    case 'batchCount': {
+      /* 到第 `in` 手为止，这条线编过几批（"第一批打光、第二队有没有跟上"靠它数） */
+      const n = st.batches;
+      const lowOk = c.min === undefined || n >= c.min;
+      const highOk = c.max === undefined || n <= c.max;
+      return { ok: lowOk && highOk, got: `开过 ${n} 批` };
     }
     case 'unitsNear': {
       const countAt = (st2: Stat): number =>

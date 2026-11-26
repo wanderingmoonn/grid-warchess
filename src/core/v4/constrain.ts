@@ -1497,12 +1497,20 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
      */
     const all = rest.map((u) => u.id);
     const cap = Math.max(2, Math.min(decision.men ?? all.length, all.length));
-    const picked = [...all]
+    /*
+     * **已经在城下的人不许被"分批"挤出去。**
+     *
+     * `men` 管的是"这一次新派几个人"。如果按人数一刀切，前排 10 个人而 `men` 只有 8，
+     * 就会有两个人被落下、原地不动——那不是分批，那是丢人。
+     * 所以：够得着城的人（还差 1 手以内）**无条件留在队里**，上限只卡"后面补上来的"。
+     */
+    const us = all
       .map((id) => s.units.find((u) => u.id === id))
       .filter((u): u is Unit => !!u)
-      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))
-      .slice(0, cap)
-      .map((u) => u.id);
+      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1));
+    const front = us.filter((u) => world.marchTurns(u, city) <= 1);
+    const room = Math.max(0, cap - front.length);
+    const picked = [...front, ...us.filter((u) => !front.includes(u)).slice(0, room)].map((u) => u.id);
 
     /*
      * 出发条件：这一批到得差不多就走；或者整队已经贴到城下（八成人一步能到）。

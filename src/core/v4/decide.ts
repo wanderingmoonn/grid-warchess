@@ -14,7 +14,7 @@
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
 import type { Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
-import { cityTiles, effectiveStats, utype } from '../rules.ts';
+import { cityTiles, effectiveStats, previewAttack, utype } from '../rules.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
 import type { GameState } from '../types.ts';
 
@@ -56,7 +56,21 @@ type BareDecision = Omit<Decision, 'spend'>;
  * 约束层只负责把它传给打分层，不再自己算第二遍。
  */
 function withSpend(s: GameState, world: World, d: BareDecision): Decision {
-  const noFoe = world.foeCombat.length === 0;
+  /*
+   * **"看不见敌人"要把能开火的建筑算进去**（2026-11-26，P-2-01 逼出来的）。
+   *
+   * `foeCombat` 只数 `combat` 类；箭塔/炮台是 `building` 类。对手只摆防御建筑时，
+   * v4 会认为天下太平 → `econOnly` → **只造经济兵，再也不造军队**（P-2-01 实测：
+   * 第一队 10 个人死在炮台下，之后 17 手一个战斗兵都没造）。
+   * 会打人的建筑和会打人的兵，在"要不要留钱造兵"这个问题上没有区别。
+   */
+  const noFoe =
+    world.foeCombat.length === 0 &&
+    !s.units.some((u) => {
+      if (u.owner === world.me) return false;
+      const d2 = utype(s, u.type);
+      return d2.category === 'building' && (d2.atk ?? 0) > 0;
+    });
   const gold = s.players[world.me]?.gold ?? 0;
   const keep = d.untilTurn;
 
@@ -368,8 +382,23 @@ function lineLedger(s: GameState, mem: V4Memory | undefined, city: City): LineLe
  * `min(standing, …)` 是硬上限：手上没有那么多兵就是没有。
  * `max(2, …)` 是下限：一个兵不叫一批。
  */
-function batchMen(mem: V4Memory | undefined, city: City, standing: number, supply: number): number {
+function batchMen(
+  s: GameState,
+  world: World,
+  mem: V4Memory | undefined,
+  city: City,
+  standing: number,
+  supply: number,
+): number {
   const waves = (mem?.waves ?? []).filter((w) => w.cityId === city.id && w.arrivedIds.length > 0);
+  /*
+   * **没有实测数据就不设上限**（全送）。
+   *
+   * 一开始这里写死 8（= 1.33 人/手 × 6，实测均值）。用户 2026-11-26 指出：
+   * 到货速度每张图都不一样，写死一个数迟早出错。所以只在**这条线自己量出来之后**
+   * 才分批；没量出来之前按老行为全送——第一批本身就是那次测量。
+   */
+  if (waves.length === 0) return Math.max(1, standing);
   let arrived = 0;
   let turns = 0;
   for (const w of waves) {
@@ -378,17 +407,34 @@ function batchMen(mem: V4Memory | undefined, city: City, standing: number, suppl
     arrived += w.arrivedIds.length;
     turns += Math.max(1, last - Math.max(0, first) + 1);
   }
-  /** 没有到货记录 → 用实测的默认到货率（1.33 人/手） */
-  const rate = turns > 0 ? arrived / turns : 1.33;
-  const useful = Math.round(rate * DECIDE_HORIZON);
+  const rate = arrived / Math.max(1, turns);
+  const useful = Math.max(1, Math.round(rate * DECIDE_HORIZON));
+  /*
+   * **下限：凑得够打死一个守军**。
+   *
+   * 不加这条会掉进一个死循环：到货率只数"第一次进前线的人"，被打死的人不计，
+   * 所以**越打不过，量出来的到货率越低，下一批就越小**——P-2-01 实测从 10 人
+   * 一路缩到 1 人一批，六批全填进去了。
+   *
+   * 下限取"最厚守军的血 ÷ 我方单发"：少于这个数，一批连一个守军都打不掉，
+   * 分批就没有意义。
+   */
+  const guards = s.units.filter((u) => u.owner !== world.me && utype(s, u.type).category !== 'economy');
+  const hardest = guards.reduce<((typeof guards)[number] | undefined)>(
+    (best, u) => (!best || u.hp > best.hp ? u : best),
+    undefined,
+  );
+  const dmg = hardest
+    ? world.myCombat.reduce((n, u) => Math.max(n, previewAttack(s, u, hardest).toDefender), 0)
+    : 0;
+  const need = hardest && dmg > 0 ? Math.ceil(hardest.hp / dmg) : 2;
   /*
    * **留多少人当预备队，取决于这段时间能补多少人**（`supply` = 每回合能造几个 × 期限）。
    *
    * 产能是 0 的时候一个人都不留：后面根本不会有人来，扣着兵只是让前线更薄
-   * （S-001 实测：18 个兵按 8 个一批送，40 手打不完；产能为 0 时改成全送就回去了）。
-   * 产能 12 的时候最多留 12 个顶上来。
+   * （S-001 实测：18 个兵按 8 个一批送，40 手打不完）。产能 12 的时候最多留 12 个顶上来。
    */
-  return Math.min(standing, Math.max(Math.max(2, useful), standing - Math.max(0, supply)));
+  return Math.min(standing, Math.max(2, need, Math.max(useful, standing - Math.max(0, supply))));
 }
 
 /**
@@ -524,7 +570,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
           /* 每批重算（W3）：上一批打光了，下一批该多大由现在的到货率说了算 */
-          men: batchMen(mem, line, world.myCombat.length, supplyPerHorizon(world)),
+          men: batchMen(s, world, mem, line, world.myCombat.length, supplyPerHorizon(world)),
           reason: inherit(prev.reason),
         });
       }
@@ -650,7 +696,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
         stage: guards.length > 0 ? 'clear' : 'siege',
         untilTurn: s.turn + horizon,
         cityId: target.id,
-        men: batchMen(mem, target, world.myCombat.length, supplyPerHorizon(world)),
+        men: batchMen(s, world, mem, target, world.myCombat.length, supplyPerHorizon(world)),
         reason: `${ledgerText(target, ledger)}；${
           guards.length > 0 ? `${target.id} 周围还有 ${guards.length} 个守军，先清场` : `${target.id} 城下已清空，开始攻城`
         }`,
