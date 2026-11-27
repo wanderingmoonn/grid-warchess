@@ -101,14 +101,31 @@ export function unitWorthOfType(s: GameState, typeId: string): number {
   const era = utype(s, typeId).era ?? 1;
   const vals = worthRefs(s, era).map((r) => combatPower(s, typeId, r));
   if (vals.length === 0) return 0;
-  return vals.reduce((n, x) => n + x, 0) / vals.length;
+  /* 取**最小**（对最难缠的那个参照能打出多少）。加了集火项之后 min 不再"把远程拖死"
+     （之前那个副作用是因为远程对着自己算没有白打回合），拟合也选了 min。 */
+  return Math.min(...vals);
 }
 
 /** 拟合出来的三个参数（见上面的注释；动它要跑 `fit-combat-formula` 对表） */
-const W_HP = 0.1;
+const W_HP = 1.5;
 const W_STAND = 0.5;
-/** 典型接敌距离（格）：射程的价值取决于"对面要走进来几步"，这是唯一标定出来的"场面"参数 */
-const GAP = 5;
+/** 标定用的军力（每边几个兵）：集火能力按它归一 */
+const FIT_N = 6;
+/** 标定用的阵型宽度（用户野战经验 4~6，取 5） */
+const FIT_W = 5;
+
+/**
+ * **集火能力**：方阵贴住之后，一个敌人能被几个自己人同时打到。
+ *
+ * 引擎射程是**曼哈顿距离**，所以"我方半平面内、距离 ≤ r 的格数" = Σ_{d=1..r}(2(r−d)+1) = **r²**
+ * （用户 2026-11-27 的推导，已核）。再被两件事截断：人数 N、阵型摆得开的位置 f(W)
+ * （W=5 时 r=3 正好吃满 9 格）。
+ */
+function focusOf(range: number, n: number, width: number): number {
+  let cap = 0;
+  for (let d = 1; d <= range; d++) cap += Math.max(0, width - 2 * (d - 1));
+  return Math.max(1, Math.min(n, range * range, cap));
+}
 
 /** 这一代当参照的兵种：最贵 / 最厚 / 射程最远（都按设计数据挑，不做战力排序，所以不会循环） */
 const refsCache = new Map<number, string[]>();
@@ -144,10 +161,7 @@ function dpsOf(s: GameState, type: string, foe: string): number {
 function combatPower(s: GameState, type: string, ref: string): number {
   const mine = dpsOf(s, type, ref);
   if (mine <= 0) return 0;
-  /*
-   * 能活几回合 = 要挨几发才死 ÷ 对面每回合几发。
-   * **护甲只在 `perHit` 里出现一次**（`previewAttack` 已经按发减过护甲），不重复叠。
-   */
+  /* 能活几回合 = 要挨几发才死 ÷ 对面每回合几发（护甲只在每发伤害里出现一次） */
   const perHit = previewAttack(
     s,
     { id: '__w3', owner: s.current, type: ref, x: 0, y: 0, hp: utype(s, ref).maxHp ?? 1 } as Unit,
@@ -155,11 +169,16 @@ function combatPower(s: GameState, type: string, ref: string): number {
   ).toDefender;
   const perTurn = Math.max(1, attacksPerTurn(s, { id: '__w5', owner: s.current, type: ref, x: 0, y: 0, hp: 1 } as Unit));
   const tank = perHit <= 0 ? 99 : Math.ceil((utype(s, type).maxHp ?? 1) / perHit) / perTurn;
-  const myRange = utype(s, type).range ?? 1;
-  const refRange = utype(s, ref).range ?? 1;
-  let stand = 0;
-  if (myRange > refRange) stand = Math.ceil(Math.max(0, GAP - refRange) / Math.max(1, utype(s, ref).move ?? 2));
-  return mine * (W_HP * tank + W_STAND * stand);
+  /* 白打几轮 = 射程差 ÷ 走过来的那个人的移动力（正负都算） */
+  const delta = (utype(s, type).range ?? 1) - (utype(s, ref).range ?? 1);
+  const stand =
+    delta > 0
+      ? delta / Math.max(1, utype(s, ref).move ?? 2)
+      : delta < 0
+        ? delta / Math.max(1, utype(s, type).move ?? 2)
+        : 0;
+  const focusShare = focusOf(utype(s, type).range ?? 1, FIT_N, FIT_W) / FIT_N;
+  return mine * (W_HP * tank + W_STAND * stand) * focusShare;
 }
 
 /** 一个已存在单位的身价：按剩余血量打折 */

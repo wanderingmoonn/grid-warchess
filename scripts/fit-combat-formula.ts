@@ -118,7 +118,20 @@ const refsOf = (era: number): string[] => {
   return [...new Set([pick((t) => utype(s, t).cost ?? 0), pick((t) => utype(s, t).maxHp ?? 0), pick((t) => utype(s, t).range ?? 1)])];
 };
 
-const power = (u: string, r: string, wHp: number, wStand: number, _kRange: number, _GAP: number, _wArmor = 0): number => {
+/**
+ * **集火能力**（2026-11-27，用户推导）：方阵贴住之后，一个敌人能被几个自己人打到
+ *  = 我方半平面内、曼哈顿距离 ≤ r 的格数 = **r²**（引擎的射程就是曼哈顿距离，已核）。
+ *  再被两件事截断：人数 N、阵型能摆开的位置 f(W)（W=5 时 r=3 正好吃满 9 格）。
+ */
+const focusOf = (range: number, n: number, width = 5): number => {
+  const reach = Math.min(n, range * range);
+  /* 宽度限制：第 d 排最多 (W − 2(d−1)) 个位置，加起来就是能吃满的上限 */
+  let cap = 0;
+  for (let d = 1; d <= range; d++) cap += Math.max(0, width - 2 * (d - 1));
+  return Math.min(reach, cap, n);
+};
+
+const power = (u: string, r: string, wHp: number, wStand: number, _kRange: number, _GAP: number, wFocus = 0): number => {
   const mine = dps(u, r);
   if (mine <= 0) return 0;
   /*
@@ -147,7 +160,13 @@ const power = (u: string, r: string, wHp: number, wStand: number, _kRange: numbe
       : delta < 0
         ? delta / Math.max(1, utype(s, u).move ?? 2)
         : 0;
-  const far = 1;
+  /*
+   * 集火项：`focusShare = focus(r)/N`（我这一格能参与集火的比例），
+   * `wFocus=0` 就是旧模型；`=1` 就是"按集火份额打折"，中间值让网格自己找。
+   */
+  const N = 6;
+  const focusShare = focusOf(utype(s, u).range ?? 1, N) / N;
+  const far = 1 + wFocus * (focusShare - 1);
   return mine * (wHp * tank + wStand * freeRounds) * far;
 };
 /**
@@ -184,6 +203,29 @@ const agree = (p: [number, number, number, number, number]): number => {
   return total === 0 ? 0 : ok / total;
 };
 
+/**
+ * **代际递增的正确率**（2026-11-27 用户要求的分组之一）：
+ * 新一代"头名"的公式值不该低于上一代的头名——否则 `eraLadder` 会认为"升代没收益"。
+ */
+const progAcc = (p: [number, number, number, number, number]): number => {
+  const eras = [...new Set(measured.filter((m) => m.ids.every((t) => (utype(s, t).era ?? 1) === m.era)).map((m) => m.era))].sort(
+    (a, b) => a - b,
+  );
+  let ok = 0;
+  let total = 0;
+  let prev: number | null = null;
+  for (const era of eras) {
+    const ids = combatOfEra(s, era);
+    const top = Math.max(...ids.map((t) => powerOf(t, era, p)));
+    if (prev !== null) {
+      total += 1;
+      if (top >= prev) ok += 1;
+    }
+    prev = top;
+  }
+  return total === 0 ? 0 : ok / total;
+};
+
 /* ── 网格搜索 ─────────────────────────────────────────────── */
 let best = { p: [1, 1, 1, 6, 0] as [number, number, number, number, number], score: -1, agg: 'min' as 'min' | 'mean' };
 for (const agg of ['min', 'mean'] as Array<'min' | 'mean'>) {
@@ -192,9 +234,10 @@ for (const wHp of [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5]) {
   for (const wStand of [0.5, 1, 1.5, 2, 3, 4]) {
     for (const kRange of [1, 1.1, 1.25, 1.5]) {
       for (const GAP of [0]) {
-        for (const wArmor of [0, 0.5, 1, 2, 3]) {
-        const sc = agree([wHp, wStand, kRange, GAP, wArmor]);
-        if (sc > best.score) best = { p: [wHp, wStand, kRange, GAP, wArmor], score: sc, agg };
+        for (const wFocus of [0, 0.25, 0.5, 0.75, 1]) {
+        /* 目标 = 同代内部排序 0.6 + 代际递增 0.4（两组都报，不再让总平均掩盖某代） */
+        const sc = agree([wHp, wStand, kRange, GAP, wFocus]) * 0.6 + progAcc([wHp, wStand, kRange, GAP, wFocus]) * 0.4;
+        if (sc > best.score) best = { p: [wHp, wStand, kRange, GAP, wFocus], score: sc, agg };
         }
         }
       }
@@ -202,7 +245,7 @@ for (const wHp of [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5]) {
   }
 }
 AGG = best.agg;
-console.log(`\n最优参数：wHp=${best.p[0]}  wStand=${best.p[1]}  kRange=${best.p[2]}  GAP=${best.p[3]}  参照汇总=${best.agg}  护甲权重=${best.p[4]}  → 总方向一致率 ${(best.score * 100).toFixed(0)}%`);
+console.log(`\n最优参数：wHp=${best.p[0]}  wStand=${best.p[1]}  kRange=${best.p[2]}  GAP=${best.p[3]}  参照汇总=${best.agg}  集火权重=${best.p[4]}  → 综合分 ${(best.score * 100).toFixed(0)}%（同代 ${(agree(best.p) * 100).toFixed(0)}% + 代际 ${(progAcc(best.p) * 100).toFixed(0)}%）`);
 console.log(`（旧身价作为对照：${(agree([1, 0, 1, 6, 0]) * 100).toFixed(0)}%）`);
 
 /* ── 分组报告（2026-11-27 用户要求）────────────────────────────
