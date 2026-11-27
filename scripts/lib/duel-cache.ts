@@ -22,7 +22,7 @@ import { dirname } from 'node:path';
 import { fight } from './duel.ts';
 
 /** 镜像打法版本：改了 `duel.ts` 的走位/选目标就 +1 */
-const POLICY = 1;
+const POLICY = 2;
 const FILE = 'data/duel-cache.json';
 
 export interface DuelResult {

@@ -49,6 +49,47 @@ export function fight(a: string, b: string, n: number): FightResult {
         const live = s.units.find((x) => x.id === u.id)!;
         const foes = combat(who === 'A' ? 'B' : 'A');
         if (foes.length === 0) break;
+        /*
+         * **① 能白打的一方不冲锋**（2026-11-27 用户定，标定台是地基）。
+         *
+         * 原打法里所有人都朝最近的敌人冲，于是远程也自己走进贴身——等于把射程优势
+         * 白扔掉（trace 实测：弓手第 1 手就"走 6"）。现在：
+         *   · 射程 ≥ 2 的单位，先找一个"**还能打到人、但离敌人更远**"的落点，
+         *     走上去再打（引擎允许"先走再打"，`doAttack` 才置 `moved`）；
+         *   · 找不到就原地打；
+         *   · 打不到人的才朝最近敌人走。
+         * 这样"射程"才真的换成"白打几轮"，标定出来的数才是兵种强弱，而不是"谁更爱冲"。
+         */
+        const myRange = utype(s, live.type).range ?? 1;
+        const reach = reachableTiles(s, live);
+        const canHitFrom = (x: number, y: number): boolean =>
+          foes.some((f) => Math.abs(f.x - x) + Math.abs(f.y - y) <= myRange);
+        const nearDist = (x: number, y: number): number =>
+          Math.min(...foes.map((f) => Math.abs(f.x - x) + Math.abs(f.y - y)));
+        const nearest = [...foes].sort((a, b) => man(live, a) - man(live, b))[0]!;
+
+        if (myRange > 1 && man(live, nearest) <= myRange) {
+          /* 能打到了：找一个更远、但还能打到的点退过去 */
+          let bestKite: { x: number; y: number } | null = null;
+          let bestDist = nearDist(live.x, live.y);
+          for (const k of reach.keys()) {
+            const x = k % s.w;
+            const y = (k - x) / s.w;
+            const d = nearDist(x, y);
+            if (d > bestDist && canHitFrom(x, y)) {
+              bestDist = d;
+              bestKite = { x, y };
+            }
+          }
+          if (bestKite) {
+            const mv = applyAction(s, { type: 'MOVE', unitId: live.id, x: bestKite.x, y: bestKite.y });
+            if (mv.ok) {
+              s = mv.state;
+              continue; /* 走过去之后重新判定（下一步会打） */
+            }
+          }
+        }
+
         const tg = attackableTargets(s, live).filter((t) => t.owner !== who);
         if (tg.length > 0) {
           const t = [...tg].sort((x, y) => x.hp - y.hp)[0]!;
@@ -58,8 +99,7 @@ export function fight(a: string, b: string, n: number): FightResult {
             continue;
           }
         }
-        const goal = [...foes].sort((x, y) => man(live, x) - man(live, y))[0]!;
-        const reach = reachableTiles(s, live);
+        const goal = nearest;
         let best: { x: number; y: number } | null = null;
         let bd = man(live, goal);
         for (const k of reach.keys()) {
