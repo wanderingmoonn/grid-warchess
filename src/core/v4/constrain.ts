@@ -1240,6 +1240,44 @@ function guardSplit(
 }
 
 /**
+ * **每座城要几个守军**（名额）——从 `planMains` 里拆出来的一半（§4.23 步骤 1a）。
+ *
+ * ── 为什么要拆 ────────────────────────────────────────────────
+ *
+ * 批 3 的"归属"（谁归守、谁归攻）需要一个数：**这座城到底要几个人**。
+ * 可是 `planMains` 原来是"名额 + 分配"焊在一起的，而且第 ② 趟写着
+ * "剩下的补到最近的那座城"——**问它要名额，它会把整个池子吃干净**。
+ * 所以先把"要几个"单独拿出来，`planMains` 只负责按这个数发人。
+ *
+ * ── 口径一个字没改 ────────────────────────────────────────────
+ *
+ * ① 每座城：`守军身价 ÷ 我方均价 × 1.5`，夹在 2~12；
+ * ② 需求总和超过手头兵力时**按比例摊**（不是先到先得，`S-013` 实测 4:4 才守得住两城）。
+ *
+ * 注意 ① 里的均价取的是**这一手候选池**的均价（`units`），所以名额和"池子里有谁"有关——
+ * 这也是它必须在这里算、不能提前到世界层的原因。
+ */
+function defenderQuota(
+  s: GameState,
+  world: World,
+  cities: City[],
+  units: Unit[],
+): Map<string, number> {
+  if (units.length === 0 || cities.length === 0) return new Map();
+  const avg = units.reduce((n, u) => n + unitWorth(s, u), 0) / units.length || 1;
+  const needs = cities.map((c) => {
+    const guard = world.foeCombat.filter((u) => manhattan(u, c) <= 6);
+    const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
+    return { city: c, want: Math.max(2, Math.min(12, Math.round((guardStr / avg) * 1.5))) };
+  });
+  const totalWant = needs.reduce((n, x) => n + x.want, 0);
+  if (totalWant > units.length) {
+    for (const n of needs) n.want = Math.max(2, Math.floor((n.want * units.length) / totalWant));
+  }
+  return new Map(needs.map((n) => [n.city.id, n.want]));
+}
+
+/**
  * 多城分兵（2026-11-24）：**每座受威胁的城一支队**。
  *
  * 为什么必须分：只有一支 `main` 时，所有兵都去最近那座城，另一座直接丢
@@ -1255,27 +1293,9 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
   const units = ids.map((id) => s.units.find((u) => u.id === id)).filter((u): u is NonNullable<typeof u> => !!u);
   if (units.length === 0 || cities.length === 0) return [];
 
-  const avg = units.reduce((n, u) => n + unitWorth(s, u), 0) / units.length || 1;
-  const needs = cities.map((c) => {
-    const guard = world.foeCombat.filter((u) => manhattan(u, c) <= 6);
-    const guardStr = guard.reduce((n, u) => n + unitWorth(s, u), 0);
-    return { city: c, want: Math.max(2, Math.min(12, Math.round((guardStr / avg) * 1.5))) };
-  });
-
-  /*
-   * 需求超过手头兵力时**按比例摊**，不是先到先得。
-   *
-   * S-013 实测：两城各要 8 个、手上只有 8 个，第一座全拿走、第二座 0 个 →
-   * 1/2（另一座直接丢）。按比例摊是 4 : 4，正好是分兵脚本守住两城的配比。
-   */
-  const totalWant = needs.reduce((n, x) => n + x.want, 0);
-  if (totalWant > units.length) {
-    const scaled = needs.map((n) => ({
-      ...n,
-      want: Math.max(2, Math.floor((n.want * units.length) / totalWant)),
-    }));
-    for (let i = 0; i < needs.length; i++) needs[i] = scaled[i]!;
-  }
+  /* 名额（每座城要几个）和分配（谁去哪座）分开——名额单独成函数，见 `defenderQuota` */
+  const quota = defenderQuota(s, world, cities, units);
+  const needs = cities.map((c) => ({ city: c, want: quota.get(c.id) ?? 0 }));
 
   /* ① 按需求从大到小，各自从近到远取人 */
   const left = new Set(units.map((u) => u.id));
