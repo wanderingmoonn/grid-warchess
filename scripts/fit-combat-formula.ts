@@ -77,6 +77,35 @@ for (const era of [1, 2, 3, 4, 5]) {
   measured.push({ era, ids, score, margin });
 }
 
+/*
+ * **加一批"跨代"样本**（2026-11-27）：只拟合"同代内"的话，参数会把"活多久"压得很低
+ * （同代里大家都差不多厚），结果**装甲车/坦克这类厚甲兵被系统性低估**——
+ * 实测：火枪×6 打装甲车×6 是 **-10**（装甲车赢），公式却把火枪排在装甲车前面。
+ * 这里让每一代每个兵和**上一代最强的两个**也打一场，把"升代到底换来了什么"变成拟合样本。
+ */
+if (process.argv.includes('--cross')) for (let k = 1; k < measured.length; k++) {
+  const prev = measured[k - 1]!;
+  const cur = measured[k]!;
+  const tops = [...prev.ids].sort((a, b) => prev.score[b]! - prev.score[a]! || (a < b ? -1 : 1)).slice(0, 1);
+  const ids = [...cur.ids, ...tops];
+  if (ids.length < 2) continue;
+  const score: Record<string, number> = {};
+  const margin: Record<string, number> = {};
+  for (const id of ids) { score[id] = 0; margin[id] = 0; }
+  for (const a of cur.ids) {
+    for (const b of tops) {
+      const r1 = fight(a, b, N);
+      const r2 = fight(b, a, N);
+      const m = r1.aLeft - r1.bLeft + (r2.bLeft - r2.aLeft);
+      margin[a] = (margin[a] ?? 0) + m;
+      margin[b] = (margin[b] ?? 0) - m;
+      if (m > 0) score[a] = (score[a] ?? 0) + 1;
+      else if (m < 0) score[b] = (score[b] ?? 0) + 1;
+    }
+  }
+  measured.push({ era: 100 + cur.era, ids, score, margin });
+}
+
 /** 参照组：最贵 / 最厚 / 射程最远（不用战力排序，所以不会循环） */
 const refsOf = (era: number): string[] => {
   const ids = combatOfEra(s, era);
@@ -84,7 +113,7 @@ const refsOf = (era: number): string[] => {
   return [...new Set([pick((t) => utype(s, t).cost ?? 0), pick((t) => utype(s, t).maxHp ?? 0), pick((t) => utype(s, t).range ?? 1)])];
 };
 
-const power = (u: string, r: string, wHp: number, wStand: number, kRange: number, GAP: number, _wArmor = 0): number => {
+const power = (u: string, r: string, wHp: number, wStand: number, _kRange: number, _GAP: number, _wArmor = 0): number => {
   const mine = dps(u, r);
   if (mine <= 0) return 0;
   /*
@@ -100,14 +129,21 @@ const power = (u: string, r: string, wHp: number, wStand: number, kRange: number
   const perTurn = Math.max(1, attacksPerTurn(s, P(r)));
   const tank = perHit <= 0 ? 99 : Math.ceil((utype(s, u).maxHp ?? 1) / perHit) / perTurn;
   /*
-   * **白打几轮**：我射程比它远时，它得从"典型接敌距离 GAP"走进我的射程才能还手。
-   * 走过这段要几轮 = (GAP − 它射程) ÷ 它移动力 —— 这段我一发不挨。
-   * 所以射程的价值取决于**接敌距离**，那正是公式里唯一需要标定的"场面"参数。
+   * **白打几轮 = 射程差 ÷ 走过来的那个人每回合走几格**（2026-11-27 用户改）。
+   *
+   * 不再有 GAP：只要两边都在朝对方走，"谁先进入自己的射程"只差一个**射程差**，与初始距离无关：
+   *   · 我射程远 → 它要多走 `range(u) − range(r)` 格才还得了手 → 我白打 差 ÷ 它移动力 轮；
+   *   · 它射程远 → 反过来，**我少活这么多轮**（这一半以前漏了，只算了自己占便宜的那一半）。
    */
-  const gap = Math.max(0, GAP - (utype(s, r).range ?? 1));
-  const stand = (utype(s, u).range ?? 1) > (utype(s, r).range ?? 1) ? Math.ceil(gap / Math.max(1, utype(s, r).move ?? 2)) : 0;
-  const far = (utype(s, u).range ?? 1) > (utype(s, r).range ?? 1) ? kRange : 1;
-  return mine * (wHp * tank + wStand * stand) * far;
+  const delta = (utype(s, u).range ?? 1) - (utype(s, r).range ?? 1);
+  const freeRounds =
+    delta > 0
+      ? delta / Math.max(1, utype(s, r).move ?? 2)
+      : delta < 0
+        ? delta / Math.max(1, utype(s, u).move ?? 2)
+        : 0;
+  const far = 1;
+  return mine * (wHp * tank + wStand * freeRounds) * far;
 };
 /**
  * 对参照组怎么汇总：`min`（最怕的那个）/ `mean`（平均）。
@@ -150,7 +186,7 @@ for (const agg of ['min', 'mean'] as Array<'min' | 'mean'>) {
 for (const wHp of [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5]) {
   for (const wStand of [0.5, 1, 1.5, 2, 3, 4]) {
     for (const kRange of [1, 1.1, 1.25, 1.5]) {
-      for (const GAP of [4, 5, 6, 7, 8, 10]) {
+      for (const GAP of [0]) {
         for (const wArmor of [0, 0.5, 1, 2, 3]) {
         const sc = agree([wHp, wStand, kRange, GAP, wArmor]);
         if (sc > best.score) best = { p: [wHp, wStand, kRange, GAP, wArmor], score: sc, agg };
