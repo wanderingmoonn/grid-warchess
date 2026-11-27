@@ -781,6 +781,8 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
   squads: Array<{ id: string; order: string; n: number }>;
   /** 必须空的格子（下标）。面板要画它们，所以给原值不是数量 */
   keepClearList: number[];
+  /** 批 2：这一手给产兵腾了哪几格、赶走了谁（只观测） */
+  spawnQuota?: Constraints['spawnQuota'];
   /** 升级的执行结果（要不要升在 `decision.upgrade` 里，这里是"这一手执不执行"） */
   upgrade?: NonNullable<Constraints['upgrade']>;
   /** 决定层说要升、但计划层否掉了——为什么（D6） */
@@ -806,6 +808,7 @@ export function v4Snapshot(s: GameState, me: PlayerId): {
     /* `ids` 只给诊断用（看清楚一支队到底装了谁）；判断一律只看 id/order/n */
     squads: v.con.squads.map((q) => ({ id: q.id, order: q.order, n: q.unitIds.length, ids: q.unitIds })),
     keepClearList: v.con.keepClear,
+    spawnQuota: v.con.spawnQuota,
     upgrade: v.con.upgrade,
     upgradeBlocked: v.con.upgradeBlocked,
     lane: v.con.lane,

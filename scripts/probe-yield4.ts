@@ -27,6 +27,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { passable } from '../src/core/config.ts';
+import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { applyAction, attackableTargets, utype } from '../src/core/rules.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
@@ -46,9 +47,17 @@ const DETAIL = process.argv.includes('--detail');
  * 批 2 引入名额时会**故意**让它开始不一致，那时应该同步改这个检查，而不是让它静默通过。
  */
 const CHECK_KEEP = process.argv.includes('--check-keep');
+/** `--quota`：打出"这一手给产兵腾了哪几格、赶走了谁"（批 2 的机制到底生效没有） */
+const SHOW_QUOTA = process.argv.includes('--quota');
+let quotaTurns = 0;
+let quotaCells = 0;
+let quotaEvicts = 0;
 let keepMismatch = 0;
 
-const EXAM_ARGS = argOf('exam', 'exams/D-3-01').split(',').map((x) => x.trim()).filter(Boolean);
+const EXAM_ARGS = argOf('exam', '').split(',').map((x) => x.trim()).filter(Boolean);
+const SIZE = Number(argOf('size', '12'));
+const ERA = Number(argOf('era', '3'));
+const SIDE = (argOf('side', 'A') === 'B' ? 'B' : 'A') as PlayerId;
 const CAP = Number(argOf('cap', '0'));
 const SEED = Number(argOf('seed', '0'));
 
@@ -56,7 +65,26 @@ type AiFn = (s: GameState, b: typeof DEFAULT_BUDGET, r: ReadonlySet<string>) => 
   typeof import('../src/core/ai.ts')['aiNextAction']
 >;
 const meNext = ((await import('../src/core/v4/ai-v4.ts')) as { aiNextAction: AiFn }).aiNextAction;
-const foeNext = ((await import('../src/core/ai.ts')) as { aiNextAction: AiFn }).aiNextAction;
+/*
+ * **对手要和导出回放的那个工具一致**，否则"同一颗种子"根本不是同一局。
+ *
+ *   · 考题模式默认 `auto`（`src/core/ai.ts`，也就是 `exam-grade --foe-ai auto` 那一个，题库标准）；
+ *   · 随机图模式默认 `old`（`scripts/baseline-ai.ts`，也就是 `v4-duel(-replay)` 的默认对手）。
+ *
+ * 换对手会换整局，所以两边的数只有对手相同才能对读。
+ */
+const FOE_KIND = argOf('foe', '');
+const foeOf = async (kind: string): Promise<AiFn> =>
+  (
+    (await import(
+      kind === 'v3'
+        ? '../src/core/ai-v3.ts'
+        : kind === 'auto'
+          ? '../src/core/ai.ts'
+          : './baseline-ai.ts'
+    )) as { aiNextAction: AiFn }
+  ).aiNextAction;
+let foeNext: AiFn = await foeOf(FOE_KIND || 'auto');
 
 /** 一手的读数 */
 type Row = {
@@ -106,20 +134,42 @@ function playExam(dir: string): void {
     ? (JSON.parse(readFileSync(critPath, 'utf8')) as { me?: PlayerId; window?: number })
     : {};
   const ME: PlayerId = crit.me ?? raw.state.current;
-  const FOE: PlayerId = ME === 'A' ? 'B' : 'A';
-  const cap = SEED ? CAP || crit.window || 60 : CAP || crit.window || 60;
+  const cap = CAP || crit.window || 60;
 
   resetV4();
   const s0 = structuredClone(raw.state);
-  s0.aiControl = { [ME]: false, [FOE]: false } as Record<PlayerId, boolean>;
   if (SEED) s0.seed = SEED;
+  play(dir, s0, ME, cap);
+}
+
+/**
+ * **生成对局**（不是考题）：随机图整局。
+ *
+ * 为什么探针要能跑整局：考题里绝大多数局开局 0 金，"挨打 + 有钱"这个组合只有 D-2-01/02 少数几道
+ * 能考出来；而实战里"城被围 + 手上有钱"是常态。要判断名额机制在真局里到底动了几格，
+ * 只能跑整局——而且最好**和导出的回放是同一局**（种子 / 尺寸 / 代数一致），
+ * 这样你在复盘里看到的画面，和我报的数对得上。
+ */
+function playMatch(seed: number, size: number, era: number, cap: number, side: PlayerId): void {
+  resetV4();
+  const s0: GameState = createMatch(
+    { ...DEFAULT_CONFIG, size, startEra: era, mapStyle: 'random', mapSymmetry: 'fair' },
+    seed,
+  );
+  play(`随机图 ${size}×${size} · ${era} 代 · seed ${seed}（v4 执 ${side}）`, s0, side, cap);
+}
+
+function play(label: string, s0: GameState, ME: PlayerId, cap: number): void {
+  const FOE: PlayerId = ME === 'A' ? 'B' : 'A';
+  s0.aiControl = { [ME]: false, [FOE]: false } as Record<PlayerId, boolean>;
 
   const before = rows.length;
   let s = s0;
   let turnIdx = 0;
   let rejectsThisGame = 0;
+  let recruitsThisGame = 0;
 
-  console.log(`\n=== ${dir} · ${ME} 方 · 上限 ${cap} 手 ===`);
+  console.log(`\n=== ${label} · 上限 ${cap} 手 ===`);
 
   while (!s.winner && s.turn - s0.turn < cap) {
     const who = s.current;
@@ -134,6 +184,7 @@ function playExam(dir: string): void {
       s = st.state;
       row.rejects = st.rejects;
       rejectsThisGame += st.rejects;
+      recruitsThisGame += st.recruits;
       rows.push(row);
       totalRejects += st.rejects;
       printRow(row);
@@ -156,7 +207,8 @@ function playExam(dir: string): void {
   console.log(
     `— 终局：第 ${s.turn} 手 · 我方城 ${s.cities.filter((c) => c.owner === ME && !c.ruined).length}` +
       `（丢 ${lost}）· 我方战斗兵 ${s.units.filter((u) => u.owner === ME && utype(s, u.type).category === 'combat').length}` +
-      ` · 敌方战斗兵 ${s.units.filter((u) => u.owner === FOE && utype(s, u.type).category === 'combat').length}`,
+      ` · 敌方战斗兵 ${s.units.filter((u) => u.owner === FOE && utype(s, u.type).category === 'combat').length}` +
+      ` · 累计造兵 ${recruitsThisGame}`,
   );
 }
 
@@ -261,6 +313,26 @@ function measure(
     bad: 0,
     rejects: 0,
   };
+
+  if (SHOW_QUOTA && con.spawnQuota && con.spawnQuota.length > 0) {
+    quotaTurns += 1;
+    for (const q of con.spawnQuota) {
+      quotaCells += q.cells.length;
+      quotaEvicts += q.evict.length;
+      const fmt = (k: number): string => `(${k % s.w},${Math.floor(k / s.w)})`;
+      const at = (k: number): string => {
+        const u = s.units.find((x) => x.x === k % s.w && x.y === Math.floor(k / s.w));
+        if (!u) return '空';
+        const c = utype(s, u.type).category;
+        return `${u.type}${c === 'combat' ? '（战斗·吃护甲）' : '（非战斗）'}`;
+      };
+      console.log(
+        `  ▸ T${s.turn} ${q.cityId} 产兵名额 ${q.want} 格 → 留空 ` +
+          q.cells.map((k) => `${fmt(k)}${q.evict.includes(k) ? '←赶' : ''}`).join(' ') +
+          ` ｜ ${q.cells.map(at).join(' / ')}`,
+      );
+    }
+  }
 
   if (CHECK_KEEP) {
     const legacy = legacyKeepClear(s, world.cities);
@@ -386,12 +458,13 @@ function printRow(r: Row): void {
 function stepSide(
   s: GameState,
   ai: AiFn,
-): { state: GameState; rejects: number } {
+): { state: GameState; rejects: number; recruits: number } {
   const budget = { ...DEFAULT_BUDGET };
   const rejected = new Set<string>();
   const moveTries = new Map<string, number>();
   let cur = s;
   let rejects = 0;
+  let recruits = 0;
   for (let i = 0; i < AI_MAX_STEPS && !cur.winner; i++) {
     const a = ai(cur, budget, rejected);
     if (!a) break;
@@ -408,16 +481,25 @@ function stepSide(
       continue;
     }
     rejected.clear();
-    if (a.type === 'RECRUIT') budget.recruited += 1;
+    if (a.type === 'RECRUIT') {
+      budget.recruited += 1;
+      recruits += 1;
+    }
     if (a.type === 'UPGRADE') budget.upgraded += 1;
     cur = r.state;
   }
-  if (cur.winner) return { state: cur, rejects };
+  if (cur.winner) return { state: cur, rejects, recruits };
   const r = applyAction(cur, { type: 'END_TURN' });
-  return { state: r.ok ? r.state : cur, rejects };
+  return { state: r.ok ? r.state : cur, rejects, recruits };
 }
 
-for (const dir of EXAM_ARGS) playExam(dir);
+if (EXAM_ARGS.length > 0) {
+  for (const dir of EXAM_ARGS) playExam(dir);
+} else {
+  /* 没给 --exam 就跑随机图（默认 12×12 · 3 代 · 160 手，和 `v4-duel` 的快检档一致） */
+  if (!FOE_KIND) foeNext = await foeOf('old');
+  playMatch(SEED || 900, SIZE, ERA, CAP || 160, SIDE);
+}
 
 console.log('\n=== 合计 ===');
 const sum = (f: (r: Row) => number): number => rows.reduce((n, r) => n + f(r), 0);
@@ -430,6 +512,12 @@ console.log(
     ` | 离敌城更远 ${sum((r) => r.awayFoe)}` +
     ` | 被引擎拒 ${totalRejects}`,
 );
+if (SHOW_QUOTA) {
+  console.log(
+    `产兵名额：生效 ${quotaTurns} 手 · 留空 ${quotaCells} 格 · 其中赶人 ${quotaEvicts} 格` +
+      (quotaCells > 0 ? `（${Math.round((quotaEvicts / quotaCells) * 100)}% 需要赶人）` : ''),
+  );
+}
 const ys = sum((r) => r.yields);
 const bad = sum((r) => r.bad);
 console.log(

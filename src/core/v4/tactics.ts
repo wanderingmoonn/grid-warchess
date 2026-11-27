@@ -648,6 +648,17 @@ function cityPostCell(
       const x = home.x + dx;
       const y = home.y + dy;
       if (takenByOther(s, u, x, y)) continue;
+      /*
+       * **不许站进"这一手要留给产兵"的格**（批 2，2026-11-27）。
+       *
+       * 名额把挨打时的城格分成两份：产兵要 N 格（`con.spawnQuota`）、守军留 `CITY_POST` 格。
+       * 这里原来只数"有没有人站"，于是守军会走进被保留的那几格 → 下一手被搬迁链赶出来 →
+       * 再走回去，一来一回**每回合都在抖**（实测 seed 900：被引擎拒 274 → 780 次，整局形状变差）。
+       *
+       * 读 `con.keepClear` 而不是 `spawnQuota`：城格在"没挨打"时本来就在 `keepClear` 里，
+       * 用同一个集合，"这一格这一手能不能站"就只有一处答案。
+       */
+      if (con.keepClear.includes(y * s.w + x)) continue;
       const d = Math.min(...foes.map((f) => Math.abs(f.x - x) + Math.abs(f.y - y)));
       free.push({ x, y, d, k: y * s.w + x });
     }
@@ -656,14 +667,13 @@ function cityPostCell(
   free.sort((a, b) => a.d - b.d || a.k - b.k);
 
   /*
-   * **至少留一格空着**（2026-11-25，配套清 9.13）。
+   * **"进城要留一格"这条补丁删了**（批 2，2026-11-27）。
    *
-   * 城格同时是"能站人吃护甲的地方"和"新兵的产兵口"。全站满之后
-   * `recruitSpawnCells` 返回空数组，引擎会拒"城市里已经站满了，先挪出位置"——
-   * 于是守军为了 3 点护甲把补兵这条路堵死了。
-   * 现在要求进城的这一格不会把最后一格占掉（`free.length >= 2` 才进）。
+   * 原话是"要求进城的这一格不会把最后一格占掉（`free.length >= 2` 才进）"——
+   * 那是产兵名额还写死成 1 时的替代品。现在名额由 `applySpawnQuota` 按
+   * "这一手买得起几个"算出来，并把那几格**提前**放进 `keepClear`，
+   * 所以"别把补兵路堵死"已经由上面那行 `continue` 保证，不需要再数第二遍。
    */
-  if (free.length < 2) return null;
 
   /* 同一支队里我排第几（按 id，稳定），就挑第几个候选格 */
   const sq = squadOf(con, u);

@@ -391,6 +391,14 @@ export interface Constraints {
     /** 这次采购的瓶颈：`'cell'` = 不除（一格一个），`'gold'` = 除以单价 */
     bottleneck: 'cell' | 'gold';
   };
+  /**
+   * **这一手真的给产兵腾了哪几格**（批 2，2026-11-27）：只观测，不接任何判断。
+   *
+   * 挨打时城格原来是"整块豁免"，现在按名额留几格（见 `constrain.applySpawnQuota`）。
+   * 面板、探针、回放都要能回答"这一手到底腾了哪几格、赶走了谁"——
+   * 没有这个字段，机制生效没生效只能靠猜。
+   */
+  spawnQuota?: Array<{ cityId: string; want: number; cells: number[]; evict: number[] }>;
   /** 必须空出来的格子（产兵格、城门口）。打分层发现自家单位站着，第一件事就是把它挪开 */
   keepClear: number[];
   squads: Squad[];

@@ -21,6 +21,7 @@ import { DECIDE_HORIZON } from './decide.ts';
 import { bestEraBy, bestProjection, incomeNow, projectEconUntil, projectWithEra, solveEconAll, unitWorth, unitWorthOfType } from './project.ts';
 import type { EraTable } from './project.ts';
 import type { Band, Constraints, Decision, Squad, SquadTactics, V4Memory } from './types.ts';
+import { CITY_POST } from './needs.ts';
 import { buildWorld, upgradedCity } from './world.ts';
 import type { World } from './world.ts';
 
@@ -185,6 +186,112 @@ function assemblePoint(s: GameState, world: World, cityId: string): { x: number;
 }
 
 /**
+ * **产兵名额**（批 2，2026-11-27）：挨打时城格不再"整块豁免"，而是"留够这一手要用的那几格"。
+ *
+ * ── 它替掉的是什么 ────────────────────────────────────────────
+ *
+ * 原来挨打时（`foeEta <= 1`）城格**整块**从"必须空"里消失（守军要吃 +3 护甲，这没错），
+ * 然后在 `planYield` 里有一条补丁：**城格站满 + 里面有非战斗单位 → 把那格加进赶人名单**。
+ *
+ * 那条补丁有三个毛病（批 0 的账里都能看见）：
+ *   ① 只在"站满"时才动手——3 格占着、手上有 238 金，照样一格都腾不出来；
+ *   ② 只赶**非战斗**单位——守军把城格站满时就彻底造不出兵；
+ *   ③ 名额写死是 1 格，和"这一手要造几个"没有关系。
+ *
+ * 现在换成一句：**留够这一手真能造的兵数**，其余城格随便站。
+ *
+ * ── 名额从哪来（两个都是现成的数，不许新拍）────────────────────
+ *
+ *   · **守军名额** `CITY_POST`：城格一共 n×n 格，先扣掉守军那几格（他们拿护甲换的）；
+ *   · **产兵名额** = `min(剩几格, 这一手买得起几个)`；买得起几个 = `floor(金币 ÷ 最便宜单价)`，
+ *     单价取战斗兵和经济兵里更便宜的那个（这一手造哪种都算腾地方）。
+ *
+ * 三条闸把"不该腾"挡在外面：
+ *   ① 没挨打（`foeEta > 1`）→ 城格本来全在表里，不用补；
+ *   ② 这一手是**攒钱模式**（`spend.mode === 'save'`）→ 一个兵都不造，腾了也是白腾；
+ *   ③ 买不起（名额 0）→ 不腾（这就是"有钱才清产兵口"，和 `need.spawn` 同一个意思）。
+ *
+ * ── 挑哪几格（只影响"赶谁"，不影响"腾几格"）───────────────────
+ *
+ * 空的先挑（不用赶人）→ 非战斗单位（不靠护甲活）→ 战斗兵（最后才动，那一格是他们拿护甲换的）。
+ * 同类按格号，保证同一个局面每次挑同几格（不许有随机）。
+ */
+function applySpawnQuota(
+  s: GameState,
+  world: World,
+  decision: Decision,
+  keepClear: number[],
+  keepSet: Set<number>,
+): NonNullable<Constraints['spawnQuota']> {
+  const out: NonNullable<Constraints['spawnQuota']> = [];
+  /* ② 攒钱模式：这一手不造兵，腾产兵口是白腾 */
+  if (decision.spend?.mode === 'save') return out;
+  const gold = s.players[world.me]?.gold ?? 0;
+
+  /*
+   * **这一手买得起几个 = 名额的上限**。单价取战斗兵和经济兵里更便宜的那个
+   * （这一手造哪种兵都要腾地方），都是现成的数，没有新系数。
+   *
+   * ── 为什么不"固定留 2 格"（2026-11-27 实测否掉的版本）──────────
+   *
+   * 试过不看钱、按"城格数 − 守军名额"直接留 2 格。6 颗种子的对照（对手 = 冻结基线，
+   * 12×12·3 代）里 seed 902 从"41 手抢下 3 城"变成"64 手丢两城"：
+   * 挨打时把守军赶出城去腾产兵口，而**那一手根本没造兵**，白少了两个 +3 护甲的位置。
+   *
+   * 所以名额只回答一件事：**这一手真会造出几个兵**。买不起就一格都不腾——
+   * 这和 `need.spawn`（"有钱才谈得上腾产兵口"）是同一个意思，不是新判断。
+   */
+  const prices: number[] = [];
+  for (const info of world.cities) {
+    for (const o of world.affordableCombat(info.city, gold)) prices.push(o.gold);
+  }
+  const econPrices = world.econSpots().map((p) => p.gold).filter((g) => g > 0 && g <= gold);
+  if (econPrices.length > 0) prices.push(Math.min(...econPrices));
+  const cheapest = prices.length > 0 ? Math.min(...prices) : 0;
+  const afford = cheapest > 0 ? Math.floor(gold / cheapest) : 0;
+  if (afford <= 0) return out;
+
+  for (const info of world.cities) {
+    /* ① 没挨打 → 城格本来就在表里（产兵口是全清的），不用补 */
+    if (info.foeEta > 1) continue;
+    const cells = cityTiles(info.city).map((t) => t.y * s.w + t.x);
+    /*
+     * **名额 = 1 格，不是"这一手买得起几个"**（2026-11-27 实测定的）。
+     *
+     * 试过留 2 格（城格 4 − 守军 2）。6 颗种子对照：seed 902 从"41 手抢下 3 城"
+     * 翻成"64 手丢两城"，而且那 15 手里**只有 1 次赶人**——亏的不是赶人，是"预留"：
+     * 那两格一直不许站，等于让两个守军丢掉 +3 护甲，换来的只是多造 4 个兵。
+     *
+     * 所以挨打时的真需求只有一条：**补兵这条路不能断**。那是个布尔，就是个 1 格。
+     * 写"买得起几个"是把采购的账搬到这儿再算一遍——同一件事两个答案，必然打架。
+     */
+    const want = Math.min(1, Math.max(0, cells.length - CITY_POST), afford);
+    if (want <= 0) continue;
+
+    /* 挑 want 格：空 → 非战斗 → 战斗；同类按格号 */
+    const rankOf = (k: number): number => {
+      const u = occupantAt(s, k % s.w, Math.floor(k / s.w));
+      if (!u || u.owner !== world.me) return u ? 3 : 0;
+      return utype(s, u.type).category === 'combat' ? 2 : 1;
+    };
+    const pick = [...cells]
+      .filter((k) => !keepSet.has(k))
+      .sort((a, b) => rankOf(a) - rankOf(b) || a - b)
+      .slice(0, want);
+    if (pick.length === 0) continue;
+    const freed: number[] = [];
+    for (const k of pick) {
+      keepClear.push(k);
+      keepSet.add(k);
+      const u = occupantAt(s, k % s.w, Math.floor(k / s.w));
+      if (u && u.owner === world.me) freed.push(k);
+    }
+    out.push({ cityId: info.city.id, want, cells: pick, evict: freed });
+  }
+  return out;
+}
+
+/**
  * 让位搬迁计划（多源 BFS）——**思路抄 v3 的 `buildYieldPlan`，代码不抄**。
  *
  * 种子是**所有空格**（能站人的、非城格）。从它们向外扩，穿过自己人算一步
@@ -257,30 +364,13 @@ function planYield(
     (k) => (need.spawn && cityCells.has(k)) || (need.exit && !cityCells.has(k)),
   );
   /*
-   * **挨打时也要腾一格产兵**（2026-11-26 22:50，用户指出的第 3 条）。
+   * **"挨打时腾一格"那条补丁已经删了**（批 2，2026-11-27）。
    *
-   * `keepClear` 在挨打时（`foeEta <= 1`）把城格**整块豁免**了——守军站进城能吃 +3 护甲，
-   * 这没错；但经济单位也跟着蹲进去，城格只有 4 个，蹲 2~3 个经济单位 + 1~2 个守军就满了，
-   * `recruitSpawnCells` 返回空，**有钱也造不出兵**（900 局实测：T10 手上 238 金、城内 3~4 格全占）。
-   *
-   * 这里只补一件能数的事：**挨打 + 城格站满 + 里面有非战斗单位** → 把那**一格**加进赶人名单。
-   * 只赶非战斗单位：战斗兵那一格是他们用护甲换来的，抢回来会让城更容易塌
-   * （D-2-02 实测：无条件留一格之后守军少进一个，第 6 手城就没了）。
+   * 它当时做的是"挨打 + 城格站满 + 里面有非战斗单位 → 赶走那一格"。
+   * 现在由 `applySpawnQuota` 统一回答：挨打时按名额留够产兵格（名额 = 这一手买得起几个），
+   * 挑格顺序是"空 → 非战斗 → 战斗"。所以这里只剩一句类型筛选，
+   * 城格要不要赶人**不在这里判断**——它在建 `keepClear` 的时候就定完了。
    */
-  if (need.spawn) {
-    for (const info of world.cities) {
-      if (info.foeEta > 1) continue;
-      const tiles = cityTiles(info.city).map((t) => t.y * s.w + t.x);
-      const occ = tiles
-        .map((k) => ({ k, u: occupantAt(s, k % s.w, Math.floor(k / s.w)) }))
-        .filter((x): x is { k: number; u: Unit } => !!x.u && x.u.owner === world.me);
-      /* 没站满就不用赶（产兵格本来还有空）；全是守军也不动（那是护甲） */
-      if (occ.length < tiles.length) continue;
-      const squatter = occ.find((x) => utype(s, x.u.type).category !== 'combat');
-      if (!squatter || targets.includes(squatter.k)) continue;
-      targets.push(squatter.k);
-    }
-  }
   if (targets.length === 0) return [];
   const N = s.w * s.h;
 
@@ -1131,7 +1221,7 @@ function guardSplit(
   city: City,
   ids: string[],
 ): { inside: string[]; field: string[]; at?: { x: number; y: number } } {
-  if (ids.length <= 2) return { inside: ids, field: [] };
+  if (ids.length <= CITY_POST) return { inside: ids, field: [] };
   const out = world.defensible(city);
   if (!Number.isFinite(out.rounds) || out.rounds < 4) return { inside: ids, field: [] };
   /* 敌人 2 手内就要开打才谈得上"迎击"；更远的话先按原来的走位（`S-013` 实测：那时分兵会丢城） */
@@ -1143,7 +1233,7 @@ function guardSplit(
     .filter((u): u is Unit => !!u)
     .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1));
   const deadline = Math.max(1, out.firstAt);
-  const field = units.slice(2).filter((u) => world.marchTurns(u, at) <= deadline);
+  const field = units.slice(CITY_POST).filter((u) => world.marchTurns(u, at) <= deadline);
   if (field.length === 0) return { inside: ids, field: [] };
   const fieldIds = new Set(field.map((u) => u.id));
   return { inside: ids.filter((id) => !fieldIds.has(id)), field: [...fieldIds], at };
@@ -1553,6 +1643,15 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
   const city = decision.cityId ? s.cities.find((c) => c.id === decision.cityId) : undefined;
   const keepClear = [...world.keepClear];
   const keepSet = new Set(keepClear);
+  /*
+   * **批 2：产兵名额先算**（见 `applySpawnQuota`）。
+   *
+   * 必须排在下面所有读者之前——`rest`（编队池）、`blockers`（临时调令）、
+   * `planYield`（搬迁链）读的都是这一份 `keepClear`。
+   * 排在架桥那条之前：架桥加的是"走廊"，两边不重叠；顺序只影响 `keepClear` 的先后，
+   * 而先后会决定让位链的占用顺序（批 1 已经踩过这个坑），所以**放在最前面**最省事。
+   */
+  const spawnQuota = applySpawnQuota(s, world, decision, keepClear, keepSet);
   /*
    * **架桥时先把工兵要站的那一格空出来**（W4-4d-2，2026-11-26）。
    *
@@ -2809,6 +2908,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     econPosts: econPlan.posts,
     econNext: econPlan.next,
     econOrder: econPlan.order,
+    spawnQuota: spawnQuota.length > 0 ? spawnQuota : undefined,
     keepClear,
     squads,
     steps: marched.steps,
