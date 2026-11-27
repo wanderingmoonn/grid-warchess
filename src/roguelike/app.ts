@@ -87,7 +87,7 @@ function exitBtn(cls = 'rg-exit'): string {
 function packCard(c: { id: string; name: string; blurb: string; reason: string; defaultOn: boolean }): string {
   const on = pickedPacks.has(c.id);
   return `<button class="rg-pack ${on ? 'on' : ''}" data-pack="${escapeHtml(c.id)}" aria-pressed="${on}">
-    <b>${escapeHtml(c.name)}${c.defaultOn ? '<u>推荐</u>' : ''}</b>
+    <b>${escapeHtml(c.name)}</b>
     <span>${escapeHtml(c.blurb)}</span>
     <em>${escapeHtml(c.reason)}</em>
     <i>${on ? '已开启' : '关闭'}</i>
@@ -114,9 +114,13 @@ function dlcSection(): string {
     <header class="rg-dlc-head">
       <div>
         <h2>本局扩展 <small>（照战役模式的接法：包决定兵池与规则）</small></h2>
-        <p class="rg-dim">兵池不再手写：每个包按自己的时代、编制与前置条件进场。剧情兵种包跟着第一层的选择走。</p>
+        <p class="rg-dim">兵池不再手写：每个包按自己的时代、编制与前置条件进场。剧情兵种包跟着第一层的选择走。
+        <b>本版所有可选扩展默认关闭</b>；正式版由道中事件解锁（接口已留），现在想先试规则可以手动打开。</p>
       </div>
-      <button class="rg-btn ghost mini" data-pack-reset>恢复推荐</button>
+      <div class="rg-dlc-btns">
+        <button class="rg-btn ghost mini" data-pack-reset>全部关闭</button>
+        <button class="rg-btn ghost mini" data-pack-all>全部打开（调试）</button>
+      </div>
     </header>
     <div class="rg-dlc-fixed">
       <span class="rg-dlc-label">随史线</span>
@@ -189,6 +193,12 @@ function showStart(root: HTMLElement): void {
     }
     if (el?.closest('[data-pack-reset]')) {
       pickedPacks = new Set(defaultExtraPacks());
+      showStart(root);
+      return;
+    }
+    if (el?.closest('[data-pack-all]')) {
+      // 调试用：把可选包一次全打开（正式版走事件解锁）
+      pickedPacks = new Set([...ruleChoices(), ...supportChoices()].map((c) => c.id));
       showStart(root);
       return;
     }

@@ -54,7 +54,7 @@ import {
 import type { Action, GameState, Unit } from '../core/types.ts';
 import { buildBattle, baseTypeOf, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
 import type { BattleInit, BattleResult } from './types.ts';
-import { growthOf } from './data.ts';
+import { growthOf, unitName } from './data.ts';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
 /** 撤回上限：一回合里走不到这么多步，够用又不会把内存拖大 */
@@ -76,7 +76,16 @@ interface BattleHandlers {
 
 export function mountBattle(host: HTMLElement, init: BattleInit, handlers: BattleHandlers): () => void {
   let state: GameState = buildBattle(init);
+  /** 选中**自己的**单位（决定可达格/可攻击目标，能下指令） */
   let selectedId: string | null = null;
+  /**
+   * 正在**查看**的单位（可以是敌人）。
+   *
+   * 和 `selectedId` 分开是必须的：点敌人只是想看它的射程/护甲/技能，
+   * 不应该让「攻击」按钮拿着敌人的 id 去发指令；而点自己的兵时两者相同。
+   */
+  let inspectedId: string | null = null;
+  let lastSelKey = '';
   let selectedCityId: string | null = null;
   let selectedTile: { x: number; y: number } | null = null;
   let reach: number[] = [];
@@ -321,6 +330,12 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     return selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   }
 
+  /** 侧栏要展示的单位：查看对象优先，没有就看选中的自己人 */
+  function inspected(): Unit | undefined {
+    const id = inspectedId ?? selectedId;
+    return id ? state.units.find((u) => u.id === id) : undefined;
+  }
+
   function stackAt(x: number, y: number): Unit[] {
     const rank = (u: Unit): number => {
       if (utype(state, u.type).category === 'building') return 2;
@@ -369,6 +384,8 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       sieges = [];
       pendingSkill = null;
       skillAim = [];
+      // 查看对象死了/不在场就收起；活着的敌人继续留在侧栏里给玩家读
+      if (inspectedId && !state.units.some((u) => u.id === inspectedId && u.hp > 0)) inspectedId = null;
       return;
     }
     const isWork = utype(state, unit.type).category === 'building';
@@ -384,7 +401,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     refreshSelection();
     const view = playerView(state, 'A');
     const ui: BoardUi = {
-      selectedId,
+      selectedId: inspectedId ?? selectedId,
       selectedCityId,
       reach,
       targets,
@@ -436,10 +453,13 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
    */
   function renderCampaignPanel(view: ReturnType<typeof playerView>): void {
     const cityId = selectedCityId && state.cities.some((c) => c.id === selectedCityId) ? selectedCityId : null;
+    const selKey = `${inspectedId ?? ''}|${cityId ?? ''}|${selectedTile?.x ?? ''},${selectedTile?.y ?? ''}`;
+    const selChanged = selKey !== lastSelKey;
+    lastSelKey = selKey;
     renderPanel(sideEl!, {
       view,
       me: 'A',
-      selectedUnit: selected() ?? null,
+      selectedUnit: inspected() ?? selected() ?? null,
       selectedCityId: cityId,
       selectedCampId: null,
       selectedTile,
@@ -454,6 +474,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       opsHtml: `
         <div class="hint">
           <b>单位</b>：蓝格移动，红框攻击。走完还能接着打，不用重新选。<br />
+          <b>查看</b>：点侧栏上方的「敌军」徽章，或**右键**棋盘上的单位（右键只看不打）；详情卡会直接排到最上。<br />
           <b>强制移动 / 攻击</b>：<kbd>Alt</kbd> / <kbd>Shift</kbd>；也可以打开「进阶操作」里的两个按钮。
           空地叠在同一格时，只有强制模式能指到下面那个。<br />
           <b>撤回</b>：<kbd>Ctrl</kbd>+<kbd>Z</kbd>，只在同一回合内可用。<br />
@@ -469,21 +490,32 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       }
     }
     /*
-     * 肉鸽独有的两张卡，补在战役面板上：
-     *   · 我军 —— 战役里兵都围着城，点棋盘就够；肉鸽没有城，队伍可能散在
-     *     地图边缘，而且"这一仗还剩几个人"是要一眼看到的；
+     * 肉鸽独有的两张卡/条，补在战役面板上：
+     *   · 我军/敌军条 —— 战役里兵围着城，点棋盘就够；肉鸽没有城，队伍会散在
+     *     地图边缘，而且要能快速查敌方数据。做成一条横向的小徽章，不占侧栏；
      *   · 外人 —— 中立单位的场外交涉，战役里没有这种对象。
      * 每次先把上一次插的摘掉，再插新的：`renderPanel` 在 HTML 没变时会早退
      * （不动 DOM），不清就会一帧多一张。
      */
-    for (const old of sideEl!.querySelectorAll(':scope > .rg-army-card, :scope > .rg-parley-card')) old.remove();
-    const seats = sideEl!.querySelector('.card-seats');
-    const army = armyCardHtml();
-    if (army) {
-      const card = document.createElement('div');
-      card.className = 'card rg-army-card';
-      card.innerHTML = army;
-      sideEl!.insertBefore(card, seats?.nextSibling ?? sideEl!.firstChild);
+    for (const old of sideEl!.querySelectorAll(':scope > .rg-army-bar, :scope > .rg-parley-card')) old.remove();
+    const detail = sideEl!.querySelector<HTMLElement>('.card-detail');
+    const hasSel = !!(inspectedId || cityId || selectedTile);
+    const bar = armyBarHtml();
+    if (bar) {
+      const el = document.createElement('div');
+      el.className = 'rg-army-bar';
+      el.innerHTML = bar;
+      /*
+       * 条永远在最上（约 60px，两行），详情卡紧随其后。
+       *
+       * 上一版把条插在详情卡后面——详情卡本身很高，条就被顶到屏幕底，
+       * 「快速换一个兵看」变成了先滚到底。条在最上、详情第二，两个入口
+       * 都不用滚。
+       */
+      sideEl!.prepend(el);
+      if (hasSel && detail) sideEl!.insertBefore(detail, el.nextSibling);
+    } else if (hasSel && detail) {
+      sideEl!.prepend(detail);
     }
     const parley = parleyCardHtml();
     if (parley) {
@@ -492,41 +524,51 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       card.innerHTML = parley;
       sideEl!.appendChild(card);
     }
+    if (selChanged) sideEl!.scrollTop = 0;
   }
 
-  /** 我军清单：点一行 = 选中那个兵（棋盘之外的第二个入口） */
-  function armyCardHtml(): string {
-    const mine = unitsOf(state, 'A').filter((u) => u.hp > 0);
-    if (mine.length === 0) return '';
-    const combat = mine.filter((u) => utype(state, u.type).category === 'combat');
-    const works = mine.filter((u) => utype(state, u.type).category === 'building');
-    const rows = mine
-      .map((u) => {
-        const d = utype(state, u.type);
-        const grow = growthOf(baseTypeOf(u.type), init.layer);
-        const badge =
-          grow && grow.step < grow.fullAt ? `<i class="rg-army-grow">成长 ${grow.step}/${grow.fullAt}</i>` : '';
-        const done = u.moved && u.acted ? ' done' : u.moved || u.acted ? ' part' : '';
-        const sel = u.id === selectedId ? ' sel' : '';
-        const where =
-          d.category === 'building'
-            ? '工事'
-            : u.moved && u.acted
-              ? '已行动'
-              : u.moved
-                ? '已移动'
-                : u.acted
-                  ? '已攻击'
-                  : `${String.fromCharCode(65 + u.x)}${u.y + 1}`;
-        return `<button class="rg-army-row${sel}${done}" data-pick-unit="${u.id}" title="${escapeHtml(d.name)} · ${u.hp}/${maxHpOf(state, u)}">
-          <span class="n">${escapeHtml(d.name)}${badge}</span>
-          <span class="s">${u.hp}/${maxHpOf(state, u)} · ${where}</span>
-        </button>`;
-      })
-      .join('');
-    return `<div class="card-title">我军 <span class="hint">${combat.length} 个战斗单位${
-      works.length > 0 ? ` · ${works.length} 处工事` : ''
-    }</span></div><div class="rg-army-list">${rows}</div>`;
+  /** 一只兵的小徽章：短名 + 血。点一下 = 查看（自己人同时接管指令权） */
+  function armyChip(u: Unit, side: 'mine' | 'ally' | 'foe'): string {
+    const d = utype(state, u.type);
+    const grow = growthOf(baseTypeOf(u.type), init.layer);
+    const growTag = grow && grow.step < grow.fullAt ? ` · 成长 ${grow.step}/${grow.fullAt}` : '';
+    const done = u.owner === 'A' && u.moved && u.acted ? ' done' : u.owner === 'A' && (u.moved || u.acted) ? ' part' : '';
+    const sel = u.id === (inspectedId ?? selectedId) ? ' sel' : '';
+    const stateText =
+      d.category === 'building'
+        ? '工事'
+        : `${u.hp}/${maxHpOf(state, u)} · ${u.x},${u.y}${done === ' done' ? ' · 已行动' : done ? ' · 行动中' : ''}${growTag}`;
+    const title = `${d.name} · ${u.owner === 'A' ? '我军' : side === 'ally' ? '友军' : '敌军'} · ${stateText}`;
+    const growMark =
+      grow && grow.step < grow.fullAt
+        ? `<em class="rg-armychip-grow" data-grow="${grow.step}/${grow.fullAt}" title="成长 ${grow.step}/${grow.fullAt}">↑</em>`
+        : '';
+    return `<button class="rg-armychip ${side}${sel}${done}" data-pick-unit="${u.id}" title="${escapeHtml(title)}">
+      <b>${escapeHtml(d.short)}</b><span>${u.hp}</span>${growMark}
+    </button>`;
+  }
+
+  function armyGroup(owner: 'A' | 'B' | 'C' | 'D', label: string, side: 'mine' | 'ally' | 'foe'): string {
+    const list = unitsOf(state, owner).filter((u) => u.hp > 0);
+    if (list.length === 0) return '';
+    const combat = list.filter((u) => utype(state, u.type).category === 'combat').length;
+    const works = list.length - combat;
+    return `<div class="rg-armygroup ${side}">
+      <span class="rg-army-tag">${label} <b>${combat}</b>${works > 0 ? `<i>+${works} 工事</i>` : ''}</span>
+      <div class="rg-army-chips">${list.map((u) => armyChip(u, side)).join('')}</div>
+    </div>`;
+  }
+
+  /** 一条横向的「我军 / 友军 / 敌军」徽章条：点谁看谁，不占侧栏 */
+  function armyBarHtml(): string {
+    const parts = [armyGroup('A', '我军', 'mine')];
+    if (init.allyCity) {
+      parts.push(armyGroup('B', '友军', 'ally'));
+      parts.push(armyGroup('C', '攻方', 'foe'));
+    } else {
+      parts.push(armyGroup(foeSeat, '敌军', 'foe'));
+    }
+    return parts.filter(Boolean).join('');
   }
 
   function parleyCardHtml(): string {
@@ -579,7 +621,10 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       if (undoStack.length > UNDO_LIMIT) undoStack.shift();
     }
     state = r.state;
-    if (action.type === 'END_TURN') selectedId = null;
+    if (action.type === 'END_TURN') {
+      selectedId = null;
+      inspectedId = null;
+    }
     pendingCombat = null;
     pendingSkill = null;
     skillAim = [];
@@ -601,6 +646,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     }
     state = prev;
     selectedId = null;
+    inspectedId = null;
     selectedCityId = null;
     selectedTile = null;
     pendingSkill = null;
@@ -883,6 +929,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     // 先判"我方单位"：点自己的兵永远是选中，不会误触发攻击
     if (clicked && clicked.owner === 'A') {
       selectedId = clicked.id;
+      inspectedId = clicked.id;
       selectedCityId = null;
       selectedTile = null;
       pendingCombat = null;
@@ -906,20 +953,47 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       }
     }
 
-    // 什么都不做：把这一格/这座城/这个敌人当"查看对象"
+    // 什么都不做：把这一格/这座城/这个敌人当「查看对象」
     if (clicked) {
-      selectedId = clicked.id;
+      // 敌人只查看，不接管指令权
+      selectedId = null;
+      inspectedId = clicked.id;
       selectedCityId = null;
       selectedTile = null;
     } else if (city) {
       selectedId = null;
+      inspectedId = null;
       selectedCityId = city.id;
       selectedTile = null;
     } else {
       selectedId = null;
+      inspectedId = null;
       selectedCityId = null;
       selectedTile = { x, y };
     }
+    pendingCombat = null;
+    render();
+  });
+
+  /**
+   * 右键 = **只看不打**。
+   *
+   * 棋盘上左键点一个"够得着的敌人"会直接开火（肉鸽保持了短平快的手感），
+   * 但玩家常常只想先看它的射程/护甲/技能。右键把这一下变成纯查看：
+   * 不接管指令权、不触发攻击，详情卡照样排到侧栏最上。
+   */
+  boardEl!.addEventListener('contextmenu', (e) => {
+    if (busy || finished) return;
+    const coords = cellAtPoint(boardEl!, e.clientX, e.clientY);
+    if (!coords) return;
+    const u = stackAt(coords.x, coords.y)[0];
+    if (!u) return;
+    e.preventDefault();
+    inspectedId = u.id;
+    if (u.owner === 'A' && state.current === 'A') selectedId = u.id;
+    else selectedId = null;
+    selectedCityId = null;
+    selectedTile = null;
     pendingCombat = null;
     render();
   });
@@ -933,6 +1007,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     }
     if (e.key === 'Escape') {
       selectedId = null;
+      inspectedId = null;
       selectedCityId = null;
       selectedTile = null;
       pendingSkill = null;
@@ -960,7 +1035,10 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     /* ---- 我军清单（侧栏） ---- */
     const pickUnit = target?.closest<HTMLElement>('[data-pick-unit]')?.dataset.pickUnit;
     if (pickUnit) {
-      selectedId = pickUnit;
+      const u = state.units.find((x) => x.id === pickUnit);
+      // 点敌人只查看；点自己人同时接管指令权
+      selectedId = u && u.owner === 'A' && state.current === 'A' ? pickUnit : null;
+      inspectedId = pickUnit;
       selectedCityId = null;
       selectedTile = null;
       pendingCombat = null;
@@ -1009,6 +1087,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       if (r.ok) {
         state = r.state;
         selectedId = null;
+        inspectedId = null;
         selectedCityId = null;
         selectedTile = null;
         pendingSkill = null;
@@ -1143,6 +1222,21 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
 
   arrivalWaves();
   render();
+  /*
+   * 带伤进场时说一句。
+   *
+   * 上一战活下来的人只回 40%（`HEAL_PER_BATTLE`），换层才回满——这是设计，
+   * 但界面以前只在血条上体现，玩家会以为"开局自己掉血"。把"为什么"写在
+   * 战斗开始的第一条提示里，比事后解释有用。
+   */
+  const wounded = Object.entries(init.wounds ?? {}).filter(([, ratio]) => ratio < 0.995);
+  if (wounded.length > 0) {
+    flash(
+      `带伤进场：${wounded
+        .map(([type, ratio]) => `${unitName(type)} ${Math.round(ratio * 100)}%`)
+        .join('、')}（每战恢复 40%，换层回满）`,
+    );
+  }
   // 让根节点拿到焦点，Ctrl+Z / Esc 才能用
   window.setTimeout(() => rootEl.focus(), 0);
   if (state.current !== 'A') void runAi();

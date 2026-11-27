@@ -69,7 +69,13 @@ export interface PackPlan {
   windows?: Partial<Record<LayerId, EraWindow>>;
   /** 开局能不能勾（story / system / locked 一律 false） */
   choosable?: boolean;
-  /** 开局默认勾上 */
+  /**
+   * 开局默认勾上。
+   *
+   * 2026-11-28 起**全部为 false**：所有可选扩展默认关闭，正式版由道中事件
+   * 解锁（接口见 `RunState.packs` / `unlockPack`）。字段留着，是为了以后
+   * 做「推荐配置」或难度预设时还能用。
+   */
   defaultOn?: boolean;
   /** system / locked 的理由；也用作界面上的说明 */
   reason?: string;
@@ -125,7 +131,7 @@ export const PACK_PLANS: Record<string, PackPlan> = {
   'war-economy': {
     kind: 'rule',
     choosable: true,
-    defaultOn: true,
+    defaultOn: false,
     reason: '击杀赏金当场进账，战后随金币带走',
   },
   veterans: {
@@ -155,7 +161,7 @@ export const PACK_PLANS: Record<string, PackPlan> = {
   'scorched-earth': {
     kind: 'rule',
     choosable: true,
-    defaultOn: true,
+    defaultOn: false,
     reason: '阵亡波及相邻；小图上会放大"挤一团"的代价',
   },
   fortress: {

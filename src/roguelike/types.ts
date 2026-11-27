@@ -51,6 +51,15 @@ export interface Effect {
   remove?: ArmyEntry;
   /** 给一件藏品（id） */
   relic?: string;
+  /**
+   * **解锁一个可选扩展**（道中事件用）。
+   *
+   * 只接受 `PACK_PLANS` 里 `choosable` 的规则包/联动包；剧情包、系统包与
+   * 「无作用」包会被拒绝（`unlockPack` 返回失败原因），不会静默塞进本局。
+   * 事件本身还没做，但结算路径已经通了：事件选项写 `effect: { pack: 'trench' }`
+   * 就能在事件房里打开「堑壕战」。
+   */
+  pack?: string;
   /** 下一场战斗我军攻击加成（可叠加，战后清零） */
   nextAtk?: number;
   /** 下一场战斗我军护甲加成 */

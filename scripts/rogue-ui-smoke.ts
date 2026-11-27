@@ -120,6 +120,17 @@ console.log('\n[3] 进战斗：界面元素齐全，认输能回到结算');
   await wait(10);
   check(root.querySelector('[data-act="force-attack"]')?.classList.contains('armed') === true, '强制攻击也能亮起');
   click(root.querySelector('[data-act="force-attack"]'));
+  // 查看敌方：点横条上的敌军徽章，详情卡直接置顶（不需要滚到底）
+  const foeChip = root.querySelector<HTMLElement>('.rg-armychip.foe');
+  check(!!foeChip, '横条上有敌军徽章');
+  click(foeChip);
+  await wait(10);
+  const side = root.querySelector('#rg-side');
+  check(side?.firstElementChild?.classList.contains('rg-army-bar') === true && side?.children[1]?.classList.contains('card-detail') === true, '徽章条在最上、详情卡紧随其后');
+  const foeText = root.querySelector('#rg-side .card-detail')?.textContent ?? '';
+  check(foeText.includes('敌军') && (foeText.includes('攻击 / 护甲') || foeText.includes('生命')), '点敌军能读到具体数据', foeText.replace(/\s+/g, ' ').slice(0, 90));
+  check(root.querySelectorAll('.rg-armychip.mine').length > 0 && root.querySelectorAll('.rg-armychip.foe').length > 0, '我军/敌军分两组');
+
   check(root.querySelectorAll('#rg-board .tile').length > 0, '棋盘格子已渲染');
   check(root.querySelectorAll('#rg-board .unit').length > 0, '棋子已渲染');
   click(root.querySelector('[data-act="surrender"]'));
@@ -251,9 +262,7 @@ console.log('\n[5] 战斗屏的技能栏');
   let done = false;
   const stop = mountBattle(host, battleFor(run, node, 606), { onDone: () => { done = true; } });
   check(!!host.querySelector('.rg-battle-app'), '战斗屏用的是战役外壳');
-  const heroRow = [...host.querySelectorAll<HTMLElement>('[data-pick-unit]')].find((el) =>
-    (el.textContent ?? '').includes('精灵女王'),
-  );
+  const heroRow = host.querySelector<HTMLElement>('[data-pick-unit][title*="精灵女王"]');
   check(!!heroRow, '我军清单里有英雄');
   click(heroRow ?? null);
   await wait(10);
@@ -295,9 +304,7 @@ console.log('\n[5b] 修真单位：悬停卡带境界，且不超出视口');
   });
   const units = [...host.querySelectorAll<HTMLElement>('#rg-board .unit[data-id]')];
   check(units.length > 0, '棋盘上有单位', String(units.length));
-  const row = [...host.querySelectorAll<HTMLElement>('[data-pick-unit]')].find((el) =>
-    (el.textContent ?? '').includes('剑修'),
-  );
+  const row = host.querySelector<HTMLElement>('[data-pick-unit][title*="剑修"]');
   check(!!row, '我军清单里有修士');
   click(row ?? null);
   await wait(10);
@@ -331,7 +338,7 @@ console.log('\n[6] 战场两侧的"外人"：场外交涉');
   check(!!card, '有中立单位时出现「外人」卡');
   const rows = [...host.querySelectorAll<HTMLElement>('.rg-parley-row')];
   check(rows.length === 2, '两个外人各一行', String(rows.length));
-  const mineBefore = host.querySelectorAll('[data-pick-unit]').length;
+  const mineBefore = host.querySelectorAll('.rg-armychip.mine').length;
   const goldOf = (): number => {
     const m = /金币\s*(\d+)/.exec(host.querySelector('#rg-battle-status')?.textContent?.replace(/\s+/g, ' ') ?? '');
     return m ? Number(m[1]) : -1;
@@ -342,7 +349,7 @@ console.log('\n[6] 战场两侧的"外人"：场外交涉');
   check(!!rec && !rec.disabled, '钱够的时候招募按钮可点');
   click(rec ?? null);
   await wait(10);
-  check(host.querySelectorAll('[data-pick-unit]').length === mineBefore + 1, '招募之后我方多一个人');
+  check(host.querySelectorAll('.rg-armychip.mine').length === mineBefore + 1, '招募之后我方多一个人');
   check(
     !!recId && !!host.querySelector(`[data-pick-unit="${recId}"]`),
     '招进来的人出现在我军列表里（不再是"外人"）',
@@ -409,16 +416,16 @@ console.log('\n[7] 成长型英雄：角标、属性卡、第 2 层长满');
     return { host, stop };
   };
   const a = mount(1);
-  const badge = a.host.querySelector('.rg-army-grow');
-  check(!!badge && badge.textContent?.includes('1/2'), '第一层：我军清单里有「成长 1/2」', badge?.textContent ?? '无');
+  const badge = a.host.querySelector('.rg-armychip-grow');
+  check(badge?.getAttribute('data-grow') === '1/2', '第一层：我军徽章上有「成长 1/2」', badge?.getAttribute('data-grow') ?? '无');
   const one = a.host.querySelector('[data-pick-unit]');
-  check(a.host.querySelectorAll('[data-pick-unit]').length === 1, '英雄开局我军只有一行');
-  check((one?.textContent ?? '').includes('神圣骑士长'), '那一行就是英雄');
+  check(a.host.querySelectorAll('.rg-armychip.mine').length === 1, '英雄开局我军只有一行');
+  check((one?.getAttribute('title') ?? '').includes('神圣骑士长'), '那一行就是英雄');
   a.stop();
   a.host.remove();
 
   const b = mount(2);
-  check(!b.host.querySelector('.rg-army-grow'), '第二层：长满了，角标消失');
+  check(!b.host.querySelector('.rg-armychip-grow'), '第二层：长满了，角标消失');
   b.stop();
   b.host.remove();
 }

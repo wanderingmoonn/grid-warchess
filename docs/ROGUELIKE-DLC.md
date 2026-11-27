@@ -30,7 +30,7 @@ EXPANSIONS（core 的包声明：units / hooks / requires / unlockEra）
 
 | 战役模式 | 肉鸽 2.0 |
 |---|---|
-| 开局面板勾扩展 → `config.expansionIds` | 开局「本局扩展」勾规则/联动包 → `RunState.packs` |
+| 开局面板勾扩展 → `config.expansionIds` | 可选包默认全关；由道中事件 `unlockPack` 写入 `RunState.packs`（开局也能手动打开试用） |
 | 关卡 `expansions.require / forbid / warn` | 每场战斗的 `LevelDef.expansions.require`（剧情包 + 可选包 + 队伍兵所属包） |
 | `createMatch` 按 `EXPANSIONS` 算兵种表 | 同一入口，未复制一行 DLC 数据 |
 | 战役兵种池 = 已开包的全部兵 | 肉鸽兵池 = 已开包 × 时代窗口 × 编制口径（见上） |
@@ -46,9 +46,9 @@ EXPANSIONS（core 的包声明：units / hooks / requires / unlockEra）
 | `cultivation` 修真 | story | L2（e1–e3 / e3–e4）、L3 无 | 池子只有 8+4 个，所以**按境界跨代**取；L3 末法之世没有修士 |
 | `pack-contemporary` 信息化 | support（固定） | L3（e6） | 第三层高代底座；也是 e6 兵种的前置 |
 | `air` 空军 | support（可勾） | L2 高代、L3 | 勾了之后按 e4–e6 进入池子；有射程的队伍才打得动 |
-| `war-economy` 战争经济 | rule（默认开） | 全局 | 击杀赏金进 `state`，战后随金币带走 |
-| `veterans` 老兵不死 | rule（默认开） | 全局 | 击杀成长 + 城下回血；击杀数跨战斗保留 |
-| `scorched-earth` 死亡枕藉 | rule（默认开） | 全局 | 阵亡波及相邻；小图上放大"挤一团"的代价 |
+| `war-economy` 战争经济 | rule | 全局 | 击杀赏金进 `state`，战后随金币带走 |
+| `veterans` 老兵不死 | rule | 全局 | 击杀成长 + 城下回血；击杀数每场重置、只有有城方能回血 |
+| `scorched-earth` 死亡枕藉 | rule | 全局 | 阵亡波及相邻；小图上放大"挤一团"的代价 |
 | `trench` 堑壕战 | rule | 全局 | 林丘 +2 甲；对 e1 互殴影响过大，默认关 |
 | `blitz` 闪电战 | rule | 全局 | 快速单位 +2 移；会明显缩短接敌回合 |
 | `night-raid` 大雾来了 | rule | 全局 | 视野 −1；战斗屏不开雾，主要在 AI 视野 |
@@ -94,6 +94,28 @@ EXPANSIONS（core 的包声明：units / hooks / requires / unlockEra）
    打不到空中目标，`run.ts` 的 `sanitizeAir` 仍保留（一场最多一个飞行单位、
    我方没有射程 ≥2 的兵时不给）。
 
+## 三·五、道中解锁扩展（事件接口，2026-11-28）
+
+**所有可选扩展默认关闭**；正式版通过道中事件打开。结算路径已经接好，事件本身还没写：
+
+```ts
+// 事件选项里只要写一行
+{
+  label: '在老壕沟里歇一晚',
+  hint: '解锁「堑壕战」',
+  effect: { pack: 'trench' },
+}
+```
+
+底层是 `run.ts` 的 `unlockPack(run, id)`：
+- 只接受 `PACK_PLANS` 里 `choosable` 的 **rule / support** 包；
+- 剧情包（军备/奇想/修真）由第一层的事件与试炼决定，不能从这里插队；
+- 系统包（海军/太空/地形/城市/行动点/锁雾）与 `locked` 包会被拒绝，并返回一句原因；
+- 解锁会写进行记，之后每一场战斗的 `expansions` / `LevelDef.expansions.require` 都会带上它；
+- 重复解锁幂等，不重复加。
+
+开局面板的卡片仍然可以手动打开（调试用），但默认全是「关闭」。
+
 ## 四、加一个新 DLC 的姿势
 
 1. 在 `src/core` 的 `EXPANSIONS` 里加包（兵种/钩子/前置）；
@@ -103,9 +125,10 @@ EXPANSIONS（core 的包声明：units / hooks / requires / unlockEra）
    - 纯规则包 → `kind:'rule'` + `choosable/defaultOn` + 一句话理由；
    - 需要新系统 → `kind:'system'` + **缺哪一块**；
 3. 如果它的兵要进池，确认 `era` 与 `category` 写对；**不要往肉鸽里抄单位 id**。
-4. 跑 `node --experimental-strip-types scripts/rogue-smoke.ts` 与
+4. 想让它由事件解锁，在事件选项里写 `effect: { pack: '<id>' }`；不要在事件里手改 `run.packs`。
+5. 跑 `node --experimental-strip-types scripts/rogue-smoke.ts` 与
    `scripts/rogue-ui-smoke.ts`；再跑 `npm run test:rules` / `npm run test:ui`。
-5. 更新本文件的表与 `ROGUELIKE-INDEX.md` 的决议。
+6. 更新本文件的表与 `ROGUELIKE-INDEX.md` 的决议。
 
 ## 五、战斗 UI 与战役模式的对齐
 
@@ -114,7 +137,7 @@ EXPANSIONS（core 的包声明：units / hooks / requires / unlockEra）
 | 顶栏：回合、目标、扩展徽章、棋盘视图 | 复用（去掉联机/迷雾/看全图/设置） |
 | 资源条：金币、每回合收入、撤回 | 复用 `battleStatusShell` / `updateBattleStatus` |
 | 侧栏：回合徽章、资源、席位、对局信息 | 复用 `renderPanel` |
-| 单位卡：数值、状态、技能、扩展面板 | 复用；**补了「我军」清单**（没有城，队伍散在地图边缘） |
+| 单位卡：数值、状态、技能、扩展面板 | 复用；**补了顶部「我军/友军/敌军」徽章条**（约 60px，点一下即查看，详情卡紧随其后） |
 | 城卡 / 地形卡 | 复用（敌城只读；地形可查） |
 | 战报、结束行动、认输 | 复用 |
 | 攻击预览、缩放、强制模式 | 复用（`forecastCombat` / `fitBoardBox` / `forceMode`） |

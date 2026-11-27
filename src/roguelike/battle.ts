@@ -759,6 +759,15 @@ export function buildBattle(init: BattleInit): GameState {
        * 变金丹，"谁的修为高就全员高"，等于没有个体差异。
        */
       const base = baseTypeOf(u.type);
+      /*
+       * **只有修士吃境界**。
+       *
+       * 上一版漏了这道判断：修真线的 `init.rank > 0`，于是普通兵（戈兵、弓手……）
+       * 也被灌了修为、拿到 `maxHpBonus`，然后下面套加成变体时 `u.hp = v.maxHp`
+       * 按兵种基础血算——表现就是"进了修真线以后所有部队开局都掉一截血"。
+       * 修士的 `applyRank` 自己会判身份，玩家这一支是手写流程，所以必须单独判。
+       */
+      if (!CULTIVATORS.has(base)) continue;
       const floorExp = init.rank > 0 ? expForRank(init.rank - 1) : 0;
       const saved = init.cultivation?.[base] ?? 0;
       const exp = Math.max(floorExp, saved);
@@ -911,7 +920,12 @@ export function buildBattle(init: BattleInit): GameState {
       init.bonusHp + growHp,
     );
     const v = s.unitTypes[u.type];
-    if (v) u.hp = v.maxHp;
+    /*
+     * 变体把 `u.type` 换成了"基础血 + 加成"的新兵种，但修士还有一份
+     * `maxHpBonus`（境界带来的生命）。只写 `v.maxHp` 会把那一段抹掉，
+     * 修士每场开局都少一截血——和上面那条是同一个 bug 的两半。
+     */
+    if (v) u.hp = maxHpOf(s, u);
   }
 
   // ---- 火药桶 / 工兵破墙：**敌城**开场就带伤 ----

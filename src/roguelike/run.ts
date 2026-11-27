@@ -28,7 +28,7 @@ import {
   unitName,
 } from './data.ts';
 import type { DecisionOption, LayerTheme, WorldId } from './data.ts';
-import { CORE_PACK, mergeBattlePacks, normalizeExtraPacks, poolOf } from './packs.ts';
+import { CORE_PACK, PACK_PLANS, mergeBattlePacks, normalizeExtraPacks, poolOf } from './packs.ts';
 import { expForRank } from '../core/cultivation/progression.ts';
 import { expansionById } from '../core/expansions.ts';
 import { makeRng } from './rng.ts';
@@ -549,6 +549,53 @@ function resolveType(theme: LayerTheme, type: string): string {
 }
 
 /**
+ * **道中解锁一个扩展**（事件接口）。
+ *
+ * 这是给"事件打开 DLC"留的入口：事件选项写 `effect: { pack: 'trench' }`，
+ * `applyEffect` 调到这里，之后每一场战斗的 `expansions` 都会带上它。
+ *
+ * 只认 `PACK_PLANS` 里 `choosable` 的规则包/联动包：
+ *   · 剧情包（军备/奇想/修真）由第一层的事件与试炼决定，不能从这里插队；
+ *   · 系统包（海军/太空/地形/城市/行动点/锁雾）本版没有对应玩法；
+ *   · `locked` 包（大征兵/先后手/黑暗动乱/装甲 e7-e8）在本模式无作用。
+ * 拒绝时说清是哪一类，不静默吞掉——事件作者一眼能看出写错了 id。
+ */
+export interface UnlockPackResult {
+  ok: boolean;
+  /** 实际新加进本局的包（含前置闭包） */
+  added: string[];
+  /** 给事件结算用的一句话 */
+  message: string;
+}
+
+export function unlockPack(run: RunState, id: string): UnlockPackResult {
+  run.packs ??= [];
+  const wanted = normalizeExtraPacks([id]);
+  if (wanted.length === 0) {
+    const def = expansionById(id);
+    const plan = PACK_PLANS[id];
+    const why = !def
+      ? '没有这个扩展'
+      : !plan
+        ? '这个扩展还没在 PACK_PLANS 里定性'
+        : plan.kind === 'story'
+          ? '剧情兵种包由第一层的事件/试炼决定，不能在道中直接打开'
+          : plan.kind === 'system'
+            ? `这个扩展需要整套系统（${plan.reason ?? '本版未接'}）`
+            : '这个扩展在本模式里没有作用';
+    return { ok: false, added: [], message: `${def?.name ?? id}：${why}` };
+  }
+  const added = wanted.filter((p) => !run.packs.includes(p));
+  if (added.length === 0) {
+    return { ok: true, added: [], message: `「${expansionName(wanted[0] as string)}」已经开过了` };
+  }
+  run.packs.push(...added);
+  const names = added.map((p) => expansionName(p));
+  run.log.push(`解锁扩展：${names.join('、')}`);
+  return { ok: true, added, message: `解锁扩展「${names.join('、')}」` };
+}
+
+/**
  * 应用一条效果。`random` / `risk` 类的东西在这里落地，所以需要 rng。
  *
  * `log` 只给递归用：赌博的两岔会再进来一次，内层不要再往行记里写一遍，
@@ -662,6 +709,13 @@ function applyEffectInner(
       run.gold += 60;
       notes.push('重复的藏品折成 +60 金');
     }
+  }
+  /*
+   * 道中解锁扩展（2026-11-28）：事件选项写 `{ pack: id }` 即可。
+   * 事件本身还没做，但结算、日志、后续战斗的扩展开关已经接好。
+   */
+  if (effect.pack) {
+    notes.push(unlockPack(run, effect.pack).message);
   }
   /*
    * 整编：把最低级的兵换成**本层最高档**。

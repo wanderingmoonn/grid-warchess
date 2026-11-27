@@ -13,6 +13,7 @@ import { DEFAULT_BUDGET } from '../src/core/ai-meta.ts';
 import {
   afterRoom,
   applyEffect,
+  unlockPack,
   armyCount,
   battleFor,
   bonusOf,
@@ -64,11 +65,26 @@ console.log('\n[0] 扩展包接入（28 个包逐条定性）');
     .map(([id]) => id);
   check(noReason.length === 0, '每条定性都写了理由（给玩家/接手的人看）', noReason.join(', '));
   check(EXPANSIONS.length === 28, '当前共 28 个扩展', String(EXPANSIONS.length));
-  check(defaultExtraPacks().length >= 1, '开局默认勾了至少一个可选包');
+  check(defaultExtraPacks().length === 0, '开局所有可选包默认关闭（等道中事件解锁）');
   // +4 = 3 个剧情包 + 固定开启的信息化（support 但 choosable:false）
   check(ruleChoices().length + supportChoices().length + unavailablePacks().length + 4 === EXPANSIONS.length,
     '可选 / 不接 / 剧情三类加起来等于全量',
     `${ruleChoices().length}+${supportChoices().length}+${unavailablePacks().length}+4 vs ${EXPANSIONS.length}`);
+
+  // 道中解锁扩展：事件选项写 { pack: id } 即可（事件本身还没做）
+  const r = startRun(424242, 'frontier');
+  check(r.packs.length === 0, '开局不预开任何可选扩展（默认全关）');
+  const notes = applyEffect(r, { pack: 'trench' }, makeRng(9));
+  check(r.packs.includes('trench'), '事件可以把「堑壕战」解锁进本局', r.packs.join(','));
+  check(notes.some((n) => n.includes('解锁扩展')), '解锁会写进结算文案', notes.join(' / '));
+  const b = battleFor(r, { kind: 'battle', title: '', sub: '' }, 9);
+  check(b.expansions.includes('trench'), '解锁后下一场战斗会带上它', b.expansions.join(','));
+  const dup = unlockPack(r, 'trench');
+  check(dup.ok && dup.added.length === 0, '重复解锁不重复加，也不报错', dup.message);
+  const naval = unlockPack(r, 'naval');
+  check(!naval.ok, '系统包不能在道中解锁（会说明原因）', naval.message);
+  const story = unlockPack(r, 'fantasy');
+  check(!story.ok, '剧情兵种包不能在道中解锁', story.message);
 
   // 每一支史、每一层都必须能算出兵池（空池会在开局直接崩）
   for (const world of ['base', 'arms', 'fantasy', 'cultivation'] as const) {
@@ -413,6 +429,31 @@ console.log('\n[7] 第二层的四种世界（正史 / 军备 / 奇想 / 修真�
   } else {
     check(false, '修真层派出了修士', '场上没有 qi-cultivator');
   }
+
+  /*
+   * 回归：修真线只有修士吃境界。
+   *
+   * 2026-11-28 用户报"进了修真线以后所有部队开局都掉一截血"。根因是玩家侧
+   * 的境界循环漏了身份判断：`init.rank > 0` 时连戈兵也被灌了修为、拿到
+   * `maxHpBonus`；随后套加成变体又把 `hp` 按兵种基础血写回去。这里同时守住
+   * 两件事：非修士不带境界、所有单位开局满血（`wounds` 传空）。
+   */
+  const r4 = startRun(34, 'frontier');
+  r4.layer = 2;
+  r4.clock = 6;
+  r4.world = 'cultivation';
+  r4.army = [
+    { type: 'sword-cultivator', count: 2 },
+    { type: 'ge', count: 2 },
+  ];
+  const init4 = battleFor(r4, { kind: 'battle', title: '', sub: '' }, 79);
+  init4.wounds = {};
+  const s4 = buildBattle(init4);
+  const mine4 = s4.units.filter((u) => u.owner === 'A');
+  const ge4 = mine4.find((u) => baseTypeOf(u.type) === 'ge');
+  check(!!ge4 && (ge4.maxHpBonus ?? 0) === 0, '修真线里非修士不吃境界（不带 maxHpBonus）', String(ge4?.maxHpBonus ?? 'n/a'));
+  check(mine4.every((u) => u.hp === maxHpOf(s4, u)), '修真线开局所有部队满血（没带伤时）',
+    mine4.map((u) => `${baseTypeOf(u.type)}:${u.hp}/${maxHpOf(s4, u)}`).join(', '));
 
   // 层末战利品里的"下一层兵"要跟着世界走
   const r3 = startRun(33, 'frontier');
