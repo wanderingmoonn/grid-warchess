@@ -145,6 +145,8 @@ type Row = {
 const rows: Row[] = [];
 /** 当前这一手的三层输出（被拒明细要用它看编队） */
 let view0: ReturnType<typeof currentView> | null = null;
+/** 当前这局我是哪一方（`stepSide` 是模块级的，靠它分侧统计） */
+let ME_NOW: PlayerId = 'A';
 const details: string[] = [];
 let totalRejects = 0;
 
@@ -187,6 +189,7 @@ function playMatch(seed: number, size: number, era: number, cap: number, side: P
 
 function play(label: string, s0: GameState, ME: PlayerId, cap: number): void {
   const FOE: PlayerId = ME === 'A' ? 'B' : 'A';
+  ME_NOW = ME;
   s0.aiControl = { [ME]: false, [FOE]: false } as Record<PlayerId, boolean>;
 
   const before = rows.length;
@@ -538,8 +541,19 @@ function stepSide(
     const r = applyAction(cur, a);
     if (!r.ok) {
       rejects += 1;
-      const key = `${a.type}｜${(r.reason ?? '（无原因）').slice(0, 28)}`;
+      /* 带上「谁在提这个动作」：我方和敌方的浪费要分开算，否则会误判成自己改坏了 */
+      const key = `${cur.current === ME_NOW ? '我' : '敌'}｜${a.type}｜${(r.reason ?? '（无原因）').slice(0, 28)}`;
       reasons.set(key, (reasons.get(key) ?? 0) + 1);
+      if (SHOW_REJECT_DETAIL && rejectDetailLeft > 0 && (r.reason ?? '').includes('移动过')) {
+        rejectDetailLeft -= 1;
+        const uid = 'unitId' in a ? String((a as { unitId?: string }).unitId ?? '') : '';
+        const u = cur.units.find((x) => x.id === uid);
+        console.log(
+          `  ⟳ T${cur.turn} ${cur.current} ${uid} moved=${String(u?.moved)} acted=${String(u?.acted)}` +
+            ` 步数=${cur.units.filter((x) => x.owner === cur.current && x.moved).length}` +
+            ` / ${cur.units.filter((x) => x.owner === cur.current).length}`,
+        );
+      }
       if (SHOW_REJECT_DETAIL && rejectDetailLeft > 0 && (r.reason ?? '').includes('重建')) {
         rejectDetailLeft -= 1;
         const uid = 'unitId' in a ? String((a as { unitId?: string }).unitId ?? '') : '';

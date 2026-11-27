@@ -15,6 +15,7 @@ import {
   applyAction,
   attackableTargets,
   buildSiteError,
+  canSeeTile,
   effectiveStats,
   occupantAt,
   reachableTiles,
@@ -171,7 +172,7 @@ export function actFor(
     const t = sqC?.tactics;
     if (t?.converge && sqC!.order === 'march') {
       const foe = s.units.find((v) => v.id === t.focusId && v.owner !== world.me);
-      if (foe && !attackableTargets(s, u).some((v) => v.id === foe.id)) {
+      if (foe && !seenFoes(s, u).some((v) => v.id === foe.id)) {
         const spot = approachStep(s, u, foe);
         if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
       }
@@ -247,7 +248,7 @@ export function actFor(
         if (manhattan(u, home) > 2) {
           const spot = stepToward(s, u, { x: home.x, y: home.y });
           if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
-        } else if (!attackableTargets(s, u).some((v) => v.owner !== world.me)) {
+        } else if (seenFoes(s, u).length === 0) {
           /*
            * **能打就打，打不到才进城**——这是二选一，不是两件事。
            *
@@ -291,7 +292,7 @@ export function actFor(
   const focus = sq?.tactics
     ? s.units.find((v) => v.id === sq.tactics!.focusId && v.owner !== world.me)
     : undefined;
-  if (focus && attackableTargets(s, u).some((v) => v.id === focus.id)) {
+  if (focus && seenFoes(s, u).some((v) => v.id === focus.id)) {
     return { type: 'ATTACK', unitId: u.id, targetId: focus.id, x: focus.x, y: focus.y };
   }
 
@@ -301,7 +302,7 @@ export function actFor(
    * 空中 +1）算，于是 v4 每回合都提一个必被拒的攻击（"目标超出射程"），
    * 整整 30 手一次都没打出去。**一份真相：能打谁只问引擎。** */
   const st = effectiveStats(s, u);
-  const foes = attackableTargets(s, u).filter((v) => v.owner !== world.me).sort((a, b) => a.hp - b.hp);
+  const foes = seenFoes(s, u).sort((a, b) => a.hp - b.hp);
   if (foes[0] && (st.atk ?? 0) > 0) {
     return { type: 'ATTACK', unitId: u.id, targetId: foes[0].id, x: foes[0].x, y: foes[0].y };
   }
@@ -369,6 +370,25 @@ export function actFor(
  * 不再比"地形防御/威胁/队友距离"，那些都是分数项，落点会跑偏（见项目里的证伪清单）。
  */
 /**
+ * **打谁**：引擎说打得到 + 我自己看得见（2026-11-27）。
+ *
+ * 这是"不做弊"的落点。原来 `attackableTargets` 的判据只看射程，而 AI 拿到的是**真状态**
+ * （全图），于是它会对着视野外的敌人提 `ATTACK`——引擎回"看不见那个位置（视野外）"，
+ * 全册实测 **205 次**白烧。那不只是浪费，**那是玩家做不到的事**（用户的话）。
+ *
+ * 现在两道判据一起用，而且都是引擎自己的：
+ *   · `attackableTargets` → 射程 / 视线 / 高度差，一条不自己算；
+ *   · `canSeeTile` → 视野（和引擎拒动作时用的是同一个函数）。
+ *
+ * 判据相同，所以"AI 认为能打"和"引擎允许打"不会再分岔。
+ */
+function seenFoes(s: GameState, u: Unit): Unit[] {
+  return attackableTargets(s, u).filter(
+    (v) => v.owner !== u.owner && canSeeTile(s, u.owner, v.x, v.y),
+  );
+}
+
+/**
  * **这一格是不是被别人站着**（桥不算，见 `rules.occupantAt`）。
  *
  * 桥和兵可以同格，所以"这格有人"不能直接数 `s.units`：
@@ -392,7 +412,7 @@ function approachStep(
     if (x === u.x && y === u.y) continue;
     if (takenByOther(s, u, x, y)) continue;
     const moved = { ...u, x, y, moved: true } as Unit;
-    if (!attackableTargets(s, moved).some((v) => v.id === foe.id)) continue;
+    if (!seenFoes(s, moved).some((v) => v.id === foe.id)) continue;
     const d = manhattan({ x, y }, foe);
     if (d < bestD || (d === bestD && k < bestK)) {
       bestD = d;

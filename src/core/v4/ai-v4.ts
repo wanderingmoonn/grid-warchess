@@ -74,6 +74,20 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
    *
    * 裁完之后的局面里，看不见的敌人**根本不在**，所以所有"能打谁"的判断
    * 自然只包含看得见的。这是"一份真相"在视野上的那一条。
+   *
+   * ── **这里不传 `clipByVision`，是故意的**（2026-11-27 踩过一次）──────
+   *
+   * 试过学 `ai.ts` / `ai-v3.ts` 传 `clipByVision = true`（"AI 永远按视野裁"），
+   * 想一次修掉"对着视野外敌人开火"。结果 **7 道题翻红**（`P-1-01~04` 等）。
+   * 原因：那一挡只在**开雾**的对局里才对得上玩家——
+   *   · `ui/board.ts` 只在 `s.fog` 为真时才隐藏单位；
+   *   · 关雾（绝大多数考题和实战）时**玩家看得见全图**，只是打不着视野外的目标
+   *     （引擎的 `canSeeTile` 与是否开雾无关，`rules.ts` 里写着"看全图 ≠ 能打全图"）。
+   *
+   * 所以"和玩家同等信息"= **看见什么跟 `s.fog` 走，能打什么跟引擎走**。
+   * 这里传默认值（开雾才裁）正好是前半句；后半句由 `tactics.seenFoes` 负责
+   * ——它把开火目标按 `canSeeTile` 过滤，于是"视野外攻击"这一类被拒归零，
+   * 而决策层仍然看得见玩家看得见的东西。
    */
   const view = playerView(s, me).state;
   const world = buildWorld(view, me);
@@ -587,6 +601,19 @@ export function aiNextActionV4(
   const me = s.current;
   const view = currentView(s, me);
   const { world, con } = view;
+  /*
+   * **下面用的是真状态 `s`，不是 `view.state`**（2026-11-27 试出来的）
+   *
+   * 试过把 `s` 整个换成裁剪后的 `view.state`（想让"看不见的敌人不在"一次生效）。
+   * 两个后果都很硬：
+   *   ① 它是**这一手开始时**的快照，动作一个一个结算它不跟着变 → 同一个兵被反复派 MOVE
+   *      （引擎："该单位本回合已经移动过"，全册 **4054** 次），把真问题全盖住了；
+   *   ② `hp` 也永远是满的，于是 `sort((a,b)=>a.hp-b.hp)` 每一手都挑错目标——
+   *      `D-1-02` 因此一个敌人都打不死（那题的判据正是"6 手内至少打死一个"）。
+   *
+   * **hp 和 moved 一样是"动态事实"，不是"视野信息"**：这一手打成什么样，自己当然知道。
+   * 所以动作选择留在真状态上；"能不能打"另由 `tactics.seenFoes` 按引擎的 `canSeeTile` 过滤。
+   */
 
   const usable = (a: Action | null): a is Action =>
     !!a && !rejected.has(aiActionKey(a)) && !view.tried.has(aiActionKey(a));
