@@ -81,8 +81,9 @@ import type { City, GameState, PlayerId, Unit } from '../types.ts';
  * ── 新公式（对着参照兵算，参数由标定表拟合）────────────────
  *
  *   每回合伤害 dmg(u→r) = 单发伤害（`previewAttack`，带护甲/破甲）× 一回合几发
- *   能活几回合  tank     = 我的血 ÷ r 的每回合伤害 + 1.0 × 我的护甲 × r 的每回合发数
- *                          （护甲是按发减伤，等价于"多挨几发"；低攻高甲的兵靠这一项才不吃亏）
+ *   能活几回合  tank     = ceil(我的血 ÷ r 的每发伤害) ÷ r 的每回合发数
+ *                          （**护甲只出现一次**：`previewAttack` 的每发伤害里已经减过护甲；
+ *                            用"整数发数"还顺带表达了**过杀浪费**——少发大伤害打厚血兵会溢出）
  *   白打回合    stand    = r 要走进我射程才还手：(GAP − r 射程) ÷ r 移动力（我射程更远时才有）
  *   战力        power    = dmg × (0.1 × tank + 1.0 × stand)
  *
@@ -105,11 +106,9 @@ export function unitWorthOfType(s: GameState, typeId: string): number {
 
 /** 拟合出来的三个参数（见上面的注释；动它要跑 `fit-combat-formula` 对表） */
 const W_HP = 0.1;
-const W_STAND = 1;
-/** 护甲当"额外血量"的权重（S3c）：护甲按发减伤，对多发小伤害的敌人特别有效 */
-const W_ARMOR = 1;
+const W_STAND = 0.5;
 /** 典型接敌距离（格）：射程的价值取决于"对面要走进来几步"，这是唯一标定出来的"场面"参数 */
-const GAP = 7;
+const GAP = 5;
 
 /** 这一代当参照的兵种：最贵 / 最厚 / 射程最远（都按设计数据挑，不做战力排序，所以不会循环） */
 const refsCache = new Map<number, string[]>();
@@ -145,9 +144,17 @@ function dpsOf(s: GameState, type: string, foe: string): number {
 function combatPower(s: GameState, type: string, ref: string): number {
   const mine = dpsOf(s, type, ref);
   if (mine <= 0) return 0;
-  const theirs = dpsOf(s, ref, type);
-  const armorTerm = W_ARMOR * (utype(s, type).armor ?? 0) * attacksPerTurn(s, { id: '__w3', owner: s.current, type: ref, x: 0, y: 0, hp: 1 } as Unit);
-  const tank = (theirs <= 0 ? 99 : (utype(s, type).maxHp ?? 1) / theirs) + armorTerm;
+  /*
+   * 能活几回合 = 要挨几发才死 ÷ 对面每回合几发。
+   * **护甲只在 `perHit` 里出现一次**（`previewAttack` 已经按发减过护甲），不重复叠。
+   */
+  const perHit = previewAttack(
+    s,
+    { id: '__w3', owner: s.current, type: ref, x: 0, y: 0, hp: utype(s, ref).maxHp ?? 1 } as Unit,
+    { id: '__w4', owner: s.current, type, x: 1, y: 0, hp: utype(s, type).maxHp ?? 1 } as Unit,
+  ).toDefender;
+  const perTurn = Math.max(1, attacksPerTurn(s, { id: '__w5', owner: s.current, type: ref, x: 0, y: 0, hp: 1 } as Unit));
+  const tank = perHit <= 0 ? 99 : Math.ceil((utype(s, type).maxHp ?? 1) / perHit) / perTurn;
   const myRange = utype(s, type).range ?? 1;
   const refRange = utype(s, ref).range ?? 1;
   let stand = 0;

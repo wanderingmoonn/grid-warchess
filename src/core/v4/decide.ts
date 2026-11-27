@@ -443,12 +443,21 @@ function econCandidates(
 
 /** 这一期要不要升代（D4a）：先问"救不救得了"，再问"钱是不是多到花不完" */
 function upgradeOf(s: GameState, world: World, mem: V4Memory | undefined, d: Decision): Decision['upgrade'] {
+  const dbg = process.env.V4_UPGRADE_LOG === '1';
   /* 攒钱期不升级：那笔钱是重建费，动了就前功尽弃 */
-  if (d.spend.mode === 'save') return undefined;
+  if (d.spend.mode === 'save') {
+    if (dbg) process.stderr.write(`[up] T=${s.turn} 挡住：spend=save\n`);
+    return undefined;
+  }
   const gold = s.players[world.me]?.gold ?? 0;
   const rescue = rescueCandidates(s, world, gold);
-  if (rescue.length > 0) return { kind: 'rescue', candidates: rescue };
-  return econCandidates(s, world, mem, gold);
+  if (rescue.length > 0) {
+    if (dbg) process.stderr.write(`[up] T=${s.turn} rescue 抢占（${rescue.length} 个候选）\n`);
+    return { kind: 'rescue', candidates: rescue };
+  }
+  const econ = econCandidates(s, world, mem, gold);
+  if (dbg) process.stderr.write(`[up] T=${s.turn} gold=${gold} econ=${econ ? '有' : '无'} live=${mem?.eraPlan ? `${mem.eraPlan.cityId}->${mem.eraPlan.targetEra}@T${mem.eraPlan.since}` : '-'}\n`);
+  return econ;
 }
 
 /**

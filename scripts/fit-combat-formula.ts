@@ -84,11 +84,21 @@ const refsOf = (era: number): string[] => {
   return [...new Set([pick((t) => utype(s, t).cost ?? 0), pick((t) => utype(s, t).maxHp ?? 0), pick((t) => utype(s, t).range ?? 1)])];
 };
 
-const power = (u: string, r: string, wHp: number, wStand: number, kRange: number, GAP: number): number => {
+const power = (u: string, r: string, wHp: number, wStand: number, kRange: number, GAP: number, _wArmor = 0): number => {
   const mine = dps(u, r);
   if (mine <= 0) return 0;
-  const theirs = dps(r, u);
-  const tank = theirs <= 0 ? 99 : (utype(s, u).maxHp ?? 1) / theirs;
+  /*
+   * **能活几回合 = 要挨几发才死 ÷ 对面每回合几发**（2026-11-27 修）。
+   *
+   * 旧写法是 `血 ÷ 对面每回合伤害`，那已经把护甲算进去了（`previewAttack` 按发减护甲）；
+   * 再叠一项 `护甲 × 发数` 就是**同一件事算两次**，而且量纲也不对（那是"每回合少吃的伤害"，
+   * 不是"多活几回合"）。
+   * 改成"整数发数"：护甲只在 `perHit` 里出现一次，同时**过杀浪费**自动被表达出来
+   * （少发大伤害打厚血兵会溢出，多发小伤害不会）。
+   */
+  const perHit = previewAttack(s, P(r), P(u)).toDefender;
+  const perTurn = Math.max(1, attacksPerTurn(s, P(r)));
+  const tank = perHit <= 0 ? 99 : Math.ceil((utype(s, u).maxHp ?? 1) / perHit) / perTurn;
   /*
    * **白打几轮**：我射程比它远时，它得从"典型接敌距离 GAP"走进我的射程才能还手。
    * 走过这段要几轮 = (GAP − 它射程) ÷ 它移动力 —— 这段我一发不挨。
@@ -106,13 +116,13 @@ const power = (u: string, r: string, wHp: number, wStand: number, kRange: number
  * 对着自己算没有白打回合，战力被压到最低（1 代弓手排最后）。所以拿平均也试一遍。
  */
 let AGG: 'min' | 'mean' = 'min';
-const powerOf = (t: string, era: number, p: [number, number, number, number]): number => {
-  const vals = refsOf(era).map((r) => power(t, r, p[0], p[1], p[2], p[3]));
+const powerOf = (t: string, era: number, p: [number, number, number, number, number]): number => {
+  const vals = refsOf(era).map((r) => power(t, r, p[0], p[1], p[2], p[3], p[4]));
   return AGG === 'min' ? Math.min(...vals) : vals.reduce((n, x) => n + x, 0) / Math.max(1, vals.length);
 };
 
 /** 打分：每一代里，两两比较"公式说谁强"和"实测谁净胜多"，方向对上得 1 分 */
-const agree = (p: [number, number, number, number]): number => {
+const agree = (p: [number, number, number, number, number]): number => {
   let ok = 0;
   let total = 0;
   for (const m of measured) {
@@ -134,23 +144,25 @@ const agree = (p: [number, number, number, number]): number => {
 };
 
 /* ── 网格搜索 ─────────────────────────────────────────────── */
-let best = { p: [1, 1, 1, 6] as [number, number, number, number], score: -1, agg: 'min' as 'min' | 'mean' };
+let best = { p: [1, 1, 1, 6, 0] as [number, number, number, number, number], score: -1, agg: 'min' as 'min' | 'mean' };
 for (const agg of ['min', 'mean'] as Array<'min' | 'mean'>) {
   AGG = agg;
 for (const wHp of [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5]) {
   for (const wStand of [0.5, 1, 1.5, 2, 3, 4]) {
     for (const kRange of [1, 1.1, 1.25, 1.5]) {
       for (const GAP of [4, 5, 6, 7, 8, 10]) {
-        const sc = agree([wHp, wStand, kRange, GAP]);
-        if (sc > best.score) best = { p: [wHp, wStand, kRange, GAP], score: sc, agg };
+        for (const wArmor of [0, 0.5, 1, 2, 3]) {
+        const sc = agree([wHp, wStand, kRange, GAP, wArmor]);
+        if (sc > best.score) best = { p: [wHp, wStand, kRange, GAP, wArmor], score: sc, agg };
+        }
         }
       }
     }
   }
 }
 AGG = best.agg;
-console.log(`\n最优参数：wHp=${best.p[0]}  wStand=${best.p[1]}  kRange=${best.p[2]}  GAP=${best.p[3]}  参照汇总=${best.agg}  → 方向一致率 ${(best.score * 100).toFixed(0)}%`);
-console.log(`（旧身价作为对照的一致率：${(agree([1, 0, 1, 6]) * 100).toFixed(0)}%，但旧公式不是这个形状，仅供参照）\n`);
+console.log(`\n最优参数：wHp=${best.p[0]}  wStand=${best.p[1]}  kRange=${best.p[2]}  GAP=${best.p[3]}  参照汇总=${best.agg}  护甲权重=${best.p[4]}  → 方向一致率 ${(best.score * 100).toFixed(0)}%`);
+console.log(`（旧身价作为对照的一致率：${(agree([1, 0, 1, 6, 0]) * 100).toFixed(0)}%，但旧公式不是这个形状，仅供参照）\n`);
 
 for (const m of measured) {
   const pred = [...m.ids].sort((a, b) => powerOf(b, m.era, best.p) - powerOf(a, m.era, best.p));
