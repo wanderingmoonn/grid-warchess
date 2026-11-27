@@ -54,7 +54,13 @@ let cache: TurnCache | null = null;
 const LANE_WINDOW = 6;
 
 const keyOf = (s: GameState, me: PlayerId): string =>
-  `${s.turn}:${s.current}:${s.units.length}:${s.players[me]?.gold ?? 0}:${s.cities.length}`;
+  `${s.turn}:${s.current}:${s.units.length}:${s.players[me]?.gold ?? 0}:${s.cities.length}` +
+  /*
+   * **可见性也要进键**（2026-11-27）：玩家随时可能点开/关掉"看全图"，
+   * 那一刻回合号、兵数、金币都没变，不带这一位就会命中上一份视图——
+   * AI 会用旧的可见性把整手算完，开关等于没生效。
+   */
+  `:${seeAllOf(s) ? 'v' : '-'}`;
 
 /**
  * 拿这一回合的世界与约束（必要时重建）。
@@ -77,29 +83,32 @@ export function visibilityLabel(s: GameState): string {
 }
 
 /**
- * **这一手 AI 能不能看全图**（2026-11-27，用户定的两档）。
+ * **这一手 AI 能不能看全图**（2026-11-27，用户定的三档）。
  *
  * 1. `config.seeAll === true` —— 题目 / 调试显式开（"这题不考察侦查"）；
- * 2. `state.seeAllSeen === true` —— 玩家**这一阵子点过 "看全图"**（开、关都算）。
+ * 2. `state.showAll === true` —— 玩家**此刻正开着** "看全图"（一直看 → AI 也一直看）；
+ * 3. `state.seeAllSeen === true` —— 玩家**刚开过关掉了**（看一眼就关 → AI 看这一回合）。
  *
  * 都不满足 → `false`。此时 `playerView` 按 `state.fog` 走：
  * 有雾就只给视野内的，没雾本来就全见。**这就是"和玩家一样"**，不多也不少。
  *
- * ── **为什么不读 `state.showAll`**（2026-11-27 用户指出的漏洞）────────
+ * ── 为什么第 2 和第 3 档都要有 ────────────────────────────────
  *
- * 第一版把"玩家此刻正开着看全图"也算一档。那等于：**玩家一直开着，AI 就一直全知**
- * ——用户的原话是"只防住了玩家看一眼，没防住一直看"。
- * 而设计意图是**补偿一手**（玩家看过，AI 这一手也看看），不是"跟着玩家的开关走"。
+ * 只留 `showAll` 不够：玩家常见的动作是**打开看一眼就关掉**，等轮到 AI 时
+ * `showAll` 已经变回 false，AI 就白瞎了——所以点按钮那一刻要记一笔（第 3 档）。
  *
- * 所以现在只认"点过按钮"这一笔（`state.seeAllSeen`），而且**只算一手**
- * ——不管玩家是看一眼就关、还是一直开着，AI 都只在下一次自己行动的回合里享受这一次，
- * 回合结束就清（见 `aiNextActionV4` 结尾）。
+ * 只留"记一笔"也不够：玩家**一直开着**的时候不会再点按钮，那一笔早就用掉了，
+ * 于是 AI 从第二手起就瞎——而玩家明明整局都在看全图（第 2 档）。
+ *
+ * 两档合起来才是完整的意思：**玩家看得见多久，AI 就看得见多久**；
+ * 中间"关掉了"也不立刻收回，让它用完下一次自己行动的回合（`aiNextActionV4` 返回 `null` 时清）。
  *
  * ⚠️ 这条只管"看得见什么"，**不放开"打得着什么"**：开火目标永远过
  * `tactics.seenFoes`（引擎的 `canSeeTile`），玩家点了看全图也一样打不了视野外的目标。
  */
 function seeAllOf(s: GameState): boolean {
   if (s.config.seeAll === true) return true;
+  if (s.showAll === true) return true;
   return s.seeAllSeen === true;
 }
 
