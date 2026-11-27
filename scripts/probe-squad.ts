@@ -8,7 +8,7 @@
  */
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
 import { utype } from '../src/core/rules.ts';
-import { squadDuel } from '../src/core/v4/world.ts';
+import { squadDuel, unitWorthOfType } from '../src/core/v4/world.ts';
 import { combatOfEra } from './lib/duel.ts';
 import { duel, flushDuelCache } from './lib/duel-cache.ts';
 import type { GameState } from '../src/core/types.ts';
@@ -18,6 +18,7 @@ const argOf = (name: string, dflt: string): string => {
   return i >= 0 && process.argv[i + 1] ? (process.argv[i + 1] as string) : dflt;
 };
 const N = Number(argOf('n', '6'));
+const MODE = argOf('mode', 'duel');
 const s: GameState = createMatch({ ...DEFAULT_CONFIG, size: 16, startEra: 1 }, 900);
 
 let okAll = 0;
@@ -38,9 +39,20 @@ for (const era of [1, 2, 3, 4, 5]) {
       const m = r1.aLeft - r1.bLeft + (r2.bLeft - r2.aLeft);
       if (m === 0) continue;
       const realWin = m > 0 ? a : b;
-      /* 模型：同一对，也按剩余人数差判 */
-      const d1 = squadDuel(s, Array(N).fill(a), Array(N).fill(b));
-      const predWin = d1.mine > d1.foes ? a : d1.foes > d1.mine ? b : null;
+      /*
+       * 两种预测：
+       *  · `sum`（"干脆不建模"）：编队战力 = 每个人的身价之和 × 展开折扣（两边人数相同 → 折扣相消）
+       *  · `duel`：`squadDuel` 的递推
+       */
+      let predWin: string | null = null;
+      if (MODE === 'sum') {
+        const wa = N * unitWorthOfType(s, a);
+        const wb = N * unitWorthOfType(s, b);
+        predWin = wa > wb ? a : wb > wa ? b : null;
+      } else {
+        const d1 = squadDuel(s, Array(N).fill(a), Array(N).fill(b));
+        predWin = d1.mine > d1.foes ? a : d1.foes > d1.mine ? b : null;
+      }
       total += 1;
       if (predWin === realWin) ok += 1;
       else wrong.push(`${utype(s, a).name} vs ${utype(s, b).name}（实测 ${utype(s, realWin).name} 赢，模型说 ${predWin ? utype(s, predWin).name : '平'}）`);
@@ -50,5 +62,5 @@ for (const era of [1, 2, 3, 4, 5]) {
   totalAll += total;
   console.log(`${ok === total ? '✅' : '⚠️'} ${era} 代  ${ok}/${total}` + (wrong.length ? `\n    ${wrong.join('\n    ')}` : ''));
 }
-console.log(`\n合计 ${okAll}/${totalAll} = ${((okAll / Math.max(1, totalAll)) * 100).toFixed(0)}%`);
+console.log(`\n（模式 ${MODE}）合计 ${okAll}/${totalAll} = ${((okAll / Math.max(1, totalAll)) * 100).toFixed(0)}%`);
 flushDuelCache();
