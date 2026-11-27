@@ -223,6 +223,33 @@ function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory):
  * 注意这里只写**意图**：`hold` 不代表它真的走得到，可不可行是计划层的事
  * （`DESIGN-LANES-WAVES` §0 的分工：选择在决定层、可行性在计划层）。
  */
+/**
+ * **记忆里："这座城附近最近还有敌人吗"**（阶段 5 §2.1b）。
+ *
+ * 只回答一个布尔，**不回答"敌人在哪一格"**——这是 `V4Memory.foeSight` 的红线：
+ * 记录里的坐标是**旧位置**，拿它算距离、算战力会比"不知道"更错。
+ *
+ * 「最近」不拍数字：同一条记录，从它**最后被看见的位置走回这座城要几手**
+ * （`world.marchTurns`，和 `defensible` 量敌人用的是同一把尺），
+ * 在这之内算还有效；走得到的这段时间本来就是它追过来的时间。
+ *
+ * 再加一道**上限 `DECIDE_HORIZON`**：这条记忆唯一的作用是"这一次决定的守势先别撤"，
+ * 而这一次决定最多管一个决定期。敌人一个决定期都走不到城的，留着它只会让守势无限续期
+ * （`R-1-01` 实测：远处一个走得慢的敌人，让前线晚掉头一手，8 手就打不下 c2 了）。
+ *
+ * 它挡的是：敌人只是暂时走出"城还能撑几轮"的窗口，就被判成"没威胁"、全军掉头去打。
+ */
+function recentFoeNear(world: World, mem: V4Memory | undefined, city: City, turn: number): boolean {
+  for (const r of Object.values(mem?.foeSight ?? {})) {
+    const age = turn - r.turn;
+    if (age < 0) continue; /* 记的是未来的手数（换局面/读档），不当证据 */
+    const walk = world.marchTurns(r, city);
+    if (!Number.isFinite(walk) || walk > DECIDE_HORIZON) continue;
+    if (age <= walk) return true;
+  }
+  return false;
+}
+
 function bandTasksOf(world: World, mem: V4Memory | undefined, d: BareDecision): BandTask[] {
   /* 架桥时所有战斗兵的目标是"渡口的岸"，不是某座城——统一交给计划层的 bridge 分支安排 */
   if (d.kind === 'bridge') return [];
@@ -738,14 +765,33 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
        * 不能换成 `state !== 'hold'`：那会让"需要增援"也把守势无限续期，
        * 而"要不要继续守"是另一件事（下一步再单独改，一次只动一处）。
        */
-      if (home && (atGate || world.defensible(home).state === 'lose')) {
+      /* 服务层这只算一次，下面判断和理由都读它 */
+      const outlook = home ? world.defensible(home) : undefined;
+      /*
+       * **第三个理由：记忆里这块地方最近还有敌人**（阶段 5 §2.1b，`S-004`）。
+       *
+       * 前两条都在回答"现在这一刻算不算威胁"，而 `defensible` 只数**窗口内**能到的人
+       * （窗口 = 城还能撑几轮）。于是敌人退到窗口外一手，判据就说"稳" → 全军掉头去打，
+       * 在开阔地上撞上那支本来只是走开了一点的部队（`S-004` 实测：12 个兵换 0 个）。
+       *
+       * 记忆补的正是这一格窟窿：**"看不见 / 不算威胁"不等于"没这回事"**。
+       * 它只输出一个布尔，位置一律不读（旧坐标算距离会比不知道更错）。
+       */
+      const remembered = home ? recentFoeNear(world, mem, home, s.turn) : false;
+      /* 只因为记忆才续期的那一种，理由要单独写：面板上不能出现"稳"却还在守 */
+      const onlyMemory = !!outlook && outlook.state === 'hold' && !atGate && remembered;
+      if (home && (atGate || remembered || outlook!.state === 'lose')) {
         return complete(s, world, mem, {
           kind: 'defend',
           untilTurn: prev.untilTurn,
           cityId: prev.cityId,
           /* 分兵名单跟着这一手一起续期，否则"守 A 时看不见 B"的老毛病又回来了 */
           ...(prev.holdAlso && prev.holdAlso.length > 0 ? { holdAlso: prev.holdAlso } : {}),
-          reason: inherit(prev.reason),
+          reason: inherit(
+            onlyMemory
+              ? `${home.id} 现在看不见敌人，但记忆里这块地方最近还有敌人：先不转攻`
+              : prev.reason,
+          ),
         });
       }
     } else if (prev.kind === 'takeover' && myStr / Math.max(1, foeStr) < 1.25) {

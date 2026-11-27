@@ -279,12 +279,26 @@ function foeSightMemo(
   turn: number,
 ): NonNullable<V4Memory['foeSight']> {
   const out: NonNullable<V4Memory['foeSight']> = { ...(mem.foeSight ?? {}) };
+  const aliveNow = new Set<string>();
   for (const u of s.units) {
     if (u.owner === me) continue;
     if (u.board !== undefined && u.board !== EARTH) continue;
     if (utype(s, u.type).category !== 'combat') continue;
     if (!canSeeTile(s, me, u.x, u.y)) continue;
+    aliveNow.add(u.id);
     out[u.id] = { x: u.x, y: u.y, turn };
+  }
+  /*
+   * **删掉"看着它那一格、人却没了"的记录**——那不是走开了，是**死了**。
+   *
+   * 这一步只用视野自己就能判：如果最后看见的那格**现在还在我视野里**，
+   * 而这个人不在"看得见的敌人"名单里，它只能是死了（走开的话会在新格子上被重新记下）。
+   * 不删的话，城门口被打死的敌人会一直留在账上，判据就会以为"门口还有敌人"、
+   * 守势无限续期（`R-1-01` 实测：一个死在家门口的兵让前线晚掉头一手，8 手打不下 c2）。
+   */
+  for (const [id, r] of Object.entries(out)) {
+    if (aliveNow.has(id)) continue;
+    if (canSeeTile(s, me, r.x, r.y)) delete out[id];
   }
   /* 内存卫生：超了就从"最久没见"的开始删。过期判断不在这里（见 FOE_SIGHT_KEEP） */
   const ids = Object.keys(out);
