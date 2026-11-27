@@ -353,7 +353,8 @@ function measure(
       if (stepSet.has(u.id)) { seatMoving += 1; continue; }
       if (postSet.has(u.id) || holdSet.has(u.id)) { seatJob += 1; continue; }
       if (attackableTargets(s, u).some((v) => v.owner !== ME) || siegeTargets(s, u).length > 0) { seatFight += 1; continue; }
-      if (con.squads.some((q) => q.unitIds.includes(u.id))) { seatWaiting += 1; continue; }
+      /* order='yield' 是回放标签、不是任务（没有城、没有终点），不能算待命 */
+      if (con.squads.some((q) => q.order !== 'yield' && q.unitIds.includes(u.id))) { seatWaiting += 1; continue; }
       seatIdle += 1;
     }
     if (seatIdle + seatWaiting > 0) seatTurns += 1;
