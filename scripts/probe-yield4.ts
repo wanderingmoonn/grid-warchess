@@ -49,6 +49,8 @@ const DETAIL = process.argv.includes('--detail');
 const CHECK_KEEP = process.argv.includes('--check-keep');
 /** `--quota`：打出"这一手给产兵腾了哪几格、赶走了谁"（批 2 的机制到底生效没有） */
 const SHOW_QUOTA = process.argv.includes('--quota');
+/** `--plan`：打出这一手的决定、编队和"有几个人拿到了落点"（冻住不动就靠它看） */
+const SHOW_PLAN = process.argv.includes('--plan');
 let quotaTurns = 0;
 let quotaCells = 0;
 let quotaEvicts = 0;
@@ -262,6 +264,7 @@ function measure(
   turnIdx: number,
 ): Row {
   const { world, con } = view;
+  const v = view.decision;
   const keep = new Set(con.keepClear);
   const cityCells = new Set<number>();
   for (const c of world.myCities) {
@@ -314,6 +317,15 @@ function measure(
     rejects: 0,
   };
 
+  if (SHOW_PLAN) {
+    const step = Object.keys(con.steps ?? {}).length;
+    const sqs = con.squads.map((q) => `${q.order}${q.cityId ? '@' + q.cityId : ''}:${q.unitIds.length}`).join(' ');
+    console.log(
+      `  · T${s.turn} 决定=${v.kind}${v.cityId ? '@' + v.cityId : ''}` +
+        ` 花费=${v.spend?.mode ?? '-'} 编队[${sqs || '无'}] 有落点 ${step}/${world.myCombat.length}` +
+        ` 名单 ${con.keepClear.length} 格`,
+    );
+  }
   if (SHOW_QUOTA && con.spawnQuota && con.spawnQuota.length > 0) {
     quotaTurns += 1;
     for (const q of con.spawnQuota) {
