@@ -66,6 +66,7 @@ import {
   utype,
 } from '../rules.ts';
 import type { City, GameState, PlayerId, Unit } from '../types.ts';
+import { geometricNeeds, keepClearOf, type Need } from './needs.ts';
 
 /**
  * **身价 = 相对战力**（2026-11-27 换，S1）。
@@ -489,7 +490,14 @@ export interface World {
   /** 我方的建造单位（`category === 'builder'`）——架桥要它们 */
   myBuilders: Unit[];
   foeCombat: Unit[];
-  /** 这几格必须空出来（产兵格 + 城门口），约束层会读它 */
+  /**
+   * **需求表**（批 1，2026-11-27）：这一手"谁要哪一格"。
+   *
+   * `keepClear` 现在是它的并集（`keepClearOf`），不再是手写几何。批 2 起 `want`/`rank`
+   * 才开始被读；现在它们只是标注。见 `src/core/v4/needs.ts` 顶部。
+   */
+  needs: Need[];
+  /** 这几格必须空出来（产兵格 + 城门口）。**由需求表拼出来**，别再单独手写一份 */
   keepClear: number[];
   /** 从某格到某格要走几回合；走不到 = Infinity */
   marchTurns(from: { x: number; y: number }, to: { x: number; y: number }): number;
@@ -947,79 +955,21 @@ export function buildWorld(s: GameState, me: PlayerId): World {
   const roleMap = new Map(cities.map((c) => [c.city.id, c.role]));
 
   /*
-   * 产兵格 = **城周围那一圈**（几何算），不用 `recruitSpawnCells`。
+   * **"必须空"的格子 = 需求表的并集**（批 1，2026-11-27）。
    *
-   * 这里踩过一个死循环：`recruitSpawnCells` 只返回**空着的**落点，
-   * 所以"兵把产兵格占满"这个状态它返回空数组——于是一个关键格都找不到，
-   * 也就没人被要求让开，永远造不出兵（S-009：守住之后 3 个回合 0 造兵，金 190 花不出去）。
+   * 原来是三只手写循环（城格 / 城的外一圈 / 桥头），现在挪进 `needs.ts`：
+   * 每条需求带"谁要、要几格、多急"，`keepClear` 由 `keepClearOf` 拼出来。
+   * 批 1 只搬位置——`want` 全是"整圈"、`mode` 全是"要空"，所以格子、顺序、数量
+   * 都必须和改之前一模一样（39 题逐字节一致）。
    *
-   * 关键格的定义不能依赖"现在有没有空位"，否则它会在最需要工作的时刻失效。
+   * 三条历史结论跟着搬走了，别在原处再写一遍：
+   *   · 几何算而不用 `recruitSpawnCells`——那个函数只返回**空着的**落点，
+   *     "占满"这个状态它会返回空数组，于是最需要清人的时候一个关键格都找不到（S-009）；
+   *   · 挨打时（`foeEta <= 1`）城格可以站（+3 护甲），外圈照旧不许停（出城通道）；
+   *   · 城格 + 外一圈都保（只保城格会让 S-001 从胜变平）。
    */
-  const keepClear: number[] = [];
-  for (const info of cities) {
-    const city = info.city;
-    const n = city.size ?? 2;
-    /*
-     * **挨打的时候，城格是可以站的**（2026-11-25，修 9.12）。
-     *
-     * 引擎的事实：地形防御表 **city = +3 护甲、plain = 0**，所以守军站进城里
-     * 比站在城外多 3 点护甲。而 v4 原来把城格和外圈一律算成"必须空"，
-     * 于是守军永远站在平原上挨打（实测 D-1-01：v1 站 2 个进城里、城血 18；
-     * v4 一个都不进、城血 11）。
-     *
-     * 为什么只在 `foeEta <= 1`（敌人下一手就能摸到）时放开：
-     * 这是**同一个数**（9.7 的威胁场）的第三个读者，不另起一个"我在防守"的判断。
-     * 不在威胁下的城仍然按"产兵口"处理——那时候挡住产兵口是真的会造不出兵。
-     *
-     * 挨打时会不会堵产兵口：**会，所以要留一格**。
-     * v4 原来写了一条"被压着的城不造兵"的假规则挡住这件事（引擎里没有这条，见 9.13），
-     * 2026-11-25 清掉之后，冲突就真的存在了：守军站满城格 → `recruitSpawnCells` 返回空 →
-     * 引擎拒"城市里已经站满了"。所以 `tactics.cityPostCell` 加了"至少留一格"的判据
-     * （`free.length < 2` 就不进城）——护甲和补兵两头都保住。
-     */
-    /*
-     * **城格 + 外一圈都保**（2026-11-24 试过只保城格，回退了）。
-     *
-     * 试的理由：产兵口就是城格本身，外圈挡住的是城边的好地形（S-015 那 2 格森林正好贴着城）。
-     * 回退的理由：**外圈是军队出城的通道**——只保城格之后 S-001（必赢题）从"胜"变成"未分胜负"，
-     * 兵挤在城墙外，主力出不来。
-     *
-     * 结论：城边的高产地在这个口径下吃不到。要吃得改地图（把高产地形挪出外圈），
-     * 不是改 keepClear。
-     *
-     * 城格为什么也算（2026-11-24 修正）：兵站在城里，产兵口就被堵住，
-     * `recruitSpawnCells` 直接返回 0（S-009：守军退回城下之后金 190 一分都花不出去）。
-     * **例外只有一个**：挨打的时候（上面那条 `foeEta <= 1`），城格是可以站的。
-     */
-    for (let dy = -1; dy <= n; dy++) {
-      for (let dx = -1; dx <= n; dx++) {
-        /* 挨打时城格可以站（见上）；外圈照旧不许停——那是出城通道 */
-        const inside = dx >= 0 && dy >= 0 && dx < n && dy < n;
-        if (inside && info.foeEta <= 1) continue;
-        const x = city.x + dx;
-        const y = city.y + dy;
-        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
-        const t = s.tiles[y * s.w + x]?.terrain;
-        if (!t || !passable(t)) continue;
-        keepClear.push(y * s.w + x);
-      }
-    }
-  }
-
-  /*
-   * 桥头：邻格有 ≥2 片水的桥面格 = 过河的唯一通道，停在那儿就是把全军的门堵死（S-005）。
-   */
-  for (let y = 0; y < s.h; y++) {
-    for (let x = 0; x < s.w; x++) {
-      if (s.tiles[y * s.w + x]?.terrain !== 'bridge') continue;
-      let water = 0;
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-        const t = s.tiles[(y + dy) * s.w + (x + dx)]?.terrain;
-        if (t === 'water' || t === 'deep') water += 1;
-      }
-      if (water >= 2) keepClear.push(y * s.w + x);
-    }
-  }
+  const needs = geometricNeeds(s, cities);
+  const keepClear = keepClearOf(needs);
 
   /* 每个敌方战斗单位的"威胁半径"，只算一次（贴脸：移动 + 1，见 harassed 的注释） */
 
@@ -1615,6 +1565,7 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     myEcon,
     myBuilders,
     foeCombat,
+    needs,
     keepClear: [...new Set(keepClear)],
     turnsFrom(p) {
       return marchFrom(p);

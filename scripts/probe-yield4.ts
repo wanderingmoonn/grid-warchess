@@ -26,6 +26,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { passable } from '../src/core/config.ts';
 import { applyAction, attackableTargets, utype } from '../src/core/rules.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
@@ -36,6 +37,16 @@ const argOf = (name: string, fallback = ''): string => {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 };
 const DETAIL = process.argv.includes('--detail');
+/**
+ * `--check-keep`：**批 1 的自查**——需求表拼出来的"必须空"清单，必须和旧的手写几何循环
+ * （城格 + 外一圈 + 桥头，按行主序）**逐格、逐序**一致。
+ *
+ * 为什么不只是"39 题没变"：矩阵只比结论（红/绿），格子清单错了也可能碰巧不改红绿。
+ * 这里把旧公式**原样抄一份当对照**——它是"特征测试"，不是第二套实现：
+ * 批 2 引入名额时会**故意**让它开始不一致，那时应该同步改这个检查，而不是让它静默通过。
+ */
+const CHECK_KEEP = process.argv.includes('--check-keep');
+let keepMismatch = 0;
 
 const EXAM_ARGS = argOf('exam', 'exams/D-3-01').split(',').map((x) => x.trim()).filter(Boolean);
 const CAP = Number(argOf('cap', '0'));
@@ -149,6 +160,48 @@ function playExam(dir: string): void {
   );
 }
 
+/**
+ * **旧的手写几何循环，原样抄一份当对照**（只给 `--check-keep` 用）。
+ *
+ * 这是"特征测试"：把批 1 之前的构造固定下来，用来证明"搬位置"真的没改任何一格。
+ * 批 2 引入名额之后它会**故意**开始不一致——那时要么同步改它，要么删掉它，
+ * **不许让它静默通过**（静默通过等于这层保护失效了）。
+ */
+function legacyKeepClear(
+  s: GameState,
+  cities: ReadonlyArray<{ city: { x: number; y: number; size?: number }; foeEta: number }>,
+): number[] {
+  const out: number[] = [];
+  for (const info of cities) {
+    const city = info.city;
+    const n = city.size ?? 2;
+    for (let dy = -1; dy <= n; dy++) {
+      for (let dx = -1; dx <= n; dx++) {
+        const inside = dx >= 0 && dy >= 0 && dx < n && dy < n;
+        if (inside && info.foeEta <= 1) continue;
+        const x = city.x + dx;
+        const y = city.y + dy;
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        const t = s.tiles[y * s.w + x]?.terrain;
+        if (!t || !passable(t)) continue;
+        out.push(y * s.w + x);
+      }
+    }
+  }
+  for (let y = 0; y < s.h; y++) {
+    for (let x = 0; x < s.w; x++) {
+      if (s.tiles[y * s.w + x]?.terrain !== 'bridge') continue;
+      let water = 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const t = s.tiles[(y + dy) * s.w + (x + dx)]?.terrain;
+        if (t === 'water' || t === 'deep') water += 1;
+      }
+      if (water >= 2) out.push(y * s.w + x);
+    }
+  }
+  return [...new Set(out)];
+}
+
 /** 一手的读数（在**任何动作执行之前**算） */
 function measure(
   s: GameState,
@@ -208,6 +261,22 @@ function measure(
     bad: 0,
     rejects: 0,
   };
+
+  if (CHECK_KEEP) {
+    const legacy = legacyKeepClear(s, world.cities);
+    const now = world.keepClear;
+    const same = legacy.length === now.length && legacy.every((k, i) => k === now[i]);
+    if (!same) {
+      keepMismatch += 1;
+      const onlyOld = legacy.filter((k) => !now.includes(k));
+      const onlyNew = now.filter((k) => !legacy.includes(k));
+      console.log(
+        `  ✗ T${s.turn} 「必须空」清单不一致：旧 ${legacy.length} 格 / 新 ${now.length} 格` +
+          ` · 只在旧:${onlyOld.length} 只在新:${onlyNew.length}` +
+          (onlyOld.length || onlyNew.length ? `（顺序或内容变了）` : '（内容一样但顺序变了）'),
+      );
+    }
+  }
 
   for (const u of s.units) {
     if (u.owner !== ME) continue;
