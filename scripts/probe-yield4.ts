@@ -59,6 +59,10 @@ const SHOW_PLAN = process.argv.includes('--plan');
  * "先补座位表"是不是根问题（见 `PLAN-V4-PHASE4` §4.23）。
  */
 const SHOW_SEAT = process.argv.includes('--seat');
+/** `--reject`：把"被引擎拒"按原因分档（第 3 步第一个动作，只读） */
+const SHOW_REJECT = process.argv.includes('--reject');
+/** 原因 → 人次。键里带上动作类型，才看得出"是不是 MOVE 在撞车" */
+const rejectReasons = new Map<string, number>();
 let seatTurns = 0;
 let seatOnKeep = 0;
 let seatMoving = 0;
@@ -201,6 +205,7 @@ function play(label: string, s0: GameState, ME: PlayerId, cap: number): void {
       s = st.state;
       row.rejects = st.rejects;
       rejectsThisGame += st.rejects;
+      if (SHOW_REJECT) for (const [k, n] of st.reasons) rejectReasons.set(k, (rejectReasons.get(k) ?? 0) + n);
       recruitsThisGame += st.recruits;
       rows.push(row);
       totalRejects += st.rejects;
@@ -513,19 +518,22 @@ function printRow(r: Row): void {
 function stepSide(
   s: GameState,
   ai: AiFn,
-): { state: GameState; rejects: number; recruits: number } {
+): { state: GameState; rejects: number; recruits: number; reasons: Map<string, number> } {
   const budget = { ...DEFAULT_BUDGET };
   const rejected = new Set<string>();
   const moveTries = new Map<string, number>();
   let cur = s;
   let rejects = 0;
   let recruits = 0;
+  const reasons = new Map<string, number>();
   for (let i = 0; i < AI_MAX_STEPS && !cur.winner; i++) {
     const a = ai(cur, budget, rejected);
     if (!a) break;
     const r = applyAction(cur, a);
     if (!r.ok) {
       rejects += 1;
+      const key = `${a.type}｜${(r.reason ?? '（无原因）').slice(0, 28)}`;
+      reasons.set(key, (reasons.get(key) ?? 0) + 1);
       if (a.type === 'MOVE' && 'unitId' in a) {
         const uid = String((a as { unitId?: string }).unitId ?? '');
         const n = (moveTries.get(uid) ?? 0) + 1;
@@ -543,9 +551,9 @@ function stepSide(
     if (a.type === 'UPGRADE') budget.upgraded += 1;
     cur = r.state;
   }
-  if (cur.winner) return { state: cur, rejects, recruits };
+  if (cur.winner) return { state: cur, rejects, recruits, reasons };
   const r = applyAction(cur, { type: 'END_TURN' });
-  return { state: r.ok ? r.state : cur, rejects, recruits };
+  return { state: r.ok ? r.state : cur, rejects, recruits, reasons };
 }
 
 if (EXAM_ARGS.length > 0) {
@@ -567,6 +575,14 @@ console.log(
     ` | 离敌城更远 ${sum((r) => r.awayFoe)}` +
     ` | 被引擎拒 ${totalRejects}`,
 );
+if (SHOW_REJECT) {
+  const all = [...rejectReasons.entries()].sort((a, b) => b[1] - a[1]);
+  const total = all.reduce((n, x) => n + x[1], 0);
+  console.log(`\n被拒原因（合计 ${total} 人次）：`);
+  for (const [k, n] of all.slice(0, 12)) {
+    console.log(`  ${String(n).padStart(5)}  ${total > 0 ? String(Math.round((n / total) * 100)).padStart(3) : '  0'}%  ${k}`);
+  }
+}
 if (SHOW_SEAT) {
   console.log(
     `座位账（只数站在"必须空"格子上的战斗兵，共 ${seatOnKeep} 人次）：` +
