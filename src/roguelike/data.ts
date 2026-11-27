@@ -292,8 +292,13 @@ export const WORLDS: Record<WorldId, WorldDef> = {
         { title: '魂修的祭坛', sub: '坛上摆的不是供品，是名字' },
       ],
     ),
-    // 境界：门口就是筑基，越往钟后越深（demo 用固定加成代替完整的修炼循环）
-    rankOf: (clock) => Math.min(5, 2 + Math.floor(clock / 3)),
+    /*
+     * 境界：门口就是筑基，越往钟后越深（demo 用固定加成代替完整的修炼循环）。
+     *
+     * **上限元婴(4)**：第二层不该撞见化神。上一版封顶 5（化神），加上长老的
+     * 境界又白送一级，层末直接站出一个「返虚」——玩家的 e3/e4 兵打它像挠墙。
+     */
+    rankOf: (clock) => Math.min(4, 2 + Math.floor(clock / 3)),
     power: 2.2,
     l3Pool: [],
     l3Subtitle: '末法之世——灵气被钢铁抽干了，这一层没有修士，只有机器',
@@ -1010,8 +1015,8 @@ export const TRIALS: TrialDef[] = [
     world: 'cultivation',
     title: '山门禁地',
     sub: '守山弟子没有问你为什么来，只问你还走不走',
-    // 四个筑基弟子（境界 2）：修士的强度大头在境界，光换兵种不换境界压不住
-    enemy: ['qi-cultivator', 'body-cultivator', 'sword-cultivator', 'qi-cultivator'],
+    // 三个筑基弟子（境界 2）：修士的强度大头在境界，光换兵种不换境界压不住
+    enemy: ['qi-cultivator', 'body-cultivator', 'sword-cultivator'],
     rank: 2,
     reward: ['qi-cultivator', 'body-cultivator'],
   },

@@ -21,7 +21,8 @@ import type { BoardUi } from '../ui/board.ts';
 import type { AiBudget } from '../core/ai-meta.ts';
 import type { Action, GameState, Unit } from '../core/types.ts';
 import { buildBattle, baseTypeOf, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
-import { growthOf } from './data.ts';
+import { CULTIVATORS, growthOf } from './data.ts';
+import { expForRank, getExp, getRank, REALMS } from '../core/cultivation/progression.ts';
 import type { BattleInit, BattleResult } from './types.ts';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
@@ -145,6 +146,15 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     const hp = `${u.hp}/${maxHpOf(state, u)}`;
     const base = baseTypeOf(u.type);
     const grow = growthOf(base, init.layer);
+    /*
+     * 修士的境界：`describeUnit` 只讲兵种定义，不讲这个单位**现在**修到哪了。
+     * 但境界正是修士一半的数值来源（每级 +3 攻 / +8 血），也是玩家判断
+     * "这个长老我打不打得动"的唯一依据，必须在卡上写出来。
+     */
+    const cult = CULTIVATORS.has(base);
+    const rank = cult ? getRank(u) : 0;
+    const exp = cult ? getExp(u) : 0;
+    const next = cult && rank < 9 ? expForRank(rank) : 0;
     const side =
       u.owner === 'A'
         ? '我方'
@@ -159,6 +169,13 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       ${
         grow && grow.step < grow.fullAt
           ? `<div class="rg-hc-line">成长期 ${grow.step}/${grow.fullAt}：它自己的时代还在第 ${grow.fullAt} 层，每层末长一次。</div>`
+          : ''
+      }
+      ${
+        cult
+          ? `<div class="rg-hc-line rg-hc-realm">境界 <b>${REALMS[rank] ?? '凡人'}</b>（攻 +${rank * 3} / 血 +${rank * 8}）· 修为 ${exp}${
+              rank >= 9 ? '（已至顶）' : ` / ${next}`
+            }</div>`
           : ''
       }
       ${lines.map((l) => `<div class="rg-hc-line">${escapeHtml(l)}</div>`).join('')}`;
@@ -223,25 +240,51 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     flashTip('它走开了');
   }
 
+  /**
+   * 把属性卡放进视口：先量它有多高，下方放不下就翻到鼠标上方。
+   *
+   * 上一版把 `top` 硬夹在 `innerHeight - 160`——那是按普通兵五六行算的。
+   * 修真单位多出「境界 / 特殊能力 / 技能」好几段，卡能到三百像素高，
+   * 底部直接被屏幕切掉；偏偏玩家自己的兵都摆在棋盘下沿，悬停时最容易撞上。
+   */
+  function placeHover(x: number, y: number): void {
+    if (!hoverEl) return;
+    const pad = 10;
+    const w = hoverEl.offsetWidth || 252;
+    const h = hoverEl.offsetHeight || 180;
+    let left = Math.min(window.innerWidth - w - pad, x + 16);
+    if (left < pad) left = pad;
+    let top = y + 12;
+    if (top + h > window.innerHeight - pad) top = y - h - 12;
+    top = Math.max(pad, Math.min(window.innerHeight - h - pad, top));
+    hoverEl.style.left = `${left}px`;
+    hoverEl.style.top = `${top}px`;
+  }
+
   boardEl.addEventListener('mouseover', (e) => {
     const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset.id;
     const u = id ? unitById(state, id) : undefined;
     if (!u || !hoverEl) return;
     hoverEl.innerHTML = statCardHtml(u);
     hoverEl.hidden = false;
+    const ev = e as MouseEvent;
+    placeHover(ev.clientX, ev.clientY);
   });
   boardEl.addEventListener('mousemove', (e) => {
     if (!hoverEl || hoverEl.hidden) return;
     const ev = e as MouseEvent;
-    const x = Math.min(window.innerWidth - 220, ev.clientX + 16);
-    const y = Math.min(window.innerHeight - 160, ev.clientY + 12);
-    hoverEl.style.left = `${x}px`;
-    hoverEl.style.top = `${y}px`;
+    placeHover(ev.clientX, ev.clientY);
   });
   boardEl.addEventListener('mouseout', (e) => {
     const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
     if (to && to.closest?.('[data-id]')) return;
+    // 鼠标移到卡片上（为了滚动看全文）时不要收起来
+    if (to && hoverEl && hoverEl.contains(to)) return;
     if (hoverEl) hoverEl.hidden = true;
+  });
+  // 卡片本身可滚：从卡片上离开再收起
+  hoverEl.addEventListener('mouseleave', () => {
+    hoverEl.hidden = true;
   });
 
   function selected(): Unit | undefined {

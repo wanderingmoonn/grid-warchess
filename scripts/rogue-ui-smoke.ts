@@ -255,6 +255,44 @@ console.log('\n[5] 战斗屏的技能栏');
   host.remove();
 }
 
+console.log('\n[5b] 修真单位：悬停卡带境界，且不超出视口');
+{
+  /*
+   * 修真单位的信息比普通兵多一大截（境界、修为、真元伤害、剑扫……），
+   * 原来的悬停卡把 top 硬夹在 `innerHeight - 160`，玩家自己的兵在棋盘下沿时
+   * 卡片底部会被屏幕切掉。现在按实际高度翻转，并且卡上补了境界行。
+   */
+  const { startRun, battleFor } = await import('../src/roguelike/run.ts');
+  const { mountBattle } = await import('../src/roguelike/battle-screen.ts');
+  const run = startRun(32, 'frontier');
+  run.layer = 2;
+  run.world = 'cultivation';
+  run.clock = 6;
+  run.army = [{ type: 'sword-cultivator', count: 2 }];
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const stop = mountBattle(host, battleFor(run, { kind: 'battle', title: '遭遇战', sub: '' }, 61), {
+    onDone: () => {},
+  });
+  let sawRealm = false;
+  let topInView = true;
+  const units = [...host.querySelectorAll<HTMLElement>('#rg-board .unit[data-id]')].slice(0, 8);
+  check(units.length > 0, '棋盘上有单位', String(units.length));
+  for (const el of units) {
+    el.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, clientX: 120, clientY: 640 }));
+    el.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 120, clientY: 640 }));
+    const card = host.querySelector<HTMLElement>('#rg-hovercard');
+    if (!card || card.hidden) continue;
+    if ((card.textContent ?? '').includes('境界')) sawRealm = true;
+    const top = Number.parseFloat(card.style.top);
+    if (!Number.isFinite(top) || top < 0 || top > window.innerHeight) topInView = false;
+  }
+  check(sawRealm, '修真单位的悬停卡写着境界', String(sawRealm));
+  check(topInView, '卡片位置被夹在视口内', `innerHeight=${window.innerHeight}`);
+  stop();
+  host.remove();
+}
+
 console.log('\n[6] 战场两侧的"外人"：场外交涉');
 {
   /*
@@ -351,6 +389,29 @@ console.log('\n[7] 成长型英雄：角标、属性卡、第 2 层长满');
   check(!b.host.querySelector('.rg-grow'), '第二层：长满了，角标消失');
   b.stop();
   b.host.remove();
+}
+
+console.log('\n[8] 局外军队行：修士的修为与能力也写出来');
+{
+  /*
+   * 局外原来只有一行「攻 / 甲 / 血 / 射 / 移」，修士的境界与能力要进战斗、
+   * 再把鼠标悬上去才看得见。现在每一行补「修为 x / y」与「能力：…」。
+   */
+  const { armyRow } = await import('../src/roguelike/app.ts');
+  const { startRun } = await import('../src/roguelike/run.ts');
+  const r = startRun(41, 'frontier');
+  r.layer = 2;
+  r.world = 'cultivation';
+  r.clock = 6;
+  r.army = [{ type: 'sword-cultivator', count: 2 }];
+  r.cultivation['sword-cultivator'] = 500;
+  const html = armyRow(r, r.army[0]!);
+  check(html.includes('修为'), '局外行写出修为进度', html.slice(0, 100));
+  check(html.includes('境界加成'), '局外行写出境界加成');
+  check(html.includes('能力：'), '局外行列出能力/技能', html.slice(0, 160));
+
+  const plain = startRun(42, 'frontier');
+  check(!armyRow(plain, plain.army[0]!).includes('修为'), '普通兵没有修士行');
 }
 
 console.log(failures === 0 ? '\n全部通过。' : `\n有 ${failures} 项没通过。`);

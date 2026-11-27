@@ -521,13 +521,28 @@
   flex-direction: column;
   gap: 4px;
 }
+/*
+ * 局外军队行：名字和数值一行，境界/修为与能力各占一行。
+ * 原来是一条 flex 行，加了「修为 / 能力」之后会挤成一团；修真单位的
+ * 信息量大头在这些行里，必须让它们换行显示，而不是被省略。
+ */
 .rg-armyrow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e0d8c6;
+}
+.rg-armyhead {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 6px;
-  padding: 3px 0;
-  border-bottom: 1px dashed #e0d8c6;
+}
+.rg-armyline {
+  color: #837b6b;
+  font-size: 10px;
+  line-height: 1.5;
 }
 .rg-armyrow:last-child {
   border-bottom: 0;
@@ -847,14 +862,22 @@
 .rg-hovercard {
   position: fixed;
   z-index: 6000;
-  width: 208px;
-  pointer-events: none;
+  width: 252px;
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+  /*
+   * 卡片要能滚：修真单位的能力 / 技能段落多，鼠标停在卡上滚轮看全文。
+   * `pointer-events` 从 none 改成 auto 是为此——对应的 mouseout 会判断
+   * 「relatedTarget 在不在卡里」，不会一移上去就消失。
+   */
+  pointer-events: auto;
   background: #fffdf6;
   border: 1px solid #cabfa8;
   border-radius: 10px;
   padding: 8px 10px;
   box-shadow: 0 10px 26px rgba(40, 34, 20, 0.22);
   font-size: 12px;
+  line-height: 1.45;
   color: #3c3a33;
 }
 .rg-hc-head {
@@ -900,6 +923,13 @@
 .rg-hc-line {
   color: #837b6b;
   line-height: 1.5;
+}
+/* 修士的境界行：和普通说明分开，玩家一眼能看到"这只修到哪了" */
+.rg-hc-realm {
+  color: #2f6b5e;
+}
+.rg-hc-realm b {
+  color: #1f5147;
 }
 
 /* ---------- 第二层的岔口：四种历史 ---------- */

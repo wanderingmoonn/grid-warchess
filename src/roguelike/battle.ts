@@ -737,11 +737,16 @@ export function buildBattle(init: BattleInit): GameState {
         const ed = s.unitTypes[elder.type];
         if (ed) ed.name = `${ed.name}·长老`;
       }
-      setCultivationExp(elder, expForRank(Math.min(9, init.rank)));
+      /*
+       * 境界 R 的门槛是 `expForRank(R-1)`——写成 `expForRank(R)` 会白送一级
+       * （上一版长老因此是「返虚」而不是「化神」，比设计高了一整档）。
+       */
+      setCultivationExp(elder, expForRank(Math.max(0, Math.min(9, init.rank - 1))));
     }
     for (const u of foes) {
       if (u === elder) continue;
       if (!CULTIVATORS.has(baseTypeOf(u.type))) continue;
+      // 手下压到钟下一级（同样减一：expForRank(R-1) 才是 R）
       setCultivationExp(u, expForRank(Math.max(0, init.rank - 2)));
     }
   }

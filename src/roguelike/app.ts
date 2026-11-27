@@ -6,7 +6,8 @@
  */
 import { STRATEGIES, armyText, eventById, relicById, relicDesc, rankOfExp, themeOf, unitDefOf, unitName } from './run.ts';
 import { CULTIVATORS, EVENTS, WORLDS } from './data.ts';
-import { REALMS } from '../core/cultivation/progression.ts';
+import { expForRank, REALMS } from '../core/cultivation/progression.ts';
+import { abilityById } from '../core/ability-registry.ts';
 import {
   addUnits,
   applyDecision,
@@ -117,7 +118,7 @@ function beginRun(root: HTMLElement, strategyId: string): void {
  * 玩家要在"买兵 / 换兵 / 走哪条路"上做决定，却看不到手里这些兵到底是什么。
  * 现在把**能查到的都写出来**，不再需要点进战斗才认得出自己的队伍。
  */
-function armyRow(r: RunState, entry: ArmyEntry): string {
+export function armyRow(r: RunState, entry: ArmyEntry): string {
   const def = unitDefOf(entry.type);
   const name = def?.name ?? unitName(entry.type);
   const stats = !def
@@ -126,12 +127,33 @@ function armyRow(r: RunState, entry: ArmyEntry): string {
       ? `攻 ${def.atk} · 耐久 ${def.maxHp}`
       : `攻 ${def.atk} · 甲 ${def.armor} · 血 ${def.maxHp} · 射 ${def.range} · 移 ${def.move}`;
   let realm = '';
+  let realmLine = '';
   if (CULTIVATORS.has(entry.type)) {
     // 修士的境界 = 时代钟给的下限与修出来的取高者（和 `battleFor` 一个口径）
     const base = WORLDS[r.world].rankOf?.(r.clock) ?? 0;
-    const rank = Math.max(base, rankOfExp(r.cultivation[entry.type] ?? 0));
-    realm = `<i class="rg-realm">${REALMS[Math.max(0, Math.min(9, rank))] ?? '凡人'}</i>`;
+    const exp = r.cultivation[entry.type] ?? 0;
+    const rank = Math.max(base, rankOfExp(exp));
+    const shown = Math.max(0, Math.min(9, rank));
+    realm = `<i class="rg-realm">${REALMS[shown] ?? '凡人'}</i>`;
+    /*
+     * 只写"筑基"不够：修为涨到哪、下一级还差多少，决定这个修士还值不值得带。
+     * 局外没有 `Unit`，就用 `run.cultivation` 里存的 exp 和同一套门槛算。
+     */
+    const next = shown < 9 ? expForRank(shown) : 0;
+    realmLine = `<div class="rg-armyline">修为 ${exp}${
+      shown >= 9 ? '（已至顶）' : ` / ${next}`
+    } · 境界加成 攻 +${shown * 3} / 血 +${shown * 8}</div>`;
   }
+  /*
+   * 能力与技能：修真单位的信息量大头在这里（真元伤害、剑扫、化灵……）。
+   * 以前局外只有一行数值，玩家得点进战斗、再把鼠标悬上去才知道自己买的是什么。
+   */
+  const traits = [
+    ...(def?.abilities ?? []).map((id) => abilityById(id)?.name ?? id),
+    ...(def?.skills ?? []).map((k) => k.name),
+  ];
+  const traitLine =
+    traits.length > 0 ? `<div class="rg-armyline">能力：${escapeHtml(traits.join('、'))}</div>` : '';
   const wound = r.wounds[entry.type];
   const hurt =
     wound !== undefined && wound < 0.995
@@ -139,8 +161,11 @@ function armyRow(r: RunState, entry: ArmyEntry): string {
       : '';
   const tag = def?.hero ? '<i class="rg-hero">英雄</i>' : '';
   return `<div class="rg-armyrow">
-    <span class="n">${escapeHtml(name)}${entry.count > 1 ? ` ×${entry.count}` : ''}</span>
-    <b>${stats}</b>${realm}${tag}${hurt}
+    <div class="rg-armyhead">
+      <span class="n">${escapeHtml(name)}${entry.count > 1 ? ` ×${entry.count}` : ''}</span>
+      <b>${stats}</b>${realm}${tag}${hurt}
+    </div>
+    ${realmLine}${traitLine}
   </div>`;
 }
 
