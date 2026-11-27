@@ -23,11 +23,12 @@
  */
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../ai.ts';
 import { playerView } from '../fog.ts';
+import { EARTH } from '../board.ts';
 import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
-import { recruitPriceOf, utype } from '../rules.ts';
+import { canSeeTile, recruitPriceOf, utype } from '../rules.ts';
 import type { Band, BandReport, Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId, Unit } from '../types.ts';
 
@@ -52,6 +53,15 @@ let cache: TurnCache | null = null;
  * 允许短期小亏，长期大亏才动（用户 2026-11-26 定的口径）。
  */
 const LANE_WINDOW = 6;
+
+/**
+ * "见过的敌人"这本账最多留几条。
+ *
+ * **这不是判断，是内存卫生**：一本只增不减的账会跟着存档/回放一直长。
+ * 过期怎么算**不在这里拍**——由读它的那一步用 `marchTurns` 判（见 `types.ts` 的 `foeSight`）。
+ * 128 远大于一局里真能看见的敌兵数（200 手里一般几十个），所以现在删谁都不影响读数。
+ */
+const FOE_SIGHT_KEEP = 128;
 
 const keyOf = (s: GameState, me: PlayerId): string =>
   `${s.turn}:${s.current}:${s.units.length}:${s.players[me]?.gold ?? 0}:${s.cities.length}` +
@@ -164,6 +174,8 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     /* 工兵队：只有架桥那一条分支会写；别的决定里是 undefined，等于撤编 */
     buildBand: con.buildBand,
     ...laneMemo(s, world, con, decision, mem, s.turn),
+    /* 阶段 5 第一步：只写不读（读者接上之前，这一行不该改变任何一手动作） */
+    foeSight: foeSightMemo(s, me, mem, s.turn),
   };
   writeMemory(s, me, nextMem);
   logLane(s, world, con, nextMem);
@@ -240,6 +252,45 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
       (a, b) => Math.abs(u.x - a.x) + Math.abs(u.y - a.y) - (Math.abs(u.x - b.x) + Math.abs(u.y - b.y)),
     )[0];
     out[u.id] = prev[u.id] ?? near?.id ?? '';
+  }
+  return out;
+}
+
+/**
+ * **记忆层第一步（阶段 5 §2.1）：记下"在视野里见过的敌战斗兵"**。
+ *
+ * 这一版**只写不读**——故意不给任何人读，先用 40 题证明"记了不改变任何行为"，
+ * 下一手再接读者。接的时候只准读一个布尔（"这块地方最近有没有敌人"），
+ * 不许读坐标，理由见 `types.ts` 的 `foeSight`。
+ *
+ * ── 三个容易写错的地方 ──────────────────────────────────
+ *
+ * 1. **判"看不看得见"用引擎的 `canSeeTile`**，和开火同一个函数。
+ *    **不能图省事读 `world.foeCombat`**：`playerView` 只在**开雾**时裁单位，
+ *    关雾局里它给的是全图（`P-1-01~04` 翻红 7 道就是照抄 `ai.ts` 的写法踩的）。
+ *    所以必须显式问引擎"这一格我这边看不看得见"。
+ * 2. **只记敌方的战斗兵**，和 `world.foeCombat` 同一口径——预警问的是"能打的兵"。
+ * 3. **只记地球上的**：`canSeeTile` 只认地球的格号，月球/站上的单位用它判会串格。
+ */
+function foeSightMemo(
+  s: GameState,
+  me: PlayerId,
+  mem: V4Memory,
+  turn: number,
+): NonNullable<V4Memory['foeSight']> {
+  const out: NonNullable<V4Memory['foeSight']> = { ...(mem.foeSight ?? {}) };
+  for (const u of s.units) {
+    if (u.owner === me) continue;
+    if (u.board !== undefined && u.board !== EARTH) continue;
+    if (utype(s, u.type).category !== 'combat') continue;
+    if (!canSeeTile(s, me, u.x, u.y)) continue;
+    out[u.id] = { x: u.x, y: u.y, turn };
+  }
+  /* 内存卫生：超了就从"最久没见"的开始删。过期判断不在这里（见 FOE_SIGHT_KEEP） */
+  const ids = Object.keys(out);
+  if (ids.length > FOE_SIGHT_KEEP) {
+    ids.sort((a, b) => out[a]!.turn - out[b]!.turn || (a < b ? -1 : 1));
+    for (const id of ids.slice(0, ids.length - FOE_SIGHT_KEEP)) delete out[id];
   }
   return out;
 }
