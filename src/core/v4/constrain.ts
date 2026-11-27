@@ -1072,6 +1072,84 @@ function planEconPosts(
 }
 
 /**
+ * **出城迎击站哪儿**：离这座城最近的敌人旁边、且不在城格里的一格（2026-11-27）。
+ *
+ * 判据全是几何：敌人按 `marchTurns` 挑最近的，站它身边（曼哈顿 1），
+ * 排除城格（城里那 2 个另有其人）、排除站了人的格、只留能走的格。
+ * 多个候选里挑**离城最远**的那个——在城外接火，不把战场摆在城门口。
+ */
+function interceptAt(
+  s: GameState,
+  world: World,
+  city: City,
+): { x: number; y: number } | undefined {
+  const foe = [...world.foeCombat].sort(
+    (a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1),
+  )[0];
+  if (!foe) return undefined;
+  const cityCells = new Set(cityTiles(city).map((p) => p.y * s.w + p.x));
+  const cands = [
+    { x: foe.x + 1, y: foe.y },
+    { x: foe.x - 1, y: foe.y },
+    { x: foe.x, y: foe.y + 1 },
+    { x: foe.x, y: foe.y - 1 },
+  ].filter(
+    (p) =>
+      p.x >= 0 &&
+      p.y >= 0 &&
+      p.x < s.w &&
+      p.y < s.h &&
+      !cityCells.has(p.y * s.w + p.x) &&
+      passable(s.tiles[p.y * s.w + p.x]?.terrain ?? 'water') &&
+      !s.units.some((u) => u.x === p.x && u.y === p.y),
+  );
+  if (cands.length === 0) return undefined;
+  const dist = (p: { x: number; y: number }): number =>
+    Math.abs(p.x - city.x) + Math.abs(p.y - city.y);
+  return [...cands].sort((a, b) => dist(b) - dist(a) || b.y - a.y || b.x - a.x)[0];
+}
+
+/**
+ * **守一座城的兵力怎么分：城里留几个、谁出城迎击**（2026-11-27，用户定的"适当主动防御"）。
+ *
+ * 原来的守 = 全部钉在城格上等敌人来打。城格只有 n×n 个（2×2 = 4），站不下的人也
+ * 只是挤在门口挨城破的连带伤害，一分输出都没有——`D-3-01` 实测：3 个人站在离敌人
+ * 两格的地方，一整场没出过一拳，城就这么被拆了。
+ *
+ * 三条判据，全是数：
+ *   ① **城撑不满 4 轮就不出城**：出城一趟来回要 4 手（出去 2、回来 2），
+ *      撑不到就是白送（`D-1-01`/`D-1-03` 城只能撑 3 轮、`D-2-02` 只能撑 2 轮，
+ *      分兵会让它们直接翻红）；
+ *   ② **城里留 2 个**：城格吃 +3 护甲，而且城格得有人站着才不会被"抢走"；
+ *   ③ **出去的人要赶得上**：`marchTurns(到迎击位) ≤ 敌人开打的手数`，赶不上的留在城里。
+ *
+ * 三条任一不成立就退回"全员进城"（行为与改动前逐字一致）。
+ */
+function guardSplit(
+  s: GameState,
+  world: World,
+  city: City,
+  ids: string[],
+): { inside: string[]; field: string[]; at?: { x: number; y: number } } {
+  if (ids.length <= 2) return { inside: ids, field: [] };
+  const out = world.defensible(city);
+  if (!Number.isFinite(out.rounds) || out.rounds < 4) return { inside: ids, field: [] };
+  /* 敌人 2 手内就要开打才谈得上"迎击"；更远的话先按原来的走位（`S-013` 实测：那时分兵会丢城） */
+  if (out.firstAt > 2) return { inside: ids, field: [] };
+  const at = interceptAt(s, world, city);
+  if (!at) return { inside: ids, field: [] };
+  const units = ids
+    .map((id) => s.units.find((u) => u.id === id))
+    .filter((u): u is Unit => !!u)
+    .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1));
+  const deadline = Math.max(1, out.firstAt);
+  const field = units.slice(2).filter((u) => world.marchTurns(u, at) <= deadline);
+  if (field.length === 0) return { inside: ids, field: [] };
+  const fieldIds = new Set(field.map((u) => u.id));
+  return { inside: ids.filter((id) => !fieldIds.has(id)), field: [...fieldIds], at };
+}
+
+/**
  * 多城分兵（2026-11-24）：**每座受威胁的城一支队**。
  *
  * 为什么必须分：只有一支 `main` 时，所有兵都去最近那座城，另一座直接丢
@@ -1133,6 +1211,31 @@ function planMains(s: GameState, world: World, cities: City[], ids: string[]): S
   for (const n of needs) {
     const squadIds = picked.get(n.city.id) ?? [];
     if (squadIds.length === 0) continue;
+    /*
+     * **分两拨：城里留 2 个，其余出城迎击**（2026-11-27，`guardSplit`）。
+     * 不满足它的三条判据时 `field` 是空的，走的是原来那支 `main`（逐字不变）。
+     */
+    const split = guardSplit(s, world, n.city, squadIds);
+    if (split.field.length > 0 && split.at) {
+      out.push({
+        id: `hold-${n.city.id}`,
+        order: 'hold',
+        unitIds: split.inside,
+        cityId: n.city.id,
+        tactics: planTactics(s, split.inside, false),
+      });
+      out.push({
+        id: `main-${n.city.id}`,
+        order: 'march',
+        unitIds: split.field,
+        cityId: n.city.id,
+        at: split.at,
+        want: split.field.length,
+        tactics: planTactics(s, split.field, true),
+        ...(planColumns(s, world, split.field, n.city) ?? {}),
+      });
+      continue;
+    }
     out.push({
       id: `main-${n.city.id}`,
       order: 'march',
@@ -2123,8 +2226,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
        * 而且"站着挨打"本身不产生任何输出（`D-3-01` 实测：10 个人全在城里，8 个敌人
        * 一个一个把城打穿；人手答案是迎上去在城外打）。
        *
-       * 现在分两拨，名额是一个能数的数：**城里留 2 个**（吃 +3 护甲、占住城格），
-       * 其余站到**城与敌人之间**（城心朝最近敌人 2 格），在敌人贴城之前先接火。
+       * 现在分两拨：**城里留 2 个**（吃 +3 护甲、占住城格），其余站到城与敌人之间迎击。
        * 只有 `loose` 的人数超过 2 才分——人不够时行为一个字不变。
        */
       const insideMax = 2;
@@ -2146,7 +2248,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
           order: 'hold',
           unitIds: recallIds,
           cityId: city.id,
-            tactics: planTactics(s, recallIds, false),
+          tactics: planTactics(s, recallIds, false),
         });
       } else {
         const stay = sortedLoose.slice(0, insideMax).map((u) => u.id);
@@ -2172,7 +2274,6 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         const dy = foe ? Math.sign(foe.y - cy) : 0;
         const far = { x: cx + dx * 2, y: cy + dy * 2 };
         const near = { x: cx + dx, y: cy + dy };
-        /* 用 `boardOf` 拿这张图（多图下不能写死地球） */
         const okFar = passable(tileOn(s, EARTH, far.x, far.y)?.terrain ?? 'water');
         const at = foe && okFar ? far : foe ? near : undefined;
         squads.push({

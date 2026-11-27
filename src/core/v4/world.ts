@@ -106,6 +106,15 @@ export function unitWorthOfType(s: GameState, typeId: string): number {
   return Math.min(...vals);
 }
 
+/**
+ * **提前量：敌人最多提前几手，才值得现在就召回**（2026-11-27）。
+ *
+ * 数字是"还来得及"的最小值：`D-3-01` 的敌人 1~2 手后就开打，提前一手动还能在城外接住；
+ * 再远（`S-011` 5 手、`S-013` 5~6 手）就不是"来不及"，而是"还没轮到它"——那时候召回
+ * 等于用眼前的战术动作去赌 5 手后的事，实测两道都丢城。
+ */
+const EARLY_LEAD = 3;
+
 /** 拟合出来的三个参数（见上面的注释；动它要跑 `fit-combat-formula` 对表） */
 const W_HP = 1.5;
 const W_STAND = 0.5;
@@ -372,6 +381,20 @@ export interface DefendOutlook {
   foeWorth: number;
   /** 有几个敌人的伤害真的落得到城上 */
   threats: number;
+  /**
+   * **敌人第几手开始打这座城**（`Infinity` = 打不着）。
+   *
+   * 和 `rounds` 在同一条时间轴上：`firstAt` 是"开始挨打"，`rounds` 是"塌"。
+   * 决定层用它判"回不来得及"，而不是等门口真的站了人。
+   */
+  firstAt: number;
+  /**
+   * **是不是"提前"判出来的危险**（2026-11-27）：城里没人、敌人却在我赶到之前就会开打。
+   *
+   * 决定层用它决定要不要绕开"城的角色门"——角色门只在敌人贴脸（1 手内）时才认威胁，
+   * 提前量是另一条路，所以必须显式标出来，不能默默改变所有城的判定。
+   */
+  early: boolean;
   /** 一句话，进决定理由 */
   why: string;
 }
@@ -1225,6 +1248,8 @@ export function buildWorld(s: GameState, me: PlayerId): World {
         makeWorth: 0,
         foeWorth: 0,
         threats: 0,
+        firstAt: Infinity,
+        early: false,
         why: '没人打得着这座城',
       };
     }
@@ -1274,9 +1299,63 @@ export function buildWorld(s: GameState, me: PlayerId): World {
      */
     const stableNow = foe.here === 0 || mine.here > foe.here;
     const winsEventually = defWorth > foeWorth;
+    /*
+     * **提前看见威胁：判据是"回不来得及"，不是"敌人多近"**（2026-11-27）。
+     *
+     * 只按"门口有没有人"判，就永远等挨了第一下才动（`D-3-01`：敌人从 2~3 手外走过来，
+     * 它打到第 9 手才发现城要塌）。
+     * 但也不能按"敌人多近"判——那样前线接敌、家里 5~6 手外路过一支敌人也会被算进来。
+     *
+     * 判据：最早一批自己人 `earliestEta` 手能回城，敌人 `firstAt` 手后开始打。
+     * 回得比挨打早（`<`）→ 不用提前动，等真挨打再说；回不赢（`>=`）→ 现在就得动。
+     * 人本来就在城里（`earliestEta = 0`）时这条永远不成立——这正是"前线接敌不该回防"。
+     *
+     * 另加两个地板，都是实测出来的：
+     *   · 门口已经有人（`foe.here > 0`）→ 走老口径，别抢"当下该不该打"的判断；
+     *   · 城里已经有守军（`onSiteWorth > 0`）→ 提前把外面前锋拽回来是拿战术动作换安全感
+     *     （`X-2-01` 实测：把自己那一步"合击"顶掉了）。
+     */
+    const etas = myCombat
+      .filter((u) => !skip?.has(u.id))
+      .map((u) => world.marchTurns(u, city))
+      .filter((t) => Number.isFinite(t));
+    const earliestEta = etas.length > 0 ? Math.min(...etas) : Infinity;
+    /*
+     * **来打城的那个敌人已经被我贴住了 → 不算"来不及"**（2026-11-27，`X-2-01` 逼出来的）。
+     *
+     * `earliestEta >= firstAt` 只回答"谁先到"，回答不了"它到得了吗"：
+     * 敌人正被我方围在城外的空地上打，它根本没有余力走过去拆城，
+     * 这时候把围攻的人拽回城，等于**拿一次合击换一份安全感**（`X-2-01` 就是这么翻红的：
+     * 那一手"补一刀就收"被提前召回顶掉）。
+     *
+     * 判据是几何的、能数的：离城最近的那个敌人，身边一格内有没有我的人。
+     */
+    const nearestFoe = [...foeCombat]
+      .sort((a, b) => world.marchTurns(a, city) - world.marchTurns(b, city) || (a.id < b.id ? -1 : 1))[0];
+    const blocked =
+      !!nearestFoe &&
+      myCombat.some(
+        (u) => !skip?.has(u.id) && Math.abs(u.x - nearestFoe.x) + Math.abs(u.y - nearestFoe.y) <= 1,
+      );
+    /*
+     * **敌人得落在这个窗口里**才算"马上要开打"（2026-11-27）。
+     *
+     * `firstAt` 是"第几手开始挨打"，可以远在窗口之外（那说明这座城市眼下根本没有
+     * 威胁，只是迟早会被路过）。不设这道闸，`S-011`/`S-013` 那种"敌人 5~6 手外"的
+     * 开局就会被判成"来不及"，全军提前回城（这两道实测翻红）。
+     */
+    const soon =
+      Number.isFinite(stand.firstAt) &&
+      stand.firstAt <= EARLY_LEAD &&
+      earliestEta >= stand.firstAt &&
+      /* 现在动都赶不上（回城比城塌还晚）→ 提前召回也没用，别拿战术动作换 */
+      earliestEta < stand.rounds &&
+      onSiteWorth <= 0 &&
+      foe.here === 0 &&
+      !blocked;
     const state: DefendState = !Number.isFinite(stand.rounds)
       ? 'hold'
-      : stableNow && winsEventually
+      : stableNow && !soon && winsEventually
         ? 'hold'
         : winsEventually
           ? 'reinforce'
@@ -1302,7 +1381,11 @@ export function buildWorld(s: GameState, me: PlayerId): World {
       makeWorth,
       foeWorth,
       threats: stand.threats,
-      why: `${money} ${cmp} 来犯 ${Math.round(foeWorth)}`,
+      firstAt: stand.firstAt,
+      early: soon,
+      why: `${money} ${cmp} 来犯 ${Math.round(foeWorth)}${
+        soon ? `（${stand.firstAt} 手后开打，我最早 ${earliestEta} 手到）` : ''
+      }`,
     };
   };
 

@@ -791,7 +791,17 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
    * 时间窗就是"城还能撑几轮"，所以赶不到的人不算守军、也不用来犯。
    * 最急的排前面（`rounds` 小的先救）。
    */
-  const threatened = world.cities.filter((c) => c.role === 'threatened' || c.role === 'home');
+  /*
+   * **角色门保留，另外放行"提前判出来的"那些城**（2026-11-27）。
+   *
+   * 角色门（`threatened` / `home`）只在敌人下一手能摸到时才认威胁，于是敌人在 2~3 手外
+   * 走过来时它一直在打别的城（`D-3-01`：T1~T7 全在打那座不会动的敌城）。
+   * 提前量由服务层的 `defensible` 给（`early`：城里没人 + 回不赢），这里只负责"多认这一种"，
+   * **不留第二道判断**——什么时候算危险，仍然只有 `defensible` 一处回答。
+   */
+  const threatened = world.cities.filter(
+    (c) => c.role === 'threatened' || c.role === 'home' || world.defensible(c.city).early,
+  );
   /*
    * **守军里不算"已经被派去别处进攻的人"。**
    *
