@@ -1,48 +1,74 @@
 /**
- * 战斗屏：把核心棋盘搬过来，只做"肉鸽需要的那几件事"。
+ * 战斗屏：**照抄战役模式的那一套**，只删掉肉鸽用不到的部分。
  *
- * 为什么不复用主程序那一套：主程序（main.ts）是一万多行的装配层，里面有联机、
- * 回放、选卡、指挥官、星图、战报上传……肉鸽只需要"选中 / 移动 / 攻击 / 攻城 / 结束回合"。
- * 而**规则和渲染**都是现成的独立模块（core/* 与 ui/board.ts），直接调它们，
- * 既能保证"打起来的手感和本体一样"，又不用改本体任何一行。
+ * 2026-11-28 重做。上一版是自己画了一条顶栏 + 右侧四张卡（我军/战况/技能/操作），
+ * 看着"能用"，但和本体是两套东西：单位详情只有五行字、没有地形卡、没有城卡、
+ * 没有技能输入框、没有天气/灵气的扩展面板、没有攻击预览与缩放。玩家每换一个模式
+ * 就得重学一遍界面。
  *
- * 手感跟上本体的三件事（2026-11-23 按反馈补的）：
- *   · **选中一次就能先走再打**——移动之后不清选中，同一条命令链走完；
- *   · **能撤回**——每步都压栈，Ctrl+Z 或按按钮退回上一步（结束回合后清空）；
- *   · 没有招募——前三层玩家没有城，这一关只打这一支部队。
+ * 现在的做法不是"照着战役的样子再画一遍"，而是**直接用战役的组件**：
+ *   · 侧栏 → `ui/panel.ts` 的 `renderPanel`（回合徽章、资源、席位、单位/城/地形卡、
+ *     技能、扩展面板、战报、结束行动、认输，全是同一份实现）；
+ *   · 顶栏 → `topbarShell` 里那些类的子集（回合、关卡目标、扩展徽章、棋盘视图）；
+ *   · 资源条 → `battleStatusShell` / `updateBattleStatus`（金币、每回合、撤回）；
+ *   · 棋盘 → `ui/board.ts`（连同缩放、强制模式、棋盘视图染色）。
+ *
+ * 删掉的是战役里有、肉鸽没有对应玩法的：联机、回放、上帝模式、迷雾开关、
+ * 选卡、指挥官、战报上传、城市生产/升级（前三层玩家没有城）。
+ *
+ * 肉鸽自己只有三样要补：
+ *   1. **出征军**没有城 —— 所以胜负看"战斗单位打光"，不是"城全丢"；
+ *   2. **守城战的波次**在敌方回合结束时往 `state.units` 追加（不碰规则层）；
+ *   3. **场外交涉**（中立单位）—— 战役里没有这种东西，单独补一张小卡。
  */
 import { AI_MAX_STEPS, aiActionKey, aiNextAction } from '../core/ai.ts';
 import { DEFAULT_BUDGET } from '../core/ai-meta.ts';
-import { attackableTargets, heroSkillsOf, isAirborne, maxHpOf, reachableTiles, siegeTargets, unitById, unitsAt, unitsOf, utype } from '../core/rules.ts';
-import { describeUnit, unitStatLine } from '../core/info.ts';
-import { playerView } from '../core/fog.ts';
-import { cellAtPoint, renderBoard } from '../ui/board.ts';
-import type { BoardUi } from '../ui/board.ts';
 import type { AiBudget } from '../core/ai-meta.ts';
+import { EARTH } from '../core/board.ts';
+import { activeExpansions } from '../core/expansions.ts';
+import {
+  attackableTargets,
+  heroSkillsOf,
+  isAirborne,
+  maxHpOf,
+  reachableTiles,
+  siegeTargets,
+  unitsAt,
+  unitsOf,
+  utype,
+} from '../core/rules.ts';
+import { playerView } from '../core/fog.ts';
+import { cellAtPoint, fitBoardBox, refreshCellVar, renderBoard } from '../ui/board.ts';
+import type { BoardUi } from '../ui/board.ts';
+import {
+  actionFeedback,
+  combatForecastHtml,
+  forecastCombat,
+} from '../ui/combat-feedback.ts';
+import type { CombatAction } from '../ui/combat-feedback.ts';
+import {
+  battleStatusShell,
+  renderPanel,
+  updateBattleStatus,
+} from '../ui/panel.ts';
 import type { Action, GameState, Unit } from '../core/types.ts';
 import { buildBattle, baseTypeOf, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
-import { CULTIVATORS, growthOf } from './data.ts';
-import {
-  expForRank,
-  getExp,
-  getRank,
-  REALMS,
-  totalHpBonusForRank,
-} from '../core/cultivation/progression.ts';
-import {
-  armorModifier,
-  attTimesModifier,
-  moveModifier,
-  RangeModifier,
-  realmAtkFor,
-  SplashModifier,
-  trueDamageOf,
-} from '../core/cultivation/stats.ts';
 import type { BattleInit, BattleResult } from './types.ts';
+import { growthOf } from './data.ts';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
 /** 撤回上限：一回合里走不到这么多步，够用又不会把内存拖大 */
 const UNDO_LIMIT = 40;
+
+/** AI 每步之间的停顿（毫秒）：慢 / 正常 / 快 */
+const AI_SPEEDS = [
+  { label: '慢', ms: 110 },
+  { label: '正常', ms: 45 },
+  { label: '快', ms: 0 },
+] as const;
+
+/** 缩放档位（和本体同一个序列） */
+const ZOOM_STEPS = [1, 1.35, 1.8, 2.4] as const;
 
 interface BattleHandlers {
   onDone: (result: BattleResult) => void;
@@ -51,12 +77,20 @@ interface BattleHandlers {
 export function mountBattle(host: HTMLElement, init: BattleInit, handlers: BattleHandlers): () => void {
   let state: GameState = buildBattle(init);
   let selectedId: string | null = null;
+  let selectedCityId: string | null = null;
+  let selectedTile: { x: number; y: number } | null = null;
   let reach: number[] = [];
   let targets: string[] = [];
   let sieges: string[] = [];
   let busy = false;
   let finished = false;
   let disposed = false;
+  let paused = false;
+  let speedIdx = 1;
+  let boardZoom = 1;
+  let activeView: string | null = null;
+  let opsOpen = true;
+  let logOpen = true;
   /** 撤回栈：每次我方动作之前压一份，结束回合清空（和本体一个口径） */
   const undoStack: GameState[] = [];
   /** 敌人这一场已经补了几个兵（`AiBudget.maxRecruit` 是**每回合**的额度，得自己累计） */
@@ -66,258 +100,227 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
   /** 三席守城：B 是友军、C 是攻方；两席局敌人仍是 B */
   const foeSeat = init.allyCity ? ('C' as const) : ('B' as const);
   /** 这一局几个席位：回合按"每人一次"算，不能写死 /2 */
-  const hiddenSeats = state.config.level?.seats?.hidden?.length ?? 0;
-  const seats = Math.max(1, (state.config.playerCount ?? 2) - hiddenSeats);
+  const hiddenSeats = state.config.level?.seats?.hidden ?? [];
+  const seats = Math.max(1, (state.config.playerCount ?? 2) - hiddenSeats.length);
   const roundsNow = (): number => Math.ceil(state.turn / seats);
-  /**
-   * 正在等落点的技能。
-   *
-   * 本体的施法流程是两步（点技能 → 点地图），这里照搬同一个节奏：
-   * 方向型只认施法者四邻，选点型认任意格（自己脚下算取消）。
-   * 我们的英雄技能目前全是 `targeting: 'none'`（战吼、圣旗、招魂……），
-   * 所以绝大多数情况下点一下就放；把选点这条路留着，是为了别让
-   * 以后加进来的法术在肉鸽里变成"点了没反应"。
-   */
+
+  /** 正在等落点的技能（和本体一个节奏：点技能 → 点地图） */
   let pendingSkill: { unitId: string; skillId: string; targeting: 'point' | 'direction' } | null = null;
   let skillAim: number[] = [];
-  /**
-   * 强制模式（照抄本体）：`move` = 点哪格就走上去，`attack` = 点哪格就开火。
-   *
-   * 为什么需要它：空中单位和地面单位**可以叠在同一格**（引擎按层判占位），
-   * 而"点这一格"只能有一个意思。没有强制模式时，地勤兵压在飞行兵身上，
-   * 你就永远选不到下面那个、也永远挪不上去——这就是"我方空地做不到重合"。
-   * 本体用 Alt / Shift + 两个按钮解决，这里照搬，只去掉肉鸽用不上的部分。
-   */
+  /** 强制模式：这一下点击只按一个动词解释（空地叠在同格时必需） */
   let forceMode: 'move' | 'attack' | null = null;
-  /** 同一格连点翻页：记上一次点的格子与翻到第几个 */
+  /** 攻击预览（战役的 combat-aim）：开着时点目标先出预估，确认才打 */
+  let previewMode = false;
+  let pendingCombat: CombatAction | null = null;
+  /** 同一格连点翻页 */
   let pick: { key: number; ids: string[]; index: number } | null = null;
+  /** 棋盘尺寸缓存 */
+  let fitDirty = true;
+  host.classList.add('rg-battle-host');
 
   host.innerHTML = `
-    <div class="rg-battle">
-      <div class="rg-battle-head">
-        <div class="rg-battle-title">
-          <b>${escapeHtml(init.label)}</b>
-          <span>${escapeHtml(init.sub)}</span>
+    <div class="app rg-battle-app">
+      <header class="battle-header">
+        <div class="topbar" id="rg-topbar"></div>
+        <div class="battle-status" id="rg-battle-status"></div>
+      </header>
+      <div class="main">
+        <div class="board-wrap" id="rg-board-wrap">
+          <div class="force-flag" id="rg-force-flag" hidden></div>
+          <section class="combat-preview" id="rg-combat-preview" hidden aria-label="攻击结果预览" aria-live="polite"></section>
+          <div class="action-feedback" id="rg-action-feedback" hidden role="status" aria-atomic="true"></div>
+          <div class="board-scroll" id="rg-board-scroll">
+            <div class="board rg-board" id="rg-board"></div>
+          </div>
+          <div class="zoom-bar" id="rg-zoom-bar">
+            <button class="zoom-btn" data-act="zoom-fit" title="让整张图回到屏幕里">适应</button>
+            <button class="zoom-btn" data-act="zoom-out" title="缩小">−</button>
+            <button class="zoom-btn" data-act="zoom-in" title="放大">＋</button>
+          </div>
         </div>
-        <div class="rg-battle-hud" id="rg-hud"></div>
-        <div class="rg-battle-btns">
-          <button class="rg-btn ghost mini" data-act="force-move" id="rg-force-move" title="按 Alt 点格子 = 临时用一次">强制移动 <kbd>Alt</kbd></button>
-          <button class="rg-btn ghost mini" data-act="force-attack" id="rg-force-attack" title="按 Shift 点格子 = 临时用一次">强制攻击 <kbd>Shift</kbd></button>
-          <button class="rg-btn ghost" data-act="undo" id="rg-undo">撤回</button>
-          <button class="rg-btn" data-act="end">结束回合</button>
-          <button class="rg-btn ghost" data-act="quit">认输</button>
-        </div>
-      </div>
-      <div class="rg-hovercard" id="rg-hovercard" hidden></div>
-      <div class="rg-battle-body">
-        <div class="rg-boardwrap">
-          <div class="board rg-board" id="rg-board"></div>
-        </div>
-        <aside class="rg-side">
-          <div class="rg-side-card">
-            <h4>我军</h4>
-            <div id="rg-army" class="rg-army"></div>
+        <aside class="side-drawer" id="rg-side-drawer" data-expanded="false">
+          <div class="mobile-drawer-head">
+            <button type="button" class="drawer-toggle" data-act="drawer-toggle" aria-expanded="false" aria-controls="rg-side">
+              <span class="drawer-copy"><b>战场概览</b><small>回合、资源与单位详情</small></span>
+              <span class="drawer-state">展开详情</span>
+            </button>
           </div>
-          <div class="rg-side-card">
-            <h4>战况</h4>
-            <div id="rg-foes" class="rg-foes"></div>
-          </div>
-          <div class="rg-side-card" id="rg-neutral-card" hidden>
-            <h4>外人</h4>
-            <div id="rg-neutral" class="rg-foes"></div>
-          </div>
-          <div class="rg-side-card">
-            <h4>技能</h4>
-            <div id="rg-skills" class="rg-skills"></div>
-          </div>
-          <div class="rg-side-card grow">
-            <h4>操作</h4>
-            <div id="rg-tip" class="rg-tip"></div>
-          </div>
+          <div class="side" id="rg-side"></div>
         </aside>
       </div>
     </div>`;
 
+  const rootEl = host.querySelector<HTMLElement>('.rg-battle-app');
+  const topbarEl = host.querySelector<HTMLElement>('#rg-topbar');
+  const statusEl = host.querySelector<HTMLElement>('#rg-battle-status');
   const boardEl = host.querySelector<HTMLElement>('#rg-board');
-  const hoverEl = host.querySelector<HTMLElement>('#rg-hovercard');
-  const hudEl = host.querySelector<HTMLElement>('#rg-hud');
-  const armyEl = host.querySelector<HTMLElement>('#rg-army');
-  const foeEl = host.querySelector<HTMLElement>('#rg-foes');
-  const neutralCardEl = host.querySelector<HTMLElement>('#rg-neutral-card');
-  const neutralEl = host.querySelector<HTMLElement>('#rg-neutral');
-  const skillEl = host.querySelector<HTMLElement>('#rg-skills');
-  const tipEl = host.querySelector<HTMLElement>('#rg-tip');
-  const undoBtn = host.querySelector<HTMLButtonElement>('#rg-undo');
-  const forceMoveBtn = host.querySelector<HTMLButtonElement>('#rg-force-move');
-  const forceAttackBtn = host.querySelector<HTMLButtonElement>('#rg-force-attack');
-  if (!boardEl || !hudEl || !armyEl || !foeEl || !tipEl || !undoBtn || !hoverEl || !skillEl) {
+  const boardWrapEl = host.querySelector<HTMLElement>('#rg-board-wrap');
+  const boardScrollEl = host.querySelector<HTMLElement>('#rg-board-scroll');
+  const sideEl = host.querySelector<HTMLElement>('#rg-side');
+  const drawerEl = host.querySelector<HTMLElement>('#rg-side-drawer');
+  const forceFlagEl = host.querySelector<HTMLElement>('#rg-force-flag');
+  const previewEl = host.querySelector<HTMLElement>('#rg-combat-preview');
+  const feedbackEl = host.querySelector<HTMLElement>('#rg-action-feedback');
+  if (!rootEl || !topbarEl || !statusEl || !boardEl || !boardWrapEl || !boardScrollEl || !sideEl || !drawerEl || !forceFlagEl || !previewEl || !feedbackEl) {
     throw new Error('战斗界面结构缺失');
   }
 
-  /** 单位属性卡：和本体一样，指到谁就看谁 */
-  function statCardHtml(u: Unit): string {
-    const def = utype(state, u.type);
-    const lines = describeUnit(state, def, u.owner, u);
-    const hp = `${u.hp}/${maxHpOf(state, u)}`;
-    const base = baseTypeOf(u.type);
-    const grow = growthOf(base, init.layer);
-    /*
-     * 修士的境界：`describeUnit` 只讲兵种定义，不讲这个单位**现在**修到哪了。
-     * 但境界正是修士一半的数值来源（每级 +3 攻 / +8 血），也是玩家判断
-     * "这个长老我打不打得动"的唯一依据，必须在卡上写出来。
-     */
-    const cult = CULTIVATORS.has(base);
-    const rank = cult ? getRank(u) : 0;
-    const exp = cult ? getExp(u) : 0;
-    const next = cult && rank < 9 ? expForRank(rank) : 0;
-    const side =
-      u.owner === 'A'
-        ? '我方'
-        : init.allyCity && u.owner === 'B'
-          ? '友军'
-          : !init.allyCity && u.owner === 'C'
-            ? '中立'
-            : '敌方';
-    return `<div class="rg-hc-head"><b>${escapeHtml(def.name)}</b><i>${side}</i></div>
-      <div class="rg-hc-hp"><span style="width:${Math.max(0, Math.min(100, (u.hp / Math.max(1, maxHpOf(state, u))) * 100))}%"></span><em>${hp}</em></div>
-      <div class="rg-hc-stats">${escapeHtml(unitStatLine(def))}</div>
-      ${
-        grow && grow.step < grow.fullAt
-          ? `<div class="rg-hc-line">成长期 ${grow.step}/${grow.fullAt}：它自己的时代还在第 ${grow.fullAt} 层，每层末长一次。</div>`
-          : ''
-      }
-      ${
-        cult
-          ? `<div class="rg-hc-line rg-hc-realm">境界 <b>${REALMS[rank] ?? '凡人'}</b> · 修为 ${exp}${
-              rank >= 9 ? '（已至顶）' : ` / ${next}`
-            }<br>境界加成 攻 +${realmAtkFor(u)} / 甲 +${armorModifier(u)} / 血 +${totalHpBonusForRank(
-              rank,
-            )} / 射 +${RangeModifier(u)} / 移 +${moveModifier(u)}${
-              trueDamageOf(u) > 0 ? ` / 真元 ${trueDamageOf(u)}` : ''
-            }${attTimesModifier(u) > 0 ? ` / 攻击 ${attTimesModifier(u) + 1} 次` : ''}${
-              SplashModifier(u) > 0 ? ` / 溅射 ${SplashModifier(u)}` : ''
-            }</div>`
-          : ''
-      }
-      ${lines.map((l) => `<div class="rg-hc-line">${escapeHtml(l)}</div>`).join('')}`;
-  }
+  /* ------------------------------------------------------------------ 顶栏 */
 
-  /** 跟"外人"打交道的价钱：身价的 1.8 倍，取整到 10 */
-  function recruitCost(type: string): number {
-    const c = utype(state, type).cost ?? 0;
-    return Math.max(20, Math.round((c * 1.8) / 10) * 10);
-  }
+  topbarEl.innerHTML = `
+    <div class="brand">肉鸽 2.0 <small>第 ${init.layer} 层 · ${escapeHtml(init.label)}</small></div>
+    <div class="turn-chip" title="当前行动方">
+      <b data-ref="turn"></b>
+      <span class="side-dot a" data-ref="dot"></span>
+      <span data-ref="who"></span>
+    </div>
+    <span class="level-goal" data-ref="goal" hidden></span>
+    <div class="topbar-badges" data-ref="badges"></div>
+    <div class="topbar-ext" data-ref="views"></div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-actions">
+      <button class="btn btn-sm" data-act="pause" data-ref="pause">暂停 AI</button>
+      <button class="btn btn-sm" data-act="speed" data-ref="speed">速度 正常</button>
+    </div>`;
+  statusEl.innerHTML = battleStatusShell();
 
-  /** 场外的中立单位（守城战里的 C 是攻方，不能算进来） */
-  function neutrals(): Unit[] {
-    if (!init.neutral || init.neutral.length === 0 || init.allyCity) return [];
-    return state.units.filter((u) => u.owner === 'C' && u.hp > 0);
-  }
-
-  /**
-   * 交涉：花钱把它招进来。
-   *
-   * 它**战后会留在队里**（`survivorsOf` 按 owner 收人），所以这不是"借用一回合"，
-   * 是雇一个兵——价格按身价 1.8 倍定，和商店的 1.15 倍相比贵了三成，
-   * 买的是"当场多一个能打的"，不是便宜货。
-   */
-  function recruitNeutral(u: Unit): void {
-    if (busy || finished || state.current !== 'A') return;
-    const cost = recruitCost(u.type);
-    if (state.players.A.gold < cost) {
-      flashTip(`钱不够：招他得 ${cost} 金`);
-      return;
+  function topbarBadges(): void {
+    const box = topbarEl!.querySelector<HTMLElement>('[data-ref="badges"]');
+    if (!box) return;
+    const badges: Array<{ id: string; text: string; hint: string }> = [];
+    for (const e of activeExpansions(state)) {
+      if (e.hooks.topbarBadges) badges.push(...e.hooks.topbarBadges({ state }));
     }
-    /*
-     * 这里**必须造一个新 state**，不能就地改。
-     *
-     * 撤回转的是引用：就地改的话，刚才压进栈的那份"回忆"也跟着变了，
-     * Ctrl+Z 退回去会发现钱已经扣了、人也已经是我们的人了。
-     */
-    undoStack.push(state);
-    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
-    state = {
-      ...state,
-      units: state.units.map((x) =>
-        x.id === u.id ? { ...x, owner: 'A' as const, moved: false, acted: false } : x,
-      ),
-      players: {
-        ...state.players,
-        A: { ...state.players.A, gold: state.players.A.gold - cost },
-      },
-    };
+    const sig = badges.map((b) => `${b.id}:${b.text}:${b.hint}`).join('|');
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    box.innerHTML = badges
+      .map((b) => `<span class="topbar-badge" title="${escapeHtml(b.hint)}">${escapeHtml(b.text)}</span>`)
+      .join('');
+  }
+
+  function boardViews(): Array<{ id: string; label: string; hint: string; cells?: (c: { state: GameState; viewer: 'A'; board: string }) => Array<{ x: number; y: number; color: string }>; glyph?: (c: { state: GameState; viewer: 'A'; board: string }) => Array<{ x: number; y: number; text: string }> }> {
+    const out: ReturnType<typeof boardViews> = [];
+    for (const e of activeExpansions(state)) {
+      if (e.hooks.boardViews) out.push(...e.hooks.boardViews({ state }));
+    }
+    return out;
+  }
+
+  function renderViewChips(): void {
+    const box = topbarEl!.querySelector<HTMLElement>('[data-ref="views"]');
+    if (!box) return;
+    const views = boardViews();
+    box.hidden = views.length === 0;
+    const sig = views.map((v) => v.id).join('|');
+    if (box.dataset.sig !== sig) {
+      box.dataset.sig = sig;
+      box.innerHTML = views
+        .map(
+          (v) =>
+            `<button class="view-chip" data-act="board-view" data-id="${escapeHtml(v.id)}" title="${escapeHtml(v.hint)}">${escapeHtml(v.label)}</button>`,
+        )
+        .join('');
+    }
+    for (const el of box.querySelectorAll<HTMLElement>('.view-chip')) {
+      el.classList.toggle('on', el.dataset.id === activeView);
+    }
+  }
+
+  function updateTopbarChrome(): void {
+    const ref = (name: string) => topbarEl!.querySelector<HTMLElement>(`[data-ref="${name}"]`);
+    const turn = ref('turn');
+    if (turn) turn.textContent = `第 ${roundsNow()} 回合`;
+    const dot = ref('dot');
+    if (dot) dot.className = `side-dot ${state.current === 'A' ? 'a' : 'b'}`;
+    const who = ref('who');
+    if (who) {
+      who.textContent = state.current === 'A' ? '轮到你' : `${state.players[state.current]?.name ?? '对方'}行动`;
+    }
+    const goal = ref('goal');
+    if (goal) {
+      const text = goalText();
+      goal.hidden = text === '';
+      goal.textContent = text;
+    }
+    const pause = ref('pause');
+    if (pause) {
+      pause.hidden = finished || busy === false && state.current === 'A';
+      pause.textContent = paused ? '继续 AI' : '暂停 AI';
+    }
+    const speed = ref('speed');
+    if (speed) speed.textContent = `速度 ${AI_SPEEDS[speedIdx]?.label ?? '正常'}`;
+  }
+
+  function goalText(): string {
+    if (init.holdRounds > 0) {
+      const rounds = roundsNow();
+      const left = init.waves.filter((w) => w.atRound > rounds).length;
+      return `守住 ${init.holdRounds} 轮 · 已守 ${Math.min(rounds, init.holdRounds)} · 还有 ${left} 波`;
+    }
+    if (init.kind === 'siege' || init.kind === 'boss') {
+      const cities = state.cities.filter((c) => c.owner === foeSeat && !c.ruined).length;
+      return `攻破敌城 ${cities} 座 · 回合上限 ${init.roundLimit}`;
+    }
+    if (init.kind === 'elite') return `摧毁据点 · 回合上限 ${init.roundLimit}`;
+    return `击溃敌军 · 回合上限 ${init.roundLimit}`;
+  }
+
+  /* ------------------------------------------------------------------ 棋盘尺寸 */
+
+  function applyFit(): void {
+    if (!fitDirty) return;
+    fitDirty = false;
+    const w = state.w;
+    const h = state.h;
+    const availW = Math.max(180, boardWrapEl!.clientWidth - 24);
+    const availH = Math.max(180, boardWrapEl!.clientHeight - 24);
+    const fit = fitBoardBox(w, h, availW, availH);
+    const pxW = Math.round(fit.w * boardZoom);
+    const pxH = Math.round(fit.h * boardZoom);
+    boardEl!.style.width = `${pxW}px`;
+    boardEl!.style.height = `${pxH}px`;
+    const zoomed = boardZoom > 1;
+    boardEl!.classList.toggle('zoomed', zoomed);
+    boardScrollEl!.classList.toggle('zoomed', zoomed);
+    if (zoomed) {
+      boardScrollEl!.style.width = `${fit.w}px`;
+      boardScrollEl!.style.height = `${fit.h}px`;
+    } else {
+      boardScrollEl!.style.width = '';
+      boardScrollEl!.style.height = '';
+    }
+    refreshCellVar(boardEl!, w, h);
+    const label = host.querySelector<HTMLElement>('[data-act="zoom-fit"]');
+    if (label) label.textContent = boardZoom > 1 ? `${boardZoom}×` : '适应';
+  }
+
+  function setZoom(next: number): void {
+    const clamped = Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1]!, Math.max(1, next));
+    boardZoom = clamped;
+    fitDirty = true;
     render();
-    flashTip(`${utype(state, u.type).name} 入了队（−${cost} 金）`);
+    if (boardZoom > 1) {
+      boardScrollEl!.scrollLeft = Math.max(0, (boardScrollEl!.scrollWidth - boardScrollEl!.clientWidth) / 2);
+      boardScrollEl!.scrollTop = Math.max(0, (boardScrollEl!.scrollHeight - boardScrollEl!.clientHeight) / 2);
+    } else {
+      boardScrollEl!.scrollLeft = 0;
+      boardScrollEl!.scrollTop = 0;
+    }
   }
 
-  /** 交涉：请它走开（不花钱，但也没有兵） */
-  function dismissNeutral(u: Unit): void {
-    if (busy || finished || state.current !== 'A') return;
-    undoStack.push(state);
-    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
-    // 同上：造新 state，别让撤回栈里的那份跟着被改掉
-    state = { ...state, units: state.units.filter((x) => x.id !== u.id) };
-    render();
-    flashTip('它走开了');
+  function zoomStep(dir: 1 | -1): void {
+    const at = ZOOM_STEPS.indexOf(boardZoom as (typeof ZOOM_STEPS)[number]);
+    const idx = at < 0 ? 0 : at;
+    setZoom(ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, idx + dir))]!);
   }
 
-  /**
-   * 把属性卡放进视口：先量它有多高，下方放不下就翻到鼠标上方。
-   *
-   * 上一版把 `top` 硬夹在 `innerHeight - 160`——那是按普通兵五六行算的。
-   * 修真单位多出「境界 / 特殊能力 / 技能」好几段，卡能到三百像素高，
-   * 底部直接被屏幕切掉；偏偏玩家自己的兵都摆在棋盘下沿，悬停时最容易撞上。
-   */
-  function placeHover(x: number, y: number): void {
-    if (!hoverEl) return;
-    const pad = 10;
-    const w = hoverEl.offsetWidth || 252;
-    const h = hoverEl.offsetHeight || 180;
-    let left = Math.min(window.innerWidth - w - pad, x + 16);
-    if (left < pad) left = pad;
-    let top = y + 12;
-    if (top + h > window.innerHeight - pad) top = y - h - 12;
-    top = Math.max(pad, Math.min(window.innerHeight - h - pad, top));
-    hoverEl.style.left = `${left}px`;
-    hoverEl.style.top = `${top}px`;
-  }
-
-  boardEl.addEventListener('mouseover', (e) => {
-    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-id]')?.dataset.id;
-    const u = id ? unitById(state, id) : undefined;
-    if (!u || !hoverEl) return;
-    hoverEl.innerHTML = statCardHtml(u);
-    hoverEl.hidden = false;
-    const ev = e as MouseEvent;
-    placeHover(ev.clientX, ev.clientY);
-  });
-  boardEl.addEventListener('mousemove', (e) => {
-    if (!hoverEl || hoverEl.hidden) return;
-    const ev = e as MouseEvent;
-    placeHover(ev.clientX, ev.clientY);
-  });
-  boardEl.addEventListener('mouseout', (e) => {
-    const to = (e as MouseEvent).relatedTarget as HTMLElement | null;
-    if (to && to.closest?.('[data-id]')) return;
-    // 鼠标移到卡片上（为了滚动看全文）时不要收起来
-    if (to && hoverEl && hoverEl.contains(to)) return;
-    if (hoverEl) hoverEl.hidden = true;
-  });
-  // 卡片本身可滚：从卡片上离开再收起
-  hoverEl.addEventListener('mouseleave', () => {
-    hoverEl.hidden = true;
-  });
+  /* ------------------------------------------------------------------ 选择 */
 
   function selected(): Unit | undefined {
     return selectedId ? state.units.find((u) => u.id === selectedId) : undefined;
   }
 
-  /**
-   * 这一格上压着哪些单位，按渲染顺序排（空中 → 地面 → 建筑）。
-   *
-   * 和 board.ts 的绘制顺序一致：眼睛看到谁在上面，第一下点就该选中谁，
-   * 再点一下往下翻。`unitsAt` 认的是"覆盖格"，所以 2×2 的建筑也对。
-   */
   function stackAt(x: number, y: number): Unit[] {
     const rank = (u: Unit): number => {
       if (utype(state, u.type).category === 'building') return 2;
@@ -328,11 +331,6 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       .sort((a, b) => rank(a) - rank(b));
   }
 
-  /**
-   * 点这一格到底选中谁：同格连点就是往下翻一层。
-   * `preferTarget`（强制攻击）时优先挑"我能打的"——飞行兵停在敌人头顶时，
-   * 按 Shift 点的意思一定是打脚下那个，不是选中自己的兵。
-   */
   function pickUnitAt(x: number, y: number, preferTarget: boolean): Unit | undefined {
     const list = stackAt(x, y);
     if (list.length === 0) {
@@ -362,16 +360,6 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     return list[cur.index];
   }
 
-  /** 走不上这一格时给一句原因——静默没反应比报错更让人困惑 */
-  function moveRefusal(x: number, y: number, unit: Unit): string {
-    const blockers = stackAt(x, y).filter((u) => u.id !== unit.id);
-    if (blockers.length > 0) {
-      return `这一格被「${utype(state, (blockers[0] as Unit).type).name}」占着，走不上去`;
-    }
-    return '这一格不在可达范围里';
-  }
-
-  /** 重新算"这个兵还能去哪、打谁"：移动过的只剩攻击，打过的两样都没有 */
   function refreshSelection(): void {
     const unit = selected();
     if (!unit || unit.owner !== 'A' || state.current !== 'A' || unit.hp <= 0) {
@@ -384,189 +372,206 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       return;
     }
     const isWork = utype(state, unit.type).category === 'building';
-    // 工事永远不给"可达格"：本体里它们 move 0，肉鸽的加成也不该落到它们身上。
     reach = unit.moved || isWork ? [] : [...reachableTiles(state, unit).keys()];
     targets = unit.acted ? [] : attackableTargets(state, unit).map((u) => u.id);
     sieges = unit.acted ? [] : siegeTargets(state, unit).map((c) => c.id);
   }
 
-  /**
-   * 技能栏：只列**当前选中那个兵**的主动技能。
-   *
-   * 本体那边是一整块指挥官面板（产兵、升级、装备、技能），肉鸽只留技能这一格：
-   * 前三层玩家没有城，其余按钮在这里都没有意义。按钮的"灰"和规则层
-   * （`heroSkillsOf.ready`）走同一个判据，不会出现"按钮亮着、点下去被拒"。
-   */
-  function renderSkills(): void {
-    const unit = selected();
-    const list = unit && state.current === 'A' && unit.owner === 'A' ? heroSkillsOf(state, unit) : [];
-    if (!unit) {
-      skillEl!.innerHTML = '<p class="rg-dim">选中一个兵，看它会不会技能。</p>';
-      return;
-    }
-    if (list.length === 0) {
-      skillEl!.innerHTML = `<p class="rg-dim">${escapeHtml(utype(state, unit.type).name)} 没有主动技能。</p>`;
-      return;
-    }
-    skillEl!.innerHTML = list
-      .map((k) => {
-        const why = k.notReadyReason ?? (k.toNext > 0 ? `${k.toNext} 回合` : '冷却中');
-        return `<button class="rg-skill" data-skill="${k.def.id}" ${k.ready ? '' : 'disabled'} title="${escapeHtml(
-          k.def.summary,
-        )}">
-          <b>${escapeHtml(k.def.name)}</b>
-          <span>${escapeHtml(k.ready ? k.def.summary : why)}</span>
-        </button>`;
-      })
-      .join('');
-  }
+  /* ------------------------------------------------------------------ 渲染 */
 
   function render(): void {
     if (disposed) return;
     refreshSelection();
+    const view = playerView(state, 'A');
     const ui: BoardUi = {
       selectedId,
+      selectedCityId,
       reach,
       targets,
       siegeTargets: sieges,
       aimTiles: skillAim,
-      selectedCityId: null,
       placeable: [],
       threat: [],
     };
-    renderBoard(boardEl as HTMLElement, playerView(state, 'A'), ui);
+    const wanted = boardViews().find((v) => v.id === activeView);
+    if (wanted?.cells) {
+      const cells = wanted.cells({ state, viewer: 'A', board: EARTH });
+      if (cells.length > 0) {
+        ui.boardView = new Map(cells.map((c) => [c.y * state.w + c.x, c.color]));
+      }
+    }
+    if (wanted?.glyph) {
+      const glyphs = wanted.glyph({ state, viewer: 'A', board: EARTH });
+      if (glyphs.length > 0) {
+        ui.boardGlyph = new Map(glyphs.map((g) => [g.y * state.w + g.x, g.text]));
+      }
+    }
+    renderBoard(boardEl!, view, ui);
+    applyFit();
 
-    const rounds = roundsNow();
+    updateBattleStatus(statusEl!, state, 'A', !busy && state.current === 'A' && undoStack.length > 0);
+    updateTopbarChrome();
+    topbarBadges();
+    renderViewChips();
+
+    renderCampaignPanel(view);
+
+    forceFlagEl!.hidden = forceMode === null && !pendingSkill;
+    forceFlagEl!.textContent =
+      pendingSkill
+        ? '正在选技能落点：点高亮格施法，点别处取消'
+        : forceMode === 'move'
+          ? '强制移动：点可达格就走上去（压在别人身上也行）· 再点按钮退出'
+          : forceMode === 'attack'
+            ? '强制攻击：点目标就开火（含身下那个）· 再点按钮退出'
+            : '';
+    renderCombatPreview();
+  }
+
+  /**
+   * 侧栏直接用战役的 `renderPanel`。
+   *
+   * 传进去的只有"肉鸽真的有的东西"：单位、城、地形、强制模式、撤回栈。
+   * 城市生产/联机/回放那些字段根本不传，面板自己就不会画。
+   */
+  function renderCampaignPanel(view: ReturnType<typeof playerView>): void {
+    const cityId = selectedCityId && state.cities.some((c) => c.id === selectedCityId) ? selectedCityId : null;
+    renderPanel(sideEl!, {
+      view,
+      me: 'A',
+      selectedUnit: selected() ?? null,
+      selectedCityId: cityId,
+      selectedCampId: null,
+      selectedTile,
+      activeBoard: EARTH,
+      forceMode,
+      battleStatusInHeader: true,
+      combatInspectMode: previewMode,
+      combatTargetCount: targets.length + sieges.length,
+      opsOpen,
+      logOpen,
+      canUndo: !busy && state.current === 'A' && undoStack.length > 0,
+      opsHtml: `
+        <div class="hint">
+          <b>单位</b>：蓝格移动，红框攻击。走完还能接着打，不用重新选。<br />
+          <b>强制移动 / 攻击</b>：<kbd>Alt</kbd> / <kbd>Shift</kbd>；也可以打开「进阶操作」里的两个按钮。
+          空地叠在同一格时，只有强制模式能指到下面那个。<br />
+          <b>撤回</b>：<kbd>Ctrl</kbd>+<kbd>Z</kbd>，只在同一回合内可用。<br />
+          <b>这一仗没有城</b>：所以没有生产、升级和招募——兵只从战利品、商店与事件里来。
+        </div>`,
+    });
+    // 隐藏席位（中立单位用的 C）不该出现在席位栏里：它不占回合、不参与胜负
+    if (hiddenSeats.length > 0) {
+      for (const row of sideEl!.querySelectorAll<HTMLElement>('.seat-row')) {
+        const dot = row.querySelector('.vs-dot');
+        const seat = dot ? [...dot.classList].find((c) => c.length === 1)?.toUpperCase() : null;
+        if (seat && hiddenSeats.includes(seat as never)) row.hidden = true;
+      }
+    }
     /*
-     * 人数只数**战斗单位**：守城战时玩家有塔和墙，它们不是"人"，
-     * 混进"我 5"里会让人以为还剩五个兵，其实只剩三个。
+     * 肉鸽独有的两张卡，补在战役面板上：
+     *   · 我军 —— 战役里兵都围着城，点棋盘就够；肉鸽没有城，队伍可能散在
+     *     地图边缘，而且"这一仗还剩几个人"是要一眼看到的；
+     *   · 外人 —— 中立单位的场外交涉，战役里没有这种对象。
+     * 每次先把上一次插的摘掉，再插新的：`renderPanel` 在 HTML 没变时会早退
+     * （不动 DOM），不清就会一帧多一张。
      */
-    const combatOf = (owner: 'A' | 'B' | 'C' | 'D'): number =>
-      unitsOf(state, owner).filter((u) => state.unitTypes[u.type]?.category === 'combat').length;
-    const worksOf = (owner: 'A' | 'B' | 'C' | 'D'): number =>
-      unitsOf(state, owner).filter((u) => state.unitTypes[u.type]?.category === 'building').length;
-    const mine = combatOf('A');
-    const myWorks = worksOf('A');
-    // 三席：B 是友军、C 是敌人；两席：B 就是敌人
-    const allies = init.allyCity ? combatOf('B') : 0;
-    const allyWorks = init.allyCity ? worksOf('B') : 0;
-    const foes = combatOf(foeSeat);
-    const foeWorks = worksOf(foeSeat);
-    const timer =
-      init.holdRounds > 0
-        ? `<span>守 <b>${Math.min(rounds, init.holdRounds)}</b>/${init.holdRounds} 轮</span>`
-        : `<span>回合 <b>${rounds}</b>/${init.roundLimit}</span>`;
-    const left = init.waves.filter((w) => w.atRound > rounds).length;
-    hudEl!.innerHTML = `
-      ${timer}
-      <span>我 <b>${mine}</b>${myWorks > 0 ? `（工事 ${myWorks}）` : ''}${
-        init.allyCity ? ` · 友 <b>${allies}</b>${allyWorks > 0 ? `（工事 ${allyWorks}）` : ''}` : ''
-      } · 敌 <b>${foes}</b>${foeWorks > 0 ? `（工事 ${foeWorks}）` : ''}</span>
-      ${init.holdRounds > 0 ? `<span>还有 <b>${left}</b> 波</span>` : ''}
-      <span>金 <b>${state.players.A.gold}</b></span>
-      <span>${state.current === 'A' ? (busy ? '对方行动中…' : '轮到你') : '对方行动中…'}</span>`;
+    for (const old of sideEl!.querySelectorAll(':scope > .rg-army-card, :scope > .rg-parley-card')) old.remove();
+    const seats = sideEl!.querySelector('.card-seats');
+    const army = armyCardHtml();
+    if (army) {
+      const card = document.createElement('div');
+      card.className = 'card rg-army-card';
+      card.innerHTML = army;
+      sideEl!.insertBefore(card, seats?.nextSibling ?? sideEl!.firstChild);
+    }
+    const parley = parleyCardHtml();
+    if (parley) {
+      const card = document.createElement('div');
+      card.className = 'card rg-parley-card';
+      card.innerHTML = parley;
+      sideEl!.appendChild(card);
+    }
+  }
 
-    armyEl!.innerHTML =
-      mine === 0
-        ? '<p class="rg-dim">一个兵都没有了。</p>'
-        : unitsOf(state, 'A')
-            .filter((u) => state.unitTypes[u.type]?.category === 'combat')
-            .map((u) => {
-              const d = utype(state, u.type);
-              const cls = u.id === selectedId ? 'sel' : '';
-              const done = u.moved && u.acted ? 'done' : '';
-              const where = u.moved && !u.acted ? '已移动' : u.acted ? '已行动' : `${u.x},${u.y}`;
-              /*
-               * 成长型单位挂一个"成长 n/m"的角标：它是这一局里唯一会**越打越强**
-               * 的东西，玩家得知道自己带的是半成品，而不是一个弱的英雄。
-               */
-              const grow = growthOf(baseTypeOf(u.type), init.layer);
-              const badge =
-                grow && grow.step < grow.fullAt
-                  ? `<i class="rg-grow">成长 ${grow.step}/${grow.fullAt}</i>`
-                  : '';
-              return `<button class="rg-unitrow ${cls} ${done}" data-unit="${u.id}">
-                <span class="n">${escapeHtml(d.name)}${badge}</span>
-                <span class="s">${u.hp}/${maxHpOf(state, u)} · ${where}</span>
-              </button>`;
-            })
-            .join('');
+  /** 我军清单：点一行 = 选中那个兵（棋盘之外的第二个入口） */
+  function armyCardHtml(): string {
+    const mine = unitsOf(state, 'A').filter((u) => u.hp > 0);
+    if (mine.length === 0) return '';
+    const combat = mine.filter((u) => utype(state, u.type).category === 'combat');
+    const works = mine.filter((u) => utype(state, u.type).category === 'building');
+    const rows = mine
+      .map((u) => {
+        const d = utype(state, u.type);
+        const grow = growthOf(baseTypeOf(u.type), init.layer);
+        const badge =
+          grow && grow.step < grow.fullAt ? `<i class="rg-army-grow">成长 ${grow.step}/${grow.fullAt}</i>` : '';
+        const done = u.moved && u.acted ? ' done' : u.moved || u.acted ? ' part' : '';
+        const sel = u.id === selectedId ? ' sel' : '';
+        const where =
+          d.category === 'building'
+            ? '工事'
+            : u.moved && u.acted
+              ? '已行动'
+              : u.moved
+                ? '已移动'
+                : u.acted
+                  ? '已攻击'
+                  : `${String.fromCharCode(65 + u.x)}${u.y + 1}`;
+        return `<button class="rg-army-row${sel}${done}" data-pick-unit="${u.id}" title="${escapeHtml(d.name)} · ${u.hp}/${maxHpOf(state, u)}">
+          <span class="n">${escapeHtml(d.name)}${badge}</span>
+          <span class="s">${u.hp}/${maxHpOf(state, u)} · ${where}</span>
+        </button>`;
+      })
+      .join('');
+    return `<div class="card-title">我军 <span class="hint">${combat.length} 个战斗单位${
+      works.length > 0 ? ` · ${works.length} 处工事` : ''
+    }</span></div><div class="rg-army-list">${rows}</div>`;
+  }
 
-    // 敌人手里的城：三席守城战里 B 是友军，不能把它的城算成敌人的
-    const bCities = state.cities.filter((c) => c.owner === foeSeat && !c.ruined).length;
-    foeEl!.innerHTML =
-      foes === 0 && foeWorks === 0
-        ? '<p class="rg-dim">对面已经没人了。</p>'
-        : `<p class="rg-dim">还剩 ${foes} 个敌人${foeWorks > 0 ? `、${foeWorks} 处工事` : ''}${
-            bCities > 0 ? `、${bCities} 座城` : ''
-          }。</p>`;
-
-    /*
-     * 外人：两侧路过的中立单位。
-     *
-     * 这里做的是"场外交涉"——不占回合、不走棋盘，点一下就行：
-     *   · 招募：花钱，它当场变成我方的兵（战后留在队里）；
-     *   · 请走：不花钱，把它从场上拿掉（不想为它绕路，或者怕被它挡道）。
-     * 都是直接改 state，所以**压一次撤回栈**：Ctrl+Z 能连同钱一起退回来。
-     */
+  function parleyCardHtml(): string {
     const ns = neutrals();
-    if (neutralCardEl && neutralEl) {
-      neutralCardEl.hidden = ns.length === 0;
-      const idle = state.current !== 'A' || busy || finished;
-      neutralEl.innerHTML = ns
+    if (ns.length === 0) return '';
+    const idle = state.current !== 'A' || busy || finished;
+    return `<div class="card-title">外人 <span class="hint">不占回合 · 场外交涉</span></div>
+      ${ns
         .map((u) => {
           const d = utype(state, u.type);
           const cost = recruitCost(u.type);
           const poor = state.players.A.gold < cost;
-          return `<div class="rg-neutral-row">
-            <span class="n">${escapeHtml(d.name)}<i>${u.hp}/${maxHpOf(state, u)} · 身价 ${utype(state, u.type).cost ?? 0}</i></span>
-            <button class="rg-btn mini" data-parley="${u.id}" ${poor || idle ? 'disabled' : ''}>招募 ${cost}</button>
-            <button class="rg-btn ghost mini" data-dismiss="${u.id}" ${idle ? 'disabled' : ''}>请走</button>
+          return `<div class="rg-parley-row">
+            <span class="rg-parley-name"><b>${escapeHtml(d.name)}</b><i>${u.hp}/${maxHpOf(state, u)} · 身价 ${d.cost ?? 0}</i></span>
+            <button class="btn btn-sm" data-parley="${u.id}" ${poor || idle ? 'disabled' : ''}>招募 ${cost}</button>
+            <button class="btn btn-sm" data-dismiss="${u.id}" ${idle ? 'disabled' : ''}>请走</button>
           </div>`;
         })
-        .join('');
-    }
-
-    tipEl!.innerHTML = hintText();
-    renderSkills();
-    undoBtn!.disabled = busy || state.current !== 'A' || undoStack.length === 0;
-    // 强制模式的按钮：扣住时高亮，再点一次退出
-    forceMoveBtn?.classList.toggle('armed', forceMode === 'move');
-    forceAttackBtn?.classList.toggle('armed', forceMode === 'attack');
-    const canAct = !busy && !finished && state.current === 'A';
-    if (forceMoveBtn) forceMoveBtn.disabled = !canAct;
-    if (forceAttackBtn) forceAttackBtn.disabled = !canAct;
+        .join('')}`;
   }
 
-  function hintText(): string {
-    if (finished) return '这一战已经结束。';
-    if (pendingSkill) return '正在选技能落点：点高亮格施法，点别处取消。';
-    if (busy || state.current !== 'A') return '对面在想。';
-    if (forceMode === 'move') return '强制移动：点可达格就走上去（压在别人身上也行）· 再点一次按钮退出。';
-    if (forceMode === 'attack') return '强制攻击：点目标就开火（含身下那个）· 再点一次按钮退出。';
-    const unit = selected();
-    if (!unit) {
-      const head =
-        init.holdRounds > 0
-          ? `守住 <b>${init.holdRounds}</b> 轮。城破了就输，人打光了也算输。<br>`
-          : '';
-      return `${head}点自己的兵 → 点空格移动 / 点敌人（含塔）开火 / 点敌城攻城。<br>走完还能接着打，不用重新选。`;
+  function renderCombatPreview(): void {
+    if (!pendingCombat) {
+      previewEl!.hidden = true;
+      previewEl!.innerHTML = '';
+      return;
     }
-    const name = escapeHtml(utype(state, unit.type).name);
-    if (utype(state, unit.type).category === 'building') {
-      return `${name} 是工事：不能移动${targets.length > 0 ? '，但可以开火（红框）' : '，这一回合也打不到人'}。`;
+    const forecast = forecastCombat(playerView(state, 'A'), 'A', pendingCombat);
+    if (!forecast) {
+      pendingCombat = null;
+      previewEl!.hidden = true;
+      return;
     }
-    if (unit.moved && unit.acted) return `${name} 这一回合已经动完了。`;
-    if (unit.moved) return `${name} 已经走过了，现在可以开火（红框是目标）。`;
-    if (unit.acted) return `${name} 已经打过了，还能走（绿点是可达格）。`;
-    return `${name}：绿点走，红框打。走完还能打。`;
+    previewEl!.hidden = false;
+    previewEl!.innerHTML = combatForecastHtml(forecast, true);
   }
+
+  /* ---------------------------------------------------------------- 动作 */
 
   function act(action: Action): void {
     if (busy || finished || state.current !== 'A') return;
+    const before = playerView(state, 'A');
     const r = step(state, action);
     if (!r.ok) {
-      flashTip(r.reason ?? '这一步走不了');
+      flash(r.reason ?? '这一步走不了');
       return;
     }
     if (action.type !== 'END_TURN') {
@@ -574,9 +579,16 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       if (undoStack.length > UNDO_LIMIT) undoStack.shift();
     }
     state = r.state;
-    // 关键：移动之后**不清选中**——同一条命令链走完，和本体一致
     if (action.type === 'END_TURN') selectedId = null;
+    pendingCombat = null;
+    pendingSkill = null;
+    skillAim = [];
+    selectedCityId = null;
+    selectedTile = null;
     render();
+    const after = playerView(state, 'A');
+    const note = actionFeedback(before, after, action);
+    if (note) flash(note);
     checkEnd();
   }
 
@@ -584,30 +596,67 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     if (busy || finished || state.current !== 'A') return;
     const prev = undoStack.pop();
     if (!prev) {
-      flashTip('没有可以撤回的操作');
+      flash('没有可以撤回的操作');
       return;
     }
     state = prev;
     selectedId = null;
+    selectedCityId = null;
+    selectedTile = null;
     pendingSkill = null;
     skillAim = [];
+    pendingCombat = null;
     render();
   }
 
-  /** 点技能按钮：不需要落点的直接放，需要落点的进"瞄准"状态 */
-  function castSkill(skillId: string): void {
+  function flash(msg: string): void {
+    if (!feedbackEl) return;
+    feedbackEl.textContent = msg;
+    feedbackEl.hidden = false;
+    window.setTimeout(() => {
+      if (!disposed && feedbackEl) feedbackEl.hidden = true;
+    }, 2600);
+  }
+
+  function checkEnd(): void {
+    if (finished) return;
+    const outcome = outcomeOf(state, init);
+    if (!outcome) {
+      if (roundsNow() > init.roundLimit) {
+        finished = true;
+        flash('拖太久了：这一战按撤退算。');
+        window.setTimeout(() => {
+          if (!disposed) handlers.onDone(resultOf(state, false));
+        }, 900);
+      }
+      return;
+    }
+    finished = true;
+    window.setTimeout(() => {
+      if (!disposed) handlers.onDone(resultOf(state, outcome === 'win'));
+    }, 900);
+  }
+
+  /* ---------------------------------------------------------------- 技能 */
+
+  function castSkill(unitId: string, skillId: string, input?: string): void {
     if (busy || finished || state.current !== 'A') return;
-    const unit = selected();
+    const unit = state.units.find((u) => u.id === unitId);
     if (!unit) return;
     const info = heroSkillsOf(state, unit).find((k) => k.def.id === skillId);
     if (!info) return;
     if (!info.ready) {
-      flashTip(info.notReadyReason ?? '这个技能还不能用');
+      flash(info.notReadyReason ?? '这个技能还不能用');
       return;
+    }
+    if (info.def.input && input === undefined) {
+      const v = window.prompt(info.def.input.label);
+      if (v === null) return;
+      input = v;
     }
     const targeting = info.def.targeting;
     if (targeting === 'point' || targeting === 'direction') {
-      pendingSkill = { unitId: unit.id, skillId, targeting };
+      pendingSkill = { unitId, skillId, targeting };
       skillAim =
         targeting === 'direction'
           ? [
@@ -623,65 +672,68 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
               })
               .filter((i) => i >= 0)
           : [];
-      flashTip(targeting === 'point' ? '点地图上任意一格施法（点自己脚下取消）' : '点四个方向之一施法');
+      flash(targeting === 'point' ? '点地图上任意一格施法（点自己脚下取消）' : '点四个方向之一施法');
       render();
       return;
     }
-    if (info.def.input) {
-      const v = window.prompt(info.def.input.label);
-      if (v === null) return;
-      act({ type: 'HERO_SKILL', unitId: unit.id, skillId, targetX: unit.x, targetY: unit.y, input: v });
+    act({
+      type: 'HERO_SKILL',
+      unitId,
+      skillId,
+      targetX: unit.x,
+      targetY: unit.y,
+      ...(input !== undefined ? { input } : {}),
+    });
+  }
+
+  /* ---------------------------------------------------------------- 中立 */
+
+  function recruitCost(type: string): number {
+    const c = utype(state, type).cost ?? 0;
+    return Math.max(20, Math.round((c * 1.8) / 10) * 10);
+  }
+
+  function neutrals(): Unit[] {
+    if (!init.neutral || init.neutral.length === 0 || init.allyCity) return [];
+    return state.units.filter((u) => u.owner === 'C' && u.hp > 0);
+  }
+
+  function recruitNeutral(u: Unit): void {
+    if (busy || finished || state.current !== 'A') return;
+    const cost = recruitCost(u.type);
+    if (state.players.A.gold < cost) {
+      flash(`钱不够：招他得 ${cost} 金`);
       return;
     }
-    act({ type: 'HERO_SKILL', unitId: unit.id, skillId, targetX: unit.x, targetY: unit.y });
+    undoStack.push(state);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    state = {
+      ...state,
+      units: state.units.map((x) =>
+        x.id === u.id ? { ...x, owner: 'A' as const, moved: false, acted: false } : x,
+      ),
+      players: {
+        ...state.players,
+        A: { ...state.players.A, gold: state.players.A.gold - cost },
+      },
+    };
+    render();
+    flash(`${utype(state, u.type).name} 入了队（−${cost} 金）`);
   }
 
-  function flashTip(msg: string): void {
-    tipEl!.textContent = msg;
-    window.setTimeout(() => {
-      if (!disposed) tipEl!.innerHTML = hintText();
-    }, 1800);
+  function dismissNeutral(u: Unit): void {
+    if (busy || finished || state.current !== 'A') return;
+    undoStack.push(state);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    state = { ...state, units: state.units.filter((x) => x.id !== u.id) };
+    render();
+    flash('它走开了');
   }
 
-  function checkEnd(): void {
-    if (finished) return;
-    const outcome = outcomeOf(state, init);
-    if (!outcome) {
-      // 超时：小图打到二十几轮还没结果，就是"两边都不想打"
-      if (roundsNow() > init.roundLimit) {
-        finished = true;
-        flashTip('拖太久了：这一战按撤退算。');
-        window.setTimeout(() => {
-          if (!disposed) handlers.onDone(resultOf(state, false));
-        }, 900);
-      }
-      return;
-    }
-    finished = true;
-    window.setTimeout(() => {
-      if (!disposed) handlers.onDone(resultOf(state, outcome === 'win'));
-    }, 900);
-  }
+  /* ---------------------------------------------------------------- AI */
 
-  /**
-   * 守城战：到点的波次上场。
-   *
-   * 放在"敌方回合结束、轮到你"这一刻：玩家先看见新来的人站在上沿，
-   * 再决定这一轮怎么挡。不在 render 里调，是因为它会改状态。
-   */
-  function arrivalWaves(): void {
-    if (finished || disposed) return;
-    let came = false;
-    while (waveIdx < init.waves.length) {
-      const wave = init.waves[waveIdx] as BattleInit['waves'][number];
-      if (wave.atRound > roundsNow()) break;
-      waveIdx += 1;
-      const units = spawnWave(state, wave.types, init.seed ^ (waveIdx * 7919), foeSeat);
-      if (units.length === 0) continue;
-      came = true;
-      flashTip(`第 ${waveIdx + 1} 波到了：${units.length} 个兵`);
-    }
-    if (came) render();
+  async function waitWhilePaused(): Promise<void> {
+    while (paused && !disposed && !finished) await sleep(120);
   }
 
   async function runAi(): Promise<void> {
@@ -689,28 +741,19 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     busy = true;
     undoStack.length = 0;
     render();
-    /*
-     * 不给 AI 补员：这一关两边都只打**开局编队**。
-     *
-     * 玩家没有城，本来就没法补；让对面能补就是单方面加血——实测攻坚关里
-     * 敌人每两回合摸出一个民兵，玩家再能打也磨不过。`AiBudget` 就是现成的闸门。
-     */
     const budget: AiBudget = {
       ...DEFAULT_BUDGET,
-      // 整场总量，不是每回合：额度减掉已经补过的，补满就再也不补
       maxRecruit: Math.max(0, init.enemyRecruit - enemyRecruited),
       maxUpgrade: 0,
     };
-    /*
-     * 三席局里"对面"不止一家：A 交棒之后要依次跑完 B（友军）和 C（攻方），
-     * 直到轮回 A 为止。用 `state.current` 当循环条件，席位数由关卡决定，
-     * 两席局的行为一个字没变。
-     */
     while (!disposed && !finished && state.current !== 'A' && !outcomeOf(state, init)) {
+      await waitWhilePaused();
+      if (disposed || finished) break;
       const seat = state.current;
       const rejected = new Set<string>();
       for (let i = 0; i < AI_MAX_STEPS; i += 1) {
         if (disposed || finished || state.current !== seat || outcomeOf(state, init)) break;
+        await waitWhilePaused();
         const action = aiNextAction(state, budget, rejected);
         if (!action) break;
         const r = step(state, action);
@@ -726,7 +769,7 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
         }
         if (action.type === 'UPGRADE') budget.upgraded += 1;
         render();
-        await sleep(40);
+        await sleep(AI_SPEEDS[speedIdx]?.ms ?? 45);
       }
       if (!disposed && !finished && state.current === seat && !outcomeOf(state, init)) {
         const end = step(state, { type: 'END_TURN' });
@@ -741,14 +784,50 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
     checkEnd();
   }
 
-  boardEl.addEventListener('click', (e) => {
+  /* ---------------------------------------------------------------- 波次 */
+
+  function arrivalWaves(): void {
+    if (finished || disposed) return;
+    let came = false;
+    while (waveIdx < init.waves.length) {
+      const wave = init.waves[waveIdx] as BattleInit['waves'][number];
+      if (wave.atRound > roundsNow()) break;
+      waveIdx += 1;
+      const units = spawnWave(state, wave.types, init.seed ^ (waveIdx * 7919), foeSeat);
+      if (units.length === 0) continue;
+      came = true;
+      flash(`第 ${waveIdx + 1} 波到了：${units.length} 个兵`);
+    }
+    if (came) render();
+  }
+
+  /* ---------------------------------------------------------------- 点击 */
+
+  function tryCombat(action: CombatAction): void {
+    if (previewMode) {
+      pendingCombat = action;
+      renderCombatPreview();
+      render();
+      return;
+    }
+    act(action);
+  }
+
+  boardEl!.addEventListener('click', (e) => {
     if (busy || finished || state.current !== 'A') return;
-    const coords = cellAtPoint(boardEl as HTMLElement, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
+    const coords = cellAtPoint(boardEl!, (e as MouseEvent).clientX, (e as MouseEvent).clientY);
     if (!coords) return;
     const { x, y } = coords;
+
     /*
-     * 技能落点优先于一切：正在选点时，这一下点击只有一个含义。
+     * 不死鸟的蛋：引擎会在 `pendingEgg` 里挂一个"等你选一格"的状态，
+     * 战役面板顶上都写了提示；棋盘这一下必须先把它放下去，否则点哪都没反应。
      */
+    if (state.pendingEgg && state.pendingEgg.owner === 'A') {
+      act({ type: 'PLACE_EGG', x, y });
+      return;
+    }
+
     if (pendingSkill) {
       const { unitId, skillId, targeting } = pendingSkill;
       const caster = state.units.find((u) => u.id === unitId);
@@ -758,129 +837,255 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       pendingSkill = null;
       skillAim = [];
       if (!picked) {
-        flashTip('已取消施法');
+        flash('已取消施法');
         render();
         return;
       }
       act({ type: 'HERO_SKILL', unitId, skillId, targetX: x, targetY: y });
       return;
     }
+
     const mouse = e instanceof MouseEvent ? e : null;
     const wantMove = forceMode === 'move' || mouse?.altKey === true;
     const wantAttack = forceMode === 'attack' || mouse?.shiftKey === true;
     const cell = y * state.w + x;
     const unit = selected();
 
-    /*
-     * 强制移动 / 强制攻击：这一下只按那一个动词解释，绝不落到"选中"上去。
-     * 这是"空地叠在一格就动不了"的正解——不然压在格子上那枚棋子总把话抢走。
-     */
     if (wantMove) {
       if (!unit) {
-        flashTip('先选中一个兵，再点强制移动');
+        flash('先选中一个兵，再点强制移动');
         return;
       }
       if (reach.includes(cell)) {
         act({ type: 'MOVE', unitId: unit.id, x, y });
         return;
       }
-      flashTip(moveRefusal(x, y, unit));
+      flash('这一格不在可达范围里');
       return;
     }
     if (wantAttack) {
       if (!unit) {
-        flashTip('先选中一个兵，再点强制攻击');
+        flash('先选中一个兵，再点强制攻击');
         return;
       }
       const hit = stackAt(x, y).find((u) => targets.includes(u.id));
       if (hit) {
-        act({ type: 'ATTACK', unitId: unit.id, targetId: hit.id, x, y });
+        tryCombat({ type: 'ATTACK', unitId: unit.id, targetId: hit.id, x, y });
         return;
       }
-      flashTip(unit.acted ? '它这一回合已经打过了' : '这一格没有能打的目标');
+      flash(unit.acted ? '它这一回合已经打过了' : '这一格没有能打的目标');
       return;
     }
 
     const clicked = pickUnitAt(x, y, false);
+    const city = state.cities.find((c) => x >= c.x && x < c.x + c.size && y >= c.y && y < c.y + c.size);
+
+    // 先判"我方单位"：点自己的兵永远是选中，不会误触发攻击
     if (clicked && clicked.owner === 'A') {
       selectedId = clicked.id;
+      selectedCityId = null;
+      selectedTile = null;
+      pendingCombat = null;
       render();
       return;
     }
+
+    // 已选中我方单位：点敌人 → 攻击；点敌城 → 攻城；点可达格 → 移动
     if (unit) {
       if (clicked && targets.includes(clicked.id)) {
-        act({ type: 'ATTACK', unitId: unit.id, targetId: clicked.id, x, y });
+        tryCombat({ type: 'ATTACK', unitId: unit.id, targetId: clicked.id, x, y });
         return;
       }
-      const city = state.cities.find((c) => x >= c.x && x < c.x + c.size && y >= c.y && y < c.y + c.size);
       if (city && sieges.includes(city.id)) {
-        act({ type: 'SIEGE', unitId: unit.id, cityId: city.id, x, y });
+        tryCombat({ type: 'SIEGE', unitId: unit.id, cityId: city.id, x, y });
         return;
       }
-      if (reach.includes(cell)) {
+      if (reach.includes(cell) && !clicked) {
         act({ type: 'MOVE', unitId: unit.id, x, y });
         return;
       }
-      if (clicked && clicked.owner !== 'A') {
-        flashTip(moveRefusal(x, y, unit));
-        return;
-      }
     }
-    selectedId = null;
+
+    // 什么都不做：把这一格/这座城/这个敌人当"查看对象"
+    if (clicked) {
+      selectedId = clicked.id;
+      selectedCityId = null;
+      selectedTile = null;
+    } else if (city) {
+      selectedId = null;
+      selectedCityId = city.id;
+      selectedTile = null;
+    } else {
+      selectedId = null;
+      selectedCityId = null;
+      selectedTile = { x, y };
+    }
+    pendingCombat = null;
     render();
   });
 
-  host.addEventListener('keydown', (e) => {
+  /* ---------------------------------------------------------------- 面板/按钮 */
+
+  rootEl!.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
       undo();
     }
+    if (e.key === 'Escape') {
+      selectedId = null;
+      selectedCityId = null;
+      selectedTile = null;
+      pendingSkill = null;
+      skillAim = [];
+      pendingCombat = null;
+      forceMode = null;
+      render();
+    }
   });
+  // 让键盘事件能进 root：棋盘/侧栏本身不是可聚焦元素
+  rootEl!.tabIndex = -1;
 
-  host.addEventListener('click', (e) => {
+  rootEl!.addEventListener('click', (e) => {
     const target = e.target as HTMLElement | null;
-    const act0 = target?.closest<HTMLElement>('[data-act]')?.dataset.act;
-    if (act0 === 'end') {
+
+    /* ---- 棋盘缩放 ---- */
+    const zoomAct = target?.closest<HTMLElement>('[data-act="zoom-fit"],[data-act="zoom-in"],[data-act="zoom-out"]')?.dataset.act;
+    if (zoomAct) {
+      if (zoomAct === 'zoom-fit') setZoom(1);
+      else if (zoomAct === 'zoom-in') zoomStep(1);
+      else zoomStep(-1);
+      return;
+    }
+
+    /* ---- 我军清单（侧栏） ---- */
+    const pickUnit = target?.closest<HTMLElement>('[data-pick-unit]')?.dataset.pickUnit;
+    if (pickUnit) {
+      selectedId = pickUnit;
+      selectedCityId = null;
+      selectedTile = null;
+      pendingCombat = null;
+      render();
+      return;
+    }
+
+    /* ---- 顶栏 ---- */
+    const topAct = target?.closest<HTMLElement>('[data-act="pause"],[data-act="speed"]')?.dataset.act;
+    if (topAct === 'pause') {
+      paused = !paused;
+      render();
+      return;
+    }
+    if (topAct === 'speed') {
+      speedIdx = (speedIdx + 1) % AI_SPEEDS.length;
+      render();
+      return;
+    }
+    const viewId = target?.closest<HTMLElement>('[data-act="board-view"]')?.dataset.id;
+    if (viewId) {
+      activeView = activeView === viewId ? null : viewId;
+      render();
+      return;
+    }
+
+    /* ---- 攻击预览的确认/取消 ---- */
+    const combat = target?.closest<HTMLElement>('[data-combat]')?.dataset.combat;
+    if (combat === 'cancel') {
+      pendingCombat = null;
+      render();
+      return;
+    }
+    if (combat === 'confirm' && pendingCombat) {
+      const action = pendingCombat;
+      pendingCombat = null;
+      act(action);
+      return;
+    }
+
+    /* ---- 面板动作 ---- */
+    const actName = target?.closest<HTMLElement>('[data-act]')?.dataset.act;
+    if (actName === 'end-turn') {
       if (busy || finished || state.current !== 'A') return;
       const r = step(state, { type: 'END_TURN' });
       if (r.ok) {
         state = r.state;
         selectedId = null;
+        selectedCityId = null;
+        selectedTile = null;
         pendingSkill = null;
         skillAim = [];
+        pendingCombat = null;
         undoStack.length = 0;
         render();
         void runAi();
       }
       return;
     }
-    if (act0 === 'force-move') {
-      forceMode = forceMode === 'move' ? null : 'move';
-      pick = null;
-      render();
-      return;
-    }
-    if (act0 === 'force-attack') {
-      forceMode = forceMode === 'attack' ? null : 'attack';
-      pick = null;
-      render();
-      return;
-    }
-    if (act0 === 'undo') {
+    if (actName === 'undo') {
       undo();
       return;
     }
-    if (act0 === 'quit') {
+    if (actName === 'surrender') {
       if (busy || finished) return;
       finished = true;
       handlers.onDone({ win: false, survivors: [], gold: state.players.A.gold, turns: state.turn });
       return;
     }
-    const skillId = target?.closest<HTMLElement>('[data-skill]')?.dataset.skill;
-    if (skillId) {
-      castSkill(skillId);
+    if (actName === 'force-move') {
+      forceMode = forceMode === 'move' ? null : 'move';
+      pick = null;
+      render();
       return;
     }
+    if (actName === 'force-attack') {
+      forceMode = forceMode === 'attack' ? null : 'attack';
+      pick = null;
+      render();
+      return;
+    }
+    if (actName === 'combat-aim') {
+      previewMode = !previewMode;
+      pendingCombat = null;
+      render();
+      return;
+    }
+    if (actName === 'disband') {
+      const unit = selected();
+      if (unit && unit.owner === 'A') act({ type: 'DISBAND', unitId: unit.id });
+      return;
+    }
+    if (actName === 'drawer-toggle') {
+      const open = drawerEl!.dataset.expanded !== 'true';
+      drawerEl!.dataset.expanded = String(open);
+      const btn = drawerEl!.querySelector<HTMLElement>('[data-act="drawer-toggle"]');
+      btn?.setAttribute('aria-expanded', String(open));
+      const stateEl = drawerEl!.querySelector<HTMLElement>('.drawer-state');
+      if (stateEl) stateEl.textContent = open ? '收起' : '展开详情';
+      return;
+    }
+
+    const skillId = target?.closest<HTMLElement>('[data-act="hero-skill"]')?.dataset.skill;
+    if (skillId) {
+      const unitId = target?.closest<HTMLElement>('[data-act="hero-skill"]')?.dataset.id;
+      if (!unitId) return;
+      const item = target?.closest<HTMLElement>('.skill-item');
+      const inputEl = item?.querySelector<HTMLInputElement>('.skill-input');
+      castSkill(unitId, skillId, inputEl ? inputEl.value : undefined);
+      return;
+    }
+
+    const actionId = target?.closest<HTMLElement>('[data-act="unit-action"]')?.dataset.action;
+    if (actionId) {
+      const unitId = target?.closest<HTMLElement>('[data-act="unit-action"]')?.dataset.id;
+      if (unitId) act({ type: 'UNIT_ACTION', unitId, actionId });
+      return;
+    }
+
+    // 生产/建造/升级：肉鸽前三层没有城，也不让在战场上补员
+    if (actName === 'recruit' || actName === 'build' || actName === 'upgrade' || actName === 'open-camp') {
+      flash('肉鸽里不能造兵：兵只从战利品、商店和事件来');
+      return;
+    }
+
     const rec = target?.closest<HTMLElement>('[data-parley]')?.dataset.parley;
     if (rec) {
       const u = state.units.find((x) => x.id === rec);
@@ -893,23 +1098,63 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       if (u) dismissNeutral(u);
       return;
     }
-    const unitId = target?.closest<HTMLElement>('[data-unit]')?.dataset.unit;
-    if (unitId) {
-      selectedId = unitId;
-      render();
-    }
   });
+
+  /* ---- 折叠状态、缩放拖拽 ---- */
+  sideEl!.addEventListener(
+    'toggle',
+    (e) => {
+      const el = e.target as HTMLElement | null;
+      if (!el || !el.classList.contains('card-fold')) return;
+      if (el.dataset.fold === 'ops' || !el.dataset.fold) opsOpen = (el as HTMLDetailsElement).open;
+      if (el.dataset.fold === 'log') logOpen = (el as HTMLDetailsElement).open;
+    },
+    true,
+  );
+
+  let dragging = false;
+  let dragFrom = { x: 0, y: 0, left: 0, top: 0 };
+  boardScrollEl.addEventListener('pointerdown', (e) => {
+    if (boardZoom <= 1) return;
+    dragging = true;
+    dragFrom = { x: e.clientX, y: e.clientY, left: boardScrollEl.scrollLeft, top: boardScrollEl.scrollTop };
+    boardScrollEl.classList.add('dragging');
+  });
+  boardScrollEl.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    boardScrollEl.scrollLeft = dragFrom.left - (e.clientX - dragFrom.x);
+    boardScrollEl.scrollTop = dragFrom.top - (e.clientY - dragFrom.y);
+  });
+  const endDrag = (): void => {
+    dragging = false;
+    boardScrollEl.classList.remove('dragging');
+  };
+  boardScrollEl.addEventListener('pointerup', endDrag);
+  boardScrollEl.addEventListener('pointercancel', endDrag);
+  boardScrollEl.addEventListener('pointerleave', endDrag);
+
+  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+    fitDirty = true;
+    applyFit();
+  }) : null;
+  ro?.observe(boardWrapEl);
+
+  /* ---------------------------------------------------------------- 启动 */
 
   arrivalWaves();
   render();
+  // 让根节点拿到焦点，Ctrl+Z / Esc 才能用
+  window.setTimeout(() => rootEl.focus(), 0);
   if (state.current !== 'A') void runAi();
 
   return () => {
     disposed = true;
+    ro?.disconnect();
     host.innerHTML = '';
   };
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
 }
+

@@ -189,6 +189,14 @@ export interface RunOver {
 export interface RunState {
   seed: number;
   strategyId: string;
+  /**
+   * 玩家开局勾的**可选扩展**（规则包 + 联动兵种包）。
+   *
+   * 和战役模式的 `config.expansionIds` 同一个位置：每一关的 `LevelDef.expansions`
+   * 会把它作为 `require` 带进去，`createMatch` 按它注册钩子与兵种。
+   * 剧情兵种包不在这里——它由第一层的选择决定（见 `world`）。
+   */
+  packs: string[];
   /** 这一局走的是哪一支史（决定第二层的四种样子） */
   world: WorldId;
   /**

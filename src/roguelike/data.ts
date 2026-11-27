@@ -17,6 +17,7 @@ import { UNIT_TYPES } from '../core/config.ts';
 import { EXPANSIONS } from '../core/expansions.ts';
 import { CULTIVATOR_IDS } from '../core/cultivation/identity.ts';
 import { expansionUnitsFor } from '../core/setup.ts';
+import { CORE_PACK, poolOf } from './packs.ts';
 
 /**
  * **全量兵种索引**：基础表 + 所有扩展包（含 `requiresPack` 的前置包单位）。
@@ -57,6 +58,16 @@ export interface LayerTheme {
   /** 本层低代（开局）/ 高代（层末） */
   eraLow: number;
   eraHigh: number;
+  /**
+   * 这一层的兵池是**哪几个包算出来的**（`core` = 原版）。
+   *
+   * 2026-11-28 起不再手写单位名单：池子由 `packs.ts` 的 `poolOf()` 按
+   * 包 + 时代 + 编制口径现算。`packs` 同时决定这一关要开的扩展——
+   * 和原版战役的 `LevelDef.expansions.require` 是同一件事。
+   */
+  packs: string[];
+  /** 算"上一代兵池"用的包（通常只放 core；第三层会加上本世界的兵种包） */
+  prevPacks: string[];
   /** 上一代的兵池：开局两关混进来一些，玩家的老兵还有得打（L1 没有） */
   prevPool: string[];
   prevEra: number;
@@ -64,7 +75,7 @@ export interface LayerTheme {
   pool: string[];
   /** 时代钟靠后 / 层末的高代兵池 */
   poolHigh: string[];
-  /** 这一层要开哪些扩展（第 6 代要「信息化」解锁，它没有规则钩子） */
+  /** 这一层要开哪些扩展（`packs` 去掉 `core`；保留旧字段名，调用点不必全改） */
   expansions: string[];
   /** 地图边长：遭遇 / 精英 / 攻坚 / boss */
   size: readonly [number, number, number, number];
@@ -72,60 +83,84 @@ export interface LayerTheme {
   bosses: ReadonlyArray<{ title: string; sub: string }>;
 }
 
+/** 从包算出一层的三个池子。所有主题（含四支史）都走它，不允许再手抄 id */
+function themePools(packs: string[], prevPacks: string[], layer: LayerId): Pick<LayerTheme, 'pool' | 'poolHigh' | 'prevPool'> {
+  return {
+    pool: poolOf(packs, layer, 'low'),
+    poolHigh: poolOf(packs, layer, 'high'),
+    prevPool: prevPacks.length > 0 ? poolOf(prevPacks, layer, 'prev') : [],
+  };
+}
+
+const CORE = CORE_PACK;
+
 export const LAYERS: Record<LayerId, LayerTheme> = {
-  1: {
-    id: 1,
-    name: '第一层 · 旧垒',
-    subtitle: '墙还站在那儿，人已经换过三茬',
-    eraLow: 1,
-    eraHigh: 2,
-    // 第一层没有"上一代"，开局就是第一代
-    prevPool: [],
-    prevEra: 0,
-    pool: ['militia', 'archer', 'scout', 'ge'],
-    poolHigh: ['spearman', 'longbow', 'crossbow', 'knight'],
-    expansions: [],
-    size: [8, 10, 10, 12],
-    bosses: [
-      { title: '守墙人的土垣', sub: '他守的不是城，是"这里归谁"这件事' },
-      { title: '持秤者的货栈', sub: '账本比城墙厚，也比特么城墙硬' },
-      { title: '守钟人的石龛', sub: '钟还没响，他先站到了门口' },
-    ],
-  },
-  2: {
-    id: 2,
-    name: '第二层 · 商道',
-    subtitle: '同一条路，昨天运粮，今天运兵',
-    eraLow: 3,
-    eraHigh: 4,
-    // 开局两关混一半第二代的兵：玩家刚带着第一层的老兵上来，第一关不该全是火枪
-    prevPool: ['spearman', 'longbow', 'crossbow', 'knight'],
-    prevEra: 2,
-    pool: ['musketeer', 'halberdier', 'hussar', 'mortar'],
-    poolHigh: ['rifleman', 'mg', 'armoredcar'],
-    expansions: [],
-    size: [10, 12, 12, 14],
-    bosses: [
-      { title: '守墙人的棱堡', sub: '墙学会了拐弯，人就学会了绕路' },
-      { title: '持秤者的商埠', sub: '你打下的每一寸地，他都算过价' },
-      { title: '守钟人的修道院', sub: '院里不敲钟了，改抄账' },
-    ],
-  },
-  3: {
-    id: 3,
-    name: '第三层 · 钟楼',
-    subtitle: '三家的旗都挂在同一座楼上，谁也不敢先摘',
-    eraLow: 5,
-    eraHigh: 6,
-    // 同上：开局还留着第四代的兵，钟过 3 之后才全是第五代
-    prevPool: ['rifleman', 'mg', 'armoredcar'],
-    prevEra: 4,
-    pool: ['hmg', 'squad', 'tank', 'artillery'],
-    poolHigh: ['ct_infantry', 'ct_tank', 'ct_howitzer', 'ct_recon'],
-    expansions: ['pack-contemporary'],
-    size: [12, 14, 14, 16],
-    bosses: [{ title: '钟楼', sub: '三家共守的地方——谁都不能让你砸这口钟' }],
-  },
+  1: (() => {
+    const packs = [CORE];
+    return {
+      id: 1,
+      name: '第一层 · 旧垒',
+      subtitle: '墙还站在那儿，人已经换过三茬',
+      eraLow: 1,
+      eraHigh: 2,
+      packs,
+      prevPacks: [],
+      prevEra: 0,
+      ...themePools(packs, [], 1),
+      expansions: [],
+      size: [8, 10, 10, 12],
+      bosses: [
+        { title: '守墙人的土垣', sub: '他守的不是城，是"这里归谁"这件事' },
+        { title: '持秤者的货栈', sub: '账本比城墙厚，也比特么城墙硬' },
+        { title: '守钟人的石龛', sub: '钟还没响，他先站到了门口' },
+      ],
+    };
+  })(),
+  2: (() => {
+    const packs = [CORE];
+    return {
+      id: 2,
+      name: '第二层 · 商道',
+      subtitle: '同一条路，昨天运粮，今天运兵',
+      eraLow: 3,
+      eraHigh: 4,
+      packs,
+      prevPacks: [CORE],
+      prevEra: 2,
+      ...themePools(packs, [CORE], 2),
+      expansions: [],
+      size: [10, 12, 12, 14],
+      bosses: [
+        { title: '守墙人的棱堡', sub: '墙学会了拐弯，人就学会了绕路' },
+        { title: '持秤者的商埠', sub: '你打下的每一寸地，他都算过价' },
+        { title: '守钟人的修道院', sub: '院里不敲钟了，改抄账' },
+      ],
+    };
+  })(),
+  3: (() => {
+    /*
+     * 第三层的底座是原版 e5 + 信息化 e6。
+     *
+     * 之前这里是两张手写名单（`hmg/squad/tank/artillery` 与
+     * `ct_infantry/ct_tank/ct_howitzer/ct_recon`）。现在只写"开哪几个包"，
+     * 具体是谁由包自己的 `era` 决定——信息化补到 e6 时，池子会自动跟着变。
+     */
+    const packs = [CORE, 'pack-contemporary'];
+    return {
+      id: 3,
+      name: '第三层 · 钟楼',
+      subtitle: '三家的旗都挂在同一座楼上，谁也不敢先摘',
+      eraLow: 5,
+      eraHigh: 6,
+      packs,
+      prevPacks: [CORE],
+      prevEra: 4,
+      ...themePools(packs, [CORE], 3),
+      expansions: ['pack-contemporary'],
+      size: [12, 14, 14, 16],
+      bosses: [{ title: '钟楼', sub: '三家共守的地方——谁都不能让你砸这口钟' }],
+    };
+  })(),
 };
 
 /**
@@ -159,22 +194,25 @@ export interface WorldDef {
    * 修真带境界。同样的预算，他们会明显更难打——所以按世界给预算打个折。
    */
   power?: number;
-  /** 第三层的"本世界溢出"：并进 L3 的低代池 */
-  l3Pool: string[];
+  /**
+   * 第三层的"本世界溢出"：这几个包并进 L3 的兵池（按它们自己的时代算）。
+   *
+   * 上一版这里是 `l3Pool: string[]`（手写单位名）。改成包之后，
+   * "军备的 e5 兵"、"奇想的 e5/e6 兵"都由包自己说，不在这里点名。
+   */
+  l3Packs: string[];
   /** 第三层层名若不是默认的科技层，在这里覆盖 */
   l3Subtitle?: string;
 }
 
-/** 第二层的地图尺寸与"上一代"兵池：四个世界通用 */
+/** 第二层的地图尺寸：四个世界通用 */
 const L2_SIZE = [10, 12, 12, 14] as const;
-const L2_PREV = ['spearman', 'longbow', 'crossbow', 'knight'];
 
 function l2(
   name: string,
   subtitle: string,
-  pool: string[],
-  poolHigh: string[],
-  expansions: string[],
+  /** 这一支史的兵种包（第二层只开它，不和别的史混池） */
+  packs: string[],
   bosses: ReadonlyArray<{ title: string; sub: string }>,
 ): LayerTheme {
   return {
@@ -183,11 +221,16 @@ function l2(
     subtitle,
     eraLow: 3,
     eraHigh: 4,
-    prevPool: [...L2_PREV],
+    packs,
+    /*
+     * 「上一代」永远从原版算：玩家是从第一层（原版 e1/e2）带着老兵上来的。
+     * 奇想的 e2 兵不该出现在开局两关里——那等于第二层一进门就换了一整套世界，
+     * 而这支史是玩家在第一层里"挣"来的，不是开局就存在的。
+     */
+    prevPacks: [CORE],
     prevEra: 2,
-    pool,
-    poolHigh,
-    expansions,
+    ...themePools(packs, [CORE], 2),
+    expansions: packs.filter((p) => p !== CORE),
     size: L2_SIZE,
     bosses,
   };
@@ -208,7 +251,7 @@ export const WORLDS: Record<WorldId, WorldDef> = {
     history: 'technology',
     blurb: '没有魔法，也没有被提前造出来的枪。一切按本来的时间表走。',
     theme: LAYERS[2],
-    l3Pool: [],
+    l3Packs: [],
   },
   arms: {
     id: 'arms',
@@ -218,8 +261,6 @@ export const WORLDS: Record<WorldId, WorldDef> = {
     theme: l2(
       '第二层 · 军械库',
       '铁比人多，炮比话多',
-      ['gp_lineinfantry', 'gp_sharpshooter', 'gp_cuirassier', 'gp_dragoon', 'gp_grenadier', 'gp_siegecannon', 'gp_rocket', 'gp_culverin', 'combat-engineer'],
-      ['ind_trenchraider', 'ind_trenchmortar', 'ind_flamethrower', 'ind_gas', 'ind_howitzer', 'ind_railwaygun', 'ind_landship', 'ind_armoredtrain', 'mine-sweeper'],
       ['era-arms'],
       [
         { title: '守墙人的兵工厂', sub: '墙靠人守，人靠厂养' },
@@ -227,7 +268,7 @@ export const WORLDS: Record<WorldId, WorldDef> = {
         { title: '守钟人的试炮场', sub: '他们拿钟当靶子试射程' },
       ],
     ),
-    l3Pool: ['mod_paratrooper', 'mod_commando', 'mod_atgun', 'mod_katyusha', 'mod_heavytank', 'mod_spg', 'mod_flak', 'mod_heavy_mortar'],
+    l3Packs: ['era-arms'],
   },
   fantasy: {
     id: 'fantasy',
@@ -250,16 +291,11 @@ export const WORLDS: Record<WorldId, WorldDef> = {
        * 便宜的蝙蝠/小恶魔不进池：它们会拉低池内最低价，让整套"按人头摊钱"
        * 的编成算法把敌人换成一堆杂兵。
        */
-      [
-        'berserker', 'ghost', 'assassin', 'mage', 'elf-archer', 'treant', 'necromancer', 'paladin',
-        'royal-cavalry', 'cataphract',
-        'harpy', 'gargoyle', 'air-elemental', 'griffin-rider',
-      ],
-      [
-        'royal-guard', 'werewolf', 'elementalist', 'two-head-giant', 'clockwork-golem', 'holy-knight-lord',
-        'royal-king', 'alchemist',
-        'vampire', 'dragoon-rider', 'demon', 'bone-dragon',
-      ],
+      /*
+       * 2026-11-28：池子不再手写，改为 `poolOf(['fantasy'], 2, ...)` 按 e3/e4 现算。
+       * 召唤物（蝙蝠/小恶魔/小史莱姆……）是 `summonedOnly`，本来就不会进池，
+       * 所以"便宜货拉低池内最低价"的问题从数据层就不存在了。
+       */
       ['fantasy'],
       [
         { title: '邪龙王的巢', sub: '它不是守城，它只是睡在城里' },
@@ -267,7 +303,7 @@ export const WORLDS: Record<WorldId, WorldDef> = {
         { title: '至尊法师的高塔', sub: '塔里没有楼梯，只有上一层的门' },
       ],
     ),
-    l3Pool: ['archmage', 'elf-queen'],
+    l3Packs: ['fantasy'],
     power: 1.8,
   },
   cultivation: {
@@ -278,8 +314,6 @@ export const WORLDS: Record<WorldId, WorldDef> = {
     theme: l2(
       '第二层 · 山门',
       '山门还在，灵气不多了',
-      ['qi-cultivator', 'sword-cultivator', 'body-cultivator', 'cultivation-artifact-wood', 'cultivation-artifact-stone'],
-      ['blood-cultivator', 'soul-cultivator', 'cultivation-artifact-water', 'cultivation-artifact-fire'],
       ['cultivation'],
       [
         { title: '掌门与护山大阵', sub: '山门不破，是因为阵还没破' },
@@ -298,7 +332,7 @@ export const WORLDS: Record<WorldId, WorldDef> = {
      */
     rankOf: (clock) => Math.min(3, 1 + Math.floor(clock / 3)),
     power: 2.2,
-    l3Pool: [],
+    l3Packs: [],
     l3Subtitle: '末法之世——灵气被钢铁抽干了，这一层没有修士，只有机器',
   },
 };
@@ -459,25 +493,12 @@ export const STRATEGIES: Strategy[] = [
 /**
  * 兵种 → 它需要开哪几个扩展包。
  *
- * 试验型方略会带"这一层本来不该有"的兵（奇想的英雄、后面的坦克）。
- * `createMatch` 只注册**已开启扩展**的兵种，不把包带上的话，部署时会被
- * 当成"不存在的兵"直接跳过——玩家点了英雄，场上却只有两个民兵。
- *
- * 注意**前置包**：圣剑勇者在 `fantasy` 里，但它 `requiresPack: 'pack-contemporary'`，
- * 只开 fantasy 是拿不到它的（`expansionUnitsFor` 会把这种兵滤掉）。
- * 上一版只记了"第一个见到它的包"，于是英雄一个人都没上场。
+ * 2026-11-28 起这份表搬到 `packs.ts`（和"包级 requires 闭包"放在一起）：
+ * 上一版只记 `[包, unit.requiresPack]`，漏了**包自己的前置**
+ * （armor-era8 → armor-era7、dark-turmoil → cultivation），
+ * 那种兵部署时会被当成"不存在"直接跳过。这里只做转发，不再维护第二份。
  */
-/** 兵种 → 所属包（+ 前置包）。`EXPANSIONS` 是静态表，模块加载时建一次就够 */
-const PACK_OF: Record<string, string[]> = {};
-for (const e of EXPANSIONS) {
-  for (const u of e.units ?? []) {
-    if (!PACK_OF[u.id]) PACK_OF[u.id] = u.requiresPack ? [e.id, u.requiresPack] : [e.id];
-  }
-}
-
-export function packsForUnit(type: string): string[] {
-  return PACK_OF[type] ?? [];
-}
+export { packsForUnit } from './packs.ts';
 
 export function strategyById(id: string): Strategy {
   return STRATEGIES.find((s) => s.id === id) ?? (STRATEGIES[0] as Strategy);
@@ -1174,7 +1195,7 @@ export function pickEnemyTypes(
     for (const id of [...l.pool, ...l.poolHigh, ...l.prevPool]) ids.add(id);
   }
   for (const w of Object.values(WORLDS)) {
-    for (const id of [...w.theme.pool, ...w.theme.poolHigh, ...w.theme.prevPool, ...w.l3Pool]) ids.add(id);
+    for (const id of [...w.theme.pool, ...w.theme.poolHigh, ...w.theme.prevPool]) ids.add(id);
   }
   for (const t of TRIALS) {
     for (const id of [...t.enemy, ...t.reward]) ids.add(id);

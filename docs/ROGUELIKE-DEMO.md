@@ -17,7 +17,7 @@
 | 存档 | 有自己的 run 存档 | 不落盘（刷新即重开） |
 
 **约定（对方原话）**："不要覆盖，留着""你自己搞个肉鸽 2.0""搞好就让它在你原版肉鸽旁边再加个接口"。
-所以本实现唯一动到的共享文件是**标题页加了并排的一个按钮**，原版肉鸽的代码一个字节都没改。
+所以本实现动到的共享文件只有两处：**标题页加了并排的一个按钮**、**`ui/panel.ts` 加了一个可选的 `opsHtml` 字段**（不传就走原默认文案）。原版肉鸽的代码一个字节都没改。
 
 ---
 
@@ -40,9 +40,10 @@
 | `src/roguelike/mount.ts` | 72 | 挂载点：藏主界面、建根节点、拦两个全局快捷键、退出回标题 |
 | `src/roguelike/app.ts` | 778 | 界面与流程：开局 → 层地图 → 房间（事件/商店/营地）→ 战斗 → 结算；局外检视栏 |
 | `src/roguelike/run.ts` | 1559 | 纯逻辑：房间图生成、效果结算、跨层推进、敌人编成（不碰 DOM） |
-| `src/roguelike/data.ts` | 1086 | 全部内容表：方略 / 四种世界 / 兵池 / 18 事件 / 10 藏品 / 8 决议 / 休整池 |
+| `src/roguelike/data.ts` | 1086 | 全部内容表：方略 / 四种世界 / 18 事件 / 10 藏品 / 8 决议 / 休整池；**兵池由 `packs.ts` 现算** |
+| `src/roguelike/packs.ts` | 380 | **扩展接入层**：28 个包的定性（`PACK_PLANS`）、`poolOf` 兵池现算、`packsForUnit` 前置闭包、开局可选包 |
 | `src/roguelike/battle.ts` | 1133 | **与规则层唯一的适配层**：把一关翻成 `GameState`，打完翻回来 |
-| `src/roguelike/battle-screen.ts` | 851 | 战斗屏：复用 `ui/board.ts` 的渲染器，自己写交互、强制模式、外人卡与 AI 循环 |
+| `src/roguelike/battle-screen.ts` | 851 | 战斗屏：**复用战役模式的面板/资源条/攻击预览/缩放**，只写肉鸽自己的选择、强制模式、外人卡、守城波次与 AI 循环 |
 | `src/roguelike/types.ts` | 279 | 数据形状 |
 | `src/roguelike/rng.ts` | 44 | 可复现随机（mulberry32） |
 | `src/roguelike/rogue.css` | 950 | 样式，全部 `rg-` 前缀，不与本体类名冲突 |
@@ -58,6 +59,7 @@
 |---|---|---|
 | `src/core/rules.ts` | `attackableTargets` / `siegeTargets` 加一条「不列友军」判据 | 守城三席（A/B 同盟）与中立单位（编进 B 队）都要求 AI 不打友军；无 `teams` 的局面判据恒真，行为不变 |
 | `src/core/cultivation/identity.ts` | 加 `baseUnitId()`，让 5 个身份判断剥掉肉鸽变体前缀 | 肉鸽给修士套 `rg:…@…` 变体后核心认不出来（不涨修为、不放技能）；对原生 id 函数返回原值，行为不变 |
+| `src/ui/panel.ts` | `PanelInput` 加可选 `opsHtml`，只替换「操作」说明卡的正文 | 肉鸽的战斗没有城/生产，照抄战役文案会教玩家点不存在的按钮；不传时渲染结果与从前逐字相同（`test:ui` 348 项通过） |
 
 两处都由 `test:rules`（1006 项）、`test:cultivation`（208 项）、`test:ui`（348 项）覆盖，官方关卡不受影响。
 
@@ -74,15 +76,20 @@
 | `CULTIVATORS` 手抄 5 个修士 id | 漏了灵体（`spirit`） | 直接复用 `core/cultivation/identity.ts` 的 `CULTIVATOR_IDS` |
 | `CATALOG` 用 `expansionUnitsFor([...])` 拼子集 | 漏掉 `requiresPack` 单位：圣剑勇者/邪龙王 `cost=0`、`hero=false`、商店标价 0 | `ALL_UNITS` 遍历 `EXPANSIONS` 原表，不做可用性过滤；能不能上场由 `createMatch` 管 |
 
-**边界**：
+**边界（2026-11-28 更新，决议 92/93）**：
 
-- **必须从 DLC 读**：单位定义、名字、造价、英雄/解锁费、所属包与前置包、境界公式
-  （`stats.ts` 的攻/甲/射/移/真元/次数/溅射 + `maxHpBonus`）、能力与技能文案、工事数值。
-- **必须手写（设计内容，不是抄代码）**：兵池（哪个时代放哪些兵）、事件、藏品、试炼编成、
-  成长型单位的系数。这些是「这一局怎么设计」，DLC 里没有。
-- **加新 DLC 的姿势**：在 `EXPANSIONS` 里加包 → 兵池里写 id → 自动进入 `ALL_UNITS` 与
-  `createMatch`。不要复制数值、名字、境界规则；池子里写错 id 会在模块加载时
-  `console.warn` 点名（`data.ts` 末尾的护栏）。
+- **必须从 DLC 读**：单位定义、名字、造价、英雄/解锁费、所属包与前置包、时代、编制口径
+  （`category` / `domain` / `summonedOnly` / `requiresPack`）、境界公式、能力与技能文案、工事数值。
+- **不再手写兵池**：`src/roguelike/packs.ts` 的 `PACK_PLANS` 给 28 个包定性
+  （story / rule / support / system / locked），`poolOf(packs, 层, 低/高/上一代)`
+  按时代与包现状算。加新 DLC 只需加一行定性，不抄单位 id。详见 `ROGUELIKE-DLC.md`。
+- **仍是设计内容**：事件、藏品、试炼编成、成长型单位的系数、地图与房型比例。
+  这些是「这一局怎么设计」，DLC 里没有。
+- **关卡自己持有扩展**：`battleFor` 把包写进 `LevelDef.expansions.require`，
+  和战役关走 `createMatch` 的同一入口；不是战斗屏临时拼字符串。
+- **战斗 UI 复用战役**：侧栏 `renderPanel`、资源条 `battleStatusShell`、棋盘 `board.ts`
+  （缩放/强制模式/扩展视图）、攻击预览 `forecastCombat`；删掉联机/回放/上帝/迷雾/
+  选卡/指挥官/战报上传/城市生产，补「我军」清单、「外人」交涉、守城波次、无城胜负。
 
 ---
 

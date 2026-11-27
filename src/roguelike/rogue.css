@@ -995,3 +995,321 @@
   border-color: #9dc0a5;
   background: #eef7ef;
 }
+
+/* ==========================================================================
+ * 2026-11-28：战斗屏改为**复用战役模式的组件**
+ *
+ * 结构是 .app > .battle-header(.topbar + .battle-status) + .main(.board-wrap + .side-drawer)
+ * ——和 index.html 里主对局那套一模一样，样式也直接吃 style.css。
+ * 这里只补三件它不知道的事：
+ *   1. 根节点的字体/背景（主对局是 body 给的，我们在 #rogue-root 里）；
+ *   2. 棋盘宽高由 JS 的 fitBoard 写死像素，撤掉旧版那条 width:min(76vh,100%)；
+ *   3. 肉鸽独有的「外人」卡和开局扩展选择。
+ * ======================================================================== */
+
+.rg-battle-app {
+  height: 100%;
+  background: var(--bg, #eae6dc);
+  color: var(--text, #3c3a33);
+  font: 14px/1.6 system-ui, 'Microsoft YaHei', sans-serif;
+}
+
+/* 旧版那条"棋盘占 76vh"是给自绘布局用的；现在尺寸由 fitBoard 写 inline，
+   旧规则一旦压过 inline 就会和缩放/滚动容器对不上。 */
+.rg-battle-app .board.rg-board {
+  width: auto;
+  max-width: none;
+  flex: 0 0 auto;
+}
+
+/* 棋盘上的高亮保留（本体那套在浅色平原上偏淡） */
+.rg-battle-app .board.rg-board .tile.reach {
+  background-color: rgba(47, 110, 168, 0.16);
+  box-shadow: inset 0 0 0 3px rgba(47, 110, 168, 0.5);
+}
+.rg-battle-app .board.rg-board .tile.attackable {
+  background-color: rgba(176, 58, 40, 0.14);
+  box-shadow: inset 0 0 0 3px rgba(176, 58, 40, 0.55);
+}
+
+/* 战斗屏里的顶栏：主对局那套按钮更多，肉鸽只有暂停/速度，别让它把
+   回合与目标挤到看不见。 */
+.rg-battle-app .topbar {
+  min-width: 0;
+}
+.rg-battle-app .level-goal {
+  max-width: 42ch;
+}
+.rg-battle-app .battle-status {
+  align-self: center;
+  margin-right: 14px;
+}
+
+/* 「外人」：中立单位的场外交涉。战役里没有这种对象，所以这张卡只能补在
+   面板末尾；样式沿用 .card，只把两行按钮排紧一点。 */
+.rg-parley-card .rg-parley-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--line, #d9d2c2);
+}
+.rg-parley-card .rg-parley-row:first-of-type {
+  border-top: 0;
+}
+.rg-parley-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.rg-parley-name i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted, #837b6b);
+}
+.rg-parley-card .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ---------- 开局面板的「本局扩展」 ---------- */
+
+.rg-dlc {
+  margin: 26px 0 8px;
+  padding: 18px 20px;
+  border: 1px solid #d5cdbb;
+  border-radius: 14px;
+  background: #f7f4ec;
+}
+.rg-dlc-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.rg-dlc-head h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.rg-dlc-head h2 small,
+.rg-dlc-group h3 small {
+  font-weight: 400;
+  font-size: 12px;
+  color: #837b6b;
+  margin-left: 6px;
+}
+.rg-dlc-head p {
+  margin: 0;
+  font-size: 12px;
+  max-width: 68ch;
+  line-height: 1.55;
+}
+.rg-dlc-fixed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+.rg-dlc-label {
+  font-size: 12px;
+  color: #837b6b;
+}
+.rg-dlc-note {
+  font-size: 11px;
+  color: #9a9282;
+}
+.rg-pack-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid #cbbfa8;
+  background: #fffdf6;
+  font-size: 12px;
+  color: #6d6659;
+}
+.rg-dlc-group {
+  margin-top: 16px;
+}
+.rg-dlc-group h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.rg-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.rg-pack {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid #d5cdbb;
+  border-radius: 10px;
+  background: #fffdf6;
+  color: #4b4740;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.rg-pack:hover {
+  border-color: #9dbfdc;
+}
+.rg-pack.on {
+  border-color: #2f6ea8;
+  background: #eef5fb;
+  box-shadow: inset 3px 0 0 #2f6ea8;
+}
+.rg-pack b {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rg-pack b u {
+  text-decoration: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.rg-pack span {
+  font-size: 12px;
+  color: #6d6659;
+  line-height: 1.45;
+}
+.rg-pack em {
+  font-style: normal;
+  font-size: 11px;
+  color: #8a8272;
+  line-height: 1.45;
+}
+.rg-pack i {
+  font-style: normal;
+  font-size: 11px;
+  color: #9a9282;
+  align-self: flex-end;
+}
+.rg-pack.on i {
+  color: #2f6ea8;
+  font-weight: 600;
+}
+.rg-dlc-off {
+  margin-top: 14px;
+  border-top: 1px dashed #d5cdbb;
+  padding-top: 10px;
+}
+.rg-dlc-off summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #837b6b;
+}
+.rg-dlc-offlist {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rg-dlc-offrow {
+  display: grid;
+  grid-template-columns: 8.5em 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  color: #6d6659;
+}
+.rg-dlc-offrow b {
+  font-weight: 600;
+  color: #4b4740;
+}
+.rg-dlc-offrow i {
+  font-style: normal;
+  font-size: 10px;
+  color: #9a9282;
+  border: 1px solid #d5cdbb;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+@media (max-width: 720px) {
+  .rg-dlc-offrow {
+    grid-template-columns: 1fr auto;
+  }
+  .rg-dlc-offrow span {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 战斗屏挂在 app.ts 临时造的 host 上；不给高度，.app 的 100dvh 就撑不开，
+   棋盘也会按"内容高度"量出一个很小的尺寸。 */
+.rg-battle-host {
+  height: 100%;
+}
+
+/* 我军清单：肉鸽没有城，队伍散在地图边缘时，这一列是"还剩谁"的唯一总览 */
+.rg-army-card .rg-army-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 280px;
+  overflow: auto;
+}
+.rg-army-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text, #3c3a33);
+  font: inherit;
+  cursor: pointer;
+}
+.rg-army-row:hover {
+  background: #f2eee3;
+}
+.rg-army-row.sel {
+  border-color: #2f6ea8;
+  background: #eef5fb;
+}
+.rg-army-row.done .n,
+.rg-army-row.done .s {
+  opacity: 0.55;
+}
+.rg-army-row.part .s {
+  color: #8a6b1f;
+}
+.rg-army-row .n {
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rg-army-row .s {
+  font-size: 11px;
+  color: #837b6b;
+}
+.rg-army-grow {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 500;
+  color: #8a6b1f;
+  border: 1px solid #d9c48a;
+  border-radius: 999px;
+  padding: 0 5px;
+}
+
+/* .seat-row 自己写了 display:flex，会压住 [hidden] 的 UA 样式；
+   中立单位的隐藏席位（C）就靠这个属性不出现在席位栏。 */
+.rg-battle-app .seat-row[hidden] {
+  display: none;
+}

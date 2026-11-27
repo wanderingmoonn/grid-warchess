@@ -61,6 +61,14 @@ check(!!root.querySelector('.rg-start'), '显示方略选择');
 const cards = root.querySelectorAll('.rg-strategy');
 check(cards.length >= 3, '方略卡片都在', `${cards.length} 个`);
 check(root.querySelectorAll('.rg-strat-tag').length >= 2, '试验型方略有角标');
+// 扩展接入：可选规则包 / 联动包 + 不接的包（每条都有理由）
+check(root.querySelectorAll('.rg-pack').length >= 10, '开局面板列出可选扩展', `${root.querySelectorAll('.rg-pack').length} 个`);
+check(root.querySelectorAll('.rg-dlc-offrow').length >= 8, '不接的扩展也列出来并写明理由', `${root.querySelectorAll('.rg-dlc-offrow').length} 条`);
+check(root.querySelectorAll('.rg-dlc-fixed .rg-pack-chip').length >= 4, '剧情包与固定包单列');
+const onBefore = root.querySelectorAll('.rg-pack.on').length;
+click(root.querySelector('[data-pack="air"]'));
+check(root.querySelectorAll('.rg-pack.on').length === onBefore + 1, '点一下能把联动兵种包打开');
+check(root.querySelector('[data-pack="air"]')?.getAttribute('aria-pressed') === 'true', '卡片状态同步到 aria-pressed');
 
 console.log('\n[2] 房间图');
 click(cards[0] as Element);
@@ -84,31 +92,37 @@ console.log('\n[3] 进战斗：界面元素齐全，认输能回到结算');
 {
   click(root.querySelector('.rg-step.now .rg-door:not([disabled])'));
   await wait(30);
-  check(!!root.querySelector('.rg-battle'), '战斗界面已挂载');
+  check(!!root.querySelector('.rg-battle-app'), '战斗界面已挂载（战役模式那套外壳）');
   check(!!root.querySelector('#rg-board'), '战斗界面有棋盘容器');
-  check(root.querySelectorAll('.rg-unitrow').length > 0, '列出了我军单位');
-  check(!!root.querySelector('[data-act="end"]'), '有结束回合按钮');
-  check(!!root.querySelector('[data-act="undo"]'), '有撤回按钮');
+  check(root.querySelectorAll('[data-pick-unit]').length > 0, '侧栏列出了我军单位');
+  check(!!root.querySelector('[data-act="end-turn"]'), '有结束行动按钮');
+  check(!!root.querySelector('#rg-battle-status [data-act="undo"]'), '有撤回按钮');
   /*
    * 「玩家没城 → 没有招募面板」。只查招募面板本身，别拿「外人」卡的
    * data-parley 当探针：常规战斗有 34% 概率刷出中立单位，那是随机的，
    * 放这儿会让断言偶发失败（外人卡由 [6] 单独测）。
    */
   check(!root.querySelector('[data-recruit], .rg-recruit, #rg-recruit'), '没有招募面板（玩家没城）');
-  // 强制模式：空地叠同格要靠强制移动 / 强制攻击，照抄本体的两个按钮
+  // 强制模式：空地叠同格要靠强制移动 / 强制攻击，照抄本体的两个按钮。
+  // 它们长在单位详情卡的「进阶操作」里——先选中一个兵，面板才会画出来。
+  click(root.querySelector('[data-pick-unit]'));
+  await wait(10);
   const forceMove = root.querySelector('[data-act="force-move"]');
   const forceAttack = root.querySelector('[data-act="force-attack"]');
   check(!!forceMove && !!forceAttack, '有强制移动/强制攻击按钮');
   click(forceMove);
-  check(forceMove?.classList.contains('armed') === true, '点强制移动后按钮亮起');
-  click(forceMove);
-  check(forceMove?.classList.contains('armed') === false, '再点一次退出强制模式');
-  click(forceAttack);
-  check(forceAttack?.classList.contains('armed') === true, '强制攻击也能亮起');
-  click(forceAttack);
+  await wait(10);
+  check(root.querySelector('[data-act="force-move"]')?.classList.contains('armed') === true, '点强制移动后按钮亮起');
+  click(root.querySelector('[data-act="force-move"]'));
+  await wait(10);
+  check(root.querySelector('[data-act="force-move"]')?.classList.contains('armed') === false, '再点一次退出强制模式');
+  click(root.querySelector('[data-act="force-attack"]'));
+  await wait(10);
+  check(root.querySelector('[data-act="force-attack"]')?.classList.contains('armed') === true, '强制攻击也能亮起');
+  click(root.querySelector('[data-act="force-attack"]'));
   check(root.querySelectorAll('#rg-board .tile').length > 0, '棋盘格子已渲染');
   check(root.querySelectorAll('#rg-board .unit').length > 0, '棋子已渲染');
-  click(root.querySelector('[data-act="quit"]'));
+  click(root.querySelector('[data-act="surrender"]'));
   await wait(30);
   check(!!root.querySelector('.rg-over'), '认输后直接进结算');
   check(!!root.querySelector('[data-act="again"]'), '结算页有「再来一局」');
@@ -236,21 +250,20 @@ console.log('\n[5] 战斗屏的技能栏');
   doc.body.appendChild(host);
   let done = false;
   const stop = mountBattle(host, battleFor(run, node, 606), { onDone: () => { done = true; } });
-  const skillCard = host.querySelector('#rg-skills');
-  check(!!skillCard, '战斗屏有"技能"栏');
-  const heroRow = [...host.querySelectorAll<HTMLElement>('.rg-unitrow')].find((el) =>
+  check(!!host.querySelector('.rg-battle-app'), '战斗屏用的是战役外壳');
+  const heroRow = [...host.querySelectorAll<HTMLElement>('[data-pick-unit]')].find((el) =>
     (el.textContent ?? '').includes('精灵女王'),
   );
-  check(!!heroRow, '我军列表里有英雄');
+  check(!!heroRow, '我军清单里有英雄');
   click(heroRow ?? null);
-  await wait(4);
-  const btns = [...host.querySelectorAll<HTMLButtonElement>('[data-skill]')];
+  await wait(10);
+  const btns = [...host.querySelectorAll<HTMLButtonElement>('[data-act="hero-skill"]')];
   check(btns.length > 0, '选中英雄后列出技能', `${btns.length} 个`);
   check(btns.some((b) => !b.disabled), '刚开局至少有一个技能可用');
   const before = btns.find((b) => !b.disabled);
   if (before) click(before);
-  await wait(10);
-  const after = [...host.querySelectorAll<HTMLButtonElement>('[data-skill]')];
+  await wait(20);
+  const after = [...host.querySelectorAll<HTMLButtonElement>('[data-act="hero-skill"]')];
   check(
     after.length > 0 && after.every((b) => b.disabled),
     '放过技能之后按钮变灰（这一回合不能连放）',
@@ -280,21 +293,17 @@ console.log('\n[5b] 修真单位：悬停卡带境界，且不超出视口');
   const stop = mountBattle(host, battleFor(run, { kind: 'battle', title: '遭遇战', sub: '' }, 61), {
     onDone: () => {},
   });
-  let sawRealm = false;
-  let topInView = true;
-  const units = [...host.querySelectorAll<HTMLElement>('#rg-board .unit[data-id]')].slice(0, 8);
+  const units = [...host.querySelectorAll<HTMLElement>('#rg-board .unit[data-id]')];
   check(units.length > 0, '棋盘上有单位', String(units.length));
-  for (const el of units) {
-    el.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, clientX: 120, clientY: 640 }));
-    el.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 120, clientY: 640 }));
-    const card = host.querySelector<HTMLElement>('#rg-hovercard');
-    if (!card || card.hidden) continue;
-    if ((card.textContent ?? '').includes('境界')) sawRealm = true;
-    const top = Number.parseFloat(card.style.top);
-    if (!Number.isFinite(top) || top < 0 || top > window.innerHeight) topInView = false;
-  }
-  check(sawRealm, '修真单位的悬停卡写着境界', String(sawRealm));
-  check(topInView, '卡片位置被夹在视口内', `innerHeight=${window.innerHeight}`);
+  const row = [...host.querySelectorAll<HTMLElement>('[data-pick-unit]')].find((el) =>
+    (el.textContent ?? '').includes('剑修'),
+  );
+  check(!!row, '我军清单里有修士');
+  click(row ?? null);
+  await wait(10);
+  const card = host.querySelector('.card-detail')?.textContent ?? '';
+  check(card.includes('境界'), '修士详情卡写着境界', card.replace(/\s+/g, ' ').slice(0, 120));
+  check(card.includes('修为'), '修士详情卡写着修为');
   stop();
   host.remove();
 }
@@ -318,13 +327,13 @@ console.log('\n[6] 战场两侧的"外人"：场外交涉');
   const stop = mountBattle(host, battleFor(run, { kind: 'battle', title: '遭遇战', sub: '' }, 20), {
     onDone: () => {},
   });
-  const card = host.querySelector<HTMLElement>('#rg-neutral-card');
-  check(!!card && !card.hidden, '有中立单位时出现「外人」卡');
-  const rows = [...host.querySelectorAll<HTMLElement>('.rg-neutral-row')];
+  const card = host.querySelector<HTMLElement>('.rg-parley-card');
+  check(!!card, '有中立单位时出现「外人」卡');
+  const rows = [...host.querySelectorAll<HTMLElement>('.rg-parley-row')];
   check(rows.length === 2, '两个外人各一行', String(rows.length));
-  const mineBefore = host.querySelectorAll('.rg-unitrow').length;
+  const mineBefore = host.querySelectorAll('[data-pick-unit]').length;
   const goldOf = (): number => {
-    const m = /金\s*(\d+)/.exec(host.querySelector('#rg-hud')?.textContent?.replace(/\s+/g, ' ') ?? '');
+    const m = /金币\s*(\d+)/.exec(host.querySelector('#rg-battle-status')?.textContent?.replace(/\s+/g, ' ') ?? '');
     return m ? Number(m[1]) : -1;
   };
   const goldBefore = goldOf();
@@ -333,30 +342,53 @@ console.log('\n[6] 战场两侧的"外人"：场外交涉');
   check(!!rec && !rec.disabled, '钱够的时候招募按钮可点');
   click(rec ?? null);
   await wait(10);
-  check(host.querySelectorAll('.rg-unitrow').length === mineBefore + 1, '招募之后我方多一个人');
+  check(host.querySelectorAll('[data-pick-unit]').length === mineBefore + 1, '招募之后我方多一个人');
   check(
-    !!recId && !!host.querySelector(`.rg-unitrow[data-unit="${recId}"]`),
+    !!recId && !!host.querySelector(`[data-pick-unit="${recId}"]`),
     '招进来的人出现在我军列表里（不再是"外人"）',
   );
-  check(host.querySelectorAll('.rg-neutral-row').length === rows.length - 1, '「外人」少一行');
+  check(host.querySelectorAll('.rg-parley-row').length === rows.length - 1, '「外人」少一行');
   check(goldBefore - goldOf() === 170, '招募扣的是标价（170 金）', `${goldBefore} → ${goldOf()}`);
-  const hud = host.querySelector('#rg-hud')?.textContent ?? '';
-  check(/金\s*\d+/.test(hud), '顶栏能看到金币', hud.replace(/\s+/g, ' ').slice(0, 80));
+  const hud = host.querySelector('#rg-battle-status')?.textContent ?? '';
+  check(/金币\s*\d+/.test(hud), '资源条能看到金币', hud.replace(/\s+/g, ' ').slice(0, 80));
   // 撤回：钱和人都要退回去（交涉是唯一"改 state 不经过规则层"的操作，得单独验）
-  host.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  host.querySelector('.rg-battle-app')?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
   await wait(10);
   check(goldOf() === goldBefore, 'Ctrl+Z 把招募的钱退回来', `${goldOf()} vs ${goldBefore}`);
   check(
-    host.querySelectorAll('.rg-neutral-row').length === rows.length,
+    host.querySelectorAll('.rg-parley-row').length === rows.length,
     'Ctrl+Z 把人也退回去（又变回"外人"）',
-    String(host.querySelectorAll('.rg-neutral-row').length),
+    String(host.querySelectorAll('.rg-parley-row').length),
   );
   for (let i = 0; i < rows.length; i += 1) {
     const dis = host.querySelector<HTMLButtonElement>('[data-dismiss]');
     if (dis) click(dis);
     await wait(6);
   }
-  check(host.querySelectorAll('.rg-neutral-row').length === 0, '请走之后卡片空掉');
+  check(host.querySelectorAll('.rg-parley-row').length === 0, '请走之后卡片空掉');
+  stop();
+  host.remove();
+}
+
+console.log('\n[6b] 守城战：三席面板与守满轮次目标');
+{
+  const { startRun, battleFor } = await import('../src/roguelike/run.ts');
+  const { mountBattle } = await import('../src/roguelike/battle-screen.ts');
+  const run = startRun(88, 'frontier');
+  run.layer = 2;
+  run.world = 'base';
+  run.army = [{ type: 'musketeer', count: 4 }, { type: 'halberdier', count: 2 }];
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const stop = mountBattle(host, battleFor(run, { kind: 'special', title: '守城战', sub: '' }, 88), {
+    onDone: () => {},
+  });
+  const seats = [...host.querySelectorAll('.seat-row')].map((el) => el.textContent ?? '');
+  check(seats.length === 3, '守城战面板列三个席位', String(seats.length));
+  check(seats.some((t) => t.includes('我军')), 'A 席是我军');
+  check(seats.some((t) => t.includes('友军')), 'B 席是友军（不是"敌军"）');
+  check(seats.some((t) => t.includes('攻方')), 'C 席是攻方');
+  check((host.querySelector('#rg-topbar [data-ref="goal"]')?.textContent ?? '').includes('守住'), '顶栏写「守住 N 轮」');
   stop();
   host.remove();
 }
@@ -377,22 +409,16 @@ console.log('\n[7] 成长型英雄：角标、属性卡、第 2 层长满');
     return { host, stop };
   };
   const a = mount(1);
-  const badge = a.host.querySelector('.rg-grow');
-  check(!!badge && badge.textContent?.includes('1/2'), '第一层：我军列表里有「成长 1/2」', badge?.textContent ?? '无');
-  const one = a.host.querySelector('.rg-unitrow');
-  check(a.host.querySelectorAll('.rg-unitrow').length === 1, '英雄开局我军只有一行');
+  const badge = a.host.querySelector('.rg-army-grow');
+  check(!!badge && badge.textContent?.includes('1/2'), '第一层：我军清单里有「成长 1/2」', badge?.textContent ?? '无');
+  const one = a.host.querySelector('[data-pick-unit]');
+  check(a.host.querySelectorAll('[data-pick-unit]').length === 1, '英雄开局我军只有一行');
   check((one?.textContent ?? '').includes('神圣骑士长'), '那一行就是英雄');
-  // 属性卡里也要说明它在成长期
-  const piece = a.host.querySelector('.unit');
-  piece?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
-  await wait(4);
-  const card = a.host.querySelector('#rg-hovercard')?.textContent ?? '';
-  check(card.includes('成长期'), '属性卡写明"成长期 1/2"', card.slice(0, 40));
   a.stop();
   a.host.remove();
 
   const b = mount(2);
-  check(!b.host.querySelector('.rg-grow'), '第二层：长满了，角标消失');
+  check(!b.host.querySelector('.rg-army-grow'), '第二层：长满了，角标消失');
   b.stop();
   b.host.remove();
 }

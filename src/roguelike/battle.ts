@@ -485,8 +485,20 @@ function makeLevel(init: BattleInit): {
         : { count: 2, ai: ['B'], cityless: noCity },
     deploy: allyCity ? { A: deployA, B: deployB, C: deployC } : { A: deployA, B: deployB },
     /*
-     * 关卡自带工事兵种：墙在 era-arms 包里，但肉鸽不开那个包（会把 89 个
-     * 近现代兵塞进招募池），所以由关卡自己登记这几件。
+     * 关卡自己持有"这一关开哪些扩展"。
+     *
+     * 这和剧情关的写法完全一样（`LevelDef.expansions.require`），
+     * 也是"像战役模式那样接 DLC"的关键一步：包不是由战斗屏临时拼的字符串，
+     * 而是关卡数据的一部分——`createMatch` 会在归一化之前套上它，
+     * 规则书、`activeExpansions`、`eraCeilingFor` 读到的都是同一份。
+     */
+    expansions: init.expansions.length > 0 ? { require: [...init.expansions] } : undefined,
+    /*
+     * 关卡自带工事兵种：墙在 era-arms 包里。
+     *
+     * 军备史线会整包开启它，但另外两支史（正史/奇想/修真）不会——所以工事
+     * 永远由关卡自己登记，部署才认得出来；再在 `disabledUnits` 里关掉，
+     * 免得 AI 拿一个补员名额去买一道不会走的墙。
      */
     units: DEFENSE_UNIT_DEFS,
     setup: { startEra: init.cityEra, firstSide: 'A' },
@@ -666,6 +678,16 @@ export function buildBattle(init: BattleInit): GameState {
    * 全亮反而更像"短兵相接"。
    */
   s.fog = false;
+
+  /*
+   * 席位名字：战役模式的面板会把它印在回合徽章、兵种卡和战报里。
+   *
+   * A/B 在 `setup.ts` 里默认叫"我方/敌方"，三席守城时 B 是**友军**——
+   * 不改的话，玩家的援军会被写成"敌方单位"，面板上的敌我判断全部反过来。
+   */
+  s.players.A.name = '我军';
+  s.players.B.name = init.allyCity ? '友军' : '敌军';
+  if (s.players.C) s.players.C.name = init.allyCity ? '攻方' : '中立';
 
   /*
    * 中立单位：主人是隐藏席位 C。

@@ -6,6 +6,14 @@
  */
 import { STRATEGIES, armyText, eventById, relicById, relicDesc, rankOfExp, themeOf, unitDefOf, unitName } from './run.ts';
 import { CULTIVATORS, EVENTS, WORLDS } from './data.ts';
+import {
+  PACK_PLANS,
+  defaultExtraPacks,
+  ruleChoices,
+  supportChoices,
+  unavailablePacks,
+} from './packs.ts';
+import { EXPANSIONS } from '../core/expansions.ts';
 import { expForRank, REALMS, totalHpBonusForRank } from '../core/cultivation/progression.ts';
 import { moveForRank, realmArmorBase, realmAtkBase, realmRangeBase } from '../core/cultivation/stats.ts';
 import { abilityById } from '../core/ability-registry.ts';
@@ -39,6 +47,14 @@ import type { Rng } from './rng.ts';
 import type { ArmyEntry, BattleResult, Effect, EventDef, RewardOption, RoomNode, RunState } from './types.ts';
 
 let run: RunState | null = null;
+/**
+ * 开局勾选的可选扩展。
+ *
+ * 放在模块层而不是每次画开局面板时重建：玩家会先勾几个包、再比较几个方略，
+ * 每次点方略都重置选择的话，"勾选"就成了摆设。回到标题再进来时保留上一次的
+ * 选择（和原版开局面板的记忆一致），点「恢复推荐」才回默认。
+ */
+let pickedPacks = new Set<string>(defaultExtraPacks());
 /** 退出回标题（由 mount.ts 传进来；地址直开时也有） */
 let exitToTitle: (() => void) | null = null;
 
@@ -67,6 +83,79 @@ function exitBtn(cls = 'rg-exit'): string {
 
 // ------------------------------------------------------------------ 开局
 
+/** 一张可选扩展的卡：点一下开/关，勾选状态写在 `pickedPacks` 里 */
+function packCard(c: { id: string; name: string; blurb: string; reason: string; defaultOn: boolean }): string {
+  const on = pickedPacks.has(c.id);
+  return `<button class="rg-pack ${on ? 'on' : ''}" data-pack="${escapeHtml(c.id)}" aria-pressed="${on}">
+    <b>${escapeHtml(c.name)}${c.defaultOn ? '<u>推荐</u>' : ''}</b>
+    <span>${escapeHtml(c.blurb)}</span>
+    <em>${escapeHtml(c.reason)}</em>
+    <i>${on ? '已开启' : '关闭'}</i>
+  </button>`;
+}
+
+/**
+ * 「本局扩展」这一块。
+ *
+ * 结构照原版开局面板：
+ *   · **随史线**的兵种包只读（第一层的事件/试炼决定第二层走哪支，不能开局点）；
+ *   · **规则包 / 联动兵种包**可勾，勾了就是这一局的 `config.expansionIds`；
+ *   · **本版不接的包**单列一段并写明缺哪套系统——不然下次接手的人会以为漏了。
+ */
+function dlcSection(): string {
+  const fixed = EXPANSIONS.filter((e) => {
+    const plan = PACK_PLANS[e.id];
+    return plan?.kind === 'story' || (plan?.kind === 'support' && plan.choosable !== true);
+  });
+  const rules = ruleChoices();
+  const support = supportChoices();
+  const off = unavailablePacks();
+  return `<section class="rg-dlc">
+    <header class="rg-dlc-head">
+      <div>
+        <h2>本局扩展 <small>（照战役模式的接法：包决定兵池与规则）</small></h2>
+        <p class="rg-dim">兵池不再手写：每个包按自己的时代、编制与前置条件进场。剧情兵种包跟着第一层的选择走。</p>
+      </div>
+      <button class="rg-btn ghost mini" data-pack-reset>恢复推荐</button>
+    </header>
+    <div class="rg-dlc-fixed">
+      <span class="rg-dlc-label">随史线</span>
+      ${fixed
+        .map(
+          (e) =>
+            `<span class="rg-pack-chip" title="${escapeHtml(PACK_PLANS[e.id]?.reason ?? '')}">${escapeHtml(e.name)}</span>`,
+        )
+        .join('')}
+      <span class="rg-dlc-note">剧情包由第一层的事件/试炼决定；信息化由第三层结构固定开启</span>
+    </div>
+    <div class="rg-dlc-group">
+      <h3>规则扩展 <small>不影响兵池，只改这一局的规则</small></h3>
+      <div class="rg-pack-grid">${rules.map(packCard).join('')}</div>
+    </div>
+    ${
+      support.length > 0
+        ? `<div class="rg-dlc-group">
+             <h3>联动兵种 <small>按时代进入对应层，不和史线抢主体</small></h3>
+             <div class="rg-pack-grid">${support.map(packCard).join('')}</div>
+           </div>`
+        : ''
+    }
+    <details class="rg-dlc-off">
+      <summary>本版不接的扩展（${off.length}）——每条都写了缺哪一块</summary>
+      <div class="rg-dlc-offlist">
+        ${off
+          .map(
+            (p) =>
+              `<div class="rg-dlc-offrow"><b>${escapeHtml(p.name)}</b><span>${escapeHtml(p.reason)}</span><i>${
+                p.kind === 'locked' ? '无作用' : '缺系统'
+              }</i></div>`,
+          )
+          .join('')}
+      </div>
+    </details>
+  </section>`;
+}
+
 function showStart(root: HTMLElement): void {
   root.innerHTML = `
     <div class="rg-start">
@@ -86,6 +175,7 @@ function showStart(root: HTMLElement): void {
           </button>`,
         ).join('')}
       </section>
+      ${dlcSection()}
       <p class="rg-note">选一个方略出发。开局 80–180 金（方略不同）、三层房图随机、敌人编成随时代钟变硬。</p>
     </div>`;
 
@@ -95,6 +185,25 @@ function showStart(root: HTMLElement): void {
     const el = e.target as HTMLElement | null;
     if (el?.closest('[data-act="exit"]')) {
       exitToTitle?.();
+      return;
+    }
+    if (el?.closest('[data-pack-reset]')) {
+      pickedPacks = new Set(defaultExtraPacks());
+      showStart(root);
+      return;
+    }
+    const pack = el?.closest<HTMLElement>('[data-pack]')?.dataset.pack;
+    if (pack) {
+      if (pickedPacks.has(pack)) pickedPacks.delete(pack);
+      else pickedPacks.add(pack);
+      const card = el?.closest<HTMLElement>('[data-pack]');
+      if (card) {
+        const on = pickedPacks.has(pack);
+        card.classList.toggle('on', on);
+        card.setAttribute('aria-pressed', String(on));
+        const tag = card.querySelector('i');
+        if (tag) tag.textContent = on ? '已开启' : '关闭';
+      }
       return;
     }
     const id = el?.closest<HTMLElement>('[data-strategy]')?.dataset.strategy;
@@ -110,7 +219,7 @@ function beginRun(root: HTMLElement, strategyId: string): void {
    */
   const fixed = Number(new URLSearchParams(window.location.search).get('rogueSeed'));
   const seed = Number.isFinite(fixed) && fixed > 0 ? fixed >>> 0 : randomSeed();
-  run = startRun(seed, strategyId);
+  run = startRun(seed, strategyId, [...pickedPacks]);
   rng = makeRng((seed ^ 0x85ebca6b) >>> 0);
   showMap(root);
 }
@@ -247,6 +356,7 @@ function showMap(root: HTMLElement): void {
           <span>钟 <b>${r.clock}</b></span>
           <span>金 <b>${r.gold}</b></span>
           <span>兵 <b>${armyCount(r.army)}</b></span>
+          <span title="${escapeHtml(r.packs.join('、') || '没有可选扩展')}">扩展 <b>${r.packs.length}</b></span>
           ${exitBtn('rg-btn ghost rg-exit-inline')}
         </div>
       </header>

@@ -28,7 +28,9 @@ import {
   unitName,
 } from './data.ts';
 import type { DecisionOption, LayerTheme, WorldId } from './data.ts';
+import { CORE_PACK, mergeBattlePacks, normalizeExtraPacks, poolOf } from './packs.ts';
 import { expForRank } from '../core/cultivation/progression.ts';
+import { expansionById } from '../core/expansions.ts';
 import { makeRng } from './rng.ts';
 import type { Rng } from './rng.ts';
 import type {
@@ -177,28 +179,67 @@ export function effectiveGold(effect: Effect, run: RunState): number {
  * 第二层是**四种样子**（正史 / 军备 / 奇想 / 修真），由 `run.world` 决定；
  * 第一层和第三层共用一套，第三层只把本世界的高代兵与扩展混进去
  * （修真没有 e5 兵，所以第三层对它是「末法之世」——不是缺内容，是设定）。
+ *
+ * `extraPacks` 是玩家在开局勾的**规则包 + 联动兵种包**（如空军）。
+ * 规则包没有兵种，不影响池子；联动包会按自己的时代窗口补进池子——
+ * 这就是"像战役模式那样接 DLC"的那一半：池子从包里现算，不抄名单。
  */
-export function themeFor(world: WorldId, layer: LayerId): LayerTheme {
+export function themeFor(world: WorldId, layer: LayerId, extraPacks: readonly string[] = []): LayerTheme {
   const def = WORLDS[world];
-  if (layer === 2) return def.theme;
-  if (layer !== 3) return LAYERS[layer];
+  const extra = [...extraPacks].filter((id) => id !== CORE_PACK);
 
-  const extra = def.l3Pool;
-  const expansions = [...new Set([...LAYERS[3].expansions, ...def.theme.expansions])];
-  if (extra.length === 0 && !def.l3Subtitle && expansions.length === LAYERS[3].expansions.length) {
-    return LAYERS[3];
+  if (layer === 2) {
+    const base = def.theme;
+    if (extra.length === 0) return base;
+    const packs = [...new Set([...base.packs, ...extra])];
+    return {
+      ...base,
+      packs,
+      pool: poolOf(packs, 2, 'low'),
+      poolHigh: poolOf(packs, 2, 'high'),
+      expansions: packs.filter((p) => p !== CORE_PACK),
+      subtitle: base.subtitle,
+    };
   }
+  if (layer !== 3) {
+    const base = LAYERS[layer];
+    if (extra.length === 0) return base;
+    const packs = [...new Set([...base.packs, ...extra])];
+    return {
+      ...base,
+      packs,
+      pool: poolOf(packs, layer, 'low'),
+      poolHigh: poolOf(packs, layer, 'high'),
+      prevPool: base.prevPacks.length > 0 ? poolOf(base.prevPacks, layer, 'prev') : [],
+      expansions: packs.filter((p) => p !== CORE_PACK),
+    };
+  }
+
+  /*
+   * 第三层：底座（原版 e5 + 信息化 e6）+ 本世界溢出 + 玩家勾的联动包。
+   *
+   * 上一版是 `l3Pool: string[]` 手写 8 个军备兵；现在只写"溢出哪个包"，
+   * 具体是谁由包的 `era` 决定。奇想的 e6 英雄、军备的 e5 机械化兵都会自己进来。
+   */
+  const l3 = LAYERS[3];
+  const packs = [...new Set([...l3.packs, ...def.l3Packs, ...extra])];
+  const prevPacks = [...new Set([...l3.prevPacks, ...def.l3Packs])];
+  if (packs.length === l3.packs.length && !def.l3Subtitle) return l3;
   return {
-    ...LAYERS[3],
-    subtitle: def.l3Subtitle ?? LAYERS[3].subtitle,
-    expansions,
-    pool: extra.length > 0 ? [...new Set([...extra, ...LAYERS[3].pool])] : LAYERS[3].pool,
+    ...l3,
+    subtitle: def.l3Subtitle ?? l3.subtitle,
+    packs,
+    prevPacks,
+    pool: poolOf(packs, 3, 'low'),
+    poolHigh: poolOf(packs, 3, 'high'),
+    prevPool: poolOf(prevPacks, 3, 'prev'),
+    expansions: packs.filter((p) => p !== CORE_PACK),
   };
 }
 
 /** 当前这一局这一层的主题 */
 export function themeOf(run: RunState): LayerTheme {
-  return themeFor(run.world, run.layer);
+  return themeFor(run.world, run.layer, run.packs ?? []);
 }
 
 export function emptyBuffs(): Buffs {
@@ -415,10 +456,16 @@ function makeRoom(
 
 // ---------------------------------------------------------------- 开局
 
-export function startRun(seed: number, strategyId: string): RunState {
+export function startRun(seed: number, strategyId: string, packs: readonly string[] = []): RunState {
   const strategy = strategyById(strategyId);
   const rng = makeRng((seed ^ 0x9e3779b9) >>> 0);
   const army = strategy.army.map((a) => ({ ...a }));
+  /*
+   * 可选扩展：只认 `PACK_PLANS` 里标成 rule/support 且 choosable 的包。
+   * 存档、地址栏、测试脚本都能塞 id 进来，所以这道过滤必须在入口做一次
+   * （`normalizeExtraPacks` 顺带走 `enabledExpansionIds`，前置/冲突都处理了）。
+   */
+  const chosen = normalizeExtraPacks(packs);
   /*
    * 第一层的两个史线钩子：一局抽**一个试炼** + **一条史线事件**。
    *
@@ -432,6 +479,7 @@ export function startRun(seed: number, strategyId: string): RunState {
   return {
     seed,
     strategyId,
+    packs: chosen,
     world: 'base',
     worldLock: null,
     worldBan: [],
@@ -440,7 +488,7 @@ export function startRun(seed: number, strategyId: string): RunState {
     gold: strategy.gold ?? 180,
     army,
     relics: [],
-    plan: planLayer(1, rng, themeFor('base', 1), { storyEventId: story?.id, trial }),
+    plan: planLayer(1, rng, themeFor('base', 1, chosen), { storyEventId: story?.id, trial }),
     clock: 0,
     buffs: emptyBuffs(),
     bossDone: false,
@@ -448,9 +496,19 @@ export function startRun(seed: number, strategyId: string): RunState {
     cultivation: {},
     wounds: {},
     reviveLeft: 0,
-    log: [`开局：${strategy.name}，${armyText(army)}`],
+    log: [
+      `开局：${strategy.name}，${armyText(army)}`,
+      ...(chosen.length > 0
+        ? [`本局扩展：${chosen.map((id) => expansionName(id)).join('、')}`]
+        : []),
+    ],
     over: null,
   };
+}
+
+/** 扩展中文名（日志用）；查不到就退回 id，绝不静默吞掉 */
+function expansionName(id: string): string {
+  return expansionById(id)?.name ?? id;
 }
 
 // ---------------------------------------------------------------- 效果
@@ -1142,17 +1200,19 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     enemyRecruit: isSpecial ? 0 : isBoss ? 2 : enemyCityCount > 0 ? 1 : 0,
     enemyDoctrine: isSpecial || isTrial || node.kind === 'battle' ? 'rush' : 'boom',
     /*
-     * 试验型方略会带"这一层本来没有"的兵（英雄来自奇想包、步枪兵是四代）。
-     * 部队里出现的包必须一起开，否则部署时查不到兵种、那个人直接消失。
+     * 这一关要开的扩展 = 剧情兵种包 + 本局可选项（规则/联动）+ 试炼借来的包
+     * + 队伍里那些兵所属的包。
+     *
+     * 和原版战役同一条口径：包在这里定，规则层按 `config.expansionIds` 注册
+     * 钩子与兵种；`level.expansions.require` 还会再写一遍（见 `battle.ts`），
+     * 让关卡自己持有这份规则，而不是只靠调用方传参。
      */
-    expansions: [
-      ...new Set([
-        ...theme.expansions,
-        // 试炼的敌人来自目标世界：当场就要把那个包开出来，否则部署时查不到兵种
-        ...(isTrial && node.trial ? WORLDS[node.trial.world].theme.expansions : []),
-        ...run.army.flatMap((a) => packsForUnit(a.type)),
-      ]),
-    ],
+    expansions: mergeBattlePacks(
+      theme.expansions,
+      run.packs,
+      isTrial && node.trial ? WORLDS[node.trial.world].theme.expansions : [],
+      ...run.army.map((a) => packsForUnit(a.type)),
+    ),
     world: run.world,
     rank: isTrial ? (node.trial?.rank ?? 0) : (WORLDS[run.world].rankOf?.(clockForScale) ?? 0),
     /*
@@ -1383,7 +1443,7 @@ export function bossRewards(run: RunState, rng: Rng): string[] {
   notes.push(`${costOf(high)} 金`);
 
   if (run.layer < 3) {
-    const next = themeFor(run.world, (run.layer + 1) as LayerId);
+    const next = themeFor(run.world, (run.layer + 1) as LayerId, run.packs);
     const first = cheapestOf(next);
     addUnits(run.army, first, 1);
     notes.push(`${unitName(first)} ×1（下一层的兵）`);
@@ -1637,7 +1697,7 @@ export function nextLayer(run: RunState, seed: number): boolean {
   run.wounds = {};
   run.buffs = emptyBuffs();
   const rng = makeRng((seed ^ (layer * 0x2545f491)) >>> 0);
-  run.plan = planLayer(layer, rng, themeFor(run.world, layer));
+  run.plan = planLayer(layer, rng, themeFor(run.world, layer, run.packs));
 
   /*
    * 这里**不换装**。

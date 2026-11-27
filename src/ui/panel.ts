@@ -171,6 +171,14 @@ export interface PanelInput {
    */
   opsOpen?: boolean;
   /**
+   * 「操作」说明卡的正文（可选）。
+   *
+   * 主对局不传，用下面那段默认文案；肉鸽传自己的——它的战斗里没有城、
+   * 没有生产与升级，照抄默认文案会教玩家去点不存在的按钮。
+   * 传进来的必须是**已经拼好的 HTML**（内部由调用方负责转义）。
+   */
+  opsHtml?: string;
+  /**
    * 「战报」卡是不是展开着。
    *
    * 和「操作」卡同一个理由，但更彻底：战报每回合都在长，而玩家真正在读它的时候
@@ -1679,7 +1687,9 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
        * 复盘里既没有"我的单位"，也不会画可达格，整段读下来只教人去做点不动的事。
        * 这里换成这一屏真正能做的三件事。
        */
-      input.replay
+      input.opsHtml
+        ? input.opsHtml
+        : input.replay
         ? `<div class="hint">
       <kbd>←</kbd> <kbd>→</kbd> 逐步回放，<kbd>空格</kbd> 播放 / 暂停。<br />
       拖动进度条定位；<kbd>Home</kbd> / <kbd>End</kbd> 跳至首尾。<br />

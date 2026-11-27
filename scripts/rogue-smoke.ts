@@ -52,6 +52,33 @@ function check(ok: boolean, label: string, extra = ''): void {
   }
 }
 
+// ---------------------------------------------------------------- 0. 扩展包接入
+console.log('\n[0] 扩展包接入（28 个包逐条定性）');
+{
+  const { EXPANSIONS } = await import('../src/core/expansions.ts');
+  const { PACK_PLANS, defaultExtraPacks, ruleChoices, supportChoices, unavailablePacks } = await import('../src/roguelike/packs.ts');
+  const missing = EXPANSIONS.filter((e) => !PACK_PLANS[e.id]).map((e) => e.id);
+  check(missing.length === 0, '每个扩展都在 PACK_PLANS 里有定性', missing.join(', '));
+  const noReason = Object.entries(PACK_PLANS)
+    .filter(([, p]) => !p.reason)
+    .map(([id]) => id);
+  check(noReason.length === 0, '每条定性都写了理由（给玩家/接手的人看）', noReason.join(', '));
+  check(EXPANSIONS.length === 28, '当前共 28 个扩展', String(EXPANSIONS.length));
+  check(defaultExtraPacks().length >= 1, '开局默认勾了至少一个可选包');
+  // +4 = 3 个剧情包 + 固定开启的信息化（support 但 choosable:false）
+  check(ruleChoices().length + supportChoices().length + unavailablePacks().length + 4 === EXPANSIONS.length,
+    '可选 / 不接 / 剧情三类加起来等于全量',
+    `${ruleChoices().length}+${supportChoices().length}+${unavailablePacks().length}+4 vs ${EXPANSIONS.length}`);
+
+  // 每一支史、每一层都必须能算出兵池（空池会在开局直接崩）
+  for (const world of ['base', 'arms', 'fantasy', 'cultivation'] as const) {
+    for (const layer of [1, 2, 3] as const) {
+      const t = themeFor(world, layer, []);
+      check(t.pool.length > 0 && t.poolHigh.length > 0, `${world} L${layer} 低/高代兵池非空`, `${t.pool.length}/${t.poolHigh.length}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- 1. 房间图
 console.log('\n[1] 房间图生成（200 层）');
 {
