@@ -5735,6 +5735,17 @@ function handleAction(act: string, el: HTMLElement): void {
      */
     case 'toggle-show-all': {
       state.showAll = !state.showAll;
+      /*
+       * **记一笔"玩家看过全图"**（2026-11-27，用户定）。
+       *
+       * 玩家常常看一眼就关掉，等轮到 AI 时 `showAll` 已经变回 false，AI 就白瞎一次。
+       * 所以开和关都记一笔：AI 读到它就把这一手也当"能看全图"，
+       * 并在**自己这一手结束时清掉**（`aiNextActionV4` 返回 null 那一下）。
+       *
+       * 联机局不记：那会让"对面玩家点了看全图"变成"我这边 AI 全知"，
+       * 等于把对手的兵力白送过来——那不是君子协定，是漏题。
+       */
+      if (!room) state.seeAllSeen = true;
       saveMatch(state);
       render();
       toast(state.showAll ? '看全图：开（只影响显示）' : '看全图：关');

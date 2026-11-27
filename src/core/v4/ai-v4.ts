@@ -62,6 +62,26 @@ const keyOf = (s: GameState, me: PlayerId): string =>
  * 导出它是为了让探针能直接看"v4 这一手打算干什么"——出问题时第一眼看日志，
  * 而不是读代码。
  */
+/**
+ * **这一手 AI 能不能看全图**（2026-11-27，用户定的三档）。
+ *
+ * 1. `config.seeAll === true` —— 题目 / 调试显式开（"这题不考察侦查"）；
+ * 2. `state.showAll === true` —— 玩家此刻正开着界面的"看全图"；
+ * 3. `state.seeAllSeen === true` —— 玩家**刚开过关掉了**（看一眼就关是最常见的情况，
+ *    等轮到 AI 时 `showAll` 已经变回 false，不记这一笔 AI 就白瞎一次）。
+ *
+ * 都不满足 → `false`。此时 `playerView` 按 `state.fog` 走：
+ * 有雾就只给视野内的，没雾本来就全见。**这就是"和玩家一样"**，不多也不少。
+ *
+ * ⚠️ 这条只管"看得见什么"，**不放开"打得着什么"**：开火目标永远过
+ * `tactics.seenFoes`（引擎的 `canSeeTile`），玩家点了看全图也一样打不了视野外的目标。
+ */
+function seeAllOf(s: GameState): boolean {
+  if (s.config.seeAll === true) return true;
+  if (s.showAll === true) return true;
+  return s.seeAllSeen === true;
+}
+
 export function currentView(s: GameState, me: PlayerId): TurnCache {
   const key = keyOf(s, me);
   if (cache && cache.key === key) return cache;
@@ -84,12 +104,14 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
    *   · 关雾（绝大多数考题和实战）时**玩家看得见全图**，只是打不着视野外的目标
    *     （引擎的 `canSeeTile` 与是否开雾无关，`rules.ts` 里写着"看全图 ≠ 能打全图"）。
    *
-   * 所以"和玩家同等信息"= **看见什么跟 `s.fog` 走，能打什么跟引擎走**。
-   * 这里传默认值（开雾才裁）正好是前半句；后半句由 `tactics.seenFoes` 负责
-   * ——它把开火目标按 `canSeeTile` 过滤，于是"视野外攻击"这一类被拒归零，
-   * 而决策层仍然看得见玩家看得见的东西。
+   * 所以"和玩家同等信息"要分成两句话，混成一句就会让 v4 比玩家更瞎：
+   *   · **能打什么** → 跟引擎走（`tactics.seenFoes`，用引擎自己的 `canSeeTile`）；
+   *   · **看见什么** → 跟下面这个 `seeAllOf` 走（三档，见 `types.ts` 的 `seeAll`）。
+   *
+   * 正常对局是**开雾**的（`CONFIG.fogDefault = true`），所以默认必须按视野走；
+   * "看全图"只能由题目/调试显式开，或者玩家自己开了（含"刚开过关掉"那一笔）。
    */
-  const view = playerView(s, me).state;
+  const view = playerView(s, me, seeAllOf(s)).state;
   const world = buildWorld(view, me);
   /*
    * 记忆从**真状态**读、往**真状态**写。
@@ -795,6 +817,14 @@ export function aiNextActionV4(
     const a = actFor(s, world, con, live);
     if (usable(a)) return a;
   }
+
+  /*
+   * **这一手到此结束 → 把玩家"刚看过全图"那一笔清掉**（2026-11-27）。
+   *
+   * 不清的话它会一直挂着：玩家很久以前点过一次看全图，v4 之后每一手都全知。
+   * 用户定的生命周期是**到 AI 的下一个回合结束为止**，这里就是那个"结束"。
+   */
+  if (s.seeAllSeen === true) s.seeAllSeen = false;
 
   return null;
 }
