@@ -1815,7 +1815,18 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * 桥面是**过道**不是停留点：站在上面的人照常出队、继续走，走完自然离开。
    * （`passing` 那个版本还要求"人在编队名册里"，新造的兵一脚踩上去就卡住了。）
    */
-  const rest = world.myCombat.filter((u) => !keepSet.has(u.y * s.w + u.x) || onBridge(u));
+  /*
+   * **站在关键格上，不等于"没有任务"**（§4.23 步骤 1b，2026-11-27）。
+   *
+   * 原来这一行按位置过滤：人一站到城圈/桥头/产兵格，就被从所有编队里摘出去。
+   * 实测（`probe-yield4 --seat`，全册 39 题）：站在"必须空"格子上的战斗兵 637 人次里
+   * **576 是"闲人"**（没落点、没岗位、不在守/工队、打不到人）——他们不是"在集结"，
+   * 是**根本不在编队池里**，而让位链是唯一会碰他们的机制（方向随机，89% 离自城更远）。
+   *
+   * 但只放开池子会让进攻编队把城边的守家兵当新兵吸走（实测 `S-004` 12 兵剩 4）。
+   * 所以进门之前先按**名额**判归属，见下面 `reserved`。
+   */
+  const rest = world.myCombat;
 
   /*
    * 两座以上城同时受威胁 → 分兵，每城一支队。
@@ -1945,7 +1956,48 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
     /** ① **在编的编队**（口径见 `liveBandsOf`）：名册只因为人死了缩小 */
     const live: Band[] = liveBandsOf(mem, city.id, aliveIds);
     const inBand = new Set(live.flatMap((b) => b.unitIds));
-    let free = rest.filter((u) => !inBand.has(u.id));
+    /*
+     * ════════════════════════════════════════════════════════════════
+     * **归属：先按名额留守军，剩下的才归进攻**（§4.23 步骤 1b）
+     *
+     * 试过"回自城比去敌城近就归守"（纯几何比较，不要名额）：多的两道红是
+     * `X-1-01`/`X-1-02`（打分层地板题）——只要老家有一座 `role==='threatened'` 的城
+     * （它的定义含"离敌城 ≤6 且守军 <3"，不一定真挨打），就把人扣下来，进攻队凑不齐。
+     *
+     * 现在改成**按名额**：用 `defenderQuota`（1a 从 `planMains` 拆出来的那个数）
+     * 算出每座被威胁的城要几个，从近到远取够就停；多出来的人照样能去进攻。
+     *
+     * 而且**留下来的人必须进 hold 队**——只标记"不归进攻"而不给他们队，
+     * 他们就又变成闲人（批 0 的账里 96% 让位对象就是这么来的）。
+     * ════════════════════════════════════════════════════════════════
+     */
+    const homePending = world.cities.filter((i) => i.role === 'threatened' && i.city.id !== city.id);
+    const reserved = new Set<string>();
+    if (homePending.length > 0) {
+      const pool = rest.filter((u) => !inBand.has(u.id));
+      const quota = defenderQuota(
+        s,
+        world,
+        homePending.map((i) => i.city),
+        pool,
+      );
+      for (const info of homePending) {
+        const want = quota.get(info.city.id) ?? 0;
+        if (want <= 0) continue;
+        const cands = pool
+          .filter((u) => !reserved.has(u.id))
+          .sort(
+            (a, b) =>
+              world.marchTurns(a, info.city) - world.marchTurns(b, info.city) || (a.id < b.id ? -1 : 1),
+          );
+        for (const u of cands.slice(0, want)) reserved.add(u.id);
+      }
+      /* 留下来的人要有队（`hold`），否则等于把"闲人"从一个池子搬到另一个池子 */
+      if (reserved.size > 0) {
+        squads.push(...planMains(s, world, homePending.map((i) => i.city), [...reserved]));
+      }
+    }
+    let free = rest.filter((u) => !inBand.has(u.id) && !reserved.has(u.id));
     const minSize = Math.max(1, decision.menMin ?? 1);
     const FORM_TIMEOUT = 10;
 
