@@ -121,6 +121,21 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
   click(root.querySelector('.rg-strategy'));
   await wait(20);
 
+  /*
+   * 第一层：路还没定，但"史线"这件事要写在顶栏；第 2 步左门是特殊试炼。
+   * 这两条是「四选一挪进过程」的可见证据——玩家在开局就知道有一场仗能改路。
+   */
+  check(
+    (root.querySelector('.rg-world-tag')?.textContent ?? '').includes('史线：未定'),
+    '一层顶栏显示「史线：未定」',
+    root.querySelector('.rg-world-tag')?.textContent ?? '',
+  );
+  check(
+    (root.querySelector('.rg-door.k-trial b')?.textContent ?? '').startsWith('特殊 ·'),
+    '试炼门标着「特殊」',
+    root.querySelector('.rg-door.k-trial b')?.textContent ?? '',
+  );
+
   let modals = 0;
   let portals = 0;
   let battles = 0;
@@ -139,10 +154,10 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
       modals += 1;
       if (mask.querySelector('.rg-shop-row')) shops += 1;
       if ((mask.textContent ?? '').includes('临战决议')) decisions += 1;
-      // 第一层末的岔口：四个世界，挑奇想走一遍
+      // 四选一已经删掉；如果它又冒出来，记一笔并随便点一个（避免卡死）
       if (mask.querySelector('.rg-world')) {
         worlds += 1;
-        click(mask.querySelector('[data-world="fantasy"]') ?? mask.querySelector('.rg-world'));
+        click(mask.querySelector('.rg-world'));
         await wait(4);
         continue;
       }
@@ -182,8 +197,12 @@ console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结�
   console.log(
     `    经过 ${modals} 个弹层（其中商店 ${shops}、临战决议 ${decisions}）、${battles} 场（自动判胜的）战斗、${portals} 次层间推进`,
   );
-  check(worlds === 1, '第一层末出现一次"四种历史"的分岔', `实际 ${worlds}`);
-  check(interludes.some((t) => t.includes('异境')), '选奇想之后进入「异境」', interludes.join(' / '));
+  check(worlds === 0, '第一层末不再弹「四种历史」四选一', `实际 ${worlds}`);
+  check(
+    interludes.some((t) => t.includes('异境') || t.includes('山门')),
+    '打赢试炼后，第二层进入那支史',
+    interludes.join(' / '),
+  );
   check(shops > 0, '商店是三行货架');
   check(decisions >= 3, '每层层末都有临战决议', `实际 ${decisions}`);
   check(layers === 3, '走到了第三层', `实际 ${layers}`);

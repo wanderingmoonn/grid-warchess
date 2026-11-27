@@ -310,6 +310,17 @@
 .rg-door.k-special b {
   color: #7b3f5e;
 }
+/*
+ * 史线试炼：不是普通战斗，是"这一仗会把第二层改掉"。
+ * 金色虚线边框 + 暖底，和普通战斗（实线、米白）一眼能分开。
+ */
+.rg-door.k-trial {
+  border: 1px dashed #b08a2e;
+  background: #fdf8e8;
+}
+.rg-door.k-trial b {
+  color: #8a6b1f;
+}
 .rg-bossrow {
   margin-top: 14px;
   padding: 14px 16px;
@@ -947,4 +958,10 @@
   padding: 1px 7px;
   margin-left: 8px;
   vertical-align: 2px;
+}
+/* 第一层：路已经定了（事件/试炼锁的），换成实心的绿色，和"未定"分开 */
+.rg-world-tag.locked {
+  color: #3f6b45;
+  border-color: #9dc0a5;
+  background: #eef7ef;
 }

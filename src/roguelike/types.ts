@@ -11,7 +11,17 @@ import type { WorldId } from './data.ts';
 export type { WorldId };
 
 /** 房间种类。注意 boss 不在 20 个房里，它是层末强制战 */
-export type RoomKind = 'battle' | 'elite' | 'siege' | 'special' | 'event' | 'shop' | 'rest' | 'boss';
+export type RoomKind =
+  | 'battle'
+  | 'elite'
+  | 'siege'
+  | 'special'
+  /** 史线试炼：一场小仗，打赢就把第二层拽到某一支史上 */
+  | 'trial'
+  | 'event'
+  | 'shop'
+  | 'rest'
+  | 'boss';
 
 export interface ArmyEntry {
   type: string;
@@ -51,6 +61,46 @@ export interface Effect {
   promote?: number;
   /** 按概率分成两岔 */
   risk?: RiskEffect;
+  /** 对"第二层走哪支史"动手：锁定一支，或从此排斥一支 */
+  world?: WorldMark;
+  /**
+   * 按**时代钟**给一个目标世界的兵：钟越靠后，越可能给高代。
+   *
+   * 写死的"给一个 e3 兵"在钟 8 遇到时太亏；写死 e4 又太赚。这里用
+   * `钟 / 10` 当概率抽高代，让同一件事在层内前后位置价值不同。
+   */
+  addByClock?: { world: WorldId; count: number };
+}
+
+/** 事件对史线的标记（见 `Effect.world`） */
+export interface WorldMark {
+  /** 锁定：第二层必定进入这一支（等价于同时排斥另外三支） */
+  lock?: WorldId;
+  /** 排斥：第二层不再可以进入这一支 */
+  ban?: WorldId;
+}
+
+/**
+ * 史线试炼：一层里的一场"小仗"，敌人是写死的少量当代兵。
+ *
+ * 它不是普通战斗——赢了不是拿三选一，而是**把整条历史拽过来**：
+ * 第二层锁定 `world`，投降的人直接进队。绕开它，就什么都没发生。
+ */
+export interface TrialDef {
+  id: string;
+  world: WorldId;
+  title: string;
+  sub: string;
+  /** 敌方编成（写死、不走预算：试炼要的是"少量但强"的压迫感） */
+  enemy: string[];
+  /**
+   * 敌方修士的境界档位（修真试炼用；0 = 炼气，2 = 筑基）。
+   *
+   * 修士的属性大头在境界上，光换兵种不换境界，四个人也打不过五个一代兵。
+   */
+  rank?: number;
+  /** 打赢后投降/缴获的兵（每个 1 个） */
+  reward: string[];
 }
 
 /** 攒到下一场战斗的一次性加成（休整 / 事件 / 临战决议都往这里投） */
@@ -82,6 +132,13 @@ export interface EventDef {
   title: string;
   body: string;
   choices: EventChoice[];
+  /**
+   * 史线事件：它提出的不是"拿点什么"，而是"第二层走哪支史"。
+   *
+   * 已经锁定／排斥了这一支之后，这条事件不再出现（进入时退回普通事件池），
+   * 免得玩家在路已经定了之后又被问一次"要不要支持"。
+   */
+  story?: WorldId;
 }
 
 export interface RoomNode {
@@ -97,6 +154,8 @@ export interface RoomNode {
    * 战利品要用它——所以存在节点上，而不是战后再随机一次。
    */
   special?: { faction: number; name: string; unit: string };
+  /** 史线试炼：打谁、赢了谁跟你走（生成房间时就定下来） */
+  trial?: TrialDef;
 }
 
 export interface LayerPlan {
@@ -120,8 +179,17 @@ export interface RunOver {
 export interface RunState {
   seed: number;
   strategyId: string;
-  /** 这一局走的是哪一支史（第一层末选，决定第二层的四种样子） */
+  /** 这一局走的是哪一支史（决定第二层的四种样子） */
   world: WorldId;
+  /**
+   * **第一层的事件/试炼把这一局钉到哪支史上**；null = 什么都没做 → 正史。
+   *
+   * 这就是取代「第一层末四选一」的东西：路不是通关时挑的，是一路上
+   * "帮了谁、打了谁、没管谁"积出来的。一旦有值，其它史线的钩子全部失效。
+   */
+  worldLock: WorldId | null;
+  /** 已经明确排斥的史线（事件里选"不再可以进入 X"） */
+  worldBan: WorldId[];
   layer: LayerId;
   /** 已完成的步数；等于 10 时该打层末 boss */
   step: number;

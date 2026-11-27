@@ -22,6 +22,7 @@ import {
   nextLayer,
   planLayer,
   restOptions,
+  resolveWorld,
   rewardOptions,
   scaleGold,
   shopStock,
@@ -29,9 +30,10 @@ import {
   startRun,
   themeFor,
   themeOf,
+  trialActive,
   STEPS_PER_LAYER,
 } from '../src/roguelike/run.ts';
-import { DECISIONS, DEFENSE_UNIT_DEFS, EVENTS, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
+import { DECISIONS, DEFENSE_UNIT_DEFS, EVENTS, eventById, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
 import { attackableTargets, isEliminated, sameTeam, utype } from '../src/core/rules.ts';
 import { baseTypeOf, buildBattle, outcomeOf, resultOf, spawnWave, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
@@ -886,6 +888,131 @@ console.log('\n[16] 试验型方略：成长型英雄 / 成长型坦克');
   gr.layer = 1;
   nextLayer(gr, 7);
   check(gr.log.some((l) => l.includes('完全体')), '进第 2 层时提示英雄长成完全体', gr.log.slice(-3).join(' / '));
+}
+
+console.log('\n[17] 史线：军备靠事件、奇想/修真靠试炼，什么都不做就是正史');
+{
+  /* ---- 一层房间图：试炼 + 史线事件都排在最前面 ---- */
+  const r = startRun(91, 'frontier');
+  const trialRoom = r.plan.steps[1]?.[0];
+  check(trialRoom?.kind === 'trial', '第 2 步左门是一场史线试炼', trialRoom?.kind ?? '');
+  check(!!trialRoom?.trial, '试炼带着目标世界与写死的敌人');
+  check(
+    trialRoom?.trial?.world === 'fantasy' || trialRoom?.trial?.world === 'cultivation',
+    '试炼来自奇想或修真',
+    trialRoom?.trial?.world ?? '',
+  );
+  const firstEvent = r.plan.steps.flat().find((n) => n.kind === 'event');
+  check(eventById(firstEvent?.eventId ?? '').story === 'arms', '第一个事件房是军备史线事件', firstEvent?.eventId ?? '');
+  check(r.worldLock === null && r.worldBan.length === 0, '开局没有锁任何史线');
+
+  /* ---- 军备事件：四个选项各走一遍 ---- */
+  const story = eventById('story-arms');
+  const pay = story.choices[0];
+  const cheer = story.choices[1];
+  const idle = story.choices[2];
+  const reject = story.choices[3];
+  check(!!pay && !!cheer && !!idle && !!reject, '军备事件有四个选项');
+
+  // 支持：−300 金 + 一个兵 + 锁军备（钟满 → 一定高代）
+  const payRun = startRun(92, 'frontier');
+  payRun.clock = STEPS_PER_LAYER;
+  const payGold = payRun.gold;
+  const payBefore = new Set(payRun.army.map((a) => a.type));
+  const payNotes = applyEffect(payRun, pay!.effect, makeRng(3), { scaleGold: true });
+  const added = payRun.army.find((a) => !payBefore.has(a.type));
+  check(payRun.gold === Math.max(0, payGold - 300), '「支持」扣 300 金（不够就夹到 0）', String(payRun.gold));
+  check(!!added && WORLDS.arms.theme.poolHigh.includes(added.type), '钟满时「支持」给的是 e4 兵', added?.type ?? '无');
+  check(payRun.worldLock === 'arms', '「支持」把第二层锁定到军备');
+  check(payNotes.some((n) => n.includes('时代军备')), '结算文案写明路已定', payNotes.join('，'));
+
+  // 钟 0：给低代
+  const earlyRun = startRun(93, 'frontier');
+  const earlyBefore = new Set(earlyRun.army.map((a) => a.type));
+  applyEffect(earlyRun, pay!.effect, makeRng(4), { scaleGold: true });
+  const earlyAdded = earlyRun.army.find((a) => !earlyBefore.has(a.type));
+  check(
+    !!earlyAdded && WORLDS.arms.theme.pool.includes(earlyAdded.type),
+    '钟 0 时「支持」给的是 e3 兵',
+    earlyAdded?.type ?? '无',
+  );
+
+  // 表态：白拿锁定（不给兵、不动钱）
+  const cheerRun = startRun(94, 'frontier');
+  const cheerGold = cheerRun.gold;
+  const cheerArmy = armyCount(cheerRun.army);
+  applyEffect(cheerRun, cheer!.effect, makeRng(1), { scaleGold: true });
+  check(
+    cheerRun.worldLock === 'arms' && cheerRun.gold === cheerGold && armyCount(cheerRun.army) === cheerArmy,
+    '「这是好事啊」白拿锁定，不扣钱不给兵',
+  );
+
+  // 观望：什么都不发生
+  const idleRun = startRun(95, 'frontier');
+  const idleNotes = applyEffect(idleRun, idle!.effect, makeRng(1), { scaleGold: true });
+  check(
+    idleRun.worldLock === null && idleRun.worldBan.length === 0 && idleNotes.length === 0,
+    '「观望」什么都不发生',
+  );
+
+  // 排斥：ban 军备
+  const rejectRun = startRun(96, 'frontier');
+  const rejectNotes = applyEffect(rejectRun, reject!.effect, makeRng(1), { scaleGold: true });
+  check(rejectRun.worldBan.includes('arms'), '「武器不是好东西」把军备划掉');
+  check(rejectNotes.some((n) => n.includes('不再进入')), '结算文案写明军备被排斥', rejectNotes.join('，'));
+
+  // 锁优先于 ban
+  const firm = startRun(97, 'frontier');
+  applyEffect(firm, cheer!.effect, makeRng(1), { scaleGold: true });
+  applyEffect(firm, reject!.effect, makeRng(1), { scaleGold: true });
+  check(firm.worldLock === 'arms' && !firm.worldBan.includes('arms'), '已经锁定的路不能被一句 ban 改掉');
+
+  /* ---- 一层末：lock → 那支史；没锁 → 正史 ---- */
+  const toArms = startRun(98, 'frontier');
+  applyEffect(toArms, cheer!.effect, makeRng(1), { scaleGold: true });
+  check(
+    resolveWorld(toArms) === 'arms' && WORLDS[toArms.world].theme.name.includes('军械库'),
+    '第一层末按 lock 进入军械库',
+    WORLDS[toArms.world].theme.name,
+  );
+
+  const toBase = startRun(99, 'frontier');
+  check(resolveWorld(toBase) === 'base', '什么都没做 → 正史');
+
+  const onlyBan = startRun(100, 'frontier');
+  applyEffect(onlyBan, reject!.effect, makeRng(1), { scaleGold: true });
+  check(resolveWorld(onlyBan) === 'base', '只 ban 过、没锁 → 仍是正史');
+
+  /* ---- 试炼战斗：写死的少量 e3、无城、不补员 ---- */
+  const tr = startRun(101, 'frontier');
+  const trRoom = tr.plan.steps[1]?.[0];
+  const init = battleFor(tr, trRoom!, 11);
+  const want = trRoom?.trial?.enemy ?? [];
+  check(init.kind === 'trial', '战斗类型是 trial');
+  check(init.enemyTypes.length === want.length, '试炼敌人数量写死（不按预算）', `${init.enemyTypes.length}/${want.length}`);
+  check(init.enemyTypes.every((t) => want.includes(t)), '试炼敌人就是写死的那几个', init.enemyTypes.join('、'));
+  check(init.era === 3, '试炼敌人固定 e3', String(init.era));
+  check(init.enemyCityCount === 0 && init.enemyRecruit === 0, '试炼无城、不补员');
+  check(
+    WORLDS[trRoom!.trial!.world].theme.expansions.every((e) => init.expansions.includes(e)),
+    '试炼当场开了目标世界的包',
+    init.expansions.join('、'),
+  );
+  check(init.size === 10, '试炼用固定小图（10×10）', String(init.size));
+
+  // 路定了以后，试炼退回普通战斗
+  const afterLock = startRun(102, 'frontier');
+  applyEffect(afterLock, cheer!.effect, makeRng(1), { scaleGold: true });
+  check(!trialActive(afterLock, trRoom!), '路已定后试炼失效');
+  check(
+    battleFor(afterLock, { ...trRoom!, kind: 'battle' as const }, 11).kind === 'battle',
+    '失效的试炼按普通战斗打',
+  );
+
+  // 被 ban 的史线也失效
+  const banned = startRun(103, 'frontier');
+  applyEffect(banned, { world: { ban: trRoom!.trial!.world } }, makeRng(1), { scaleGold: true });
+  check(!trialActive(banned, trRoom!), '被 ban 的史线试炼失效');
 }
 
 console.log(

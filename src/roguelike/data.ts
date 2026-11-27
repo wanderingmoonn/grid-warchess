@@ -11,7 +11,7 @@
  *   · 加事件 → `EVENTS` 里加一条，选项效果同样是 `Effect`。
  *   · 加休整选项 → `REST_OPTIONS` 加一行，`run.ts` 的 `restOptions` 认 id。
  */
-import type { LayerId, EventDef, ArmyEntry } from './types.ts';
+import type { LayerId, EventDef, ArmyEntry, TrialDef } from './types.ts';
 import { expansionUnitsFor } from '../core/setup.ts';
 import { EXPANSIONS } from '../core/expansions.ts';
 
@@ -940,11 +940,82 @@ export const EVENTS: EventDef[] = [
       { label: '打水', hint: '+30 金', effect: { gold: 30 } },
     ],
   },
+  /*
+   * ---- 史线事件（2026-11-27）----
+   *
+   * 把「第二层走哪支史」从通关时的四选一，挪进第一层：路不是打完挑的，
+   * 是一路上"帮了谁、打了谁、没管谁"积出来的。军备走这条"听说—表态"的
+   * 事件；奇想与修真走特殊战斗（见 `TRIALS`）。
+   *
+   * 四条选项刻意不对称：
+   *   · 出钱 → 多拿一个当代兵，锁定军备；
+   *   · 只表态 → 白拿锁定（"这是好事啊"就是不花钱的支持）；
+   *   · 观望 → 什么都不发生（留给正史）；
+   *   · 排斥 → 把军备从这一局划掉，但也不会自动给你别的路。
+   */
+  {
+    id: 'story-arms',
+    story: 'arms',
+    title: '守墙人的突破',
+    body: '你听说守墙人那边在技术上有了一些突破，有望发明出一些先进的武器装备。',
+    choices: [
+      {
+        label: '支持一下也未尝不可',
+        hint: '−300 金，得 1 个时代军备的 e3/e4 兵（钟越靠后越可能高代）；L2 必定走时代军备',
+        effect: { gold: -300, addByClock: { world: 'arms', count: 1 }, world: { lock: 'arms' } },
+      },
+      {
+        label: '这是好事啊',
+        hint: 'L2 必定走时代军备（不再可进入其它三支）',
+        effect: { world: { lock: 'arms' } },
+      },
+      { label: '观望一下先', hint: '无事发生', effect: {} },
+      {
+        label: '武器又不是什么好东西',
+        hint: 'L2 不再可以进入时代军备',
+        effect: { world: { ban: 'arms' } },
+      },
+    ],
+  },
 ];
 
 export function eventById(id: string): EventDef {
   return EVENTS.find((e) => e.id === id) ?? (EVENTS[0] as EventDef);
 }
+
+/**
+ * 史线试炼（2026-11-27）。
+ *
+ * 和「第一层末四选一」的区别：**路是打出来的**。试炼只出现在第一层，
+ * 敌人是写死的少量当代兵——不是按预算生成的一队，所以它明显比同层遭遇战硬。
+ * 赢了：第二层锁定这支史，投降的人直接进队；输了：这一局结束；
+ * 绕开：什么都没发生（最后走正史）。
+ *
+ * 每局第一层只放**一个**试炼（从池里抽），另一扇门是普通战斗：
+ * 想走哪支史，得先敢打。
+ */
+export const TRIALS: TrialDef[] = [
+  {
+    id: 'cave',
+    world: 'fantasy',
+    title: '洞穴里的原住民',
+    sub: '与世隔绝的人，不欢迎外来者',
+    // e3 前期：幽灵 + 刺客 + 法师。射手方略好打（能先手），近战要掂量
+    enemy: ['ghost', 'assassin', 'mage'],
+    // 投降的是"较弱的两个"：不把池子里最贵的直接送出去
+    reward: ['ghost', 'assassin'],
+  },
+  {
+    id: 'sect',
+    world: 'cultivation',
+    title: '山门禁地',
+    sub: '守山弟子没有问你为什么来，只问你还走不走',
+    // 四个筑基弟子（境界 2）：修士的强度大头在境界，光换兵种不换境界压不住
+    enemy: ['qi-cultivator', 'body-cultivator', 'sword-cultivator', 'qi-cultivator'],
+    rank: 2,
+    reward: ['qi-cultivator', 'body-cultivator'],
+  },
+];
 
 /**
  * 休整房的选项池（每次随机抽 3 个）。

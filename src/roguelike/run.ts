@@ -18,6 +18,7 @@ import {
   RELICS,
   REST_OPTIONS,
   STRATEGIES,
+  TRIALS,
   packsForUnit,
   growthOf,
   CULTIVATORS,
@@ -44,6 +45,7 @@ import type {
   RoomKind,
   RoomNode,
   RunState,
+  TrialDef,
 } from './types.ts';
 
 export const STEPS_PER_LAYER = 10;
@@ -288,7 +290,25 @@ const BAG: RoomKind[] = [
  *   · 第 3、7 步各有一扇商店门（保证一局至少逛两次店）；
  *   · 第 4、8 步各有一扇休整门（保证喘得上气）。
  */
-export function planLayer(layer: LayerId, rng: Rng, theme: LayerTheme = LAYERS[layer]): LayerPlan {
+/**
+ * 第一层的两个"史线钩子"。
+ *
+ * 只在一层用：一个试炼（替换一场普通战斗）+ 一条史线事件（排在第一个事件房）。
+ * 二三层不传，房间图与以前完全一样。
+ */
+export interface LayerHooks {
+  /** 史线事件 id：保证它出现在这一层的第一个事件房 */
+  storyEventId?: string;
+  /** 史线试炼：替换第 2 步的一扇门（很近，玩家早期就能决定打不打） */
+  trial?: TrialDef;
+}
+
+export function planLayer(
+  layer: LayerId,
+  rng: Rng,
+  theme: LayerTheme = LAYERS[layer],
+  hooks: LayerHooks = {},
+): LayerPlan {
   const slots: Array<RoomKind | null> = Array<RoomKind | null>(ROOMS_PER_LAYER).fill(null);
   const at = (step: number, door: number): number => step * 2 + door;
 
@@ -298,6 +318,11 @@ export function planLayer(layer: LayerId, rng: Rng, theme: LayerTheme = LAYERS[l
   slots[at(6, rng.int(2))] = 'shop';
   slots[at(3, rng.int(2))] = 'rest';
   slots[at(7, rng.int(2))] = 'rest';
+  /*
+   * 试炼放在第 2 步的左门：第 1 步是两场普通战斗（让玩家先摸一下这层的强度），
+   * 第 2 步就能看见"要不要打这一仗换一条历史"。右门仍是普通战斗，可以绕开。
+   */
+  if (hooks.trial) slots[at(1, 0)] = 'trial';
 
   const bag: RoomKind[] = [];
   const need: Record<string, number> = {};
@@ -305,10 +330,23 @@ export function planLayer(layer: LayerId, rng: Rng, theme: LayerTheme = LAYERS[l
   for (const k of slots) if (k) need[k] = (need[k] ?? 0) - 1;
   for (const [k, n] of Object.entries(need)) for (let i = 0; i < n; i += 1) bag.push(k as RoomKind);
   rng.shuffle(bag);
+  // 试炼顶掉一场普通战斗：战斗总数仍是 10（6 普通变 5 普通 + 1 试炼），比例不乱
+  if (hooks.trial) {
+    const i = bag.indexOf('battle');
+    if (i >= 0) bag.splice(i, 1);
+  }
 
   for (let i = 0; i < slots.length; i += 1) if (!slots[i]) slots[i] = bag.pop() ?? 'battle';
 
-  const eventPool = rng.shuffle([...EVENTS]);
+  let eventPool = rng.shuffle([...EVENTS]);
+  /*
+   * 史线事件排到第一个事件房：一局一层，玩家至少有一次"要不要为某支史站队"的
+   * 机会。它不额外多给一个事件房，只是把池子里那条提到队首。
+   */
+  if (hooks.storyEventId) {
+    const story = eventPool.find((e) => e.id === hooks.storyEventId);
+    if (story) eventPool = [story, ...eventPool.filter((e) => e !== story)];
+  }
   let eventCursor = 0;
 
   const steps: RoomNode[][] = [];
@@ -321,7 +359,7 @@ export function planLayer(layer: LayerId, rng: Rng, theme: LayerTheme = LAYERS[l
           const def = eventPool[eventCursor % eventPool.length] as EventDef;
           eventCursor += 1;
           return def.id;
-        }),
+        }, hooks.trial),
       );
     }
     steps.push(doors);
@@ -352,6 +390,7 @@ function makeRoom(
   theme: LayerTheme,
   rng: Rng,
   nextEvent: () => string,
+  trial?: TrialDef,
 ): RoomNode {
   const place = rng.pick(PLACE_NAMES[layer]);
   switch (kind) {
@@ -364,6 +403,10 @@ function makeRoom(
     case 'special': {
       const sp = specialOf(theme, rng);
       return { kind, title: '守城战', sub: `${place} · 帮${sp.name}守一段`, special: sp };
+    }
+    case 'trial': {
+      const t = trial ?? (TRIALS[0] as TrialDef);
+      return { kind, title: t.title, sub: t.sub, trial: t };
     }
     case 'event':
       return { kind, title: '事件', sub: `${place} · 有人等你说话`, eventId: nextEvent() };
@@ -382,16 +425,28 @@ export function startRun(seed: number, strategyId: string): RunState {
   const strategy = strategyById(strategyId);
   const rng = makeRng((seed ^ 0x9e3779b9) >>> 0);
   const army = strategy.army.map((a) => ({ ...a }));
+  /*
+   * 第一层的两个史线钩子：一局抽**一个试炼** + **一条史线事件**。
+   *
+   * 试炼池是奇想/修真，事件池是军备——三条支线各有入口，正史则留给
+   * "两个都没碰"的人。注意这里只抽"这一层会遇到哪一条"，不是"你要哪一支"：
+   * 想走哪支，得看路上敢不敢打、肯不肯站队。
+   */
+  const stories = EVENTS.filter((e) => e.story);
+  const story = stories.length > 0 ? stories[rng.int(stories.length)] : undefined;
+  const trial = TRIALS[rng.int(TRIALS.length)] as TrialDef;
   return {
     seed,
     strategyId,
     world: 'base',
+    worldLock: null,
+    worldBan: [],
     layer: 1,
     step: 0,
     gold: strategy.gold ?? 180,
     army,
     relics: [],
-    plan: planLayer(1, rng, themeFor('base', 1)),
+    plan: planLayer(1, rng, themeFor('base', 1), { storyEventId: story?.id, trial }),
     clock: 0,
     buffs: emptyBuffs(),
     bossDone: false,
@@ -503,6 +558,42 @@ function applyEffectInner(
       const lost = before - armyCount(run.army);
       notes.push(lost > 0 ? `−${lost} ${unitName(effect.remove.type)}` : '没有人可以减');
     }
+  }
+  /*
+   * ---- 史线：锁定 / 排斥 / 按钟给兵 ----
+   *
+   * 锁定优先于排斥：已经为某支史投入过的路，不能被一句"我不喜欢"否掉。
+   * 锁定一支 = 同时排斥另外三支（`worldLock` 一有值，其它钩子全部失效），
+   * 所以这里只记一个值；`worldBan` 只服务"还没定路时先把某支划掉"。
+   */
+  if (effect.world?.lock) {
+    const id = effect.world.lock;
+    if (run.worldLock && run.worldLock !== id) {
+      notes.push(`路已经定了：${WORLDS[run.worldLock].name}`);
+    } else {
+      run.worldLock = id;
+      run.worldBan = run.worldBan.filter((w) => w !== id);
+      notes.push(`第二层：${WORLDS[id].name}（路已定）`);
+    }
+  }
+  if (effect.world?.ban) {
+    const id = effect.world.ban;
+    if (run.worldLock === id) {
+      notes.push(`已经走上${WORLDS[id].name}，改不了了`);
+    } else if (!run.worldBan.includes(id)) {
+      run.worldBan.push(id);
+      notes.push(`第二层不再进入${WORLDS[id].name}`);
+    }
+  }
+  if (effect.addByClock) {
+    const w = effect.addByClock.world;
+    const t = WORLDS[w].theme;
+    // 钟越靠后越可能给高代：钟 0 = 全低代，钟 10 = 全高代
+    const high = Math.min(1, Math.max(0, run.clock / STEPS_PER_LAYER));
+    const type = rng.pick(byPrice(rng.next() < high ? t.poolHigh : t.pool));
+    const n = effect.addByClock.count;
+    addUnits(run.army, type, n);
+    notes.push(`${unitName(type)} ×${n}`);
   }
   if (effect.relic) {
     const owned = new Set(run.relics);
@@ -794,6 +885,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const theme = themeOf(run);
   const isBoss = node.kind === 'boss';
   const isSpecial = node.kind === 'special';
+  const isTrial = node.kind === 'trial' && !!node.trial;
   const myCount = armyCount(run.army);
   const strat = strategyById(run.strategyId);
   const idx = isBoss ? 3 : node.kind === 'siege' ? 2 : node.kind === 'elite' ? 1 : 0;
@@ -807,8 +899,13 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
    * 层末固定高代（boss 不读钟，这条在 FLOW 里写过）。
    */
   const stage: 0 | 1 | 2 = isBoss ? 2 : run.clock <= 2 ? 0 : run.clock <= 5 ? 1 : 2;
-  const era =
-    stage === 0
+  /*
+   * 试炼是"从目标世界借来的少量当代兵"：不管本层钟走到哪，他们就是 e3——
+   * 这是一支不属于这条时间线的队伍，所以固定代次，也别让钟把他们涨成 e4。
+   */
+  const era = isTrial
+    ? 3
+    : stage === 0
       ? theme.prevPool.length > 0
         ? theme.prevEra
         : theme.eraLow
@@ -886,7 +983,10 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
    * 但只放大到 22（再大就变成"跑半天才见面"）。
    */
   const crowd = Math.max(0, Math.floor((myCount + headcount - 8) / 3));
-  const size = Math.min(22, (theme.size[idx] as number) + Math.min(4, crowd) + (isSpecial ? 2 : 0));
+  // 试炼用固定小图（10×10）：对面只有两个人，大地图会变成"跑半天才见面"
+  const size = isTrial
+    ? 10
+    : Math.min(22, (theme.size[idx] as number) + Math.min(4, crowd) + (isSpecial ? 2 : 0));
 
   // 遭遇/精英：双方无城；攻坚 1 座；层末 L1–L2 一座、L3 两座；守城战是"玩家有城"
   const enemyCityCount: 0 | 1 | 2 = node.kind === 'siege' ? 1 : isBoss ? (run.layer >= 3 ? 2 : 1) : 0;
@@ -933,7 +1033,16 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
   const troopHead = headcount;
 
   const waves: Array<{ atRound: number; types: string[] }> = [];
-  let enemyTypes = sanitizeAir(pickEnemyTypes(pool, troopBudget, valueOf, troopHead, isHero), run, theme);
+  /*
+   * 试炼的敌人是**写死的少量当代兵**，不按预算生成。
+   *
+   * 按预算走的话，第一层的人数/钱会把 e3 兵稀释成一堆便宜货，试炼就变成
+   * 又一场遭遇战——它要的是"对面两个人，但每个人你都打不动"的压迫感。
+   */
+  let enemyTypes =
+    isTrial
+      ? [...(node.trial?.enemy ?? [])]
+      : sanitizeAir(pickEnemyTypes(pool, troopBudget, valueOf, troopHead, isHero), run, theme);
   let holdRounds = 0;
   let roundLimit: number;
   /*
@@ -976,7 +1085,9 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     holdRounds = 6 + run.layer;
     roundLimit = holdRounds + 3;
   } else {
-    roundLimit = (isBoss ? 44 : node.kind === 'siege' ? 32 : node.kind === 'elite' ? 24 : 16) + crowd * 2;
+    roundLimit = isTrial
+      ? 18
+      : (isBoss ? 44 : node.kind === 'siege' ? 32 : node.kind === 'elite' ? 24 : 16) + crowd * 2;
   }
 
   const bonus = bonusOf(run);
@@ -1023,7 +1134,7 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     // 有城 / 有阵地的敌人守，没城的抢攻；守城战的敌人是来攻城的
     // 守城战的攻方没有城、也不补员；守军（B）靠开局编制，不刷兵
     enemyRecruit: isSpecial ? 0 : isBoss ? 2 : enemyCityCount > 0 ? 1 : 0,
-    enemyDoctrine: isSpecial || node.kind === 'battle' ? 'rush' : 'boom',
+    enemyDoctrine: isSpecial || isTrial || node.kind === 'battle' ? 'rush' : 'boom',
     /*
      * 试验型方略会带"这一层本来没有"的兵（英雄来自奇想包、步枪兵是四代）。
      * 部队里出现的包必须一起开，否则部署时查不到兵种、那个人直接消失。
@@ -1031,11 +1142,13 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     expansions: [
       ...new Set([
         ...theme.expansions,
+        // 试炼的敌人来自目标世界：当场就要把那个包开出来，否则部署时查不到兵种
+        ...(isTrial && node.trial ? WORLDS[node.trial.world].theme.expansions : []),
         ...run.army.flatMap((a) => packsForUnit(a.type)),
       ]),
     ],
     world: run.world,
-    rank: WORLDS[run.world].rankOf?.(clockForScale) ?? 0,
+    rank: isTrial ? (node.trial?.rank ?? 0) : (WORLDS[run.world].rankOf?.(clockForScale) ?? 0),
     /*
      * 玩家这一侧的境界：**时代钟给的下限**与**自己修出来的**取高的那个。
      *
@@ -1466,6 +1579,34 @@ export function applyDecision(run: RunState, opt: DecisionOption): void {
 }
 
 // ---------------------------------------------------------------- 层推进
+
+/**
+ * 这个试炼还算不算数：已经定了路、或这支史被明确排斥，就不再给锁定奖励。
+ *
+ * 房间在开局就生成在图上，不能因为后来路定了就凭空消失——进房时按普通战斗
+ * 处理（门上的字也会变），玩家不会撞见一个"点了没反应"的房间。
+ */
+export function trialActive(run: RunState, node: RoomNode): boolean {
+  if (node.kind !== 'trial' || !node.trial) return false;
+  if (run.worldLock) return false;
+  if (run.worldBan.includes(node.trial.world)) return false;
+  return true;
+}
+
+/**
+ * 第一层走完：把这一局的路定下来。
+ *
+ * 取代原来的「第一层末四选一」。路是事件/试炼攒出来的：
+ *   · 锁定了某支 → 进那一支（试炼赢的那支、或事件里站队的那支）；
+ *   · 什么都没做（或只 ban 过）→ **正史**。
+ * 二三层不再有分支，这个函数只该在第一层末调用一次。
+ */
+export function resolveWorld(run: RunState): WorldId {
+  const world = run.worldLock ?? 'base';
+  run.world = world;
+  run.log.push(`这一层的路：${WORLDS[world].name}`);
+  return world;
+}
 
 /** 走到下一层：发军饷袋/军粮袋、重排房间图。返回 false 表示这一局已经打完了 */
 export function nextLayer(run: RunState, seed: number): boolean {

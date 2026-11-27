@@ -5,10 +5,10 @@
  * `RunState` 里，这里只负责"显示它、把点击变成对它的修改"。
  */
 import { STRATEGIES, armyText, eventById, relicById, relicDesc, rankOfExp, themeOf, unitDefOf, unitName } from './run.ts';
-import { CULTIVATORS, WORLDS } from './data.ts';
+import { CULTIVATORS, EVENTS, WORLDS } from './data.ts';
 import { REALMS } from '../core/cultivation/progression.ts';
-import type { WorldId } from './data.ts';
 import {
+  addUnits,
   applyDecision,
   decisionOptions,
   refreshCost,
@@ -21,6 +21,7 @@ import {
   finishBattle,
   loseRun,
   nextLayer,
+  resolveWorld,
   restOptions,
   rewardOptions,
   shopStock,
@@ -29,10 +30,11 @@ import {
   effectiveGold,
   startRun,
   STEPS_PER_LAYER,
+  trialActive,
 } from './run.ts';
 import { makeRng, randomSeed } from './rng.ts';
 import type { Rng } from './rng.ts';
-import type { ArmyEntry, BattleResult, Effect, RewardOption, RoomNode, RunState } from './types.ts';
+import type { ArmyEntry, BattleResult, Effect, EventDef, RewardOption, RoomNode, RunState } from './types.ts';
 
 let run: RunState | null = null;
 /** 退出回标题（由 mount.ts 传进来；地址直开时也有） */
@@ -198,7 +200,13 @@ function showMap(root: HTMLElement): void {
       <header class="rg-top">
         <div class="rg-top-title">
           <b>${theme.name}</b>${
-            r.layer === 2 ? `<em class="rg-world-tag">${WORLDS[r.world].name}</em>` : ''
+            r.layer === 1
+              ? `<em class="rg-world-tag${r.worldLock ? ' locked' : ''}">${
+                  r.worldLock ? `史线：${WORLDS[r.worldLock].name}` : '史线：未定'
+                }</em>`
+              : r.layer === 2
+                ? `<em class="rg-world-tag">${WORLDS[r.world].name}</em>`
+                : ''
           }<span>${theme.subtitle}</span>
         </div>
         <div class="rg-top-stats">
@@ -275,9 +283,29 @@ function showMap(root: HTMLElement): void {
   };
 }
 
+/**
+ * 事件房实际会弹哪一条。
+ *
+ * 史线事件（军备）在路已经定了、或这支史被明确排斥之后，就不该再问一遍
+ * "要不要支持"——退回普通事件池里稳定抽一条（同一扇门每次看都是同一条）。
+ */
+function eventFor(d: RoomNode): EventDef {
+  const base = eventById(d.eventId ?? '');
+  if (!base.story || !run) return base;
+  if (!run.worldLock && !run.worldBan.includes(base.story)) return base;
+  const normal = EVENTS.filter((e) => !e.story);
+  const key = Array.from(d.eventId ?? '').reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7);
+  return normal[key % normal.length] as EventDef;
+}
+
 function doorTitle(d: RoomNode): string {
-  if (d.kind === 'event') return `事件 · ${eventById(d.eventId ?? '').title}`;
+  if (d.kind === 'event') return `事件 · ${eventFor(d).title}`;
   if (d.kind === 'special') return `守城战 · ${d.special?.name ?? ''}`;
+  /*
+   * 试炼：门牌直接写"特殊"。路已经定了 / 这支史被排斥之后，它退回成一场
+   * 普通战斗——门牌也跟着变，不然玩家会以为还能靠它改路。
+   */
+  if (d.kind === 'trial') return run && trialActive(run, d) ? `特殊 · ${d.title}` : '遭遇战';
   if (d.kind === 'boss') return '层末会战';
   return d.title;
 }
@@ -299,12 +327,20 @@ function priceHint(hint: string, effect: Effect, r: RunState): string {
 
 function enterRoom(root: HTMLElement, node: RoomNode): void {
   if (!run) return;
+  /*
+   * 试炼：路已经定了（或这支史被 ban）就退回普通战斗——房间不能凭空消失，
+   * 但也不该再给锁定奖励。`trialActive` 是唯一判据，门牌和这里共用。
+   */
+  if (node.kind === 'trial') {
+    startBattle(root, trialActive(run, node) ? node : { ...node, kind: 'battle', title: '遭遇战' });
+    return;
+  }
   if (node.kind === 'battle' || node.kind === 'elite' || node.kind === 'siege' || node.kind === 'special') {
     startBattle(root, node);
     return;
   }
   if (node.kind === 'event') {
-    const def = eventById(node.eventId ?? '');
+    const def = eventFor(node);
     /*
      * 掏不起钱的选项**不出现**。
      *
@@ -549,6 +585,22 @@ function onBattleDone(root: HTMLElement, node: RoomNode, result: BattleResult): 
     showResultThen(root, `${node.title} · 守住了`, `报酬：${notes.join('；')}。`);
     return;
   }
+  /*
+   * 史线试炼：赢了不是三选一，是**把整条历史拽过来**——第二层锁定这支史，
+   * 投降的人直接进队（写死的两个弱兵，不按本层池子抽）。
+   * 只有在 `trialActive` 还成立时才算；路已经定了的话，上面已经把它当普通
+   * 战斗打了，走不到这里。
+   */
+  if (node.kind === 'trial' && node.trial && trialActive(r, node)) {
+    const t = node.trial;
+    const notes = applyEffect(r, { world: { lock: t.world } }, rng);
+    for (const type of t.reward) addUnits(r.army, type, 1);
+    notes.push(...t.reward.map((type) => `${unitName(type)} ×1`));
+    r.log.push(`打赢试炼「${node.title}」：${WORLDS[t.world].name}`);
+    afterRoom(r);
+    showResultThen(root, `${node.title} · 打服了`, `${notes.join('，')}。他们放下了武器。`);
+    return;
+  }
   const options = rewardOptions(r, node.kind, rng);
   openModal(
     root,
@@ -610,54 +662,23 @@ function onBossDone(root: HTMLElement, node: RoomNode, result: BattleResult): vo
     });
   };
 
-  if (r.layer === 1) showWorldChoice(award);
-  else award();
+  /*
+   * 第一层末**不再弹四选一**：路在这一层里已经由事件/试炼决定了。
+   * 没锁任何一支 = 正史——"完全不作为，自然就进原版"。
+   * `resolveWorld` 必须在 `award()` 之前：战利品里那一个"下一层的兵"
+   * 要按已经定下来的世界抽。
+   */
+  if (r.layer === 1) resolveWorld(r);
+  award();
 }
 
-/**
- * 第二层的岔口：四种历史。
+/*
+ * 这里原来是「四种历史」的四选一面板（`showWorldChoice`）。
  *
- * 对应设计里"L1 末的临战决议 = 选这条历史怎么走"：
- *   原版 / 时代军备 → 技术史，奇想 / 修真 → 神话史。
- * 选完第二层的兵池、扩展开关、层末 boss 全部换成那一支史的样子；
- * 第三层保持科技底色，只把这一支史的高代兵混进去（修真是例外，见「末法之世」）。
+ * 2026-11-27 按反馈删掉：路不再在通关时挑，而是第一层的事件（军备）与
+ * 特殊战斗（奇想 / 修真）里一点点定下来的；什么都没做就是正史。
+ * 所以 L1 末只需要 `resolveWorld`，没有面板。
  */
-function showWorldChoice(onPick: () => void): void {
-  if (!run) return;
-  const list = Object.values(WORLDS);
-  const cards = list
-    .map((w) => {
-      const sample = w.theme.pool.slice(0, 3).map((t) => unitName(t)).join('、');
-      return `<button class="rg-world" data-world="${w.id}">
-        <b>${w.name}</b>
-        <em>${w.history === 'myth' ? '神话史' : '技术史'}</em>
-        <span>${w.blurb}</span>
-        <i>${sample}……</i>
-      </button>`;
-    })
-    .join('');
-  const host = document.createElement('div');
-  host.className = 'rg-mask';
-  host.innerHTML = `<div class="rg-modal wide">
-    <h3>这条历史怎么走</h3>
-    <p class="rg-body">第一层打完了。往后的路不止一条——<b>第二层会变成你选的那种样子</b>：兵、敌人、层末的对手全都换。</p>
-    <div class="rg-worlds">${cards}</div>
-  </div>`;
-  document.body.appendChild(host);
-  host.onclick = (e) => {
-    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-world]')?.dataset.world as
-      | WorldId
-      | undefined;
-    if (!id) return;
-    host.remove();
-    const w = WORLDS[id];
-    if (run) {
-      run.world = id;
-      run.log.push(`选定的路：${w.name}（${w.history === 'myth' ? '神话史' : '技术史'}）`);
-    }
-    onPick();
-  };
-}
 
 function showInterlude(root: HTMLElement): void {
   if (!run) return;
