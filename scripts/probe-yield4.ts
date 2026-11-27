@@ -28,7 +28,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { passable } from '../src/core/config.ts';
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
-import { applyAction, attackableTargets, utype } from '../src/core/rules.ts';
+import { applyAction, attackableTargets, siegeTargets, utype } from '../src/core/rules.ts';
 import type { GameState, PlayerId } from '../src/core/types.ts';
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../src/core/ai.ts';
 import { currentView, resetV4 } from '../src/core/v4/ai-v4.ts';
@@ -51,6 +51,21 @@ const CHECK_KEEP = process.argv.includes('--check-keep');
 const SHOW_QUOTA = process.argv.includes('--quota');
 /** `--plan`：打出这一手的决定、编队和"有几个人拿到了落点"（冻住不动就靠它看） */
 const SHOW_PLAN = process.argv.includes('--plan');
+/**
+ * `--seat`：数"这一手每个人有没有座位"。
+ *
+ * 座位 = 这一手有走位落点（`con.steps`）/ 有经济岗位 / 在守城或工兵队里。
+ * **三者都没有的人 = 让位链真正要照看的人**。这个数决定
+ * "先补座位表"是不是根问题（见 `PLAN-V4-PHASE4` §4.23）。
+ */
+const SHOW_SEAT = process.argv.includes('--seat');
+let seatTurns = 0;
+let seatOnKeep = 0;
+let seatMoving = 0;
+let seatJob = 0;
+let seatFight = 0;
+let seatWaiting = 0;
+let seatIdle = 0;
 let quotaTurns = 0;
 let quotaCells = 0;
 let quotaEvicts = 0;
@@ -317,6 +332,33 @@ function measure(
     rejects: 0,
   };
 
+  if (SHOW_SEAT) {
+    /*
+     * **真正要处理的人 = 站在"必须空"的格子上、又不会自己走开的人。**
+     *
+     * 分四类（从"最没事"到"有理由"）：
+     *   · 闲人   ：没落点、没岗位、不在守/工队、也打不到人 ← 座位表要收的人
+     *   · 待命   ：在编队里但这一手排不出落点（收拢/等够人） ← 站着挡路却没人管
+     *   · 能打   ：原地就能开火，这一格有产出
+     *   · 会走   ：这一手有落点，自己会离开
+     */
+    const stepSet = new Set(Object.keys(con.steps ?? {}));
+    const postSet = new Set(Object.keys(con.econPosts ?? {}));
+    const holdSet = new Set(
+      con.squads.filter((q) => q.order === 'hold' || q.order === 'build').flatMap((q) => q.unitIds),
+    );
+    for (const u of world.myCombat) {
+      if (!keep.has(u.y * s.w + u.x)) continue;
+      seatOnKeep += 1;
+      if (stepSet.has(u.id)) { seatMoving += 1; continue; }
+      if (postSet.has(u.id) || holdSet.has(u.id)) { seatJob += 1; continue; }
+      if (attackableTargets(s, u).some((v) => v.owner !== ME) || siegeTargets(s, u).length > 0) { seatFight += 1; continue; }
+      if (con.squads.some((q) => q.unitIds.includes(u.id))) { seatWaiting += 1; continue; }
+      seatIdle += 1;
+    }
+    if (seatIdle + seatWaiting > 0) seatTurns += 1;
+  }
+
   if (SHOW_PLAN) {
     const step = Object.keys(con.steps ?? {}).length;
     const sqs = con.squads.map((q) => `${q.order}${q.cityId ? '@' + q.cityId : ''}:${q.unitIds.length}`).join(' ');
@@ -524,6 +566,13 @@ console.log(
     ` | 离敌城更远 ${sum((r) => r.awayFoe)}` +
     ` | 被引擎拒 ${totalRejects}`,
 );
+if (SHOW_SEAT) {
+  console.log(
+    `座位账（只数站在"必须空"格子上的战斗兵，共 ${seatOnKeep} 人次）：` +
+      `会走 ${seatMoving} · 守/工 ${seatJob} · 能打 ${seatFight} · 待命 ${seatWaiting} · **闲人 ${seatIdle}**` +
+      ` ｜ ${seatTurns} 手出现了"待命/闲人"`,
+  );
+}
 if (SHOW_QUOTA) {
   console.log(
     `产兵名额：生效 ${quotaTurns} 手 · 留空 ${quotaCells} 格 · 其中赶人 ${quotaEvicts} 格` +
