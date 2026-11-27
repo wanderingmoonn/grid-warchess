@@ -166,6 +166,14 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     econSince: econSinceMemo(s, me, mem),
     econHome: econHomeMemo(s, me, mem, world),
     eraPlan: eraPlanMemo(s, decision, mem, s.turn),
+    /*
+     * **预警点的承诺**（阶段 5 §2.2b）：只有真的派出去人才记。
+     * 记了就是一个决定期不动——`T_def` 会跳（实测 1↔9 手），不锁住的话哨兵会来回走。
+     */
+    alert:
+      decision.alert && con.squads.some((q) => q.order === 'scout')
+        ? { ...decision.alert, since: s.turn }
+        : mem.alert ?? null,
     /* W1 影子观测：只记，不读 */
     bands: con.bands ?? mem.bands,
     /* 工兵队：只有架桥那一条分支会写；别的决定里是 undefined，等于撤编 */
@@ -262,7 +270,7 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
  * 为什么不做成"一进视野只打一次"：那要记状态（就得往记忆里加字段）。
  * 每手打一行，"第一次出现有限值"在日志里一眼看得出，而且一个字节都不碰判断。
  */
-function logAlert(s: GameState, world: World, turn: number): void {
+function logAlert(s: GameState, world: World, con: Constraints, decision: Decision, turn: number): void {
   /* 派出去的会是"最便宜的那个战斗兵"，它的视野就是预警半径（没有兵就报 0） */
   const cheap = [...world.myCombat].sort((a, b) => unitWorth(s, a) - unitWorth(s, b))[0];
   const vision = cheap ? visionOf(s, cheap) : 0;
@@ -290,7 +298,14 @@ function logAlert(s: GameState, world: World, turn: number): void {
       `${city.id} 可见敌 ${world.foeCombat.length} · 最近到城 ${Number.isFinite(best) ? `${best} 手` : '—'} · ${alert} · 血 ${city.hp}`,
     );
   }
-  console.log(`[alert] T=${turn} · 敌速 ${world.raidMove} · 视野 ${vision} · ${rows.join(' · ')}`);
+  /* 这一手到底派了没有（决定层想派 ≠ 计划层派得出） */
+  const scout = con.squads.find((q) => q.order === 'scout');
+  const act = decision.alert
+    ? scout
+      ? `派 ${scout.unitIds.join(',')} → (${decision.alert.at.x},${decision.alert.at.y})`
+      : '想派·没人可派'
+    : '不需要';
+  console.log(`[alert] T=${turn} · 敌速 ${world.raidMove} · 视野 ${vision} · 哨兵 ${act} · ${rows.join(' · ')}`);
 }
 
 /**
@@ -421,7 +436,7 @@ function laneMemo(
    */
   const alreadyDiffed = exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn;
   /* 预警读数：同一道门，一手打一行（阶段 5 §2.2-0，只打日志） */
-  if (!alreadyDiffed && process.env.V4_ALERT_LOG) logAlert(s, world, turn);
+  if (!alreadyDiffed && process.env.V4_ALERT_LOG) logAlert(s, world, con, decision, turn);
   if (alreadyDiffed) {
     return {
       unitSeen: nextSeen,

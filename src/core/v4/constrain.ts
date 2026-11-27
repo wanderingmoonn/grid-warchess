@@ -3009,7 +3009,35 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
    * **一条线的三个存量**（W1 影子模式）：只在这里算一次，给日志和探针看。
    * 挂在主队上——主队就是这一波（`main` + 目标敌城）。
    */
-  const attackSquads = squads.filter((q) => !!q.cityId && q.order !== 'hold' && q.order !== 'yield');
+  /*
+   * **哨兵**（阶段 5 §2.2b，2026-11-28）：决定层说"去哪看"，这里挑一个人。
+   *
+   * 选人规则只有一条：**不在任何队里的战斗兵里，身价最低的那个**。
+   * 挑不到（人都编进进攻队了）→ 这一手不派——**不拆进攻队去当眼睛**，
+   * 那就是又长出一个"名额"，用户明确否掉过。
+   */
+  if (decision.alert && decision.alert.at) {
+    const inAny = new Set(squads.flatMap((q) => q.unitIds));
+    const spare = rest
+      .filter((u) => !inAny.has(u.id) && captureId !== u.id)
+      .sort((a, b) => unitWorth(s, a) - unitWorth(s, b) || (a.id < b.id ? -1 : 1))[0];
+    if (spare) {
+      squads.push({
+        id: 'scout',
+        order: 'scout',
+        unitIds: [spare.id],
+        cityId: decision.alert.cityId,
+        at: decision.alert.at,
+      });
+    }
+  }
+
+  /**
+   * 挂在主队上——主队就是这一波（`main` + 目标敌城）。
+   */
+  const attackSquads = squads.filter(
+    (q) => !!q.cityId && q.order !== 'hold' && q.order !== 'yield' && q.order !== 'scout',
+  );
   const laneCity = attackSquads[0]?.cityId
     ? s.cities.find((c) => c.id === attackSquads[0]!.cityId)
     : undefined;

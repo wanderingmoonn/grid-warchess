@@ -283,6 +283,32 @@ export function actFor(
   const sq = squadOf(con, u);
 
   /*
+   * ② **哨兵：看着，不接战**（阶段 5 §2.2b，2026-11-28）。
+   *
+   * 排在集火和"打人"**之前**——它的任务是眼睛，不是拳头：
+   * 有人进它的视野就朝自己的城退一步（还在来路上、还看得见），
+   * 站在那儿跟人对拼等于用 50 金换对方一个动作，这笔账永远亏。
+   */
+  if (sq?.order === 'scout') {
+    const reach = Math.max(1, effectiveStats(s, u).vision ?? 2);
+    const spotted = seenFoes(s, u).some((f) => manhattan(u, f) <= reach);
+    if (spotted) {
+      const home = world.myCities.find((c) => c.id === sq.cityId) ?? world.myCities[0];
+      if (home) {
+        const back = stepToward(s, u, { x: home.x, y: home.y });
+        if (back) return { type: 'MOVE', unitId: u.id, x: back.x, y: back.y };
+      }
+      return null;
+    }
+    const spot = targetOf(s, sq);
+    if (!spot) return null;
+    if (manhattan(u, spot) <= 1) return null; /* 到点就站住，不追、不乱走 */
+    const step = stepToward(s, u, spot, false, world.stepsFrom(spot));
+    if (step) return { type: 'MOVE', unitId: u.id, x: step.x, y: step.y };
+    return null;
+  }
+
+  /*
    * ②.5 集火：约束层点了名就打它。
    *
    * 排在攻城之后、乱打之前。理由：集火是"全体打同一个"，属于约束；

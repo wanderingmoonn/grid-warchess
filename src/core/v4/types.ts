@@ -168,6 +168,13 @@ export interface Decision {
    */
   bandTasks?: BandTask[];
   /**
+   * **派哨兵**（阶段 5 §2.2b，2026-11-28）：这一手要有人站到这一格去看着来路。
+   *
+   * 决定层只说"去哪看"，**不说谁去**——选人、走位、让位是计划层的事。
+   * `null` = 这一手不需要（现在就能守住，或者已经有眼睛盖住了）。
+   */
+  alert?: { cityId: string; at: { x: number; y: number }; edge: { x: number; y: number }; why: string } | null;
+  /**
    * **钱怎么花**（D1）。
    *
    * 必填而不是可选：可选就会出现"沿用了决定、忘了沿用资源段"的默认值，
@@ -196,6 +203,14 @@ export type SquadOrder =
   | 'siege'
   /** 守在原地/守城（不主动出击） */
   | 'hold'
+  /**
+   * **哨兵**（阶段 5 §2.2b，2026-11-28）：站到预警点去看着来路，**不接战**。
+   *
+   * 只有一个作用：让 `world.foeCombat` 早早有值（敌人一进它的视野就被看见），
+   * 于是 `foeEta` / `defensible` 这些现成的判据会**提前几手**亮起来。
+   * 它不是"更强的守军"，是**眼睛**——有人贴上来就后退，换命是亏的。
+   */
+  | 'scout'
   /**
    * **让开**（2026-11-25）：站在"这一手必须空"的格子上，这一手的任务就是把那格腾出来。
    *
@@ -713,6 +728,14 @@ export interface V4Memory {
    * 没人读的字段——v3 的 `econUntil` 就是这么烂掉的。）
    */
   eraPlan?: { cityId: string; targetEra: number; since: number } | null;
+  /**
+   * **承诺：预警点站哪一格**（阶段 5 §2.2b，2026-11-28）。
+   *
+   * 为什么需要承诺：`T_def` 会随"谁走远了、谁回来了"上下跳（实测 1↔9 手），
+   * 预警点就跟着每手挪——哨兵会来回走，永远到不了。所以立一次、在一个决定期内不动。
+   * 和 `squad` / `eraPlan` 是同一个形状：**记事实（站哪、第几手立的），不记理由**。
+   */
+  alert?: { cityId: string; at: { x: number; y: number }; edge: { x: number; y: number }; since: number } | null;
   /*
    * ── 影子观测（W1 / W1.5，2026-11-26）──────────────────────────
    *

@@ -291,7 +291,75 @@ function bandTasksOf(world: World, mem: V4Memory | undefined, d: BareDecision): 
 
 function complete(s: GameState, world: World, mem: V4Memory | undefined, d: BareDecision): Decision {
   const dec = withSpend(s, world, d, mem);
-  return { ...dec, upgrade: upgradeOf(s, world, mem, dec), bandTasks: bandTasksOf(world, mem, dec) };
+  return {
+    ...dec,
+    upgrade: upgradeOf(s, world, mem, dec),
+    bandTasks: bandTasksOf(world, mem, dec),
+    alert: alertOf(s, world, mem, d),
+  };
+}
+
+/**
+ * **这一手要不要派哨兵、派到哪一格**（阶段 5 §2.2b，2026-11-28）。
+ *
+ * 决定层只回答"去哪看"，不选人、不定路线（那是计划层的）。
+ *
+ * ── 三条判据，都读服务层算好的数 ──────────────────────────
+ *   1. 这座城"组织守军"还要几手（`alertNeed`）—— `0` 说明现在就能守住，不用看；
+ *   2. 预警点现在还**没人看着**（`alertCover`）—— 已经看见了就不用再派人；
+ *   3. **先信承诺**：上一次立的点还在有效期内就接着用（`V4Memory.alert`）。
+ *      不这么做的话，`T_def` 一跳预警点就挪，哨兵会来回走、永远站不住。
+ */
+function alertOf(
+  s: GameState,
+  world: World,
+  mem: V4Memory | undefined,
+  d: BareDecision,
+): Decision['alert'] {
+  /*
+   * **进攻时不派眼睛**（2026-11-28）。
+   *
+   * 不是"怕分心"，是账：进攻期每一个兵都在兑现（推进/清场/攻城），
+   * 抽一个去站岗，前线就慢一手。实测 `S-017` 是"零余量"题（清场线刚好等于三家水平），
+   * 抽走一个 → 4 杀变 3 杀 → 当场翻红。
+   *
+   * 而且进攻时敌人本来就在眼前（正在接火），预警没有信息价值。
+   * "不拆进攻队"这条规矩，落到代码上就是这一句。
+   */
+  if (d.kind === 'press' || d.kind === 'takeover' || d.kind === 'bridge') return null;
+  /* 承诺期内、而且那个点还没被盖住 → 接着用，不重算 */
+  const prev = mem?.alert ?? null;
+  if (prev && s.turn - prev.since <= DECIDE_HORIZON && world.alertCover(prev.edge) === false) {
+    return { cityId: prev.cityId, at: prev.at, edge: prev.edge, why: '沿用上一次立的预警点' };
+  }
+  /* 按"最缺预警的城"排序：缺口大的先看 */
+  const ranked = world.myCities
+    .map((c) => ({ c, need: world.alertNeed(c) }))
+    .filter((x) => Number.isFinite(x.need) && x.need > 0)
+    .sort((a, b) => b.need - a.need);
+  const pick = ranked[0];
+  if (!pick) return null;
+  const foeCity = [...world.foeCities].sort(
+    (a, b) => world.marchTurns(a, pick.c) - world.marchTurns(b, pick.c),
+  )[0];
+  if (!foeCity) return null;
+  /*
+   * 视野取"我现有战斗兵里最小的那个"——派出去的会是便宜的那个，
+   * 拿最远的视野去算会高估预警半径（站得比该站的更远，白跑路）。
+   */
+  const vision = world.myCombat.length
+    ? Math.min(...world.myCombat.map((u) => utype(s, u.type).vision ?? 1))
+    : 0;
+  if (vision <= 0) return null;
+  const spot = world.watchSpot(pick.c, foeCity, vision);
+  if (!spot.feasible || !spot.at || !spot.edge) return null;
+  if (world.alertCover(spot.edge)) return null; /* 已经有人看着了 */
+  return {
+    cityId: pick.c.id,
+    at: spot.at,
+    edge: spot.edge,
+    why: `${pick.c.id} 组织守军还差 ${pick.need} 手（${spot.why}）`,
+  };
 }
 
 /**
