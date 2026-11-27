@@ -202,16 +202,57 @@ for (const wHp of [0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5]) {
   }
 }
 AGG = best.agg;
-console.log(`\n最优参数：wHp=${best.p[0]}  wStand=${best.p[1]}  kRange=${best.p[2]}  GAP=${best.p[3]}  参照汇总=${best.agg}  护甲权重=${best.p[4]}  → 方向一致率 ${(best.score * 100).toFixed(0)}%`);
-console.log(`（旧身价作为对照的一致率：${(agree([1, 0, 1, 6, 0]) * 100).toFixed(0)}%，但旧公式不是这个形状，仅供参照）\n`);
+console.log(`\n最优参数：wHp=${best.p[0]}  wStand=${best.p[1]}  kRange=${best.p[2]}  GAP=${best.p[3]}  参照汇总=${best.agg}  护甲权重=${best.p[4]}  → 总方向一致率 ${(best.score * 100).toFixed(0)}%`);
+console.log(`（旧身价作为对照：${(agree([1, 0, 1, 6, 0]) * 100).toFixed(0)}%）`);
 
-for (const m of measured) {
+/* ── 分组报告（2026-11-27 用户要求）────────────────────────────
+ * 总一致率会把"某一代整代排错"平均掉（4 代 3 对全反，总分只掉七八个点），
+ * 所以这里分开报：**每一代内部**的成对正确率 + **代际递增**是否成立。
+ */
+const eraAcc = (m: Measured): { ok: number; total: number } => {
+  let ok = 0;
+  let total = 0;
+  for (let i = 0; i < m.ids.length; i++) {
+    for (let j = i + 1; j < m.ids.length; j++) {
+      const a = m.ids[i]!;
+      const b = m.ids[j]!;
+      const da = Math.sign(powerOf(a, m.era, best.p) - powerOf(b, m.era, best.p));
+      const db = Math.sign((m.margin[a] ?? 0) - (m.margin[b] ?? 0));
+      if (db === 0) continue;
+      total += 1;
+      if (da === db) ok += 1;
+    }
+  }
+  return { ok, total };
+};
+
+console.log(`\n代 / 内部成对正确率 / 公式排序 / 实测排序`);
+const within = measured.filter((m) => m.ids.every((t) => (utype(s, t).era ?? 1) === m.era));
+for (const m of within) {
+  const { ok, total } = eraAcc(m);
   const pred = [...m.ids].sort((a, b) => powerOf(b, m.era, best.p) - powerOf(a, m.era, best.p));
   const real = [...m.ids].sort((a, b) => m.margin[b]! - m.margin[a]!);
+  const flag = total > 0 && ok === total ? '✅' : total > 0 && ok === 0 ? '❌ 整代全反' : '⚠️';
   console.log(
-    `${m.era} 代  实测：${real.map((t) => `${utype(s, t).name}(${m.score[t] ?? 0}分/净${m.margin[t]})`).join(' > ')}\n` +
-      `      公式：${pred.map((t) => `${utype(s, t).name}(${Math.round(powerOf(t, m.era, best.p))})`).join(' > ')}`,
+    `${flag} ${m.era} 代  ${ok}/${total}` +
+      `   公式：${pred.map((t) => utype(s, t).name).join('>')}` +
+      `   实测：${real.map((t) => utype(s, t).name).join('>')}`,
   );
+}
+
+/* 代际递增：新一代"最强"的公式值，不能低于老一代 */
+console.log(`\n代际递增（新一代头名的战力 ≥ 老一代头名）：`);
+const erasAsc = [...new Set(within.map((m) => m.era))].sort((a, b) => a - b);
+let prevTop: { era: number; name: string; v: number } | null = null;
+for (const era of erasAsc) {
+  const ids = combatOfEra(s, era);
+  const top = ids
+    .map((t) => ({ name: utype(s, t).name ?? t, v: powerOf(t, era, best.p) }))
+    .sort((a, b) => b.v - a.v)[0];
+  if (!top) continue;
+  const okStr = prevTop ? (top.v >= prevTop.v ? '✅' : `❌ 低于 ${prevTop.era} 代`) : '—';
+  console.log(`  ${era} 代 头名 ${top.name}（${Math.round(top.v)}）  ${okStr}`);
+  prevTop = { era, ...top };
 }
 
 flushDuelCache();
