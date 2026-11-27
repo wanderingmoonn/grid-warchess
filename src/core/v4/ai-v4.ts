@@ -28,7 +28,7 @@ import { buildWorld, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
-import { canSeeTile, recruitPriceOf, utype } from '../rules.ts';
+import { canSeeTile, effectiveStats, recruitPriceOf, utype } from '../rules.ts';
 import type { Band, BandReport, Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId, Unit } from '../types.ts';
 
@@ -252,6 +252,32 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
 }
 
 /**
+ * **预警读数（阶段 5 §2.2-0，2026-11-27）**：`V4_ALERT_LOG=1` 时每手打一行，**不参与任何判断**。
+ *
+ * 打的是"现在提前几手知道"：每座我的城，**看得见的敌人里最近的那个，走到城要几手**。
+ * 读法：某座城第一次出现一个有限的数，那个数就是「敌人第一次进视野时它离城还有几手」——
+ * 这就是 §2.2 要提升的那个读数，也是 `V-2-01` 判据 `alertTurns` 的口径
+ * （`marchTurnsOf`，**敌人自己的移动力**，不是我方的）。
+ *
+ * 为什么不做成"一进视野只打一次"：那要记状态（就得往记忆里加字段）。
+ * 每手打一行，"第一次出现有限值"在日志里一眼看得出，而且一个字节都不碰判断。
+ */
+function logAlert(s: GameState, world: World, turn: number): void {
+  const rows: string[] = [];
+  for (const city of world.myCities) {
+    let best = Infinity;
+    for (const f of world.foeCombat) {
+      const t = world.marchTurnsOf(f, city, effectiveStats(s, f).move ?? 2);
+      if (t < best) best = t;
+    }
+    rows.push(
+      `${city.id} 可见敌 ${world.foeCombat.length} · 最近到城 ${Number.isFinite(best) ? `${best} 手` : '—'} · 血 ${city.hp}`,
+    );
+  }
+  console.log(`[alert] T=${turn} · ${rows.join(' · ')}`);
+}
+
+/**
  * **影子观测：交换账 + 批次 + 断档**（W1.5，2026-11-26）。
  *
  * 只记、不读——这一版仍然**没有任何判断读它**。
@@ -377,7 +403,10 @@ function laneMemo(
    * 不设这道门就会把同一批死亡记好几遍。
    * 注意"删死记录 / 更新这一眼"在上面已经做完了，这里只挡记账。
    */
-  if (exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn) {
+  const alreadyDiffed = exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn;
+  /* 预警读数：同一道门，一手打一行（阶段 5 §2.2-0，只打日志） */
+  if (!alreadyDiffed && process.env.V4_ALERT_LOG) logAlert(s, world, turn);
+  if (alreadyDiffed) {
     return {
       unitSeen: nextSeen,
       exchange,
