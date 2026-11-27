@@ -177,6 +177,14 @@ type Stat = {
   alive: number;
   /** 我方可累计造兵数（从开局到现在） */
   recruited: number;
+  /**
+   * **我方"对着看不见的目标开火"被引擎拒掉的次数**（累计，2026-11-27 加）。
+   *
+   * 这是"作弊"的直接刻度：玩家做不到这件事，引擎会回"看不见那个位置（视野外）"。
+   * `V-1-01`（有雾回归题）就是拿它当判据——有雾时**必须恒为 0**。
+   * 注意它数的是"被拒"，所以引擎放行的那种（能看见）不会进来。
+   */
+  blindAttacks: number;
   /** 我方经济兵本手总产出（金）。经济题的核心量：站对格子才高 */
   econYield: number;
   /**
@@ -203,6 +211,8 @@ const cityMinHp: Record<string, number> = {};
 for (const c of s0.cities) cityMinHp[c.id] = c.hp;
 let lostMe = 0;
 let lostFoe = 0;
+/** 我方对着看不见的目标开火、被引擎拒掉的累计次数（见 `Stat.blindAttacks`） */
+let blindAttacks = 0;
 const disbanded = new Set<string>();
 let prevIds = new Set(s0.units.map((u) => u.id));
 /**
@@ -240,6 +250,7 @@ function capture(s: GameState): void {
     count,
     mine,
     recruited: meRecruits,
+    blindAttacks,
     econYield: s.units
       .filter((u) => u.owner === ME && utype(s, u.type).category === 'economy')
       .reduce((n, u) => n + (unitYieldAt(s, u, u.x, u.y).gold ?? 0), 0),
@@ -279,6 +290,15 @@ function aiTurn(s: GameState, ai: AiFn | null): GameState {
       if (!a) break;
       const r = applyAction(cur, a);
       if (!r.ok) {
+        /*
+         * **记一笔"我方对着看不见的目标开火"**（2026-11-27）。
+         *
+         * 只数 ATTACK / SIEGE，而且只数我方——这是在量"有没有作弊"，
+         * 不是量效率。引擎的拒绝理由就是判据本身，不自己算视野。
+         */
+        if (cur.current === ME && (a.type === 'ATTACK' || a.type === 'SIEGE') && (r.reason ?? '').includes('看不见')) {
+          blindAttacks += 1;
+        }
         if (a.type === 'MOVE' && 'unitId' in a) {
           const uid = String((a as { unitId?: string }).unitId ?? '');
           const n = (moveTries.get(uid) ?? 0) + 1;
@@ -438,6 +458,14 @@ function evalOne(c: Criterion, st: Stat | undefined, fin: GameState): { ok: bool
         got: `(${c.x},${c.y}) 半径 ${c.r} 内 ${n} 个${c.ever ? '（全程最多）' : ''}`,
       };
     }
+    case 'blindAttacks': {
+      /*
+       * 我方对着看不见的目标开火、被引擎拒掉的累计次数。
+       * `max: 0` = 一次都不许（有雾回归题的硬判据）。
+       */
+      const ok = c.max === undefined ? st.blindAttacks === 0 : st.blindAttacks <= c.max;
+      return { ok, got: `视野外攻击被拒 ${st.blindAttacks} 次` };
+    }
     case 'recruited': {
       /* "有没有把钱换成兵"。累加量，不受打死、也不被收入补回去影响。 */
       const n = st.recruited;
@@ -544,6 +572,16 @@ const pass = rows.every((r) => r.ok === true);
 const who = book ? `人手答案` : ME_AI;
 console.log(`\n=== ${EXAM} · 答题者 ${who}（对手 ${FOE_AI}）· 跑 ${window} 手 ===`);
 console.log(`出题局面：第 ${START} 手 · 我城 ${ME_CITIES0} 座 · 兵 ${s0.units.filter((u) => u.owner === ME).length} 个`);
+/*
+ * **可见性**（2026-11-27）：这题只有站对了视觉条件，读数才可解释。
+ * 口径和 v4 的判断同一处（`visibilityLabel`），不在脚本里另算一份。
+ */
+{
+  const { visibilityLabel } = (await import('../src/core/v4/ai-v4.ts')) as {
+    visibilityLabel: (x: GameState) => string;
+  };
+  console.log(`可见性：${visibilityLabel(s0)}`);
+}
 console.log(`跑完：${s.winner ? `${s.winner === ME ? '我胜' : '我负'}` : '未分胜负'}（第 ${s.turn} 手）· 种子 ${s0.seed}`);
 console.log('');
 for (const r of rows) {

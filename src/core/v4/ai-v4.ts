@@ -63,22 +63,43 @@ const keyOf = (s: GameState, me: PlayerId): string =>
  * 而不是读代码。
  */
 /**
- * **这一手 AI 能不能看全图**（2026-11-27，用户定的三档）。
+ * **这道题/这一手，AI 看到的是什么**——给人看的一行标签（2026-11-27）。
+ *
+ * 为什么要它：可见性现在是隐式的。谁把某道题改成 `fog: true`，v4 会立刻变瞎，
+ * 而跑批输出里**没有任何提示**——"这题红了是因为 AI 看不见"这件事要靠人去猜。
+ * 所以跑批每题打一行，口径和 `seeAllOf` 是同一处，不会分叉。
+ */
+export function visibilityLabel(s: GameState): string {
+  const fog = s.fog === true;
+  if (s.config.seeAll === true) return fog ? '有雾·显式全知' : '无雾·显式全知';
+  if (s.seeAllSeen === true) return fog ? '有雾·玩家刚看过(一手)' : '无雾·全知';
+  return fog ? '有雾·按视野' : '无雾·全知';
+}
+
+/**
+ * **这一手 AI 能不能看全图**（2026-11-27，用户定的两档）。
  *
  * 1. `config.seeAll === true` —— 题目 / 调试显式开（"这题不考察侦查"）；
- * 2. `state.showAll === true` —— 玩家此刻正开着界面的"看全图"；
- * 3. `state.seeAllSeen === true` —— 玩家**刚开过关掉了**（看一眼就关是最常见的情况，
- *    等轮到 AI 时 `showAll` 已经变回 false，不记这一笔 AI 就白瞎一次）。
+ * 2. `state.seeAllSeen === true` —— 玩家**这一阵子点过 "看全图"**（开、关都算）。
  *
  * 都不满足 → `false`。此时 `playerView` 按 `state.fog` 走：
  * 有雾就只给视野内的，没雾本来就全见。**这就是"和玩家一样"**，不多也不少。
+ *
+ * ── **为什么不读 `state.showAll`**（2026-11-27 用户指出的漏洞）────────
+ *
+ * 第一版把"玩家此刻正开着看全图"也算一档。那等于：**玩家一直开着，AI 就一直全知**
+ * ——用户的原话是"只防住了玩家看一眼，没防住一直看"。
+ * 而设计意图是**补偿一手**（玩家看过，AI 这一手也看看），不是"跟着玩家的开关走"。
+ *
+ * 所以现在只认"点过按钮"这一笔（`state.seeAllSeen`），而且**只算一手**
+ * ——不管玩家是看一眼就关、还是一直开着，AI 都只在下一次自己行动的回合里享受这一次，
+ * 回合结束就清（见 `aiNextActionV4` 结尾）。
  *
  * ⚠️ 这条只管"看得见什么"，**不放开"打得着什么"**：开火目标永远过
  * `tactics.seenFoes`（引擎的 `canSeeTile`），玩家点了看全图也一样打不了视野外的目标。
  */
 function seeAllOf(s: GameState): boolean {
   if (s.config.seeAll === true) return true;
-  if (s.showAll === true) return true;
   return s.seeAllSeen === true;
 }
 

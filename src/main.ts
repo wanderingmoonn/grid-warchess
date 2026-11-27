@@ -5742,10 +5742,12 @@ function handleAction(act: string, el: HTMLElement): void {
        * 所以开和关都记一笔：AI 读到它就把这一手也当"能看全图"，
        * 并在**自己这一手结束时清掉**（`aiNextActionV4` 返回 null 那一下）。
        *
-       * 联机局不记：那会让"对面玩家点了看全图"变成"我这边 AI 全知"，
-       * 等于把对手的兵力白送过来——那不是君子协定，是漏题。
+       * 联机局也记（用户 2026-11-27 定）：3 人局里可能是"两个玩家 + 1 个 AI"，
+       * AI 也是某一方的，它该和那一方的玩家看到一样多。
+       * 至于"看全图会不会跨客户端互相影响"——服务的迷雾本来就不是安全边界
+       * （`net/room.ts` 开头写着），所以这里不为它单独开特例，免得口径分叉。
        */
-      if (!room) state.seeAllSeen = true;
+      state.seeAllSeen = true;
       saveMatch(state);
       render();
       toast(state.showAll ? '看全图：开（只影响显示）' : '看全图：关');

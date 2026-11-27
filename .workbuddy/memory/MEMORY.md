@@ -23,9 +23,14 @@
 **可见性（2026-11-27 17:50 定，用户纠正过两次）：**
 - `state.fog` = 这局有没有雾（**实战默认有**，`CONFIG.fogDefault=true`）；`state.showAll` = 玩家要不要看全图；
   `config.seeAll` = 允许 AI 看全图（**正向语义，题目/调试显式开**）；`state.seeAllSeen` = 玩家刚开过关掉那一笔。
-- v4 判据在 `ai-v4.ts` 的 `seeAllOf`：三档任一成立就看全图，否则按 `fog`。**代码默认必须按视野**。
+- v4 判据在 `ai-v4.ts` 的 `seeAllOf`：**两档**（`config.seeAll` ∪ `state.seeAllSeen`），否则按 `fog`。
+  **不读 `state.showAll`**（那会让"一直开着看全图"变成"AI 一直全知"，用户指出是漏洞）。
+  `seeAllSeen` 只算**一手**：v4 回合结束（返回 null）就清。**代码默认必须按视野**。
 - **红线**：能不能"看见"和能不能"打着"是两件事。开火永远过 `tactics.seenFoes`（引擎 `canSeeTile`）。
-- ⚠️ **39 道考题全是无雾，实战默认有雾** → v4 的有雾行为从没被考过；`V-1-01` 回归题排在 §4.23 第 ⑤ 步。
+- ⚠️ **39 道考题全是无雾，实战默认有雾** → v4 的有雾行为从没被考过。
+  **`V-1-01` 已出（2026-11-27）**：有雾、守军 3 长枪在城里、敌人在 4~6 格外；
+  判 `blindAttacks=0` / `lostUnits≤2` / `foeLost≥1` / `neverLostCity`。
+  四种子：none 全红 · v1 全绿 · **v4 全红**（每手 press，敌损 0）。跑批现在每题打一行 `可见性：…`。
 
 **三条"别再踩"（今天刚踩的，很贵）：**
 1. **不要给 v4 传 `clipByVision = true`**：`ui/board.ts` 只在 `s.fog` 为真时隐藏单位 →
