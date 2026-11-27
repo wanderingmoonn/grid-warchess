@@ -23,8 +23,8 @@
  *   ③ 环检测：在"胜分相同"的那一撮里找 a>b>c>a（用户说的未定问题，先数出来）
  */
 import { DEFAULT_CONFIG, createMatch } from '../src/core/setup.ts';
-import { applyAction, attackableTargets, reachableTiles, utype } from '../src/core/rules.ts';
-import type { GameState, PlayerId } from '../src/core/types.ts';
+import type { GameState } from '../src/core/types.ts';
+import { duel, flushDuelCache } from './lib/duel-cache.ts';
 
 const argOf = (name: string, dflt: string): string => {
   const i = process.argv.indexOf(`--${name}`);
@@ -33,82 +33,7 @@ const argOf = (name: string, dflt: string): string => {
 const ERA = Number(argOf('era', '3'));
 const N = Number(argOf('n', '6'));
 
-const man = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-
-/** 打一场：A 方 a 型 × n，B 方 b 型 × n。返回双方剩余 */
-function fight(a: string, b: string): { aLeft: number; bLeft: number; turns: number } {
-  let s: GameState = createMatch({ ...DEFAULT_CONFIG, size: 14, startEra: 1, mapStyle: 'open' }, 7);
-  /* 只留建筑，开局兵全清；然后摆两队（中间隔 6 格） */
-  s = { ...s, units: s.units.filter((u) => s.unitTypes[u.type]?.category === 'building') };
-  for (const [owner, type] of [['A', a], ['B', b]] as Array<[PlayerId, string]>) {
-    for (let i = 0; i < N; i++) {
-      s.units.push({
-        id: `${owner}-${i}`,
-        owner,
-        type,
-        x: owner === 'A' ? 3 + (i % 2) : 10 + (i % 2),
-        y: 4 + Math.floor(i / 2),
-        hp: utype(s, type).maxHp!,
-        moved: false,
-        acted: false,
-      } as never);
-    }
-  }
-  s = { ...s, current: 'A' as PlayerId };
-  const combat = (o: PlayerId) => s.units.filter((u) => u.owner === o && s.unitTypes[u.type]?.category === 'combat');
-
-  for (let turn = 0; turn < 30 && !s.winner; turn++) {
-    for (const who of ['A', 'B'] as PlayerId[]) {
-      if (s.winner) break;
-      for (let step = 0; step < 120; step++) {
-        const u = combat(who).find((x) => !x.acted);
-        if (!u) break;
-        const live = s.units.find((x) => x.id === u.id)!;
-        const foes = combat(who === 'A' ? 'B' : 'A');
-        if (foes.length === 0) break;
-        const tg = attackableTargets(s, live).filter((t) => t.owner !== who);
-        if (tg.length > 0) {
-          const t = [...tg].sort((x, y) => x.hp - y.hp)[0]!;
-          const r = applyAction(s, { type: 'ATTACK', unitId: live.id, targetId: t.id });
-          if (r.ok) {
-            s = r.state;
-            continue;
-          }
-        }
-        const goal = [...foes].sort((x, y) => man(live, x) - man(live, y))[0]!;
-        const reach = reachableTiles(s, live);
-        let best: { x: number; y: number } | null = null;
-        let bd = man(live, goal);
-        for (const k of reach.keys()) {
-          const x = k % s.w;
-          const y = (k - x) / s.w;
-          const d = man({ x, y }, goal);
-          if (d < bd) {
-            bd = d;
-            best = { x, y };
-          }
-        }
-        if (best) {
-          const r = applyAction(s, { type: 'MOVE', unitId: live.id, x: best.x, y: best.y });
-          if (r.ok) {
-            s = r.state;
-            continue;
-          }
-        }
-        /* 走不动：标记掉，别死循环 */
-        const idx = s.units.findIndex((x) => x.id === live.id);
-        if (idx >= 0) s.units[idx] = { ...s.units[idx]!, moved: true, acted: true } as never;
-        else break;
-      }
-      if (!s.winner) {
-        const r = applyAction(s, { type: 'END_TURN' });
-        if (r.ok) s = r.state;
-      }
-      if (combat('A').length === 0 || combat('B').length === 0) break;
-    }
-  }
-  return { aLeft: combat('A').length, bLeft: combat('B').length, turns: s.turn };
-}
+const fight = (a: string, b: string) => duel(a, b, N);
 
 const ids = Object.values(s0().unitTypes)
   .filter((d) => d.category === 'combat' && (d.domain ?? 'land') !== 'water' && (d.era ?? 1) === ERA)
@@ -118,7 +43,7 @@ function s0(): GameState {
 }
 const name = (t: string): string => s0().unitTypes[t]?.name ?? t;
 
-console.log(`\n=== ${ERA} 代 · 每对 ${N} 个对 ${N} 个 · 同一套打法 ===\n`);
+console.log(`\n=== ${ERA} 代 · 每对 ${N} 个对 ${N} 个 · 同一套打法（结果走缓存）===\n`);
 
 const score = new Map<string, number>(ids.map((t) => [t, 0]));
 const head: Array<{ a: string; b: string; win: 'A' | 'B' | '平'; aLeft: number; bLeft: number; rev: boolean }> = [];
@@ -186,3 +111,5 @@ for (const [sc, g] of groups) {
   }
   console.log(`  三元环：${cyc.length === 0 ? '无' : cyc.join(' , ')}`);
 }
+
+flushDuelCache();

@@ -21,7 +21,8 @@
  */
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { attacksPerTurn, previewAttack, utype } from '../src/core/rules.ts';
-import { combatOfEra, fight } from './lib/duel.ts';
+import { combatOfEra } from './lib/duel.ts';
+import { duel, flushDuelCache } from './lib/duel-cache.ts';
 import type { GameState, Unit } from '../src/core/types.ts';
 
 const argOf = (name: string, dflt: string): string => {
@@ -65,8 +66,8 @@ for (const era of [1, 2, 3, 4, 5]) {
     for (let j = i + 1; j < ids.length; j++) {
       const a = ids[i]!;
       const b = ids[j]!;
-      const r1 = fight(a, b, N);
-      const r2 = fight(b, a, N);
+      const r1 = duel(a, b, N);
+      const r2 = duel(b, a, N);
       const m = r1.aLeft - r1.bLeft + (r2.bLeft - r2.aLeft);
       margin[a] = (margin[a] ?? 0) + m;
       margin[b] = (margin[b] ?? 0) - m;
@@ -83,7 +84,10 @@ for (const era of [1, 2, 3, 4, 5]) {
  * 实测：火枪×6 打装甲车×6 是 **-10**（装甲车赢），公式却把火枪排在装甲车前面。
  * 这里让每一代每个兵和**上一代最强的两个**也打一场，把"升代到底换来了什么"变成拟合样本。
  */
-if (process.argv.includes('--cross')) for (let k = 1; k < measured.length; k++) {
+/* ⚠️ 这里必须锁住**原来的长度**：循环里会往 `measured` 里 push，
+ * 用 `k < measured.length` 会永远追不上自己（第一版就这么挂过 10 分钟）。 */
+const baseLen = measured.length;
+if (process.argv.includes('--cross')) for (let k = 1; k < baseLen; k++) {
   const prev = measured[k - 1]!;
   const cur = measured[k]!;
   const tops = [...prev.ids].sort((a, b) => prev.score[b]! - prev.score[a]! || (a < b ? -1 : 1)).slice(0, 1);
@@ -94,8 +98,8 @@ if (process.argv.includes('--cross')) for (let k = 1; k < measured.length; k++) 
   for (const id of ids) { score[id] = 0; margin[id] = 0; }
   for (const a of cur.ids) {
     for (const b of tops) {
-      const r1 = fight(a, b, N);
-      const r2 = fight(b, a, N);
+      const r1 = duel(a, b, N);
+      const r2 = duel(b, a, N);
       const m = r1.aLeft - r1.bLeft + (r2.bLeft - r2.aLeft);
       margin[a] = (margin[a] ?? 0) + m;
       margin[b] = (margin[b] ?? 0) - m;
@@ -103,7 +107,8 @@ if (process.argv.includes('--cross')) for (let k = 1; k < measured.length; k++) 
       else if (m < 0) score[b] = (score[b] ?? 0) + 1;
     }
   }
-  measured.push({ era: 100 + cur.era, ids, score, margin });
+  /* 参照组仍按**这一代**取（跨代样本只是多了几对对手，不该换尺子） */
+  measured.push({ era: cur.era, ids, score, margin });
 }
 
 /** 参照组：最贵 / 最厚 / 射程最远（不用战力排序，所以不会循环） */
@@ -208,3 +213,5 @@ for (const m of measured) {
       `      公式：${pred.map((t) => `${utype(s, t).name}(${Math.round(powerOf(t, m.era, best.p))})`).join(' > ')}`,
   );
 }
+
+flushDuelCache();
