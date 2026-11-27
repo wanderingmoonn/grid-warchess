@@ -24,11 +24,11 @@
 import { AI_MAX_STEPS, DEFAULT_BUDGET, aiActionKey } from '../ai.ts';
 import { playerView } from '../fog.ts';
 import { EARTH } from '../board.ts';
-import { buildWorld, type World } from './world.ts';
+import { buildWorld, unitWorth, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
 import { actFor, recruitAction, recruitEcon } from './tactics.ts';
-import { canSeeTile, effectiveStats, recruitPriceOf, utype } from '../rules.ts';
+import { canSeeTile, effectiveStats, recruitPriceOf, utype, visionOf } from '../rules.ts';
 import type { Band, BandReport, Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId, Unit } from '../types.ts';
 
@@ -263,6 +263,9 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
  * 每手打一行，"第一次出现有限值"在日志里一眼看得出，而且一个字节都不碰判断。
  */
 function logAlert(s: GameState, world: World, turn: number): void {
+  /* 派出去的会是"最便宜的那个战斗兵"，它的视野就是预警半径（没有兵就报 0） */
+  const cheap = [...world.myCombat].sort((a, b) => unitWorth(s, a) - unitWorth(s, b))[0];
+  const vision = cheap ? visionOf(s, cheap) : 0;
   const rows: string[] = [];
   for (const city of world.myCities) {
     let best = Infinity;
@@ -270,11 +273,24 @@ function logAlert(s: GameState, world: World, turn: number): void {
       const t = world.marchTurnsOf(f, city, effectiveStats(s, f).move ?? 2);
       if (t < best) best = t;
     }
+    const need = world.alertNeed(city);
+    /* 最近的那座敌城就是"重点方向"（多座敌城时，第一版先看最近的那条） */
+    const foeCity = [...world.foeCities].sort(
+      (a, b) => world.marchTurns(a, city) - world.marchTurns(b, city),
+    )[0];
+    const spot = foeCity && vision > 0 ? world.watchSpot(city, foeCity, vision) : undefined;
+    const alert = !Number.isFinite(need)
+      ? '需 ∞'
+      : need <= 0
+        ? '需 0 手'
+        : spot?.feasible
+          ? `需 ${need} 手 · 预警点 (${spot.at!.x},${spot.at!.y}) 边 (${spot.edge!.x},${spot.edge!.y}) ${world.alertCover(spot.edge!) ? '已覆盖' : '未覆盖'}`
+          : `需 ${need} 手 · 预警不可行（${spot?.why ?? '没有战斗兵可派'}）`;
     rows.push(
-      `${city.id} 可见敌 ${world.foeCombat.length} · 最近到城 ${Number.isFinite(best) ? `${best} 手` : '—'} · 血 ${city.hp}`,
+      `${city.id} 可见敌 ${world.foeCombat.length} · 最近到城 ${Number.isFinite(best) ? `${best} 手` : '—'} · ${alert} · 血 ${city.hp}`,
     );
   }
-  console.log(`[alert] T=${turn} · ${rows.join(' · ')}`);
+  console.log(`[alert] T=${turn} · 敌速 ${world.raidMove} · 视野 ${vision} · ${rows.join(' · ')}`);
 }
 
 /**

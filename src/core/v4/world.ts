@@ -55,10 +55,12 @@ import { EARTH, idxOn, tileOn } from '../board.ts';
 import {
   attackableTargets,
   attacksPerTurn,
+  canSeeTile,
   cityTiles,
   previewAttack,
   damageToCity,
   effectiveStats,
+  incomeOf,
   rebuildCost,
   recruitSpawnCells,
   recruitPriceOf,
@@ -517,6 +519,45 @@ export interface World {
    * 引擎本来就算得出真实步数，用它挑落点最省事，也不会再和规则脱节。
    */
   turnsFrom(p: { x: number; y: number }): Float64Array;
+  /* ── 预警（阶段 5 §2.2，2026-11-27）───────────────────────────
+   *
+   * 四件东西，**一处回答**：等时线、`T_def`、预警点、覆盖。
+   * 只算，不决定；谁派不派兵是决定层的事。
+   */
+  /**
+   * **敌人从某一格走回这座城要几手**（等时线的原料）。
+   *
+   * 按**敌方的移动力**摊开；一个敌人都看不见时，按我方速度当镜像
+   * （用户 2026-11-27 的口径："没有信息就按和自己一样快估算"）。
+   */
+  raidTurns(city: City): Float64Array;
+  /** 用来摊这张场的手数口径（日志/理由里要说清是按谁的速度算的） */
+  raidMove: number;
+  /**
+   * **我组织守军还要几手**（0 = 现在就能守住；`Infinity` = 组织不出来）。
+   *
+   * 两笔账取小的那个（用户 2026-11-27 23:50 定）：
+   *   · **补新兵**：缺口身价 → 要造几个 → 钱（存量 + **每回合收入**）和产兵格谁先卡住；
+   *   · **把现有的兵调回来**：最近的那支走到城要几手。
+   *
+   * ⚠️ "产能"指**每回合收入的金币**，不是金币存量（存量只影响第一手能不能立刻买）。
+   */
+  alertNeed(city: City): number;
+  /**
+   * **预警点**：走廊（敌城 → 我城的真实最短路）上第一个"敌人 `alertNeed` 手内能到城"的格，
+   * 再朝敌城方向退到"那一格刚好落在视野边缘"的位置。
+   *
+   * `feasible = false` 有两种原因，结论相同（这条来路来不及预警 / 组织不出守军）：
+   * 敌城太近（连在城门口看见都来不及）、地形走不通、或者根本造不出兵。
+   */
+  watchSpot(city: City, foeCity: City, vision: number): {
+    at?: { x: number; y: number };
+    edge?: { x: number; y: number };
+    feasible: boolean;
+    why: string;
+  };
+  /** 那个位置**现在**有人看得见吗（用引擎的 `canSeeTile`，和开火/记账同一个口径） */
+  alertCover(at: { x: number; y: number }): boolean;
   /**
    * 从 `p` 出发的**按格计步**距离场（每格 1 步，仍然绕水/山）。
    *
@@ -1339,6 +1380,170 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     };
   };
 
+  /*
+   * ── 预警（阶段 5 §2.2，2026-11-27）──────────────────────────
+   *
+   * 三件东西：等时线（`raidTurns`）、`T_def`（`alertNeed`）、预警点（`watchSpot`）。
+   * **只算，不决定**——派不派兵是决定层的事，这里一个字节都不影响现有判断。
+   */
+
+  /**
+   * 摊等时线用的移动力：**看得见敌人就用敌人自己的（队伍按最慢的那个），
+   * 一个都看不见就用我方速度当镜像**（用户口径："没信息就按和自己一样快估算"）。
+   */
+  const raidMove = foeCombat.length > 0 ? foeMove : move;
+
+  const raidCache = new Map<string, Float64Array>();
+  const raidTurns = (city: City): Float64Array => {
+    const hit = raidCache.get(city.id);
+    if (hit) return hit;
+    /*
+     * 从**城的每一格**同时出发摊开，按敌速换算成回合。
+     * BFS 是对称的，所以"从城出发到 p"等于"从 p 走回城"，方向不用管。
+     */
+    const seeds = cityTiles(city).map((t) => t.y * s.w + t.x);
+    const f = distanceField(s, seeds, { perTurn: raidMove }).dist;
+    raidCache.set(city.id, f);
+    return f;
+  };
+
+  /**
+   * **我组织守军还要几手**：两笔账取小的那个（用户 2026-11-27 23:50 定）。
+   *
+   *   · **补新兵**：缺口身价 ÷ 单兵身价 = 要造几个；
+   *     钱走的是**存量 + 每回合收入**，同时被空产兵格卡住（一手最多造几个）。
+   *     ⚠️ 用户明确纠正过：**"产能"是每回合收入，不是金币存量**——存量只决定第一手能不能立刻买。
+   *   · **把现有的兵调回来**：最近的那支走到城要几手。
+   *
+   * 两笔都取不到（没钱没产能、手里也没兵）→ `Infinity`，意思是"组织不出来"，
+   * 这时预警的结论是"救不了，先攒钱/先修工事"，不是"再往前派人"。
+   */
+  const alertNeed = (city: City): number => {
+    /* 需要的守军身价：**镜像估**——对面一只队伍 ≈ 我现在的战斗兵（没情报就按对手和我一样强） */
+    let needWorth = 0;
+    let homeWorth = 0;
+    const outs: Array<{ w: number; t: number }> = [];
+    for (const u of myCombat) {
+      const w = unitWorth(s, u);
+      const back = marchFrom(u)[idxOn(s, EARTH, city.x, city.y)] ?? Infinity;
+      needWorth += w;
+      if (back <= 1) homeWorth += w; /* 一手能回城的，算"在家" */
+      else outs.push({ w, t: back });
+    }
+    const gap = Math.max(0, needWorth - homeWorth);
+    if (gap <= 0) return 0;
+
+    /*
+     * **调兵那条路：不是"最近那个人回来要几手"，是"人凑够要几手"。**
+     *
+     * 按到城时间排序、一个个往里加，加到"在家的 + 回来的 ≥ 需要的"那一刻为止——
+     * 一个人回来不算数（他挡不住一支队伍）。所有人都回来还凑不够 → 走不通，`Infinity`。
+     */
+    let recall = Infinity;
+    let acc = homeWorth;
+    for (const o of [...outs].sort((a, b) => a.t - b.t)) {
+      acc += o.w;
+      if (acc >= needWorth) {
+        recall = o.t;
+        break;
+      }
+    }
+
+    /* 补兵那条路：这一代每格最强的兵（不看此刻有没有空位——那是"能不能造"，不是"造多强"） */
+    const unit = bestPerCell(city, false);
+    if (!unit || unit.gold <= 0) return Number.isFinite(recall) ? recall : Infinity;
+    const men = Math.ceil(gap / Math.max(1, unit.worth));
+    const slots = cityTiles(city).filter(
+      (t) => !s.units.some((x) => x.x === t.x && x.y === t.y),
+    ).length;
+    const income = incomeOf(s, me);
+    const gold = s.players[me]?.gold ?? 0;
+    if (slots <= 0 || income <= 0) return Number.isFinite(recall) ? recall : Infinity;
+    /* 产兵格先卡：一手最多 slots 个；钱再卡：缺口那笔钱 ÷ 每回合收入 */
+    const bySlots = Math.ceil(men / slots);
+    const byGold = Math.ceil(Math.max(0, men * unit.gold - gold) / income);
+    const build = Math.max(bySlots, byGold);
+
+    return Math.min(build, recall);
+  };
+
+  /**
+   * **走廊**：敌城 → 我城的真实最短路（沿"离我城更近"的梯度一格一格走回来）。
+   *
+   * 用按格计步的场（`stepFrom`）而不是回合场：一回合走 2 格时，
+   * 十几格是同一个值，梯度就分不出方向了（这是 `stepToward` 当年踩过的坑）。
+   */
+  const corridorOf = (from: City, to: City): Array<{ x: number; y: number }> => {
+    const field = stepFrom({ x: to.x, y: to.y });
+    const path: Array<{ x: number; y: number }> = [];
+    let cur = { x: from.x, y: from.y };
+    let d = field[cur.y * s.w + cur.x] ?? Infinity;
+    if (!Number.isFinite(d)) return [];
+    for (let guard = 0; guard < s.w * s.h; guard += 1) {
+      path.push(cur);
+      if (d <= 0) break;
+      let next: { x: number; y: number } | undefined;
+      let best = d;
+      for (const [dx, dy] of DIRS4) {
+        const x = cur.x + dx;
+        const y = cur.y + dy;
+        if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+        const v = field[y * s.w + x] ?? Infinity;
+        if (v < best) {
+          best = v;
+          next = { x, y };
+        }
+      }
+      if (!next) break;
+      cur = next;
+      d = best;
+    }
+    return path;
+  };
+
+  /**
+   * **预警点**：走廊上第一个"敌人 `alertNeed` 手内能到城"的格（`edge`），
+   * 再朝敌城方向退到"`edge` 刚好落在视野边缘"的位置（`at`）。
+   *
+   * 判"可行"只用一件事：**敌城门口到我的城，够不够 `alertNeed` 手**。
+   * 不够（城挨得太近，12×12 就是这种）→ 预警这件事本身不成立，
+   * 这时该做的是就地堆兵，不是往远处派人（用户 2026-11-27 23:50 点明）。
+   */
+  const watchSpot = (
+    city: City,
+    foeCity: City,
+    vision: number,
+  ): { at?: { x: number; y: number }; edge?: { x: number; y: number }; feasible: boolean; why: string } => {
+    const need = alertNeed(city);
+    if (!Number.isFinite(need)) return { feasible: false, why: '组织不出守军（没钱、没产兵格、手里也没兵）' };
+    if (need <= 0) return { feasible: false, why: '现在就能守住，不需要预警' };
+    const field = raidTurns(city);
+    const gate = field[idxOn(s, EARTH, foeCity.x, foeCity.y)] ?? Infinity;
+    if (!Number.isFinite(gate)) return { feasible: false, why: `${foeCity.id} 走不到我城（地形不通）` };
+    if (gate <= need) {
+      return {
+        feasible: false,
+        why: `敌城太近：从 ${foeCity.id} 出发只要 ${gate} 手就到，来不及（要 ${need} 手）`,
+      };
+    }
+    const path = corridorOf(foeCity, city);
+    if (path.length === 0) return { feasible: false, why: '找不到走廊' };
+    const idx = path.findIndex((p) => (field[p.y * s.w + p.x] ?? Infinity) <= need);
+    if (idx < 0) return { feasible: false, why: '走廊上找不到等时线（距离场和走廊不同源？）' };
+    const edge = path[idx]!;
+    /* 朝敌城方向退回"视野刚好盖住 edge"的位置：走 vision-1 格，edge 就落在视野边缘 */
+    const at = path[Math.max(0, idx - Math.max(0, Math.round(vision) - 1))]!;
+    return {
+      at,
+      edge,
+      feasible: true,
+      why: `敌人 ${need} 手内能到城的那一点是 (${edge.x},${edge.y})，站 (${at.x},${at.y}) 用 ${vision} 格视野刚好盖住`,
+    };
+  };
+
+  /** 那一格现在有人看得见吗（引擎口径，和开火/记账同一个函数） */
+  const alertCover = (at: { x: number; y: number }): boolean => canSeeTile(s, me, at.x, at.y);
+
   /**
    * **能同时打到这座城的格数**（W3 上限）：到任一城格的步数 ≤ 我方射程、能站人、不是城格。
    *
@@ -1586,6 +1791,11 @@ export function buildWorld(s: GameState, me: PlayerId): World {
     foeEta(p) {
       return foeEtaAt(p);
     },
+    raidTurns,
+    raidMove,
+    alertNeed,
+    watchSpot,
+    alertCover,
     roleOf(city) {
       return roleMap.get(city.id) ?? 'safe';
     },
