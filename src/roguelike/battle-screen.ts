@@ -22,7 +22,22 @@ import type { AiBudget } from '../core/ai-meta.ts';
 import type { Action, GameState, Unit } from '../core/types.ts';
 import { buildBattle, baseTypeOf, outcomeOf, resultOf, spawnWave, step } from './battle.ts';
 import { CULTIVATORS, growthOf } from './data.ts';
-import { expForRank, getExp, getRank, REALMS } from '../core/cultivation/progression.ts';
+import {
+  expForRank,
+  getExp,
+  getRank,
+  REALMS,
+  totalHpBonusForRank,
+} from '../core/cultivation/progression.ts';
+import {
+  armorModifier,
+  attTimesModifier,
+  moveModifier,
+  RangeModifier,
+  realmAtkFor,
+  SplashModifier,
+  trueDamageOf,
+} from '../core/cultivation/stats.ts';
 import type { BattleInit, BattleResult } from './types.ts';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
@@ -173,8 +188,14 @@ export function mountBattle(host: HTMLElement, init: BattleInit, handlers: Battl
       }
       ${
         cult
-          ? `<div class="rg-hc-line rg-hc-realm">境界 <b>${REALMS[rank] ?? '凡人'}</b>（攻 +${rank * 3} / 血 +${rank * 8}）· 修为 ${exp}${
+          ? `<div class="rg-hc-line rg-hc-realm">境界 <b>${REALMS[rank] ?? '凡人'}</b> · 修为 ${exp}${
               rank >= 9 ? '（已至顶）' : ` / ${next}`
+            }<br>境界加成 攻 +${realmAtkFor(u)} / 甲 +${armorModifier(u)} / 血 +${totalHpBonusForRank(
+              rank,
+            )} / 射 +${RangeModifier(u)} / 移 +${moveModifier(u)}${
+              trueDamageOf(u) > 0 ? ` / 真元 ${trueDamageOf(u)}` : ''
+            }${attTimesModifier(u) > 0 ? ` / 攻击 ${attTimesModifier(u) + 1} 次` : ''}${
+              SplashModifier(u) > 0 ? ` / 溅射 ${SplashModifier(u)}` : ''
             }</div>`
           : ''
       }

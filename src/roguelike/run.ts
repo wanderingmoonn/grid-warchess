@@ -5,9 +5,8 @@
  * 好处是整套流程可以在 node 里直接跑（见 scripts/rogue-smoke.ts），
  * 不用开浏览器就能验证"十步走完 → boss → 下一层"这条链没有断。
  */
-import { UNIT_TYPES } from '../core/config.ts';
-import { expansionUnitsFor } from '../core/setup.ts';
 import {
+  ALL_UNITS,
   DECISIONS,
   DEFENSE_BY_ERA,
   EVENTS,
@@ -52,19 +51,14 @@ export const STEPS_PER_LAYER = 10;
 export const ROOMS_PER_LAYER = STEPS_PER_LAYER * 2;
 
 /**
- * 兵种造价表：基础兵 + 各层扩展带来的兵。
+ * 兵种造价表：直接用 `data.ts` 的全量索引（基础表 + 所有扩展包）。
  *
- * 第 6 代（摩托化步兵、中型坦克……）不在 `UNIT_TYPES` 里，它们住在「信息化」包里。
- * 只查基础表的话 `costOf` 对它们返回 0，于是 `pickEnemyTypes` 会把它们全部跳过——
- * 第三层后半段的敌人会变成"一个兵都没有"。这不是平衡问题，是查表漏了一层。
+ * 上一版是 `...UNIT_TYPES` + 各层/各世界 `expansionUnitsFor(...)` 拼出来的子集，
+ * 结果漏掉 `requiresPack` 的单位（圣剑勇者、邪龙王）：`costOf` 返回 0，
+ * 商店标价 0、英雄唯一性失效、`unitDefOf` 也查不到。
+ * 现在只有一个来源：`ALL_UNITS`（能不能上场由 `createMatch` 按 `expansionIds` 决定）。
  */
-const CATALOG: Record<string, import('../core/types.ts').UnitTypeDef> = {
-  ...UNIT_TYPES,
-  ...expansionUnitsFor(LAYERS[1].expansions),
-  ...expansionUnitsFor(LAYERS[3].expansions),
-};
-// 四种世界各自带来的兵（奇想的飞龙、修真的法器……）也要能查到造价
-for (const w of Object.values(WORLDS)) Object.assign(CATALOG, expansionUnitsFor(w.theme.expansions));
+const CATALOG = ALL_UNITS;
 const costOf = (id: string): number => CATALOG[id]?.cost ?? 0;
 
 /**
@@ -1043,6 +1037,18 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     isTrial
       ? [...(node.trial?.enemy ?? [])]
       : sanitizeAir(pickEnemyTypes(pool, troopBudget, valueOf, troopHead, isHero), run, theme);
+  /** 试炼的「师兄」：敌人里最贵的那个修士（一般是剑修），境界比普通弟子高一级 */
+  const trialSenior =
+    isTrial && node.trial
+      ? node.trial.seniorType && node.trial.enemy.includes(node.trial.seniorType)
+        ? node.trial.seniorType
+        : [...new Set(node.trial.enemy)]
+            .filter((t) => CULTIVATORS.has(t))
+            .reduce<string | undefined>(
+              (best, t) => (!best || costOf(t) > costOf(best) ? t : best),
+              undefined,
+            )
+      : undefined;
   let holdRounds = 0;
   let roundLimit: number;
   /*
@@ -1163,6 +1169,9 @@ export function battleFor(run: RunState, node: RoomNode, seed: number): BattleIn
     cultivation: { ...run.cultivation },
     wounds: { ...run.wounds },
     elderType: pickElder(run, kept),
+    trialRank: isTrial ? (node.trial?.rank ?? 0) : undefined,
+    trialSeniorRank: isTrial ? node.trial?.seniorRank : undefined,
+    trialSeniorType: trialSenior,
     bonusAtk: bonus.atk,
     bonusArmor: bonus.armor,
     bonusHp: bonus.hp,

@@ -12,41 +12,37 @@
  *   · 加休整选项 → `REST_OPTIONS` 加一行，`run.ts` 的 `restOptions` 认 id。
  */
 import type { LayerId, EventDef, ArmyEntry, TrialDef } from './types.ts';
-import { expansionUnitsFor } from '../core/setup.ts';
+import type { UnitTypeDef } from '../core/types.ts';
+import { UNIT_TYPES } from '../core/config.ts';
 import { EXPANSIONS } from '../core/expansions.ts';
+import { CULTIVATOR_IDS } from '../core/cultivation/identity.ts';
+import { expansionUnitsFor } from '../core/setup.ts';
 
-/** 兵种中文名 */
-export const UNIT_NAME: Record<string, string> = {
-  militia: '民兵',
-  archer: '弓手',
-  scout: '斥候',
-  ge: '戈兵',
-  spearman: '长枪兵',
-  longbow: '长弓手',
-  knight: '骑士',
-  crossbow: '弩兵',
-  musketeer: '火枪兵',
-  mortar: '臼炮',
-  halberdier: '戟兵',
-  hussar: '骠骑兵',
-  rifleman: '步枪兵',
-  mg: '机枪队',
-  armoredcar: '装甲车',
-  hmg: '重机枪组',
-  squad: '步兵班',
-  tank: '坦克',
-  artillery: '榴弹炮',
-  ct_infantry: '摩托化步兵',
-  ct_tank: '中型坦克',
-  ct_howitzer: '自行榴弹炮',
-  ct_recon: '装甲侦察车',
-};
+/**
+ * **全量兵种索引**：基础表 + 所有扩展包（含 `requiresPack` 的前置包单位）。
+ *
+ * 这是"查名字 / 查造价 / 查是不是英雄"用的目录，**不是本局可用白名单**——
+ * 后者由 `createMatch` 按 `expansionIds` 决定（见 `battle.ts` 的 `buildBattle`）。
+ *
+ * 为什么不用 `expansionUnitsFor([...])` 拼：那个函数会按 `requiresPack` 过滤，
+ * 只传 `['fantasy']` 时拿不到「圣剑勇者」（它还要 `pack-contemporary`），
+ * 于是 `costOf` 返回 0、`isHero` 返回 false、商店标价 0——上一版就踩了这个坑。
+ * 这里遍历 `EXPANSIONS` 原表，不做可用性过滤；要不要上场由 `createMatch` 管。
+ */
+export const ALL_UNITS: Record<string, UnitTypeDef> = { ...UNIT_TYPES };
+for (const e of EXPANSIONS) {
+  for (const u of e.units ?? []) ALL_UNITS[u.id] ??= { ...u };
+}
 
-/** 扩展兵的显示名（奇想的飞龙、修真的法器……），在 WORLDS 定义之后填 */
-const EXPANDED_NAMES: Record<string, string> = {};
-
+/**
+ * 兵种中文名：**只查扩展包的真实定义**，不再手抄一份名字表。
+ *
+ * 上一版这里有一张 23 条的 `UNIT_NAME`，已经出现两条和定义不一致
+ * （火炮写成榴弹炮、自行榴弹炮写成榴弹炮）。名字属于 DLC 数据，
+ * 肉鸽要做的是查表，不是复制。
+ */
 export function unitName(id: string): string {
-  return UNIT_NAME[id] ?? EXPANDED_NAMES[id] ?? id;
+  return ALL_UNITS[id]?.name ?? id;
 }
 
 /**
@@ -197,14 +193,13 @@ function l2(
   };
 }
 
-/** 修真里会"长境界"的单位（法器不会——它们不是人） */
-export const CULTIVATORS = new Set([
-  'qi-cultivator',
-  'sword-cultivator',
-  'body-cultivator',
-  'blood-cultivator',
-  'soul-cultivator',
-]);
+/**
+ * 修真里会"长境界"的单位：**直接复用扩展包的身份表**。
+ *
+ * 上一版手抄了 5 个 id，漏了灵体（`spirit`）——重复维护迟早会和 DLC 走散。
+ * 身份判据只有一个来源：`core/cultivation/identity.ts` 的 `CULTIVATOR_IDS`。
+ */
+export const CULTIVATORS: ReadonlySet<string> = CULTIVATOR_IDS;
 
 export const WORLDS: Record<WorldId, WorldDef> = {
   base: {
@@ -293,24 +288,22 @@ export const WORLDS: Record<WorldId, WorldDef> = {
       ],
     ),
     /*
-     * 境界：门口就是筑基，越往钟后越深（demo 用固定加成代替完整的修炼循环）。
+     * 境界：门口炼气，越往钟后越深，**封顶金丹(3)**。
      *
-     * **上限元婴(4)**：第二层不该撞见化神。上一版封顶 5（化神），加上长老的
-     * 境界又白送一级，层末直接站出一个「返虚」——玩家的 e3/e4 兵打它像挠墙。
+     * 这个上限是照 DLC 的真实护甲曲线定的：甲 = −1 + r² + 1.5^r
+     * （炼气 +2、筑基 +6、金丹 +12、元婴 +21、化神 +32）。第二层的兵是
+     * e3/e4（攻 14–30），撞上元婴的 21 甲就是"每下 0–9"，层末长老再叠
+     * 体格，直接是一堵铁墙。第二层最高金丹；元婴往上留给 L3/L4
+     * （修真线 L3 是末法之世，本来就没有修士）。
      */
-    rankOf: (clock) => Math.min(4, 2 + Math.floor(clock / 3)),
+    rankOf: (clock) => Math.min(3, 1 + Math.floor(clock / 3)),
     power: 2.2,
     l3Pool: [],
     l3Subtitle: '末法之世——灵气被钢铁抽干了，这一层没有修士，只有机器',
   },
 };
 
-// 四种世界的兵都有自己的名字；`unitName` 查不到基础表时会落到这张表
-for (const w of Object.values(WORLDS)) {
-  for (const [id, def] of Object.entries(expansionUnitsFor(w.theme.expansions))) {
-    EXPANDED_NAMES[id] = def.name;
-  }
-}
+// 名字统一走 `ALL_UNITS`（基础表 + 全部扩展），这里不再维护第二份。
 
 /**
  * 防御工事（精英战 / 攻坚 / 层末 / 守城战都会用）。
@@ -474,13 +467,16 @@ export const STRATEGIES: Strategy[] = [
  * 只开 fantasy 是拿不到它的（`expansionUnitsFor` 会把这种兵滤掉）。
  * 上一版只记了"第一个见到它的包"，于是英雄一个人都没上场。
  */
-export function packsForUnit(type: string): string[] {
-  for (const e of EXPANSIONS) {
-    const u = (e.units ?? []).find((x) => x.id === type);
-    if (!u) continue;
-    return u.requiresPack ? [e.id, u.requiresPack] : [e.id];
+/** 兵种 → 所属包（+ 前置包）。`EXPANSIONS` 是静态表，模块加载时建一次就够 */
+const PACK_OF: Record<string, string[]> = {};
+for (const e of EXPANSIONS) {
+  for (const u of e.units ?? []) {
+    if (!PACK_OF[u.id]) PACK_OF[u.id] = u.requiresPack ? [e.id, u.requiresPack] : [e.id];
   }
-  return [];
+}
+
+export function packsForUnit(type: string): string[] {
+  return PACK_OF[type] ?? [];
 }
 
 export function strategyById(id: string): Strategy {
@@ -1015,9 +1011,15 @@ export const TRIALS: TrialDef[] = [
     world: 'cultivation',
     title: '山门禁地',
     sub: '守山弟子没有问你为什么来，只问你还走不走',
-    // 三个筑基弟子（境界 2）：修士的强度大头在境界，光换兵种不换境界压不住
+    /*
+     * 两个炼气弟子 + 一个筑基师兄（剑修最贵，自动当师兄）。
+     * 全员炼气太送（10/10）；全员筑基 +6 甲，L1 的 e1 兵（攻 10–14）打不动（0/10）。
+     */
     enemy: ['qi-cultivator', 'body-cultivator', 'sword-cultivator'],
-    rank: 2,
+    rank: 1,
+    seniorRank: 2,
+    // 明确让剑修当师兄：体修的 +6 甲叠到 9 甲，L1 的射手一轮只打得动 1 点
+    seniorType: 'sword-cultivator',
     reward: ['qi-cultivator', 'body-cultivator'],
   },
 ];
@@ -1159,4 +1161,26 @@ export function pickEnemyTypes(
   }
   if (out.length === 0) out.push(cheapest);
   return out;
+}
+
+/*
+ * 开发期护栏：池子/试炼里写了一个不存在的兵种 id，最常见的表现是
+ * "这一关静默少一个敌人"或"试炼里少一个弟子"——不报错，很难查。
+ * 不抛异常（一局内容坏不该让游戏开不了），只在控制台点名。
+ */
+{
+  const ids = new Set<string>();
+  for (const l of Object.values(LAYERS)) {
+    for (const id of [...l.pool, ...l.poolHigh, ...l.prevPool]) ids.add(id);
+  }
+  for (const w of Object.values(WORLDS)) {
+    for (const id of [...w.theme.pool, ...w.theme.poolHigh, ...w.theme.prevPool, ...w.l3Pool]) ids.add(id);
+  }
+  for (const t of TRIALS) {
+    for (const id of [...t.enemy, ...t.reward]) ids.add(id);
+  }
+  const missing = [...ids].filter((id) => !ALL_UNITS[id]);
+  if (missing.length > 0) {
+    console.warn('[肉鸽] 兵池/试炼里有查不到的兵种 id（会被静默跳过）：', missing);
+  }
 }

@@ -57,7 +57,7 @@ export const UNIT_IDS = {
 // 身份只是"这个兵种吃修炼规则"。两者今天一致，明天就不一定了。
 //
 // 加新流派 → 在 UNIT_IDS 加一行 id、在 CULTIVATOR_IDS 里也加一行；别的钩子一个字都不用改。
-const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
+export const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
   UNIT_IDS.SPIRIT,

@@ -54,6 +54,8 @@ const { bootRogue } = await import('../src/roguelike/app.ts');
 const root = doc.getElementById('root') as HTMLElement;
 
 console.log('\n[1] 开局');
+// 固定开局 seed：不固定的话 [3] 的"第一扇门是战斗"会随机红
+window.history.replaceState({}, '', '/?rogue=1&rogueSeed=2026112601');
 bootRogue(root);
 check(!!root.querySelector('.rg-start'), '显示方略选择');
 const cards = root.querySelectorAll('.rg-strategy');
@@ -114,8 +116,12 @@ console.log('\n[3] 进战斗：界面元素齐全，认输能回到结算');
 
 console.log('\n[4] 内容预览（?rogueAuto=win）：一路走到第三层结局');
 {
-  // 把地址切成自动判胜，再开一局：这样能一次走完三层，把事件/商店/营地/层间都过一遍
-  window.history.replaceState({}, '', '/?rogue=1&rogueAuto=win');
+  /*
+   * 把地址切成自动判胜，再开一局：这样能一次走完三层，把事件/商店/营地/层间
+   * 都过一遍。`rogueSeed` 固定这一局——不然每次跑到的房间图/试炼都不同，
+   * 「第二层进入那支史」这类断言会随机红。
+   */
+  window.history.replaceState({}, '', '/?rogue=1&rogueAuto=win&rogueSeed=20261127');
   click(root.querySelector('[data-act="again"]'));
   await wait(20);
   click(root.querySelector('.rg-strategy'));

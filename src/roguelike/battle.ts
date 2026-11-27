@@ -20,7 +20,13 @@ import { createMatch, DEFAULT_CONFIG } from '../core/setup.ts';
 import type { LevelDef } from '../core/level.ts';
 import type { Action, GameState, PlayerId, Unit, UnitTypeDef } from '../core/types.ts';
 import type { ArmyEntry, BattleInit, BattleResult } from './types.ts';
-import { expForRank, setCultivationExp } from '../core/cultivation/progression.ts';
+import {
+  expForRank,
+  getMaxHp,
+  getRank,
+  setCultivationExp,
+  totalHpBonusForRank,
+} from '../core/cultivation/progression.ts';
 import { CULTIVATORS, DEFENSE_UNIT_DEFS, growthOf } from './data.ts';
 import { makeRng } from './rng.ts';
 
@@ -699,16 +705,61 @@ export function buildBattle(init: BattleInit): GameState {
    * **不再改全图共用的兵种表**：两边境界不一样（敌人按时代钟、玩家按自己
    * 修出来的修为），改表会让同一种修士在两边都变强。改成逐单位套变体。
    */
-  const playerRank = init.playerRank ?? init.rank;
-  const buffRank = (u: Unit, rank: number): void => {
+  /**
+   * 把境界真正落到单位上。
+   *
+   * **不要在变体上自己加攻/血**：DLC 的境界加成不是线性的「每级 +3 / +8」，
+   * 而是 `cultivation/stats.ts` 在结算时按境界现算的：
+   *   · 攻 = ceil((5r + 2^(r−0.5)) / (r+1)^0.2)（金丹 +16、元婴 +23）
+   *   · 甲 = ceil(−1 + r² + 1.5^r)（金丹 +12、元婴 +21）
+   *   · 血 = Σ hpGainForRank（金丹 +35、元婴 +78、化神 +202）
+   *   · 另有射程 / 移动 / 视野 / 真元 / 攻击次数 / 溅射，各有一条公式。
+   * 上一版用 `variantOf(..., rank*3, 0, 0, rank*8)` 又加了一遍，结果是
+   * 「DLC 加成 + 自制加成」的双份攻击，生命却只有 rank*8（远低于真实曲线）。
+   *
+   * 现在只设 exp/rank，其余交给 DLC。生命要手动补 `maxHpBonus`：
+   * `setCultivationExp` 是"扮演某个境界"的入口，不像 `addExp` 那样会加生命。
+   */
+  const applyRank = (u: Unit, rank: number): void => {
     if (rank <= 0) return;
     if (!CULTIVATORS.has(baseTypeOf(u.type))) return;
-    u.type = variantOf(s, u.type, rank * 3, 0, 0, rank * 8);
-    u.hp = s.unitTypes[u.type]?.maxHp ?? u.hp;
+    setCultivationExp(u, expForRank(Math.max(0, rank - 1)));
+    u.maxHpBonus = totalHpBonusForRank(getRank(u));
+    u.hp = getMaxHp(s, u);
   };
+
   for (const u of s.units) {
     if (u.hp <= 0) continue;
-    buffRank(u, u.owner === 'A' ? playerRank : init.rank);
+    if (u.owner === 'A') {
+      /*
+       * 玩家修士：**逐个**按自己那一类存下来的修为，与本层钟给的下限取高。
+       * 不再用全队最高的 `playerRank` 一把套——那会让炼气士跟着剑修一起
+       * 变金丹，"谁的修为高就全员高"，等于没有个体差异。
+       */
+      const base = baseTypeOf(u.type);
+      const floorExp = init.rank > 0 ? expForRank(init.rank - 1) : 0;
+      const saved = init.cultivation?.[base] ?? 0;
+      const exp = Math.max(floorExp, saved);
+      if (exp > 0) {
+        setCultivationExp(u, exp);
+        u.maxHpBonus = totalHpBonusForRank(getRank(u));
+        u.hp = getMaxHp(s, u);
+      }
+    } else {
+      /*
+       * 试炼：普通弟子按 `trialRank`，师兄（最贵那个修士）按 `seniorRank`。
+       * 修真线的普通战斗 / 层末没有这两个字段，照旧走 `init.rank`
+       * （长老与手下已在上面按 `elderType` 分过）。
+       */
+      const senior = init.trialSeniorType !== undefined && baseTypeOf(u.type) === init.trialSeniorType;
+      const rank =
+        init.trialRank !== undefined
+          ? senior
+            ? (init.trialSeniorRank ?? init.trialRank + 1)
+            : init.trialRank
+          : init.rank;
+      applyRank(u, rank);
+    }
   }
 
   /*
@@ -737,40 +788,15 @@ export function buildBattle(init: BattleInit): GameState {
         const ed = s.unitTypes[elder.type];
         if (ed) ed.name = `${ed.name}·长老`;
       }
-      /*
-       * 境界 R 的门槛是 `expForRank(R-1)`——写成 `expForRank(R)` 会白送一级
-       * （上一版长老因此是「返虚」而不是「化神」，比设计高了一整档）。
-       */
-      setCultivationExp(elder, expForRank(Math.max(0, Math.min(9, init.rank - 1))));
+      // 长老：境界＝本层钟（体格另加：攻 +25% / 血 +35% / 甲 +1）
+      applyRank(elder, init.rank);
     }
     for (const u of foes) {
       if (u === elder) continue;
       if (!CULTIVATORS.has(baseTypeOf(u.type))) continue;
-      // 手下压到钟下一级（同样减一：expForRank(R-1) 才是 R）
-      setCultivationExp(u, expForRank(Math.max(0, init.rank - 2)));
+      // 手下比长老低一级
+      applyRank(u, init.rank - 1);
     }
-  }
-
-  /*
-   * ---- 玩家修士：把跨战斗保留的修为灌回去 ----
-   *
-   * 这是"修为跨战斗"的另一半（另一半在 `resultOf` 里把经验捞出来）。
-   * 灌的是 exp，境界由引擎自己反推——不自己算，免得两套阈值对不上。
-   */
-  for (const u of s.units) {
-    if (u.owner !== 'A') continue;
-    const type = baseTypeOf(u.type);
-    if (!CULTIVATORS.has(type)) continue;
-    /*
-     * 起手至少是**本层钟给的那个境界**（不然玩家修士的境界是 0，而敌人
-     * 按钟是 3——同一场里对面会法术、会溅射，你连真元都没有，一回合被清空）。
-     * 存下来的修为如果更高，就用存下来的：这就是"跨战斗保留"。
-     */
-    // 境界 R 的门槛是 `expForRank(R-1)`——差一位就是白送一级，别写成 R
-    const base = init.rank > 0 ? expForRank(init.rank - 1) : 0;
-    const saved = init.cultivation?.[type] ?? 0;
-    const exp = Math.max(base, saved);
-    if (exp > 0) setCultivationExp(u, exp);
   }
 
   /*

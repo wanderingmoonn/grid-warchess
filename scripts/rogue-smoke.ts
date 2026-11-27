@@ -34,7 +34,8 @@ import {
   STEPS_PER_LAYER,
 } from '../src/roguelike/run.ts';
 import { DECISIONS, DEFENSE_UNIT_DEFS, EVENTS, eventById, pickEnemyTypes, WORLDS } from '../src/roguelike/data.ts';
-import { attackableTargets, isEliminated, sameTeam, utype } from '../src/core/rules.ts';
+import { attackableTargets, isEliminated, maxHpOf, sameTeam, utype } from '../src/core/rules.ts';
+import { realmAtkFor } from '../src/core/cultivation/stats.ts';
 import { baseTypeOf, buildBattle, outcomeOf, resultOf, spawnWave, step, survivorsOf } from '../src/roguelike/battle.ts';
 import { makeRng } from '../src/roguelike/rng.ts';
 import type { LayerId, RoomKind, RunState } from '../src/roguelike/types.ts';
@@ -374,9 +375,14 @@ console.log('\n[7] 第二层的四种世界（正史 / 军备 / 奇想 / 修真�
   // 修士现在会套"境界变体"（rg:qi-cultivator@…），按基础 id 找
   const qi = s2.units.find((u) => baseTypeOf(u.type) === 'qi-cultivator');
   if (qi) {
+    /*
+     * 境界不再写进"变体兵种"：DLC 的 `stats.ts` 在伤害结算时按 rank 现算
+     * 攻/甲/射/移，生命走 `maxHpOf`（基础 + `maxHpBonus`）。所以断言要查
+     * **实际生效值**，不是 `utype().atk`——那个只是兵种基础。
+     */
     const def = utype(s2, qi.type);
-    check(def.atk > 10, '修真修士吃到境界加成（基础攻 10）', `atk=${def.atk}`);
-    check(def.maxHp > 20, '修真修士的血也涨了（基础 20）', `hp=${def.maxHp}`);
+    check(realmAtkFor(qi) > 0, '修真修士吃到境界加成（攻击）', `境界+${realmAtkFor(qi)}`);
+    check(maxHpOf(s2, qi) > def.maxHp, '修真修士的血也涨了', `${def.maxHp} → ${maxHpOf(s2, qi)}`);
   } else {
     check(false, '修真层派出了修士', '场上没有 qi-cultivator');
   }

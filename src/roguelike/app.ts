@@ -6,7 +6,8 @@
  */
 import { STRATEGIES, armyText, eventById, relicById, relicDesc, rankOfExp, themeOf, unitDefOf, unitName } from './run.ts';
 import { CULTIVATORS, EVENTS, WORLDS } from './data.ts';
-import { expForRank, REALMS } from '../core/cultivation/progression.ts';
+import { expForRank, REALMS, totalHpBonusForRank } from '../core/cultivation/progression.ts';
+import { moveForRank, realmArmorBase, realmAtkBase, realmRangeBase } from '../core/cultivation/stats.ts';
 import { abilityById } from '../core/ability-registry.ts';
 import {
   addUnits,
@@ -103,7 +104,12 @@ function showStart(root: HTMLElement): void {
 }
 
 function beginRun(root: HTMLElement, strategyId: string): void {
-  const seed = randomSeed();
+  /*
+   * `?rogueSeed=123` 固定这一局：冒烟脚本靠它复现，玩家想复盘同一张图也能用。
+   * 没写就随机——正常开局不受影响。
+   */
+  const fixed = Number(new URLSearchParams(window.location.search).get('rogueSeed'));
+  const seed = Number.isFinite(fixed) && fixed > 0 ? fixed >>> 0 : randomSeed();
   run = startRun(seed, strategyId);
   rng = makeRng((seed ^ 0x85ebca6b) >>> 0);
   showMap(root);
@@ -142,7 +148,9 @@ export function armyRow(r: RunState, entry: ArmyEntry): string {
     const next = shown < 9 ? expForRank(shown) : 0;
     realmLine = `<div class="rg-armyline">修为 ${exp}${
       shown >= 9 ? '（已至顶）' : ` / ${next}`
-    } · 境界加成 攻 +${shown * 3} / 血 +${shown * 8}</div>`;
+    } · 境界加成 攻 +${realmAtkBase(shown)} / 甲 +${realmArmorBase(
+      shown,
+    )} / 血 +${totalHpBonusForRank(shown)} / 射 +${realmRangeBase(shown)} / 移 +${moveForRank(shown)}</div>`;
   }
   /*
    * 能力与技能：修真单位的信息量大头在这里（真元伤害、剑扫、化灵……）。
