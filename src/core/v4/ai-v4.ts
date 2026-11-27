@@ -55,13 +55,10 @@ let cache: TurnCache | null = null;
 const LANE_WINDOW = 6;
 
 /**
- * "见过的敌人"这本账最多留几条。
- *
- * **这不是判断，是内存卫生**：一本只增不减的账会跟着存档/回放一直长。
- * 过期怎么算**不在这里拍**——由读它的那一步用 `marchTurns` 判（见 `types.ts` 的 `foeSight`）。
- * 128 远大于一局里真能看见的敌兵数（200 手里一般几十个），所以现在删谁都不影响读数。
+ * 账本最多留几条。**这不是判断，是内存卫生**：一本只增不减的账会跟着存档/回放一直长。
+ * 过期怎么算不在这里拍——读者用 `marchTurns` 判（见 `types.ts` 的 `unitSeen`）。
  */
-const FOE_SIGHT_KEEP = 128;
+const SEEN_KEEP = 128;
 
 const keyOf = (s: GameState, me: PlayerId): string =>
   `${s.turn}:${s.current}:${s.units.length}:${s.players[me]?.gold ?? 0}:${s.cities.length}` +
@@ -174,8 +171,6 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
     /* 工兵队：只有架桥那一条分支会写；别的决定里是 undefined，等于撤编 */
     buildBand: con.buildBand,
     ...laneMemo(s, world, con, decision, mem, s.turn),
-    /* 阶段 5 第一步：只写不读（读者接上之前，这一行不该改变任何一手动作） */
-    foeSight: foeSightMemo(s, me, mem, s.turn),
   };
   writeMemory(s, me, nextMem);
   logLane(s, world, con, nextMem);
@@ -257,59 +252,6 @@ function econHomeMemo(s: GameState, me: PlayerId, mem: V4Memory, world: World): 
 }
 
 /**
- * **记忆层第一步（阶段 5 §2.1）：记下"在视野里见过的敌战斗兵"**。
- *
- * 这一版**只写不读**——故意不给任何人读，先用 40 题证明"记了不改变任何行为"，
- * 下一手再接读者。接的时候只准读一个布尔（"这块地方最近有没有敌人"），
- * 不许读坐标，理由见 `types.ts` 的 `foeSight`。
- *
- * ── 三个容易写错的地方 ──────────────────────────────────
- *
- * 1. **判"看不看得见"用引擎的 `canSeeTile`**，和开火同一个函数。
- *    **不能图省事读 `world.foeCombat`**：`playerView` 只在**开雾**时裁单位，
- *    关雾局里它给的是全图（`P-1-01~04` 翻红 7 道就是照抄 `ai.ts` 的写法踩的）。
- *    所以必须显式问引擎"这一格我这边看不看得见"。
- * 2. **只记敌方的战斗兵**，和 `world.foeCombat` 同一口径——预警问的是"能打的兵"。
- * 3. **只记地球上的**：`canSeeTile` 只认地球的格号，月球/站上的单位用它判会串格。
- */
-function foeSightMemo(
-  s: GameState,
-  me: PlayerId,
-  mem: V4Memory,
-  turn: number,
-): NonNullable<V4Memory['foeSight']> {
-  const out: NonNullable<V4Memory['foeSight']> = { ...(mem.foeSight ?? {}) };
-  const aliveNow = new Set<string>();
-  for (const u of s.units) {
-    if (u.owner === me) continue;
-    if (u.board !== undefined && u.board !== EARTH) continue;
-    if (utype(s, u.type).category !== 'combat') continue;
-    if (!canSeeTile(s, me, u.x, u.y)) continue;
-    aliveNow.add(u.id);
-    out[u.id] = { x: u.x, y: u.y, turn };
-  }
-  /*
-   * **删掉"看着它那一格、人却没了"的记录**——那不是走开了，是**死了**。
-   *
-   * 这一步只用视野自己就能判：如果最后看见的那格**现在还在我视野里**，
-   * 而这个人不在"看得见的敌人"名单里，它只能是死了（走开的话会在新格子上被重新记下）。
-   * 不删的话，城门口被打死的敌人会一直留在账上，判据就会以为"门口还有敌人"、
-   * 守势无限续期（`R-1-01` 实测：一个死在家门口的兵让前线晚掉头一手，8 手打不下 c2）。
-   */
-  for (const [id, r] of Object.entries(out)) {
-    if (aliveNow.has(id)) continue;
-    if (canSeeTile(s, me, r.x, r.y)) delete out[id];
-  }
-  /* 内存卫生：超了就从"最久没见"的开始删。过期判断不在这里（见 FOE_SIGHT_KEEP） */
-  const ids = Object.keys(out);
-  if (ids.length > FOE_SIGHT_KEEP) {
-    ids.sort((a, b) => out[a]!.turn - out[b]!.turn || (a < b ? -1 : 1));
-    for (const id of ids.slice(0, ids.length - FOE_SIGHT_KEEP)) delete out[id];
-  }
-  return out;
-}
-
-/**
  * **影子观测：交换账 + 批次 + 断档**（W1.5，2026-11-26）。
  *
  * 只记、不读——这一版仍然**没有任何判断读它**。
@@ -361,12 +303,83 @@ function laneMemo(
   const waveOf = { ...(mem.waveOf ?? {}) };
   const lineGap = { ...(mem.lineGap ?? {}) };
   /*
+   * **这一眼"看到"的东西**（阶段 5 §2.1c，2026-11-27）。
+   *
+   * 只有两样：**我自己的单位**（我的兵在哪我永远知道）+ **我看得见的敌人**。
+   * 原来是 `s.units` 全抄——那是用只有引擎知道的全图去算账，
+   * 于是"雾里对面死了一个兵" v4 也知道，账再喂给决定层（判这条线赚不赚）= 开了全图。
+   *
+   * **"看得见"用的是同一套口径**（不是另发明一个）：
+   * 开雾 → 引擎的 `canSeeTile`；没雾 / 玩家开着看全图 → 和玩家一样看得见全图。
+   * 这就是阶段 4 定的那一句"**看见什么跟 `s.fog`，能打什么跟 `canSeeTile`**"：
+   * 账本记的是"看见什么"，所以照前半句；打谁仍由 `tactics.seenFoes` 管，不在这一层。
+   */
+  const sees = (x: number, y: number): boolean => seeAllOf(s) || canSeeTile(s, world.me, x, y);
+  const now: NonNullable<V4Memory['unitSeen']> = {};
+  const visFoe = new Set<string>();
+  for (const u of s.units) {
+    if (u.owner !== world.me) {
+      /* 别人的坐标只在两个前提下有意义：地球上的、我看得见的（`sees` 只认地球格号） */
+      if (u.board !== undefined && u.board !== EARTH) continue;
+      if (!sees(u.x, u.y)) continue;
+      visFoe.add(u.id);
+    }
+    now[u.id] = { type: u.type, owner: u.owner, x: u.x, y: u.y, turn };
+  }
+
+  /*
+   * **"死了"和"走开了"怎么分清**（§2.1c 最费劲的一处，2026-11-27）。
+   *
+   * 引擎不报击杀事件，只能看"上一眼还在、这一眼不见了"。可在雾里这两件事长得一样：
+   * 它可能被打死了，也可能正好从视野边上走出去。**这件事没有精确解**
+   * （玩家能分是因为他看见棋子一格一格在动，AI 只拿到每手的快照）。
+   *
+   * 试过的两个极端，都量过：
+   *   · **"最后那格还看得见"就算死**（现在这条）：`S-004` 开雾时会有幽灵收益
+   *     （走出去的敌人被记成击杀，约 45 金/手）。误差方向是**高估收益**。
+   *   · **"它这一步能去的格子全在我视野里"才敢算死**（严格证明版）：
+   *     `S-002` 开雾量出 2000 金的真实击杀、账本记 **0 金** —— 太严，
+   *     等于雾里永远没有收益，那条线会被判成"一直在亏"，v4 就再也不进攻了。
+   *
+   * 取前者：**只用它真正看见过的东西**（记录是视野内写的、判断也用视野），
+   * 剩下的是一个方向已知的小偏差，写在 `docs/PLAN-V4-PHASE5` §2.1c 里。
+   *
+   * ⚠️ 这一步**不能关在"一手只差分一次"那道门后面**：一手里最后一下打死的人，
+   * 是在这次写账之后才消失的。门一关，这笔记录要拖到下一手才删，
+   * 于是每一手都挂着一个 1 手前的幽灵，判据就以为"城门口还有人"、守势无限续期
+   * （`R-1-01` 直接翻红）。删记录是**事实更新**，不是记账；记账才需要那道门。
+   */
+  const kept: NonNullable<V4Memory['unitSeen']> = {};
+  /* 算作死亡的那些：只有它们进账本收益（判断只写一次，下面差分直接读） */
+  const deadFoe = new Set<string>();
+  for (const [id, r] of Object.entries(seen)) {
+    if (r.owner === world.me) continue; /* 我的兵：以这一眼为准，别留旧记录 */
+    if (visFoe.has(id)) continue; /* 还看得见：以这一眼为准 */
+    if (r.x === undefined || r.y === undefined) continue; /* 老格式没位置，判不了 */
+    if (sees(r.x, r.y)) deadFoe.add(id); /* 那格看得见、人却没了 → 死了 */
+    else kept[id] = { ...r, gone: true }; /* 看不见了 → 挂账（给预警用，账上不结） */
+  }
+  const nextSeen: NonNullable<V4Memory['unitSeen']> = { ...kept, ...now };
+  /*
+   * 内存卫生：超了就从"最久没见"的开始删。
+   * 挂账的那些本来就不会再刷新 `turn`，所以先被删的是它们——这是有意的：
+   * 一支消失了太久的部队，既不该算收益，也不该再让守势续期。
+   */
+  const seenIds = Object.keys(nextSeen);
+  if (seenIds.length > SEEN_KEEP) {
+    seenIds.sort(
+      (a, b) => (nextSeen[a]!.turn ?? 0) - (nextSeen[b]!.turn ?? 0) || (a < b ? -1 : 1),
+    );
+    for (const id of seenIds.slice(0, seenIds.length - SEEN_KEEP)) delete nextSeen[id];
+  }
+  /*
    * **一手只差分一次**：`currentView` 一手内会被多次重建（每花一笔钱一次），
    * 不设这道门就会把同一批死亡记好几遍。
+   * 注意"删死记录 / 更新这一眼"在上面已经做完了，这里只挡记账。
    */
   if (exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn) {
     return {
-      unitSeen: seen,
+      unitSeen: nextSeen,
       exchange,
       exchangeByCity: byCity,
       waves,
@@ -375,9 +388,6 @@ function laneMemo(
       lineFront: mem.lineFront ?? {},
     };
   }
-
-  const now: Record<string, { type: string; owner: string; x: number; y: number }> = {};
-  for (const u of s.units) now[u.id] = { type: u.type, owner: u.owner, x: u.x, y: u.y };
 
   /* 进行中的线（还没结束的批次所属的城市）——死亡按"离哪条线最近"归属 */
   const openCities = [...new Set(waves.filter((w) => !w.endTurn).map((w) => w.cityId))]
@@ -389,9 +399,15 @@ function laneMemo(
   const gainBy: Record<string, number> = {};
   const lossBy: Record<string, number> = {};
   for (const [id, prev] of Object.entries(seen)) {
-    if (now[id]) continue;
-    const price = recruitPriceOf(s, prev.owner as PlayerId, utype(s, prev.type)).gold;
+    if (now[id]) continue; /* 这一眼还看得见 → 没死 */
     const mine = prev.owner === world.me;
+    /*
+     * **敌人不见了，要先分清是死了还是走了**（§2.1c 的核心）。
+     * 这一条判断只在上面的 `kept` 循环里做一次（`deadFoe`），这里只认它的结论——
+     * 同一件事不写第二个答案。挂账（`gone`）和"没证住"的，一分钱都不进收益。
+     */
+    if (!mine && !deadFoe.has(id)) continue;
+    const price = recruitPriceOf(s, prev.owner as PlayerId, utype(s, prev.type)).gold;
     if (mine) loss += price;
     else gain += price;
     /* 位置是老记忆可能没有的字段：没有就只进总账，不硬猜 */
@@ -542,7 +558,7 @@ function laneMemo(
     for (const [uid, wid] of Object.entries(waveOf)) if (drop.has(wid)) delete waveOf[uid];
   }
 
-  return { unitSeen: now, exchange: ex, exchangeByCity: byCity, waves, waveOf, lineGap, lineFront };
+  return { unitSeen: nextSeen, exchange: ex, exchangeByCity: byCity, waves, waveOf, lineGap, lineFront };
 }
 
 /**

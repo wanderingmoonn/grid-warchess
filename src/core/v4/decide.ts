@@ -226,8 +226,10 @@ function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory):
 /**
  * **记忆里："这座城附近最近还有敌人吗"**（阶段 5 §2.1b）。
  *
- * 只回答一个布尔，**不回答"敌人在哪一格"**——这是 `V4Memory.foeSight` 的红线：
+ * 只回答一个布尔，**不回答"敌人在哪一格"**——这是 `V4Memory.unitSeen` 的红线：
  * 记录里的坐标是**旧位置**，拿它算距离、算战力会比"不知道"更错。
+ *
+ * 只算**敌方的战斗兵**：预警问的是"能打的兵"，一支路过的经济兵不该让守势续期。
  *
  * 「最近」不拍数字：同一条记录，从它**最后被看见的位置走回这座城要几手**
  * （`world.marchTurns`，和 `defensible` 量敌人用的是同一把尺），
@@ -239,11 +241,23 @@ function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory):
  *
  * 它挡的是：敌人只是暂时走出"城还能撑几轮"的窗口，就被判成"没威胁"、全军掉头去打。
  */
-function recentFoeNear(world: World, mem: V4Memory | undefined, city: City, turn: number): boolean {
-  for (const r of Object.values(mem?.foeSight ?? {})) {
+function recentFoeNear(
+  s: GameState,
+  world: World,
+  mem: V4Memory | undefined,
+  city: City,
+  turn: number,
+): boolean {
+  for (const r of Object.values(mem?.unitSeen ?? {})) {
+    if (r.owner === world.me) continue;
+    /* 记的是未来的手数（换局面/读档）或老格式（没有手数）→ 不当证据 */
+    if (r.turn === undefined) continue;
     const age = turn - r.turn;
-    if (age < 0) continue; /* 记的是未来的手数（换局面/读档），不当证据 */
-    const walk = world.marchTurns(r, city);
+    if (age < 0) continue;
+    if (utype(s, r.type).category !== 'combat') continue;
+    /* 老格式可能没有位置：没有位置就没法量"它离城多远"，不当证据 */
+    if (r.x === undefined || r.y === undefined) continue;
+    const walk = world.marchTurns({ x: r.x, y: r.y }, city);
     if (!Number.isFinite(walk) || walk > DECIDE_HORIZON) continue;
     if (age <= walk) return true;
   }
@@ -777,7 +791,7 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
        * 记忆补的正是这一格窟窿：**"看不见 / 不算威胁"不等于"没这回事"**。
        * 它只输出一个布尔，位置一律不读（旧坐标算距离会比不知道更错）。
        */
-      const remembered = home ? recentFoeNear(world, mem, home, s.turn) : false;
+      const remembered = home ? recentFoeNear(s, world, mem, home, s.turn) : false;
       /* 只因为记忆才续期的那一种，理由要单独写：面板上不能出现"稳"却还在守 */
       const onlyMemory = !!outlook && outlook.state === 'hold' && !atGate && remembered;
       if (home && (atGate || remembered || outlook!.state === 'lose')) {
