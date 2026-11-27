@@ -13,7 +13,7 @@
  */
 import type { World } from './world.ts';
 import type { City } from '../types.ts';
-import type { Band, BandTask, Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
+import type { BandTask, Decision, TakeoverStage, UpgradeCandidate, V4Memory } from './types.ts';
 import { unitWorth, upgradedCity } from './world.ts';
 import { cityTiles, effectiveStats, previewAttack, utype } from '../rules.ts';
 import { passable } from '../config.ts';
@@ -209,51 +209,6 @@ function withSpend(s: GameState, world: World, d: BareDecision, mem?: V4Memory):
  * "沿用了决定、忘了沿用升级"的默认值 bug。让唯一入口来挂，漏不掉。
  */
 /**
- * **这支队回得来吗**——`defend` 时"撤哪几队"的唯一判据（2026-11-27 用户定）。
- *
- * 用户给的三条（原话要点）：**正在攻城的不撤；在路上、离得太远的也不撤；刚出门或离得近的可以回防。**
- *
- * 翻译成两个能数的条件：
- *   · **在打**：这一队有人"这一手就能攻城"（`laneStats().front > 0`，几何量，不是感觉）；
- *   · **太远**：队里**最慢的那个**走回城要的手数 > 这座城还能撑的轮数（`cityStand().rounds`）。
- *     回不来的人不该被叫回——叫了也是白叫，还把它本来那一路的攻势扔了。
- *
- * 两个条件任一成立 → **不撤**，让它继续干手上的事。
- * 两个都不成立（刚出门 / 离得近）→ 撤，回去守。
- *
- * ── 为什么这不是"新机制" ────────────────────────────────────
- *
- * 决定层早就能**逐队下任务**（`bandTasksOf`），`defend` 那一支却一直是
- * "所有队一律 `hold`"——那就是"全局撤攻"的唯一来源（`S-002` 第 9/13 手这么翻的）。
- * 这里只是把那一支换成逐队判断，没有加新层。
- */
-function canRecall(world: World, band: Band, home: City): boolean {
-  /*
-   * 城撑得住（没有威胁 / 无限轮）时，`rounds` 是 Infinity。
-   * 这种时候"回得来"恒真，但也不该因为这条就把所有队撤回去——
-   * 调用方只在**真的判成要守**的时候才问这个问题，所以这里返回 true 是安全的。
-   */
-  const stand = world.cityStand(home).rounds;
-  const window = Number.isFinite(stand) ? Math.max(1, stand) : Infinity;
-  /* ① 在打那座城 → 不撤 */
-  const foeCity = world.foeCities.find((c) => c.id === band.cityId);
-  if (foeCity && world.laneStats(band.unitIds, foeCity).front > 0) return false;
-  /* ② 队里最慢的人回不来 → 不撤 */
-  const units = band.unitIds
-    .map((id) => world.myCombat.find((u) => u.id === id))
-    .filter((u): u is NonNullable<typeof u> => !!u);
-  if (units.length === 0) return false;
-  const slowest = Math.max(...units.map((u) => world.marchTurns(u, home)));
-  if (process.env.V4_RECALL_LOG === '1') {
-    console.error(
-      `[recall] band=${band.id}@${band.cityId} n=${units.length} 敌城=${foeCity?.id ?? '无'} 在打=${foeCity ? world.laneStats(band.unitIds, foeCity).front : 'N/A'} 最近=${foeCity ? Math.min(...units.map((u) => world.marchTurns(u, foeCity))) : 'N/A'}` +
-        ` 最慢回城=${slowest} 窗口=${window} → ${slowest <= window ? '撤' : '不撤'}`,
-    );
-  }
-  return slowest <= window;
-}
-
-/**
  * **每队一条任务**（W3.6 第 3c 步，2026-11-26）。
  *
  * 决定层的输出原来只有一个"全局类型"，于是一次类型切换（打 → 发展）就只能把所有人
@@ -276,25 +231,7 @@ function bandTasksOf(world: World, mem: V4Memory | undefined, d: BareDecision): 
     if (b.unitIds.length === 0) continue;
     const isTarget = !!d.cityId && d.cityId === b.cityId;
     if (d.kind === 'defend' && d.cityId) {
-      /*
-       * **逐队判"撤不撤"**（2026-11-27，用户定的三条）。原来是"所有队一律 hold"，
-       * 于是正在城下猛攻的队也被叫回家——`S-002` 第 9/13 手就是这么从 press 翻成 defend 的。
-       *
-       * 判据只有一处：`canRecall`（在打 / 太远 → 不撤；否则撤）。
-       * 撤 → `hold` 回这座城；不撤 → 保持它原来的任务（继续打它自己那座城）。
-       */
-      const home = world.cities.find((i) => i.city.id === d.cityId)?.city;
-      if (!home || canRecall(world, b, home)) {
-        out.push({ bandId: b.id, order: 'hold', cityId: d.cityId });
-      } else {
-        /* 不撤：保持它原来的任务。能攻城就 `siege`，还在路上就 `march`（同一把尺：`laneStats().front`） */
-        const foeCity = world.foeCities.find((c) => c.id === b.cityId);
-        out.push({
-          bandId: b.id,
-          order: foeCity && world.laneStats(b.unitIds, foeCity).front > 0 ? 'siege' : 'march',
-          cityId: b.cityId,
-        });
-      }
+      out.push({ bandId: b.id, order: 'hold', cityId: d.cityId });
       continue;
     }
     if (d.kind === 'takeover' && isTarget) {
@@ -876,15 +813,6 @@ export function decide(s: GameState, world: World, mem?: V4Memory): Decision {
     new Set(
       (mem?.bands ?? [])
         .filter((b) => b.cityId !== cityId && world.foeCities.some((f) => f.id === b.cityId))
-        /*
-         * **只排除"叫不回来"的**（2026-11-27）。判据和派任务那边是同一个 `canRecall`：
-         * 会回来的人算守军，不会回来的不算——两处不能各说各话，否则
-         * "判它挡得住"和"派谁回去"会打架（`S-002` 翻 defend 又翻回来就是这种）。
-         */
-        .filter((b) => {
-          const home = world.cities.find((i) => i.city.id === cityId)?.city;
-          return !home || !canRecall(world, b, home);
-        })
         .flatMap((b) => b.unitIds),
     );
   const losing = threatened
