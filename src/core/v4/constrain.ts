@@ -11,7 +11,7 @@
  */
 import { EARTH, boardIdOf, boardOf, tileOn } from '../board.ts';
 import { passable } from '../config.ts';
-import { attackableTargets, cityTiles, effectiveStats, previewAttack, produceAt, reachableTiles, recruitCost, recruitSpawnCells, threatTiles } from '../rules.ts';
+import { attackableTargets, cityTiles, effectiveStats, previewAttack, produceAt, reachableTiles, rebuildCost, recruitCost, recruitSpawnCells, threatTiles } from '../rules.ts';
 import { occupantAt, utype } from '../rules.ts';
 import { eraDef } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
@@ -1877,13 +1877,69 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       : reserveGold > 0
         ? Math.max(0, (s.players[world.me]?.gold ?? 0) - reserveGold)
         : undefined;
+  /*
+   * ════════════════════════════════════════════════════════════════
+   * **接管废墟：队伍停在城外，进城只是一件事**（2026-11-27，被拒 422 次的根因）
+   *
+   * 攒钱链本来就有（`clear` → `save` → `enter`，`spendCap` 压住重建费）。
+   * 漏的是**队伍的落脚点**：这些队只有 `cityId = 废墟`，于是 `squadBase`/`targetOf`
+   * 都取**城中心**，走到城下就往城格里踩——而进废墟要付重建费，引擎在 MOVE 那一刻才拒。
+   * 实测：`S-000` 14 手里被拒 **298 次**、`D-3-01` 30 手里 **112 次**，全册 713 次里 84% 是这一条。
+   *
+   * 两条修法：
+   *   ① **集结点放在城外**（`at` = 离城中心最近的、非城格的可站格）——
+   *      城队围着它站，`targetOf` 不再指城中心，最后一步就不会踩进格子里；
+   *   ② **钱不够就不指城格**：`captureTarget` 只在付得起重建费时才给。
+   *      这是项目自己的分工（"价格与可行性属于计划层"）——引擎那道检查是兜底，不是判据。
+   * ════════════════════════════════════════════════════════════════
+   */
   if (decision.kind === 'takeover' && city) {
     const center = {
       x: city.x + Math.floor((city.size ?? 2) / 2),
       y: city.y + Math.floor((city.size ?? 2) / 2),
     };
-    captureTarget = center;
-    if (decision.stage === 'enter') {
+    /* 付得起重建费吗（和引擎同一个函数、同一个 `freeRebuild` 开关） */
+    const rebuildPrice = rebuildCost(city, s.config.freeRebuild === true);
+    const canEnter = (s.players[world.me]?.gold ?? 0) >= rebuildPrice;
+    /* 城外的集结点：离城中心最近、非城格、可站。同一距离取格号小的（可复现） */
+    let staging: { x: number; y: number } | undefined;
+    {
+      const n = city.size ?? 2;
+      let bestD = Infinity;
+      let bestK = Infinity;
+      for (let dy = -1; dy <= n; dy += 1) {
+        for (let dx = -1; dx <= n; dx += 1) {
+          const x = city.x + dx;
+          const y = city.y + dy;
+          if (x < 0 || y < 0 || x >= s.w || y >= s.h) continue;
+          const tile = s.tiles[y * s.w + x];
+          if (!tile || !passable(tile.terrain)) continue;
+          /*
+           * **"城格"要按 `cityId` 判，不能按地形判**（2026-11-27 踩的）：
+           * 废墟的格子地形已经不是 `city`，只看地形会把集结点选到废墟格上，
+           * 队伍照样往城里踩（`D-3-01` 实测：改完还剩 94 次被拒）。
+           */
+          if (tile.cityId !== null) continue;
+          const d = Math.abs(x - center.x) + Math.abs(y - center.y);
+          const k = y * s.w + x;
+          if (d < bestD || (d === bestD && k < bestK)) {
+            bestD = d;
+            bestK = k;
+            staging = { x, y };
+          }
+        }
+      }
+    }
+    /*
+     * ② **只有 `enter` 段才允许"往城格里走"，而且钱要够**。
+     *
+     * 清场（`clear`）和攒钱（`save`）段一律不指城格——`clear` 段这一手是要打仗的，
+     * 计划时看着够、打起来钱花掉了，最后一步走进废墟就被引擎拒（实测 `S-000`：
+     * 光这一条 14 手被拒 298 次）。`enter` 段因为 `spend.mode = 'save'`
+     * （上限压到"金币 − 重建费"），钱一定还在，所以那一段才安全。
+     */
+    captureTarget = decision.stage === 'enter' && canEnter ? center : undefined;
+    if (decision.stage === 'enter' && canEnter) {
       /*
        * 派**离废墟最近的那个**去，不派"最强/最贵"的。
        * 走进废墟只看"能不能站进去 + 付不付得起"，谁去都一样；
@@ -1921,6 +1977,8 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         order: task?.order ?? (decision.stage === 'clear' ? 'march' : 'hold'),
         unitIds: ids,
         cityId: task?.cityId ?? city.id,
+        /* 落脚点在城外：城队围着它站，不会往城格里踩（见上面那段注释） */
+        at: staging,
         want: b.want ?? ids.length,
       });
     }
@@ -1935,6 +1993,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
         order: decision.stage === 'clear' ? 'march' : 'hold',
         unitIds: restMain,
         cityId: city.id,
+        at: staging,
       });
     }
   } else if (threatened.length >= 2 && rest.length >= threatened.length * 2) {

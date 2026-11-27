@@ -61,6 +61,9 @@ const SHOW_PLAN = process.argv.includes('--plan');
 const SHOW_SEAT = process.argv.includes('--seat');
 /** `--reject`：把"被引擎拒"按原因分档（第 3 步第一个动作，只读） */
 const SHOW_REJECT = process.argv.includes('--reject');
+/** `--reject-detail`：把前若干次"走进废墟"的被拒打成明细（谁 → 哪一格） */
+const SHOW_REJECT_DETAIL = process.argv.includes('--reject-detail');
+let rejectDetailLeft = 12;
 /** 原因 → 人次。键里带上动作类型，才看得出"是不是 MOVE 在撞车" */
 const rejectReasons = new Map<string, number>();
 let seatTurns = 0;
@@ -140,6 +143,8 @@ type Row = {
 };
 
 const rows: Row[] = [];
+/** 当前这一手的三层输出（被拒明细要用它看编队） */
+let view0: ReturnType<typeof currentView> | null = null;
 const details: string[] = [];
 let totalRejects = 0;
 
@@ -200,6 +205,7 @@ function play(label: string, s0: GameState, ME: PlayerId, cap: number): void {
        * 所以这里读到的是"它真的打算这么干"，不是另算一遍。
        */
       const view = currentView(s, ME);
+      view0 = view;
       const row = measure(s, ME, view, turnIdx);
       const st = stepSide(s, meNext);
       s = st.state;
@@ -534,6 +540,17 @@ function stepSide(
       rejects += 1;
       const key = `${a.type}｜${(r.reason ?? '（无原因）').slice(0, 28)}`;
       reasons.set(key, (reasons.get(key) ?? 0) + 1);
+      if (SHOW_REJECT_DETAIL && rejectDetailLeft > 0 && (r.reason ?? '').includes('重建')) {
+        rejectDetailLeft -= 1;
+        const uid = 'unitId' in a ? String((a as { unitId?: string }).unitId ?? '') : '';
+        const u = cur.units.find((x) => x.id === uid);
+        const sq = u ? view0?.con.squads.find((q) => q.unitIds.includes(u.id)) : undefined;
+        console.log(
+          `  ✗ T${cur.turn} ${uid} ${u ? `(${u.x},${u.y})` : '?'} → (${(a as { x?: number }).x},${(a as { y?: number }).y})` +
+            ` 队=${sq ? `${sq.order}@${sq.cityId ?? '-'}${sq.at ? ' at(' + sq.at.x + ',' + sq.at.y + ')' : ''}` : '不在队里'}` +
+            ` 金=${cur.players[cur.current]?.gold ?? 0}｜${r.reason}`,
+        );
+      }
       if (a.type === 'MOVE' && 'unitId' in a) {
         const uid = String((a as { unitId?: string }).unitId ?? '');
         const n = (moveTries.get(uid) ?? 0) + 1;

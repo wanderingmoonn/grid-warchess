@@ -102,7 +102,7 @@ export function actFor(
    * 废墟格本身在 `reachableTiles` 里是可达的（引擎对已废墟的城放行）。
    */
   if (con.captureId === u.id && con.captureTarget) {
-    const step = stepToward(s, u, con.captureTarget, false, world.stepsFrom(con.captureTarget));
+    const step = stepToward(s, u, con.captureTarget, false, world.stepsFrom(con.captureTarget), true);
     if (step) return { type: 'MOVE', unitId: u.id, x: step.x, y: step.y };
   }
 
@@ -437,6 +437,14 @@ function stepToward(
   straight = false,
   /** 现成的距离表（越小越近）。给了就按表比，不给就退回 `manhattan` */
   field?: Float64Array,
+  /**
+   * 允许踩进**废墟格**（默认不许）。
+   *
+   * 走进废墟 = 接管，引擎在那一步要收重建费；付不起就整步作废（白烧一个动作）。
+   * 所以默认绕开——只有"这一手就是去接管"的那一次调用（`captureTarget`）才传 true。
+   * 实测（`probe-yield4 --reject`）：不绕开时全册 713 次被拒里 84% 是这一条。
+   */
+  allowRuin = false,
 ): { x: number; y: number } | null {
   const dist = (x: number, y: number): number =>
     field ? (field[y * s.w + x] ?? Infinity) : manhattan({ x, y }, to);
@@ -463,6 +471,14 @@ function stepToward(
      * "别停"由约束层的搬迁计划负责：停在上面的单位下一手会被挪开。
      */
     if (takenByOther(s, u, x, y)) continue;
+    /* **别踩废墟格**（见 `allowRuin` 的注释）——按 `cityId` 判，废墟的地形不再是 `city` */
+    if (!allowRuin) {
+      const cid = s.tiles[key]?.cityId;
+      if (cid) {
+        const c = s.cities.find((x2) => x2.id === cid);
+        if (c?.ruined) continue;
+      }
+    }
     const d = distSafe(x, y);
     if (d < bestD) {
       bestD = d;
