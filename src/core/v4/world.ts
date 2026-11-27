@@ -181,6 +181,80 @@ function combatPower(s: GameState, type: string, ref: string): number {
   return mine * (W_HP * tank + W_STAND * stand) * focusShare;
 }
 
+/**
+ * **一支编队的战力**（2026-11-27，用户定：编队是天然的计量单位）。
+ *
+ * 和"单兵身价"分开，因为有三件事只有**成群**才存在：
+ *   ① **集火**：一个敌人顶多被 `focus(r)` 个人同时打（`r²`，见 `focusOf`）；
+ *   ② **排队**：能同时出手的人被"槽位"卡住 —— `slots = min(N, focus × 敌人数)`；
+ *   ③ **白打的复利**：射程宽的一方在对方走过来那几轮里**不受反击**，
+ *      打掉的人会让对方后面每一轮都少一份输出（这才是平方律的那一半）。
+ *
+ * 做法是**离散递推**（最多 10 轮，每轮双方各结算一次），不是解析式——
+ * 因为复利本来就是一环扣一环，写成闭式容易算错，也不好看懂。
+ *
+ * 输入是**兵种 id 的列表**（不是单位实例）：决定层问的是"这 5 个人 + 那 6 个人谁强"，
+ * 手上还没有"谁站在哪"的细节。要按残血算，调用方先把虚弱的人剔掉。
+ */
+export function squadDuel(
+  s: GameState,
+  mine: string[],
+  foes: string[],
+  maxRounds = 10,
+): { mine: number; foes: number; rounds: number } {
+  const army = (types: string[], other: string[]) => {
+    if (types.length === 0) return null;
+    const avg = (f: (t: string) => number): number => types.reduce((n, t) => n + f(t), 0) / types.length;
+    /* 对"对面平均水平"的一套数：单发、每回合发数、血量、射程、移动力 */
+    const perHit = avg((t) => {
+      const one = other[0] ?? t;
+      return Math.max(
+        1,
+        previewAttack(
+          s,
+          { id: '__a', owner: s.current, type: t, x: 0, y: 0, hp: utype(s, t).maxHp ?? 1 } as Unit,
+          { id: '__b', owner: s.current, type: one, x: 1, y: 0, hp: utype(s, one).maxHp ?? 1 } as Unit,
+        ).toDefender,
+      );
+    });
+    return {
+      n: types.length,
+      perHit,
+      perTurn: avg((t) => attacksPerTurn(s, { id: '__c', owner: s.current, type: t, x: 0, y: 0, hp: 1 } as Unit)),
+      hp: avg((t) => utype(s, t).maxHp ?? 1),
+      range: avg((t) => utype(s, t).range ?? 1),
+      move: avg((t) => utype(s, t).move ?? 2),
+    };
+  };
+  const A = army(mine, foes);
+  const B = army(foes, mine);
+  if (!A) return { mine: 0, foes: foes.length, rounds: 0 };
+  if (!B) return { mine: mine.length, foes: 0, rounds: 0 };
+
+  /* 白打：射程宽的走在前面，对方要走 `Δ ÷ 它移动力` 轮才还得了手 */
+  const delta = A.range - B.range;
+  const freeForA = delta > 0 ? Math.ceil(delta / Math.max(1, B.move)) : 0;
+  const freeForB = delta < 0 ? Math.ceil(-delta / Math.max(1, A.move)) : 0;
+
+  let na = A.n;
+  let nb = B.n;
+  for (let r = 1; r <= maxRounds && na > 0 && nb > 0; r++) {
+    /* ① 我方这一轮：能出手的人数被集火槽位卡住 */
+    const slotA = Math.min(na, Math.max(1, focusOf(A.range, na, FIT_W)) * nb);
+    const killB = Math.min(nb, Math.floor((slotA * A.perHit * A.perTurn) / Math.max(1, B.hp)));
+    nb -= killB;
+    if (nb <= 0) return { mine: na, foes: 0, rounds: r };
+    if (r <= freeForA) continue; /* 对方还没走到，白挨这一轮 */
+
+    const slotB = Math.min(nb, Math.max(1, focusOf(B.range, nb, FIT_W)) * na);
+    const killA = Math.min(na, Math.floor((slotB * B.perHit * B.perTurn) / Math.max(1, A.hp)));
+    na -= killA;
+    if (na <= 0) return { mine: 0, foes: nb, rounds: r };
+    if (r <= freeForB) continue;
+  }
+  return { mine: na, foes: nb, rounds: maxRounds };
+}
+
 /** 一个已存在单位的身价：按剩余血量打折 */
 export function unitWorth(s: GameState, u: { type: string; hp: number }): number {
   const d = utype(s, u.type);
