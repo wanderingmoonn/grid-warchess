@@ -281,6 +281,31 @@ export function actFor(
     }
   }
 
+  /*
+   * **①.5 站在关键格上、敌人已经在射程内 → 先打这一拳**（阶段 5 §2.6-A，2026-11-28）。
+   *
+   * 为什么排在让开之前：这一格是"不许停"，但**没说不许打**。
+   * 引擎里攻击会同时置 `moved`，所以"打完再让开"必须拆成两手：这一手打，下一手让开。
+   * 不打的话，这个兵一整手都在做"挪一格"，而眼前那个敌人会继续往前走。
+   *
+   * 只在 `march` / `siege`（进军队）里放开；`hold` 按 `S-004` 的规矩（撤离路上不许停）
+   * **不在此列**。`assemble` / `build` 也不在——那些是差事，不是接敌状态。
+   */
+  {
+    const sqA = squadOf(con, u);
+    if (sqA && (sqA.stance === 'march' || sqA.stance === 'siege')) {
+      const onKey =
+        con.keepClear.includes(u.y * s.w + u.x) || con.yieldMoves.some((m) => m.unitId === u.id);
+      if (onKey) {
+        const foe = seenFoes(s, u).sort((a, b) => a.hp - b.hp || (a.id < b.id ? -1 : 1))[0];
+        if (foe) {
+          tallyEnc('圈上·打了');
+          return { type: 'ATTACK', unitId: u.id, targetId: foe.id, x: foe.x, y: foe.y };
+        }
+      }
+    }
+  }
+
   const sqE = squadOf(con, u);
   if (sqE && (sqE.stance === 'march' || sqE.stance === 'siege')) {
     const foesNow = seenFoes(s, u);
