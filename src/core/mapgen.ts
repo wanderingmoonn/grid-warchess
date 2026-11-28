@@ -920,6 +920,38 @@ function scatterTerrain(
   }
 }
 
+/**
+ * 贴着水边长出来的两种地形：沼泽与谷地。
+ *
+ * 判据只有一条——八邻里有水。在此之上按概率分：沼泽 28%（低洼积水）、
+ * 谷地 18%（沿岸肥土洼地，农业单位最赚）。按概率而不是整圈改写：整圈会
+ * 把河岸变成一条泥带，走两步一停；撒成"其中有几段烂泥"才对。
+ */
+function sprinkleWetTerrain(c: Ctx, rng: () => number, blocked: Set<number>): void {
+  const w = c.w;
+  const h = c.h;
+  const wet = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    const t = at(c, x, y);
+    return t === 'water' || t === 'shallow' || t === 'deep';
+  };
+  const around = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]] as const;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (at(c, x, y) !== 'plain') continue;
+      if (blocked.has(y * w + x)) continue;
+      let touching = false;
+      for (const [dx, dy] of around) {
+        if (wet(x + dx, y + dy)) { touching = true; break; }
+      }
+      if (!touching) continue;
+      const roll = rng();
+      if (roll < 0.28) put(c, x, y, 'marsh');
+      else if (roll < 0.46) put(c, x, y, 'valley');
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* 3.5 额外地貌：大地图上的河、湖、海、山与成片森林                    */
 /* ------------------------------------------------------------------ */
@@ -2032,10 +2064,24 @@ export function generateLayout(
     // （它们是给撒点式地图补纹理的，会把山脊掏出一堆碎林子和小湖）。
   } else {
     // 本体五种地貌的配方。扩展地貌走上面那条路，不会进到这里。
+    /*
+     * 2026-11-24：地形高差并进本体 —— **新对局默认带它**（见 setup 的默认配置），
+     * 但生成端仍认这个开关：老存档、沙盒与用例里显式关掉时，地图一格都不变，
+     * 这样"没开的时候和从前逐格相同"这条契约还立得住。
+     */
+    const heightOn = (opts.expansions ?? []).includes('height-terrain');
     const ratio: Array<{ t: Terrain; r: number }> = [
       { t: 'forest', r: style === 'open' ? 0.06 : 0.11 },
       { t: 'hill', r: style === 'ridge' ? 0.13 : style === 'open' ? 0.05 : 0.08 },
       { t: 'mountain', r: style === 'open' ? 0 : 0.03 },
+      /*
+       * 台地 / 沙丘（2026-11-24 用户要求"随机也能抽到"）。
+       *
+       * 这两种不靠水，按团块撒：台地是"抬起来的一块平地"，沙丘是"干的沙脊"。
+       * 份额压得很低——它们不是常规地貌，是让图面有起伏的调味，撒多了会挤掉
+       * 本体的空地林子。谷地/沼泽不在这张表里，它们必须贴着水边长（见下一趟）。
+       */
+      ...(heightOn ? [{ t: 'plateau' as Terrain, r: 0.02 }, { t: 'dune' as Terrain, r: 0.015 }] : []),
     ];
     for (const { t, r } of ratio) {
       const n = Math.round(base * r);
@@ -2057,6 +2103,14 @@ export function generateLayout(
         blob: [3, Math.max(5, Math.min(10, Math.round(Math.min(c.w, c.h) / 4)))],
       });
     }
+    /*
+     * 湿地与谷地（2026-11-24）：只长在**紧挨着水**的空地上。
+     *
+     * 沼泽是"低洼积水"、谷地是"聚水的洼地"——撒在内陆中央读起来像 bug。
+     * 位置也讲究：放在 enrichTerrain 之后（河湖已存在，沿水一圈都能挑到）、
+     * 镜像之前（最后 A/B 两半会被镜像统一）。
+     */
+    if (heightOn) sprinkleWetTerrain(c, rngTerrain, blocked);
   }
 
 /**

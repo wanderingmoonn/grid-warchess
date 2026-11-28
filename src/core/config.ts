@@ -511,7 +511,21 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 16,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 7, forest: 3, hill: 4, city: 0 },
+    /*
+     * 地形产出（金币/回合）。
+     *
+     * 2026-11-24 补齐 `plateau / valley / marsh / dune` 四种地形：斜俯视美术上线后
+     * 这几种地形真的会出现在盘面上，但产出表里没有它们的键，站在上面收 0 金币——
+     * 那不是"贫瘠"，是漏了。
+     *
+     * 定价口径（生产单位一律按这三条推）：
+     *   · **台地**：坡陡土薄，上水难 → 农业打折，牧业加分（高处草场）；
+     *   · **谷地**：聚水、淤积肥土 → 农业最高（水车/种植园尤其），工业打折；
+     *   · **沼泽**：低洼积水 → 只有零星产出，任何单位都别指望它；
+     *   · **沙丘**：干沙 → 全场最低，只比"不能站"好一点。
+     * 值与同单位相邻档保持比例（谷地≈平原×1.15、台地≈丘陵×0.8、沼泽≈平原×0.25、沙丘≈平原×0.1）。
+     */
+    incomeByTerrain: { plain: 7, forest: 3, hill: 4, city: 0, plateau: 3, valley: 9, marsh: 2, dune: 1 },
   },
   herder: {
     id: 'herder',
@@ -526,7 +540,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 18,
     range: 1,
     vision: 3,
-    incomeByTerrain: { hill: 8, plain: 4, forest: 2, city: 0 },
+    incomeByTerrain: { hill: 8, plain: 4, forest: 2, city: 0, plateau: 10, valley: 6, marsh: 3, dune: 2 },
   },
   laborer: {
     id: 'laborer',
@@ -574,7 +588,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 24,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0 },
+    incomeByTerrain: { plain: 8, hill: 5, forest: 4, city: 0, plateau: 4, valley: 9, marsh: 2, dune: 1 },
   },
 
   /*
@@ -607,14 +621,13 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '枪',
     era: 2,
     category: 'combat',
-    cost: 65,
+    cost: 55,
     move: 2,
     atk: 15,
     armor: 3,
-    maxHp: 40,
-    range: 1,
-    vision: 2,
-    abilities: ['shield-wall'],
+    maxHp: 35,
+    range: 2,
+    vision: 3,
   },
   longbow: {
     id: 'longbow',
@@ -622,11 +635,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '长',
     era: 2,
     category: 'combat',
-    cost: 90,
+    cost: 60,
     move: 2,
-    atk: 14,
+    atk: 11,
     armor: 1,
-    maxHp: 24,
+    maxHp: 20,
     range: 4,
     vision: 3,
   },
@@ -669,7 +682,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
      * 穿上林之后森林不再减速，它就真的成了"林子里的搬运工"。
      */
     abilities: ['forest-walk'],
-    incomeByTerrain: { forest: 12, hill: 5, plain: 3, city: 0 },
+    incomeByTerrain: { forest: 12, hill: 5, plain: 3, city: 0, plateau: 2, valley: 4, marsh: 2, dune: 1 },
   },
   miller: {
     id: 'miller',
@@ -720,7 +733,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 28,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4 },
+    incomeByTerrain: { plain: 13, forest: 8, hill: 6, city: 4, plateau: 3, valley: 14, marsh: 6, dune: 1 },
   },
 
   /*
@@ -741,7 +754,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '弩',
     era: 2,
     category: 'combat',
-    cost: 82,
+    cost: 80,
     move: 2,
     atk: 19,
     armor: 1,
@@ -782,11 +795,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     category: 'combat',
     cost: 130,
     move: 2,
-    atk: 23,
+    atk: 25,
     armor: 3,
     maxHp: 36,
     range: 4,
-    vision: 3,
+    vision: 4,
     abilities: ['armor-pierce'],
   },
   mortar: {
@@ -797,7 +810,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     category: 'combat',
     cost: 140,
     move: 2,
-    atk: 19,
+    atk: 30,
     armor: 2,
     maxHp: 28,
     range: 4,
@@ -822,7 +835,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
      * 一处价格改动能把另一条不相关的能力打掉，说明这条链路还没有被理解，
      * 不该顺手带进这一批。留作单独一批（连同"盾墙/阵型"一起）再验。
      */
-    cost: 100,
+    cost: 90,
     move: 2,
     atk: 21,
     armor: 5,
@@ -842,7 +855,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     armor: 4,
     maxHp: 38,
     range: 1,
-    vision: 4,
+    vision: 6,
   },
   planter: {
     id: 'planter',
@@ -857,7 +870,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 24,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 20, forest: 12, hill: 8, city: 6 },
+    incomeByTerrain: { plain: 20, forest: 12, hill: 8, city: 6, plateau: 9, valley: 24, marsh: 4, dune: 2 },
   },
   engineer: {
     id: 'engineer',
@@ -908,7 +921,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     vision: 2,
     // 城市 20 → 30（2026-11-01）：火器档唯一"城里赚钱"的建筑。
     // 180 局里它几乎没被造过——20/回合撑不起 180 金造价 + 36 点工期。
-    incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6 },
+    incomeByTerrain: { city: 30, plain: 10, hill: 6, forest: 6, plateau: 7, valley: 8, marsh: 3, dune: 2 },
   },
 
   // ================= 时代 4 · 蒸汽 =================
@@ -923,8 +936,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 36,
     armor: 3,
     maxHp: 38,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     abilities: ['armor-pierce'],
   },
   mg: {
@@ -944,8 +957,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 20,
     armor: 3,
     maxHp: 32,
-    range: 4,
-    vision: 2,
+    range: 5,
+    vision: 3,
     burst: 3,
   },
   hmg: {
@@ -954,14 +967,14 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '重',
     era: 5,
     category: 'combat',
-    cost: 215,
+    cost: 237,
     // 同上：移 1 → 2（理由见机枪队）。四段输出已经够强，卡死的只是走位。
     move: 2,
-    atk: 17,
-    armor: 3,
-    maxHp: 32,
-    range: 4,
-    vision: 2,
+    atk: 20,
+    armor: 4,
+    maxHp: 37,
+    range: 5,
+    vision: 3,
     // 四动：比机枪队多一动，所以单发伤害压到更低——总输出靠次数堆
     burst: 4,
   },
@@ -971,15 +984,15 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '甲',
     era: 4,
     category: 'combat',
-    cost: 250,
-    move: 4,
+    cost: 270,
+    move: 5,
     atk: 22,
-    armor: 5,
+    armor: 7,
     maxHp: 54,
-    range: 3,
+    range: 4,
     // 车顶机枪：两连发
     burst: 2,
-    vision: 3,
+    vision: 5,
   },
   foreman: {
     id: 'foreman',
@@ -1028,23 +1041,34 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     range: 1,
     vision: 2,
     // 城市 30 → 40（2026-11-01）：和工厂同一条理由，4 代这一档更依赖它回本
-    incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9 },
+    incomeByTerrain: { city: 40, plain: 14, hill: 9, forest: 9, plateau: 10, valley: 11, marsh: 4, dune: 3 },
   },
 
   // ============ 时代 5 · 机械化（第六时代在原版表里是空的） ============
-  squad: {
-    id: 'squad',
-    name: '步兵班',
-    short: '班',
+  commando: {
+    /*
+     * 突击队（原「时代军备 · 机械化」的单位，2026-11-28 转入原版）。
+     *
+     * 为什么转：机械化那一代本来就该有"潜行捅后排"的角色，把它留在扩展里
+     * 等于让不开时代军备的玩家少一条解法。数值原样搬过来（费 341 / 攻 49 /
+     * 甲 5 / 血 53 / 射 4 / 视 5），已含时代 5 的全局上调。
+     *
+     * 立绘沿用被删掉的「步兵班」那一张：`ERA5_UNIT_SPECS` 的键从 `squad`
+     * 改成了 `commando`，美术资源既没新增也没浪费。
+     */
+    id: 'commando',
+    name: '突击队',
+    short: '击',
     era: 5,
     category: 'combat',
-    cost: 300,
-    move: 2,
-    atk: 47,
-    armor: 4,
-    maxHp: 48,
+    cost: 341,
+    move: 3,
+    atk: 49,
+    armor: 5,
+    maxHp: 53,
     range: 4,
-    vision: 4,
+    vision: 5,
+    abilities: ['stealth'],
   },
   tank: {
     id: 'tank',
@@ -1052,18 +1076,18 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     short: '坦',
     era: 5,
     category: 'combat',
-    cost: 400,
+    cost: 440,
     move: 3,
-    atk: 56,
-    armor: 10,
-    maxHp: 88,
-    range: 3,
-    vision: 3,
+    atk: 65,
+    armor: 13,
+    maxHp: 102,
+    range: 4,
+    vision: 4,
     abilities: ['shield-wall', 'siege-master'],
   },
   artillery: {
     id: 'artillery',
-    name: '火炮',
+    name: '火箭炮',
     short: '炮',
     era: 5,
     category: 'combat',
@@ -1074,16 +1098,16 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     // 「时代越靠后、站桩远程射程越长」——火炮 5 格是这条线的天花板（有测试钉着），
     // 砍成 4 就等于让 5 代火力追平 2 代长弓。所以改成"用钱换那一格"：
     // 价格 +60，每百金输出从 46.2 掉到 38.7，仍然高效，但不再是"顺手就买"。
-    cost: 380,
+    cost: 418,
     move: 2,
-    atk: 47,
-    armor: 5,
-    maxHp: 54,
-    range: 5,
+    atk: 55,
+    armor: 6,
+    maxHp: 63,
+    range: 7,
     splash: 2,
     // 视野 2 → 3：射程 5 却只能看 2 格，等于自己 60% 的射程要别人点灯。
     // 不改射程，就把"看得见"补回来一格；最后一格仍然需要前排。
-    vision: 3,
+    vision: 5,
     abilities: ['siege-master'],
   },
   agribusiness: {
@@ -1101,7 +1125,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 30,
     range: 1,
     vision: 3,
-    incomeByTerrain: { plain: 48, city: 32, forest: 19, hill: 16 },
+    incomeByTerrain: { plain: 48, city: 32, forest: 19, hill: 16, plateau: 20, valley: 56, marsh: 8, dune: 4 },
   },
   crew: {
     id: 'crew',
@@ -1151,7 +1175,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     maxHp: 60,
     range: 1,
     vision: 2,
-    incomeByTerrain: { plain: 34, city: 22, forest: 14, hill: 14 },
+    incomeByTerrain: { plain: 34, city: 22, forest: 14, hill: 14, plateau: 15, valley: 26, marsh: 6, dune: 5 },
   },
 
   // ================= 水上部队与桥梁 =================
@@ -1386,8 +1410,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 40,
     armor: 10,
     maxHp: 82,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
     domain: 'water',
     abilities: ['armor-pierce'],
   },

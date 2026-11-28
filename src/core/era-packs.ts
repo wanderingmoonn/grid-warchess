@@ -41,7 +41,7 @@ import type { AbilityDef } from './abilities.ts';
 // （那边有按 EHP 校准过的数值口径），这里只负责把它们并进同一个包。
 // 依赖方向是单向的：era-packs → contemporary-packs，反过来没有引用。
 import { CONTEMPORARY_WAR, MODERN_ABILITIES } from './contemporary-packs.ts';
-import { TURN_START } from './ability-hooks.ts';
+import { ARMOR_STAGE, DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
@@ -102,11 +102,25 @@ const ANTIQUITY: UnitTypeDef[] = [
   },
   {
     /*
-     * 轻盾兵：跑得比步兵快、能藏林子，用来抢资源点和摸后排。
+     * 轻盾兵：现在是个**慢速正面肉盾**。
      *
      * 2026-11-22 平衡：移速 4 → 3、护甲 1 → 3。
      * 原来 4 速配「潜行」，能在前排还没接触时绕到后排拆弓手，而且一旦挨打
-     * 就整队报销（护甲 1，等于没有）；现在慢半拍、但扛得住一轮齐射。
+     * 就整队报销（护甲 1，等于没有）；那次改成慢半拍、但扛得住一轮齐射。
+     *
+     * 2026-11-28 平衡：护甲 3 → 4、血量 24 → 30、攻击 11 → 10、移速 3 → 2。
+     * 继续往"扛"这一侧压，速度砍到和民兵同档（2），"潜行摸后排"这条线基本
+     * 交还给猎兵/努比亚弓手；开头那句"跑得比步兵快"已经不成立，别再当快攻用。
+     *
+     * 按本文件顶部的口径记一笔：
+     *   每金耐久 EHP/cost：0.94 (30/32) → **1.19** (38/32)，逼近青铜带上沿 1.28；
+     *   输出：atk 11 → 10（−9%）；机动：3 → 2。
+     * 也就是"用近一成输出和两成机动，换来两成半耐久"。同价位的民兵（25 金、
+     * atk 13、EHP 32）依然比它能打，轻盾兵的价值全压在"甲 4 + 血 30 站得住"
+     * 和视野 4/潜行上——32 金买这个是不是划算，没跑过对打，不下结论。
+     *
+     * 另注意：era 1 的战斗单位会被开局白送（见文件头"硬约束"），所以它变硬
+     * 也会顺带抬高"开局随机送兵"那一侧的强度。
      */
     id: 'anc_skirmisher',
     name: '轻盾兵',
@@ -114,13 +128,12 @@ const ANTIQUITY: UnitTypeDef[] = [
     era: 1,
     category: 'combat',
     cost: 32,
-    move: 3,
-    atk: 11,
-    armor: 3,
-    maxHp: 24,
+    move: 2,
+    atk: 10,
+    armor: 4,
+    maxHp: 35,
     range: 1,
-    vision: 4,
-    abilities: ['stealth'],
+    vision: 4,
   },
   {
     // 埃及/赫梯战车：青铜唯一的"高机动打击力量"，代价是脆
@@ -166,7 +179,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     // 加这 2 点之前先确认了一件事：自动开火（`fireBuildings`）是照 `range` 选靶的，
     // **不看视野**——所以视野只影响迷雾和 AI 的信息，不会让它多打一发。
     // 这也是当初"视野 5 就永远先手开火"那句注释说不通的地方：真正决定杀伤的是 atk，不是视野。
-    // 6 格的可见面积（≈113 格）是 4 格（≈50 格）的 2.26 倍，
+    // 6 格的可见面积（欧氏圆，≈113 格）是 4 格（≈50 格）的 2.26 倍，
     // 12×12 上一座塔能看住大半个棋盘——这是"侦察塔"该有的样子，但它仍是静止的 85 金工事。
     id: 'anc_watchtower',
     name: '瞭望塔',
@@ -262,6 +275,8 @@ const ANTIQUITY: UnitTypeDef[] = [
    * 它是**第一代唯一的支援兵**，编制模板里那 15% 支援份额终于有东西可买。
    */
   {
+    // 2026-11-28 平衡：视野 4 → 5。射程 4 的弓手，视野 4 意味着"刚好打到
+    // 自己刚能看见的那一格"，多一格视野才换得来先手站位的信息。
     id: 'anc_nubian',
     name: '努比亚弓手',
     short: '努',
@@ -273,7 +288,7 @@ const ANTIQUITY: UnitTypeDef[] = [
     armor: 0,
     maxHp: 18,
     range: 4,
-    vision: 4,
+    vision: 5,
     abilities: ['stealth'],
   },
   {
@@ -282,11 +297,11 @@ const ANTIQUITY: UnitTypeDef[] = [
     short: '剑',
     era: 1,
     category: 'combat',
-    cost: 36,
+    cost: 45,
     move: 2,
-    atk: 15,
+    atk: 20,
     armor: 2,
-    maxHp: 32,
+    maxHp: 37,
     range: 1,
     vision: 2,
   },
@@ -322,9 +337,9 @@ const MEDIEVAL: UnitTypeDef[] = [
     category: 'combat',
     cost: 78,
     move: 2,
-    atk: 19,
+    atk: 16,
     armor: 6,
-    maxHp: 48,
+    maxHp: 58,
     range: 1,
     vision: 2,
     abilities: ['shield-wall'],
@@ -374,7 +389,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     category: 'combat',
     cost: 88,
     move: 2,
-    atk: 27,
+    atk: 28,
     armor: 3,
     maxHp: 42,
     range: 1,
@@ -405,8 +420,8 @@ const MEDIEVAL: UnitTypeDef[] = [
     era: 2,
     category: 'combat',
     cost: 100,
-    move: 1,
-    atk: 8,
+    move: 2,
+    atk: 12,
     armor: 7,
     maxHp: 90,
     range: 1,
@@ -504,11 +519,11 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '重',
     era: 2,
     category: 'combat',
-    cost: 58,
+    cost: 65,
     move: 2,
     atk: 16,
     armor: 5,
-    maxHp: 46,
+    maxHp: 50,
     range: 1,
     vision: 2,
     abilities: ['shield-wall'],
@@ -526,11 +541,11 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '弩',
     era: 2,
     category: 'combat',
-    cost: 64,
+    cost: 100,
     move: 1,
-    atk: 17,
+    atk: 30,
     armor: 1,
-    maxHp: 24,
+    maxHp: 27,
     range: 4,
     vision: 5,
     abilities: ['armor-pierce'],
@@ -542,10 +557,10 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '团',
     era: 2,
     category: 'combat',
-    cost: 62,
+    cost: 50,
     move: 2,
-    atk: 19,
-    armor: 4,
+    atk: 17,
+    armor: 3,
     maxHp: 42,
     range: 1,
     vision: 2,
@@ -558,13 +573,13 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '象',
     era: 2,
     category: 'combat',
-    cost: 72,
-    move: 2,
-    atk: 24,
+    cost: 75,
+    move: 1,
+    atk: 30,
     armor: 4,
-    maxHp: 58,
+    maxHp: 78,
     range: 1,
-    vision: 2,
+    vision: 3,
     abilities: ['kamikaze'],
   },
 ];
@@ -698,6 +713,68 @@ function makeMineLayer(kind: string, cap: number, label: string): AbilityDef {
   };
 }
 
+/**
+ * 破甲Ⅱ：无视目标**全部**护甲。
+ *
+ * 和「破甲」的关系：破甲是砍一半，破甲Ⅱ是清零。放在 `ARMOR_STAGE.postPierce`
+ * 而不是 `pierce` 是有意的——它要排在破甲之后。带破甲Ⅱ的兵同时带破甲时
+ * （比如自定义兵种两条都勾），结果是 0（"无视全部"本来就包含"无视一半"），
+ * 而不是"砍一半再砍一半"这种没人能预期的叠加。
+ *
+ * 为什么用清零而不是给个超大数：`armor` 在公式里是直接相减，清零后
+ * "攻击 - 0"就是满伤，语义最干净；写成 -999 会在任何"护甲不能为负"的
+ * 修正里露馅。
+ */
+export const ARMOR_PIERCE_2: AbilityDef = {
+  id: 'armor-pierce-2',
+  name: '破甲Ⅱ',
+  summary: '无视目标全部护甲。',
+  group: 'attack',
+  hooks: {
+    armorPhase: [
+      {
+        stage: ARMOR_STAGE.postPierce,
+        apply: (c) => {
+          if (c.side !== 'attacker') return;
+          c.armor = 0;
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 反空：对飞行单位的伤害 ×2，结算顺序同「破城」。
+ *
+ * "同破城"落在两件事上：① 乘的是**基础伤害**，不是最终伤害，所以之后还要
+ * 减目标护甲（破城也是先翻倍再啃城防）；② 在 `DAMAGE_STAGE.postRange`
+ * 这一段，射程折扣已经算完、护甲还没开始扣。
+ *
+ * 和现成的「对空」（`anti-air`，×1.6）是两条**不同的**能力，故意不合并：
+ * 对空是信息化底座那个防空导弹营的"打得更准"，反空是这一档的"专打天上的"。
+ * 两者都在 postRange，同时带会先后相乘（×1.6 ×2 = ×3.2）——目前没有兵同时带，
+ * 但这条写在这里，免得以后有人以为漏了去合并。
+ */
+export const ANTI_AIR_2: AbilityDef = {
+  id: 'anti-air-2',
+  name: '防空',
+  summary: '打飞行单位时伤害 ×2（先翻倍再减护甲，结算顺序同破城）；打地面目标没有加成。',
+  group: 'attack',
+  hooks: {
+    damage: [
+      {
+        stage: DAMAGE_STAGE.postRange,
+        apply: (c) => {
+          if (c.side !== 'attacker' || !c.foe) return;
+          const def = c.api.utype(c.state, c.foe.type);
+          const flying = def.layer === 'air' || c.api.hasAbility(c.state, c.foe, 'fly');
+          if (flying) c.damage = Math.round(c.damage * 2);
+        },
+      },
+    ],
+  },
+};
+
 const LAY_MINES: AbilityDef = makeMineLayer('era-mine', 6, '布雷');
 const LAY_AT_MINES: AbilityDef = makeMineLayer('era-at-mine', 4, '布反装甲雷');
 
@@ -793,11 +870,11 @@ const MINE_UNITS_MODERN: UnitTypeDef[] = [
     short: '雷',
     era: 5,
     category: 'combat',
-    cost: 260,
+    cost: 286,
     move: 4,
-    atk: 14,
-    armor: 6,
-    maxHp: 60,
+    atk: 17,
+    armor: 7,
+    maxHp: 69,
     range: 1,
     vision: 5,
     abilities: ['lay-at-mines'],
@@ -848,20 +925,20 @@ const GUNPOWDER: UnitTypeDef[] = [
     move: 4,
     atk: 30,
     armor: 7,
-    maxHp: 46,
+    maxHp: 50,
     range: 1,
     vision: 3,
   },
   {
     // 龙骑兵：骑马机动、下马射击，是火力与速度的结合
     id: 'gp_dragoon',
-    name: '龙骑兵',
+    name: '法国龙骑兵',
     short: '龙',
     era: 3,
     category: 'combat',
     cost: 155,
     move: 4,
-    atk: 22,
+    atk: 25,
     armor: 3,
     maxHp: 38,
     range: 3,
@@ -886,7 +963,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     armor: 1,
     maxHp: 24,
     range: 4,
-    vision: 5,
+    vision: 6,
     abilities: ['stealth'],
   },
   {
@@ -898,7 +975,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     category: 'combat',
     cost: 160,
     move: 1,
-    atk: 30,
+    atk: 33,
     armor: 3,
     maxHp: 36,
     range: 5,
@@ -921,7 +998,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     armor: 1,
     maxHp: 28,
     range: 5,
-    vision: 2,
+    vision: 5,
     splash: 1,
   },
   {
@@ -931,9 +1008,9 @@ const GUNPOWDER: UnitTypeDef[] = [
     short: '长',
     era: 3,
     category: 'combat',
-    cost: 170,
+    cost: 185,
     move: 1,
-    atk: 28,
+    atk: 43,
     armor: 3,
     maxHp: 34,
     range: 6,
@@ -1070,6 +1147,20 @@ const GUNPOWDER: UnitTypeDef[] = [
 /* 时代 4 · 蒸汽（原版 7 个 → 模组 13 个）                             */
 /* ================================================================== */
 
+/*
+ * 2026-11-28 射程调整（本包与 config.ts 里的原版同期兵一起改）：
+ *   时代 4/5 的远程单位射程集体 +1，视野跟着加同样的量；
+ *   时代 5 射程最高的那一档（火炮 / 火箭炮 / 驱逐舰）再额外 +1，直接到 7。
+ * 结果是时代 4 的远程带整体上移到 3~5，两头特化单位被拉长：榴弹炮 6 → 7。
+ *
+ * 列车炮**是这一轮里唯一的例外**：它原本就是 7，跟着 +1 会到 8——那就成了全游戏
+ * 射程最远的单位，比时代 5 的任何兵都远一格，时代顺序倒挂。所以它的 range 和
+ * vision 都留在原值（7 / 2），没有参与这次 +1。
+ *
+ * 视野同步的原因：射程一旦超过视野，单位就会"打得到、看不见"，
+ * 只能等对手走进视野才开火，等于射程白给。
+ */
+
 const INDUSTRY: UnitTypeDef[] = [
   {
     // 战壕迫击炮（斯托克斯式，1915）：堑壕战的产物，曲射、轻便、跟着步兵走。
@@ -1087,8 +1178,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 26,
     armor: 3,
     maxHp: 32,
-    range: 4,
-    vision: 2,
+    range: 6,
+    vision: 3,
     splash: 1,
   },
   {
@@ -1106,8 +1197,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 42,
     armor: 3,
     maxHp: 40,
-    range: 3,
-    vision: 3,
+    range: 4,
+    vision: 4,
     abilities: ['stealth'],
   },
   {
@@ -1120,10 +1211,10 @@ const INDUSTRY: UnitTypeDef[] = [
     cost: 215,
     move: 2,
     atk: 42,
-    armor: 3,
-    maxHp: 36,
-    range: 2,
-    vision: 2,
+    armor: 6,
+    maxHp: 40,
+    range: 3,
+    vision: 3,
     splash: 1,
   },
   {
@@ -1140,10 +1231,10 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 36,
     armor: 3,
     maxHp: 36,
-    range: 3,
-    vision: 2,
+    range: 4,
+    vision: 3,
     splash: 2,
-    abilities: ['armor-pierce'],
+    abilities: ['armor-pierce-2'],
   },
   {
     // 榴弹炮：曲射，射程 6，专门拆堑壕体系
@@ -1157,8 +1248,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 38,
     armor: 4,
     maxHp: 42,
-    range: 6,
-    vision: 2,
+    range: 7,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
   },
@@ -1188,31 +1279,11 @@ const INDUSTRY: UnitTypeDef[] = [
     category: 'combat',
     cost: 330,
     move: 2,
-    atk: 30,
+    atk: 35,
     armor: 10,
     maxHp: 80,
-    range: 2,
-    vision: 2,
-    abilities: ['siege-master'],
-  },
-  {
-    // 装甲列车：一战东线的主角，一门炮加几挺机枪装在铁路上。
-    // 本作没有轨道机制，所以按普通地面单位处理（说明列里注明这一点）。
-    // 第一版 atk 40 + burst 2，实测每百金 48.1、交换比 3.69，是全包最高（步枪兵 23.9）——
-    // 射程 4 加护甲 9 让它站在后排既打得到人又不挨打。攻击收到 34，保留连发作卖点。
-    id: 'ind_armoredtrain',
-    name: '装甲列车',
-    short: '轨',
-    era: 4,
-    category: 'combat',
-    cost: 340,
-    move: 2,
-    atk: 34,
-    armor: 9,
-    maxHp: 70,
-    range: 4,
+    range: 3,
     vision: 3,
-    burst: 2,
     abilities: ['siege-master'],
   },
   {
@@ -1299,23 +1370,6 @@ const INDUSTRY: UnitTypeDef[] = [
     vision: 2,
     builds: [],
   },
-  {
-    // 驱逐舰：蒸汽时代的海上多面手，带一点溅射
-    id: 'ind_destroyer',
-    name: '雷击舰',
-    short: '雷',
-    era: 4,
-    category: 'combat',
-    cost: 285,
-    move: 5,
-    atk: 38,
-    armor: 8,
-    maxHp: 75,
-    range: 4,
-    vision: 4,
-    splash: 1,
-    domain: 'water',
-  },
 ];
 
 /* ================================================================== */
@@ -1330,31 +1384,13 @@ const MODERN: UnitTypeDef[] = [
     short: '伞',
     era: 5,
     category: 'combat',
-    cost: 340,
+    cost: 374,
     move: 4,
-    atk: 41,
-    armor: 4,
-    maxHp: 48,
-    range: 3,
-    vision: 5,
-  },
-  {
-    // 突击队：潜行 + 高攻，用来捅后排。
-    // 第一版射程 2、330 金，实测每百金 6.7，是全包最差——"潜行贴近"在 AI 手里等于送死。
-    // 射程放到 3、价格降到 310，让它先能站着输出。
-    id: 'mod_commando',
-    name: '突击队',
-    short: '击',
-    era: 5,
-    category: 'combat',
-    cost: 310,
-    move: 3,
-    atk: 42,
-    armor: 4,
-    maxHp: 46,
-    range: 3,
-    vision: 4,
-    abilities: ['stealth'],
+    atk: 48,
+    armor: 5,
+    maxHp: 56,
+    range: 4,
+    vision: 6,
   },
   {
     // 反坦克炮：破甲 + 先手，专治重装甲
@@ -1363,34 +1399,14 @@ const MODERN: UnitTypeDef[] = [
     short: '反',
     era: 5,
     category: 'combat',
-    cost: 260,
+    cost: 286,
     move: 1,
-    atk: 54,
-    armor: 3,
-    maxHp: 34,
-    range: 4,
-    vision: 3,
-    abilities: ['armor-pierce', 'first-strike'],
-  },
-  {
-    // 喀秋莎：一片覆盖，精度靠密度。
-    // 削了两轮才收住：第一版 atk 50 / 射程 6，交换比 5.64；降到 atk 46 后反而升到 7.48
-    // （承伤只有 633——射程 6 在这套对局里几乎不可能被摸到）。
-    // 真正的病根不是攻击而是**射程**：原版火炮是 5。现在收回 5，保留 splash 2 作为卖点。
-    id: 'mod_katyusha',
-    name: '火箭炮',
-    short: '喀',
-    era: 5,
-    category: 'combat',
-    cost: 310,
-    move: 2,
-    atk: 46,
-    armor: 5,
-    maxHp: 46,
+    atk: 63,
+    armor: 4,
+    maxHp: 40,
     range: 5,
-    vision: 2,
-    splash: 2,
-    abilities: ['siege-master'],
+    vision: 4,
+    abilities: ['armor-pierce', 'first-strike'],
   },
   {
     // 重型坦克：装甲 14，正面几乎无解，代价是慢和贵
@@ -1399,13 +1415,13 @@ const MODERN: UnitTypeDef[] = [
     short: '重',
     era: 5,
     category: 'combat',
-    cost: 480,
+    cost: 638,
     move: 3,
-    atk: 60,
-    armor: 14,
-    maxHp: 100,
-    range: 3,
-    vision: 3,
+    atk: 75,
+    armor: 20,
+    maxHp: 115,
+    range: 4,
+    vision: 4,
     abilities: ['siege-master'],
   },
   {
@@ -1419,13 +1435,13 @@ const MODERN: UnitTypeDef[] = [
     short: '自',
     era: 5,
     category: 'combat',
-    cost: 340,
+    cost: 374,
     move: 3,
-    atk: 42,
-    armor: 8,
-    maxHp: 62,
-    range: 4,
-    vision: 2,
+    atk: 49,
+    armor: 9,
+    maxHp: 72,
+    range: 5,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
   },
@@ -1436,14 +1452,15 @@ const MODERN: UnitTypeDef[] = [
     short: '空',
     era: 5,
     category: 'combat',
-    cost: 290,
+    cost: 319,
     move: 1,
-    atk: 46,
-    armor: 4,
-    maxHp: 40,
-    range: 4,
-    vision: 3,
+    atk: 53,
+    armor: 5,
+    maxHp: 46,
+    range: 5,
+    vision: 4,
     burst: 2,
+    abilities: ['anti-air-2'],
   },
   {
     // 反坦克拒马：现代最便宜的"别过来"
@@ -1536,13 +1553,13 @@ const MODERN: UnitTypeDef[] = [
     short: '舰',
     era: 5,
     category: 'combat',
-    cost: 360,
+    cost: 396,
     move: 5,
-    atk: 52,
-    armor: 11,
-    maxHp: 100,
-    range: 5,
-    vision: 5,
+    atk: 60,
+    armor: 12,
+    maxHp: 115,
+    range: 7,
+    vision: 7,
     domain: 'water',
     abilities: ['armor-pierce'],
   },
@@ -1553,13 +1570,13 @@ const MODERN: UnitTypeDef[] = [
     short: '迫',
     era: 5,
     category: 'combat',
-    cost: 260,
+    cost: 286,
     move: 2,
-    atk: 38,
-    armor: 3,
-    maxHp: 30,
-    range: 4,
-    vision: 2,
+    atk: 44,
+    armor: 4,
+    maxHp: 35,
+    range: 5,
+    vision: 3,
     splash: 1,
   },
 ];
@@ -1600,13 +1617,13 @@ export const ERA_ARMS: Expansion = {
   summary:
     '每一代都多出一批可选兵种：青铜的投石兵/战车/攻城槌/旌旗车，铁器的瑞士长矛兵/重装军士/' +
     '战象/弩炮/攻城塔，火器的线列步兵/胸甲骑兵/猎兵/棱堡，蒸汽的堑壕突击队/火焰喷射器/' +
-    '列车炮/马克 I 坦克，机械化的伞兵/突击队/喀秋莎/重型坦克；布雷与扫雷的能力也在这一包里。' +
+    '列车炮/马克 I 坦克，机械化的伞兵/反坦克炮/重型坦克/自行火炮/驱逐舰；布雷与扫雷的能力也在这一包里。' +
     '另含第六时代的 14 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
     '远程火箭炮、防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、' +
     '前进指挥所、物流集团）——**这批要同时开「信息化」才会出现**，' +
     '因为第六时代是那个包开出来的。',
   hooks: {},
-  abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ...MODERN_ABILITIES],
+  abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ARMOR_PIERCE_2, ANTI_AIR_2, ...MODERN_ABILITIES],
   // 两个雷种各来自不同时代：反装甲雷是机械化那一档的布雷车撒的
   marks: [LAND_MINE_KIND, AT_MINE_KIND],
   units: [

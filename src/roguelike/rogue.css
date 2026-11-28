@@ -1,0 +1,694 @@
+/*
+ * 肉鸽试玩版的样式。
+ *
+ * 全部前缀 rg-，不与本体 style.css 里的任何类重名——那是别人的地盘。
+ * 只有棋盘本身（.board / .tiles / .unit / .city）沿用本体的样式，
+ * 因为渲染器就是本体那一套，皮肤必须跟着它。
+ */
+
+#rogue-root {
+  position: fixed;
+  inset: 0;
+  overflow: auto;
+  background: #eae6dc;
+  color: #3c3a33;
+  font: 14px/1.6 system-ui, 'Microsoft YaHei', sans-serif;
+  z-index: 4000;
+}
+
+#rogue-root * {
+  box-sizing: border-box;
+}
+
+/* 舞台：承载 app.ts 画的那块内容。战斗屏要撑满，所以这条链上必须有高度 */
+#rogue-root .rg-stage {
+  height: 100%;
+}
+
+/* 「返回标题」：开局页固定在右上角，地图页塞在顶栏里 */
+.rg-exit {
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  border: 1px solid #cabfa8;
+  background: #f7f4ec;
+  color: #6d6659;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rg-exit:hover {
+  border-color: #2f6ea8;
+  color: #2f6ea8;
+}
+.rg-exit-inline {
+  position: static;
+  margin-left: 14px;
+}
+.rg-start {
+  position: relative;
+}
+.rg-over-btns {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.rg-tag {
+  font-size: 13px;
+  font-weight: 400;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 1px 9px;
+  margin-left: 8px;
+  vertical-align: 3px;
+}
+.rg-sub {
+  color: #837b6b;
+  font-size: 13px;
+  max-width: 62ch;
+}
+
+.rg-btn {
+  border: 1px solid #b9b1a0;
+  background: #f7f4ec;
+  color: #3c3a33;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.rg-btn:hover {
+  background: #fffdf6;
+}
+.rg-btn.ghost {
+  background: transparent;
+  color: #6d6659;
+}
+.rg-btn.big {
+  padding: 10px 26px;
+  font-size: 15px;
+  background: #2f6ea8;
+  border-color: #26587f;
+  color: #fff;
+}
+
+.rg-dim {
+  color: #837b6b;
+}
+.rg-body {
+  color: #4b4740;
+  margin: 6px 0 14px;
+  white-space: pre-wrap;
+}
+
+/* ---------- 开局 ---------- */
+
+.rg-start {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 48px 20px 60px;
+}
+.rg-hero h1 {
+  font-size: 26px;
+  margin: 0 0 8px;
+  letter-spacing: 1px;
+}
+.rg-hero p {
+  margin: 0 0 26px;
+  color: #6d6659;
+}
+.rg-strategies {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.rg-strategy {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  border: 1px solid #cabfa8;
+  border-radius: 12px;
+  background: #f7f4ec;
+  cursor: pointer;
+  font: inherit;
+}
+.rg-strategy:hover {
+  border-color: #2f6ea8;
+  background: #fffdf6;
+}
+.rg-strategy b {
+  font-size: 17px;
+}
+.rg-strategy i {
+  color: #6d6659;
+  font-style: normal;
+}
+.rg-strategy span {
+  color: #3c3a33;
+}
+.rg-strategy em {
+  color: #2f6ea8;
+  font-style: normal;
+  font-size: 13px;
+}
+.rg-note {
+  margin-top: 22px;
+  color: #837b6b;
+  font-size: 13px;
+}
+
+/* ---------- 层地图 ---------- */
+
+.rg-map {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 22px 20px 40px;
+}
+.rg-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d5cdbb;
+  flex-wrap: wrap;
+}
+.rg-top-title b {
+  font-size: 20px;
+  margin-right: 10px;
+}
+.rg-top-title span {
+  color: #6d6659;
+}
+.rg-top-stats span {
+  margin-left: 14px;
+  color: #6d6659;
+}
+.rg-top-stats b {
+  color: #3c3a33;
+}
+.rg-mapbody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 20px;
+  margin-top: 16px;
+}
+@media (max-width: 860px) {
+  .rg-mapbody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.rg-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rg-step {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.rg-stepno {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #ded6c4;
+  color: #6d6659;
+  font-size: 12px;
+}
+.rg-step.done .rg-stepno {
+  background: #b7c9b3;
+  color: #33503a;
+}
+.rg-step.now .rg-stepno {
+  background: #2f6ea8;
+  color: #fff;
+}
+.rg-doors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.rg-door {
+  text-align: left;
+  border: 1px solid #d0c7b4;
+  background: #f7f4ec;
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rg-door b {
+  font-size: 14px;
+}
+.rg-door span {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-door:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.rg-step.next .rg-door {
+  background: #efeade;
+}
+.rg-step.now .rg-door:hover {
+  border-color: #2f6ea8;
+  background: #fffdf6;
+  box-shadow: 0 2px 10px rgba(47, 110, 168, 0.12);
+}
+.rg-door.k-shop b {
+  color: #8a6b1f;
+}
+.rg-door.k-rest b {
+  color: #3f6b45;
+}
+.rg-door.k-event b {
+  color: #6b4b8a;
+}
+.rg-door.k-elite b,
+.rg-door.k-siege b {
+  color: #a43e2c;
+}
+.rg-bossrow {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid #a43e2c;
+  border-radius: 12px;
+  background: #fbeee9;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.rg-bossrow b {
+  color: #a43e2c;
+}
+.rg-bossrow button {
+  margin-left: auto;
+}
+
+.rg-side-card {
+  border: 1px solid #d5cdbb;
+  border-radius: 12px;
+  background: #f7f4ec;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.rg-side-card h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #837b6b;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.rg-side-card.grow {
+  max-height: 340px;
+  overflow: auto;
+}
+.rg-armytext {
+  margin: 0;
+}
+.rg-log {
+  margin: 0;
+  padding-left: 16px;
+  color: #6d6659;
+  font-size: 12px;
+}
+.rg-log li {
+  margin-bottom: 4px;
+}
+
+/* ---------- 战斗 ---------- */
+
+.rg-battle {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.rg-battle-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #d5cdbb;
+  flex-wrap: wrap;
+}
+.rg-battle-title b {
+  font-size: 17px;
+  margin-right: 8px;
+}
+.rg-battle-title span {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-battle-hud {
+  display: flex;
+  gap: 16px;
+  color: #6d6659;
+}
+.rg-battle-btns {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.rg-battle-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 14px;
+  padding: 14px 20px 20px;
+}
+.rg-boardwrap {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+}
+.board.rg-board {
+  /* 提到 .board.rg-board：.board 自己也写了 width:100%，谁后加载谁赢太靠运气 */
+  width: min(76vh, 100%);
+  max-width: 100%;
+  flex: 0 0 auto;
+}
+@media (max-width: 900px) {
+  .rg-battle-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .board.rg-board {
+    width: 100%;
+  }
+}
+
+/*
+ * 高亮加强：本体那套"绿点 / 红框"在浅色平原上偏淡（8×8 的小图尤其明显），
+ * 这里只在本模式的棋盘上加一圈描边。作用域限定 `.board.rg-board`，
+ * 不会碰到主对局的棋盘。
+ */
+.board.rg-board .tile.reach {
+  background-color: rgba(47, 110, 168, 0.16);
+  box-shadow: inset 0 0 0 3px rgba(47, 110, 168, 0.5);
+}
+.board.rg-board .tile.attackable {
+  background-color: rgba(176, 58, 40, 0.14);
+  box-shadow: inset 0 0 0 3px rgba(176, 58, 40, 0.55);
+}
+.rg-side {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.rg-army {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+}
+.rg-unitrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid #ddd4c1;
+  background: #fffdf6;
+  border-radius: 7px;
+  padding: 4px 8px;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.rg-unitrow .s {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-unitrow.sel {
+  border-color: #2f6ea8;
+  background: #eaf2fa;
+}
+.rg-unitrow.done {
+  opacity: 0.55;
+}
+.rg-recruit {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.rg-buy {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid #ddd4c1;
+  background: #fffdf6;
+  border-radius: 7px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rg-buy .p {
+  color: #8a6b1f;
+}
+.rg-buy:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.rg-tip {
+  color: #6d6659;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* ---------- 弹层 ---------- */
+
+.rg-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(40, 36, 28, 0.42);
+  display: grid;
+  place-items: center;
+  z-index: 5000;
+  padding: 20px;
+}
+.rg-modal {
+  width: min(560px, 100%);
+  background: #f7f4ec;
+  border: 1px solid #cabfa8;
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 18px 50px rgba(40, 34, 20, 0.28);
+}
+.rg-modal.small {
+  width: min(420px, 100%);
+}
+.rg-modal h3 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+.rg-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rg-choice {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #d5cdbb;
+  background: #fffdf6;
+  border-radius: 9px;
+  padding: 10px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.rg-choice:hover {
+  border-color: #2f6ea8;
+  background: #f2f7fc;
+}
+.rg-choice span {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-cancel {
+  margin-top: 12px;
+  border: none;
+  background: none;
+  color: #837b6b;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* ---------- 层间 / 结算 ---------- */
+
+.rg-inter,
+.rg-over {
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 90px 20px 40px;
+  text-align: center;
+}
+.rg-inter h2,
+.rg-over h2 {
+  font-size: 24px;
+  margin: 0 0 10px;
+}
+.rg-over.win h2 {
+  color: #2f6ea8;
+}
+.rg-over.lose h2 {
+  color: #a43e2c;
+}
+.rg-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  margin: 26px 0;
+}
+.rg-stats div {
+  border: 1px solid #d5cdbb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f7f4ec;
+}
+.rg-stats dt {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-stats dd {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+/* ---------- 商店（三行货架） ---------- */
+
+.rg-modal.wide {
+  width: min(720px, 100%);
+}
+.rg-shop {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 6px 0 14px;
+}
+.rg-shop-row h5 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #837b6b;
+  letter-spacing: 0.5px;
+}
+.rg-shop-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+.rg-shop-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid #d5cdbb;
+  background: #fffdf6;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.rg-shop-item:hover:not(:disabled) {
+  border-color: #2f6ea8;
+  background: #f2f7fc;
+}
+.rg-shop-item span {
+  color: #837b6b;
+  font-size: 12px;
+}
+.rg-shop-item em {
+  font-style: normal;
+  color: #8a6b1f;
+  font-size: 12px;
+}
+.rg-shop-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rg-shop-foot {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* ---------- 单位属性卡（悬停） ---------- */
+
+.rg-hovercard {
+  position: fixed;
+  z-index: 6000;
+  width: 208px;
+  pointer-events: none;
+  background: #fffdf6;
+  border: 1px solid #cabfa8;
+  border-radius: 10px;
+  padding: 8px 10px;
+  box-shadow: 0 10px 26px rgba(40, 34, 20, 0.22);
+  font-size: 12px;
+  color: #3c3a33;
+}
+.rg-hc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.rg-hc-head b {
+  font-size: 14px;
+}
+.rg-hc-head i {
+  font-style: normal;
+  color: #837b6b;
+}
+.rg-hc-hp {
+  position: relative;
+  height: 12px;
+  border-radius: 6px;
+  background: #e6dfd0;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.rg-hc-hp span {
+  display: block;
+  height: 100%;
+  background: #7ba7c9;
+}
+.rg-hc-hp em {
+  position: absolute;
+  inset: 0;
+  font-style: normal;
+  font-size: 10px;
+  line-height: 12px;
+  text-align: center;
+  color: #2b2a26;
+}
+.rg-hc-stats {
+  color: #6d6659;
+  margin-bottom: 3px;
+}
+.rg-hc-line {
+  color: #837b6b;
+  line-height: 1.5;
+}

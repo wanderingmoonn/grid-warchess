@@ -962,8 +962,8 @@ function tideLevel(o: {
       A: [
         { type: 'tank', x: 4, y: 7 },
         { type: 'tank', x: 4, y: 10 },
-        { type: 'squad', x: 3, y: 7 },
-        { type: 'squad', x: 3, y: 10 },
+        { type: 'commando', x: 3, y: 7 },
+        { type: 'commando', x: 3, y: 10 },
         { type: 'hmg', x: 2, y: 11 },
         { type: 'crew', x: 2, y: 6 },
       ],
@@ -1059,14 +1059,14 @@ function tideBigLevel(o: {
       A: [
         // 上路
         { type: 'tank', x: 4, y: 5 },
-        { type: 'squad', x: 5, y: 6 },
+        { type: 'commando', x: 5, y: 6 },
         { type: 'hmg', x: 3, y: 6 },
         // 中路机动
         { type: 'tank', x: 5, y: 11 },
-        { type: 'squad', x: 5, y: 12 },
+        { type: 'commando', x: 5, y: 12 },
         // 下路
         { type: 'tank', x: 4, y: 18 },
-        { type: 'squad', x: 5, y: 17 },
+        { type: 'commando', x: 5, y: 17 },
         { type: 'hmg', x: 3, y: 17 },
         // 经济
         { type: 'crew', x: 2, y: 3 },
@@ -2004,8 +2004,8 @@ export const LEVELS: LevelDef[] = [
     deploy: {
       A: [
         { type: 'tank', x: 10, y: 12 },
-        { type: 'squad', x: 9, y: 13 },
-        { type: 'squad', x: 9, y: 11 },
+        { type: 'commando', x: 9, y: 13 },
+        { type: 'commando', x: 9, y: 11 },
         { type: 'hmg', x: 11, y: 13 },
         { type: 'hmg', x: 10, y: 11 },
         { type: 'crew', x: 8, y: 14 },
@@ -2021,8 +2021,8 @@ export const LEVELS: LevelDef[] = [
       ],
       B: [
         { type: 'tank', x: 16, y: 12 },
-        { type: 'squad', x: 17, y: 13 },
-        { type: 'squad', x: 17, y: 11 },
+        { type: 'commando', x: 17, y: 13 },
+        { type: 'commando', x: 17, y: 11 },
         { type: 'hmg', x: 15, y: 13 },
         { type: 'hmg', x: 16, y: 11 },
         { type: 'crew', x: 18, y: 14 },
@@ -2404,16 +2404,16 @@ export const LEVELS: LevelDef[] = [
       A: [
         { type: 'tank', x: 5, y: 5 },
         { type: 'tank', x: 5, y: 8 },
-        { type: 'squad', x: 4, y: 6 },
-        { type: 'squad', x: 4, y: 9 },
+        { type: 'commando', x: 4, y: 6 },
+        { type: 'commando', x: 4, y: 9 },
         { type: 'hmg', x: 3, y: 8 },
         { type: 'crew', x: 3, y: 4 },
       ],
       B: [
         { type: 'tank', x: 5, y: 23 },
         { type: 'tank', x: 5, y: 26 },
-        { type: 'squad', x: 4, y: 24 },
-        { type: 'squad', x: 4, y: 27 },
+        { type: 'commando', x: 4, y: 24 },
+        { type: 'commando', x: 4, y: 27 },
         { type: 'hmg', x: 3, y: 25 },
         { type: 'crew', x: 3, y: 28 },
       ],

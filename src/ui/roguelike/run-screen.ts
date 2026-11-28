@@ -8,9 +8,23 @@
 import type { RosterUnit, RunState } from '../../core/roguelike/run-state.ts';
 import { cityCapacity, citySizeFor } from '../../core/roguelike/roster.ts';
 import { RELICS, relicNames } from '../../core/roguelike/relics.ts';
+import { uiIcon } from '../icons.ts';
 /** 各面板各写一份，和别的 UI 文件保持一致（没有共享的 util） */
 const esc = (t: string): string =>
   String(t).replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
+
+function stageStepperHtml(stageNo: number, total: number): string {
+  const count = Math.max(1, total);
+  const parts: string[] = [];
+  for (let i = 1; i <= count; i++) {
+    const cls = i < stageNo ? 'is-done' : i === stageNo ? 'is-current' : 'is-next';
+    if (i > 1) {
+      parts.push(`<span class="rogue-step-line${i <= stageNo ? ' is-done' : ''}" aria-hidden="true"></span>`);
+    }
+    parts.push(`<span class="rogue-step ${cls}" title="第 ${i} 关"><b>${i}</b></span>`);
+  }
+  return `<div class="rogue-stepper" aria-label="关卡进度：第 ${stageNo} / ${count} 关">${parts.join('')}</div>`;
+}
 
 export interface RunPanelOptions {
   run: RunState;
@@ -35,19 +49,20 @@ export function openRunPanel(opts: RunPanelOptions): void {
   mask.innerHTML = `
     <div class="modal rogue-panel">
       <div class="modal-head">
-        <h2>肉鸽 · 第 ${opts.stageNo} / ${opts.total} 关</h2>
+        <h2 class="modal-title-ico">${uiIcon('swords')}肉鸽 · 第 ${opts.stageNo} / ${opts.total} 关</h2>
         <p>${esc(opts.stageTitle)}</p>
       </div>
       <div class="modal-body">
+        ${stageStepperHtml(opts.stageNo, opts.total)}
         <div class="rogue-stats">
-          <span class="rogue-chip">金币 <b>${run.gold}</b></span>
-          <span class="rogue-chip">兵额 <b>${run.roster.length} / ${cap}</b></span>
-          <span class="rogue-chip">城市时代 <b>${run.cityEra}</b></span>
-          <span class="rogue-chip">免费建造 <b>${run.freeBuilds}</b></span>
-          <span class="rogue-chip">遗物 <b>${
+          <span class="rogue-chip">${uiIcon('gold')}金币 <b>${run.gold}</b></span>
+          <span class="rogue-chip">${uiIcon('swords')}兵额 <b>${run.roster.length} / ${cap}</b></span>
+          <span class="rogue-chip">${uiIcon('city')}城市时代 <b>${run.cityEra}</b></span>
+          <span class="rogue-chip">${uiIcon('flag')}免费建造 <b>${run.freeBuilds}</b></span>
+          <span class="rogue-chip">${uiIcon('ready')}遗物 <b>${
             run.relics.length === 0 ? '无' : relicNames(run).join('、')
           }</b></span>
-          <span class="rogue-chip">重开 <b>${run.allowRestart ? '允许' : '不允许'}</b></span>
+          <span class="rogue-chip">${uiIcon('reset')}重开 <b>${run.allowRestart ? '允许' : '不允许'}</b></span>
         </div>
         ${
           run.roster.length > 0
@@ -117,15 +132,15 @@ export function openSettlePanel(opts: SettlePanelOptions): void {
   mask.innerHTML = `
     <div class="modal rogue-panel">
       <div class="modal-head">
-        <h2>${opts.halfDone ? '败退' : '撤离完成'}</h2>
+        <h2 class="modal-title-ico">${uiIcon('flag')}${opts.halfDone ? '败退' : '撤离完成'}</h2>
         <p>${opts.halfDone ? '没清完敌人就撤了，结算只给三成。' : '清完场了，看看带回来什么。'}</p>
       </div>
       <div class="modal-body">
         <div class="rogue-stats">
-          <span class="rogue-chip">金币 <b>+${opts.gold}</b></span>
-          <span class="rogue-chip">带回 <b>${opts.taken.length}</b> 个</span>
-          <span class="rogue-chip">损失 <b>${opts.left.length}</b> 个</span>
-          <span class="rogue-chip">抚恤 <b>+${opts.refund}</b></span>
+          <span class="rogue-chip">${uiIcon('gold')}金币 <b>+${opts.gold}</b></span>
+          <span class="rogue-chip">${uiIcon('ready')}带回 <b>${opts.taken.length}</b> 个</span>
+          <span class="rogue-chip">${uiIcon('swords')}损失 <b>${opts.left.length}</b> 个</span>
+          <span class="rogue-chip">${uiIcon('income')}抚恤 <b>+${opts.refund}</b></span>
         </div>
         ${
           opts.taken.length > 0
@@ -175,15 +190,18 @@ export function openCardChoice(opts: CardChoiceOptions): void {
   mask.innerHTML = `
     <div class="modal rogue-panel">
       <div class="modal-head">
-        <h2>三选一</h2>
+        <h2 class="modal-title-ico">${uiIcon('swords')}三选一</h2>
         <p>三张同名合成一级（每级 +25% 攻血）。</p>
       </div>
       <div class="modal-body">
         <div class="rogue-cards">
           ${opts.cards
             .map(
-              (c) => `<button class="rogue-card" data-pick="${esc(c.id)}">
-                <span class="rogue-card-name">${esc(c.name)}</span>
+              (c) => `<button class="rogue-card${c.owned % 3 === 2 ? ' is-upgrade-ready' : ''}" data-pick="${esc(c.id)}">
+                <span class="rogue-card-head">
+                  <span class="rogue-card-name">${esc(c.name)}</span>
+                  ${c.owned % 3 === 2 ? '<span class="rogue-card-tag">再拿升级</span>' : ''}
+                </span>
                 <span class="rogue-card-note">${esc(c.note)}</span>
                 <span class="rogue-card-owned">已有 ${c.owned} 张</span>
               </button>`,
@@ -248,7 +266,7 @@ export function openRestPanel(opts: RestPanelOptions): void {
   mask.innerHTML = `
     <div class="modal rogue-panel">
       <div class="modal-head">
-        <h2>整备</h2>
+        <h2 class="modal-title-ico">${uiIcon('city')}整备</h2>
         <p>停下来喘口气，只能选一件。</p>
       </div>
       <div class="modal-body">
@@ -257,7 +275,7 @@ export function openRestPanel(opts: RestPanelOptions): void {
           ${
             opts.upgradeCost === null
               ? '　（已经到顶）'
-              : `　升到 ${opts.cityEra + 1} 代要 ${opts.upgradeCost} 金——**不占这次整备**`
+              : `　升到 ${opts.cityEra + 1} 代要 ${opts.upgradeCost} 金——<b>不占这次整备</b>`
           }
         </div>
         <div class="rogue-cards">
@@ -325,7 +343,7 @@ export function openRelicPanel(run: RunState): void {
   mask.innerHTML = `
     <div class="modal rogue-panel">
       <div class="modal-head">
-        <h2>遗物 ${owned.size} / ${RELICS.length}</h2>
+        <h2 class="modal-title-ico">${uiIcon('ready')}遗物 ${owned.size} / ${RELICS.length}</h2>
         <p>遗物靠"打谁"获得：精英与 Boss 关固定掉落，拿到就永久生效。</p>
       </div>
       <div class="modal-body">

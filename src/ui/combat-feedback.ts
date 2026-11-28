@@ -132,10 +132,15 @@ function escapeHtml(text: string): string {
 
 function healthHtml(label: string, item: CombatHealth, city = false): string {
   const delta = item.after - item.before;
-  return `<div class="combat-health"><span>${label} · ${escapeHtml(item.name)}</span>
-    <div><b>${item.before} → ${item.after}</b><strong class="${delta < 0 ? 'loss' : delta > 0 ? 'gain' : 'neutral'}">${delta > 0 ? '+' : ''}${delta}</strong></div>
+  const maxRef = Math.max(1, item.before);
+  const remainPct = Math.max(0, Math.min(100, Math.round((item.after / maxRef) * 100)));
+  return `<div class="combat-health">
+    <div class="combat-health-head"><span>${label}</span><b>${escapeHtml(item.name)}</b></div>
+    <div class="combat-health-nums"><b>${item.before} → ${item.after}</b><strong class="${delta < 0 ? 'loss' : delta > 0 ? 'gain' : 'neutral'}">${delta > 0 ? '+' : ''}${delta}</strong></div>
+    <div class="combat-hp-track"><i style="width:${remainPct}%" class="${item.removed ? 'is-dead' : ''}"></i></div>
     ${(item.extraBefore ?? 0) > 0 || (item.extraAfter ?? 0) > 0 ? `<small>额外生命 ${item.extraBefore ?? 0} → ${item.extraAfter ?? 0}</small>` : ''}
-    ${item.removed ? `<small>${city ? '城破后需派兵接管' : '预计离场'}</small>` : ''}</div>`;
+    ${item.removed ? `<small class="combat-ko">${city ? '城破后需派兵接管' : '预计离场'}</small>` : ''}
+  </div>`;
 }
 
 export function combatForecastHtml(forecast: CombatForecast, pinned: boolean, compact = false): string {
@@ -157,8 +162,10 @@ export function combatForecastHtml(forecast: CombatForecast, pinned: boolean, co
   }
   return `<div class="combat-preview-head"><b>${forecast.city ? '攻城预览' : '交锋预览'}</b>
     <button class="btn btn-sm" data-combat="cancel" aria-label="关闭攻击预览">关闭</button></div>
-    ${healthHtml(forecast.city ? '目标耐久' : '目标生命', forecast.target, forecast.city)}
-    ${healthHtml('本方生命', forecast.attacker)}
+    <div class="combat-clash-grid">
+      ${healthHtml('本方生命', forecast.attacker)}
+      ${healthHtml(forecast.city ? '目标耐久' : '目标生命', forecast.target, forecast.city)}
+    </div>
     <p class="combat-preview-note">${forecast.collateral > 0 ? `波及 ${forecast.collateral} 个可见单位。` : ''}含反击；伏兵与事件可能影响结果。</p>
     <button class="btn btn-primary btn-block" data-combat="confirm">${pinned ? '确认' : '执行'}${forecast.city ? '攻城' : '攻击'}</button>`;
 }

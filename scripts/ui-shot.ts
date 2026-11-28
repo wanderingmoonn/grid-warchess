@@ -288,6 +288,68 @@ if (ARGS.includes('combat')) {
   process.exit(0);
 }
 
+if (ARGS.includes('angled')) {
+  /*
+   * 斜俯视棋盘（2026-11-23）。
+   *
+   * 这一块是**唯一能证明它真的画出来了**的地方：jsdom 没有 CanvasRenderingContext2D，
+   * 规则/冒烟测试只能验"降级不炸"，验不了"看得见"。所以这里拿真 Edge 拍一张，
+   * 顺便断言画布有实际尺寸（不是 0×0 或被 hidden）。
+   *
+   * 用法：node --experimental-strip-types scripts/ui-shot.ts angled [modern]
+   */
+  const { createMatch, DEFAULT_CONFIG } = await import('../src/core/setup.ts');
+  const scene = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 20261123);
+  scene.fog = false;
+  scene.current = 'A';
+  const BIG = ARGS.includes('big');
+  const fogOn = ARGS.includes('fog');
+  scene.fog = fogOn;
+  if (BIG) {
+    // 32×32 的图要重开一局：棋盘尺寸是建局时定的，改不了
+    const big = createMatch({ ...DEFAULT_CONFIG, expansionIds: [], size: 32 }, 20261123);
+    big.fog = fogOn;
+    big.current = 'A';
+    scene.units = big.units;
+    scene.cities = big.cities;
+    scene.tiles = big.tiles;
+    scene.w = big.w;
+    scene.h = big.h;
+  }
+  await evaluate(`localStorage.setItem('warchess:match:v1', ${JSON.stringify(JSON.stringify(scene))})`);
+  await evaluate(`localStorage.setItem('warchess:board-angle', '1')`);
+  await goto(BASE + '?loadSave=1&view=angled' + theme);
+  const titleOpen = await evaluate(`!!document.querySelector('.title-screen')`);
+  if (titleOpen) await click('[data-title="continue"]');
+  const info = (await evaluate(`(() => {
+    const canvas = document.querySelector('.angled-board');
+    if (!canvas) return { missing: true };
+    const rect = canvas.getBoundingClientRect();
+    return { hidden: canvas.hidden, w: Math.round(rect.width), h: Math.round(rect.height), bitmap: [canvas.width, canvas.height] };
+  })()`)) as { missing?: boolean; hidden?: boolean; w?: number; h?: number; bitmap?: number[] };
+  if (info.missing || info.hidden || (info.w ?? 0) < 200 || (info.h ?? 0) < 150) {
+    const diag = await evaluate(`(() => ({
+      layout: document.documentElement.dataset.uiLayout,
+      terrain: document.documentElement.dataset.terrain,
+      board: !!document.querySelector('.board'),
+      units: document.querySelectorAll('.unit').length,
+      toggle: (() => { const b = document.querySelector('[data-act="board-angle"]'); return b ? { hidden: b.hidden, text: b.textContent } : null; })(),
+      zoomBar: !!document.querySelector('#zoom-bar'),
+      zoomHtml: (document.querySelector('#zoom-bar')?.innerHTML ?? '').slice(0, 160),
+      boardCls: document.querySelector('.board')?.className,
+      angleKey: localStorage.getItem('warchess:board-angle'),
+      search: location.search,
+    }))()`);
+    console.log('诊断：', JSON.stringify(diag));
+    throw new Error(`斜俯视画布没出来：${JSON.stringify(info)}`);
+  }
+  await shot(`30-angled${BIG ? '-32' : ''}${fogOn ? '-fog' : ''}-${tag}`);
+  proc.kill();
+  staticServer.close();
+  console.log('\n完成：', OUT);
+  process.exit(0);
+}
+
 if (ARGS.includes('manual')) {
   /*
    * 规则书：只看长表（兵种一多那种）。
@@ -325,16 +387,6 @@ if (ARGS.includes('manual')) {
 
 await goto(BASE + '?home=1' + theme);
 await shot(`01-title-${tag}`);
-
-if (ARGS.includes('rollback')) {
-  await click('[data-title="ui-layout"]');
-  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'classic') throw new Error('首页 UI 回滚没有生效');
-  await shot(`20-classic-home-${tag}`);
-  await goto(BASE + '?home=1' + theme);
-  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'classic') throw new Error('刷新丢失 UI 偏好');
-  await click('[data-title="ui-layout"]');
-  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'refined') throw new Error('首页无法恢复新版 UI');
-}
 
 if (ARGS.includes('phase3')) {
   await evaluate(`document.querySelector('.title-tools').open = true`);
@@ -445,31 +497,6 @@ await evaluate(`(() => {
 })()`);
 await sleep(700);
 await shot(`04-unit-${tag}`);
-
-if (ARGS.includes('rollback')) {
-  const saved = await evaluate(`localStorage.getItem('warchess:match:v1')`);
-  const selected = await evaluate(`document.querySelector('.unit.selected')?.dataset.id`);
-  await click('[data-act="settings"]');
-  await click('[data-act="set-ui-layout"]');
-  await shot(`21-rollback-settings-${tag}`);
-  await click('[data-act="settings-close"]');
-  const issue = await evaluate(`(() => {
-    if (document.documentElement.dataset.uiLayout !== 'classic') return '设置回滚没有生效';
-    if (getComputedStyle(document.querySelector('.unit-inner')).backgroundColor === 'rgba(0, 0, 0, 0)') return '经典棋子背景丢失';
-    if (getComputedStyle(document.querySelector('.unit-insignia')).display !== 'none') return '经典棋子图标没有回退';
-    if (innerWidth <= 920 && getComputedStyle(document.querySelector('.side-drawer')).display !== 'contents') return '经典手机布局没有回退';
-    return '';
-  })()`);
-  if (issue) throw new Error(issue);
-  if (await evaluate(`localStorage.getItem('warchess:match:v1')`) !== saved) throw new Error('UI 回滚修改了存档');
-  await shot(`22-classic-battle-${tag}`);
-  await click('[data-act="settings"]');
-  await click('[data-act="set-ui-layout"]');
-  await click('[data-act="settings-close"]');
-  if (await evaluate(`document.documentElement.dataset.uiLayout`) !== 'refined') throw new Error('设置无法恢复新版 UI');
-  if (await evaluate(`document.querySelector('.unit.selected')?.dataset.id`) !== selected) throw new Error('UI 切换丢失单位选中');
-  await shot(`23-restored-battle-${tag}`);
-}
 
 if (ARGS.includes('phase3') && W <= 920) {
   const verifyDrawer = async (expanded: boolean) => {

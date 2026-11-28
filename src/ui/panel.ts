@@ -31,6 +31,7 @@ import type { BoardId } from '../core/types.ts';
 import { carrierBlock } from './carrier-block.ts';
 import { foldLimit, foldRows } from './list-fold.ts';
 import { draftedCardsHtml } from './draft-panel.ts';
+import { uiIcon } from './icons.ts';
 import {
   MODULES,
   canMount,
@@ -423,19 +424,23 @@ function incomeNoteOf(s: GameState, income: string): string {
 }
 
 export function battleStatusShell(): string {
-  return `<div class="battle-status-amounts" role="group" aria-label="本方资源">
-    <div class="battle-status-stat"><span>金币</span><b data-ref="battle-gold"></b></div>
-    <div class="battle-status-stat" data-ref="battle-income-stat"><span>每回合</span><b data-ref="battle-income"></b></div>
+  return `<button type="button" class="ready-pill" data-act="focus-ready" data-ref="battle-ready" title="点击定位下一个可行动单位" hidden>${uiIcon('ready')}<span data-ref="battle-ready-text"></span></button>
+  <div class="battle-status-amounts" role="group" aria-label="本方资源">
+    <div class="battle-status-stat">${uiIcon('gold', 'stat-ico stat-ico-gold')}<span>金币</span><b data-ref="battle-gold"></b></div>
+    <div class="battle-status-stat" data-ref="battle-income-stat">${uiIcon('income', 'stat-ico stat-ico-income')}<span>每回合</span><b data-ref="battle-income"></b></div>
   </div>
-  <button type="button" class="btn btn-sm" data-ref="battle-undo" aria-label="撤回一步" title="撤回一步，仅本回合" disabled>撤回</button>`;
+  <button type="button" class="btn btn-sm btn-ghost-hud" data-ref="battle-undo" aria-label="撤回一步" title="撤回一步，仅本回合" disabled>${uiIcon('undo')}<span>撤回</span></button>`;
 }
 
 export function updateBattleStatus(root: HTMLElement, s: GameState, me: PlayerId | null, canUndo: boolean): void {
   root.hidden = me === null;
   const undo = root.querySelector<HTMLButtonElement>('[data-ref="battle-undo"]')!;
+  const readyBtn = root.querySelector<HTMLButtonElement>('[data-ref="battle-ready"]');
+  const readyText = root.querySelector<HTMLElement>('[data-ref="battle-ready-text"]');
   if (me === null) {
     delete undo.dataset.act;
     undo.disabled = true;
+    if (readyBtn) readyBtn.hidden = true;
     return;
   }
   const income = incomeTextOf(s, me);
@@ -450,6 +455,19 @@ export function updateBattleStatus(root: HTMLElement, s: GameState, me: PlayerId
   if (incomeStat.title !== note) incomeStat.title = note;
   if (undo.dataset.act !== 'undo') undo.dataset.act = 'undo';
   if (undo.disabled === canUndo) undo.disabled = !canUndo;
+  if (readyBtn && readyText) {
+    const myTurnNow = s.current === me && !s.winner;
+    const readyCount = myTurnNow
+      ? unitsOf(s, me).filter((u) => {
+          const def = s.unitTypes[u.type];
+          if (!def || def.category === 'building' || underConstruction(u)) return false;
+          return (canMove(u) && movePower(s, u) > 0) || (canAttack(u) && isArmed(s, u));
+        }).length
+      : 0;
+    readyBtn.hidden = readyCount <= 0;
+    const txt = `${readyCount} 可动`;
+    if (readyText.textContent !== txt) readyText.textContent = txt;
+  }
 }
 
 function panelHtml(input: PanelInput): string {
@@ -665,7 +683,7 @@ function panelHtml(input: PanelInput): string {
          </div>`
       : ''}
 
-    <div class="card">
+    <div class="card card-log">
       <details class="card-fold" data-fold="log"${input.logOpen ? ' open' : ''}>
         <summary class="card-title fold-head">战报</summary>
         ${logHtml}
@@ -673,6 +691,11 @@ function panelHtml(input: PanelInput): string {
     </div>
 
     <div class="side-footer">
+      <div class="dock-quick-row" aria-label="快捷面板">
+        <button type="button" class="dock-pill" data-act="dock-open" data-dock="match" title="查看阵营与对局概况">${uiIcon('flag')}<span>阵营</span></button>
+        <button type="button" class="dock-pill" data-act="dock-open" data-dock="log" title="查看战报记录">${uiIcon('log')}<span>战报</span></button>
+        <button type="button" class="dock-pill" data-act="dock-open" data-dock="ops" title="查看操作说明">${uiIcon('book')}<span>说明</span></button>
+      </div>
       <!--
         主按钮单独包一层（2026-11-11）。
         手机上是"棋盘在上、侧栏在下一整条"，侧栏会长到两三屏（产兵表 + 战报），
@@ -706,8 +729,16 @@ function panelHtml(input: PanelInput): string {
                      : `执行 ${input.commanderRounds ?? CONFIG.commanderSlots} 回合，然后交还`
                }
              </button>`
-          : `<button class="btn btn-primary btn-block" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
-               ${
+          : (() => {
+              const readyLeft = myTurn && !spectator && !s.winner
+                ? unitsOf(s, me).filter((u) => {
+                    const d = s.unitTypes[u.type];
+                    if (!d || d.category === 'building' || underConstruction(u)) return false;
+                    return (canMove(u) && movePower(s, u) > 0) || (canAttack(u) && isArmed(s, u));
+                  }).length
+                : 0;
+              return `<button class="btn btn-primary btn-block end-turn-btn" data-act="end-turn" ${myTurn ? '' : 'disabled'}>
+               <span>${
                  myTurn
                    ? '结束行动，交给对方'
                    : spectator
@@ -717,8 +748,9 @@ function panelHtml(input: PanelInput): string {
                      : quit
                        ? '你已认输 · 只能看'
                        : '等待对方行动中'
-               }
-             </button>`
+               }</span>${readyLeft > 0 ? `<span class="end-turn-badge" title="尚有 ${readyLeft} 个单位本回合可行动">剩 ${readyLeft}</span>` : ''}
+             </button>`;
+            })()
       }
       </div>
       ${input.replay ? '' : panelFold('match-actions', '对局管理', `<div class="side-actions">
@@ -1207,15 +1239,17 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
             }</div>
           </div>
         </div>
-        <div class="info-row"><span>进入消耗</span><b>${info.cost}</b></div>
-        <div class="info-row"><span>防御加成</span><b>${info.defense}</b></div>
-        ${
-          hazards.length > 0
-            ? `<div class="info-row"><span>环境</span><b style="color:#b4553f">${escapeHtml(
-                hazards.join(' · '),
-              )}</b></div>`
-            : ''
-        }
+        <div class="stat-grid stat-grid-tile">
+          <div class="info-row"><span class="stat-lbl">${uiIcon('move', 'stat-ico stat-ico-move')}进入消耗</span><b>${info.cost}</b></div>
+          <div class="info-row"><span class="stat-lbl">${uiIcon('armor', 'stat-ico stat-ico-armor')}防御加成</span><b>${info.defense}</b></div>
+          ${
+            hazards.length > 0
+              ? `<div class="info-row stat-wide"><span class="stat-lbl">环境</span><b style="color:var(--b)">${escapeHtml(
+                  hazards.join(' · '),
+                )}</b></div>`
+              : ''
+          }
+        </div>
         ${
           extLines.length > 0
             ? `<div class="unit-notes" style="color: #8b7eb6; margin-top: 8px;">${extLines
@@ -1470,7 +1504,7 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
      * 看起来像"这里本该有个数字，没加载出来"。
      */
     const atkRow = `<div class="info-row">
-            <span>攻击 / 护甲</span>
+            <span class="stat-lbl">${uiIcon('atk', 'stat-ico stat-ico-atk')}攻击 / 护甲</span>
             <b>${eff.atk} / ${eff.armor}${baseNote}</b>
           </div>`;
     const atkCell = statModBlock
@@ -1485,11 +1519,16 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
           <div class="unit-sub">${s.players[selectedUnit.owner].name} · ${CATEGORY_NAME[def.category] ?? '单位'}</div>
         </div>
       </div>
-      <div class="unit-readiness" aria-label="单位行动状态">${status.map((label) => `<span>${label}</span>`).join('')}</div>
+      <div class="unit-readiness" aria-label="单位行动状态">${status
+        .map((label) => {
+          const ready = label.startsWith('可移动') || label.startsWith('可攻击');
+          return `<span${ready ? ' class="is-ready"' : ''}>${label}</span>`;
+        })
+        .join('')}</div>
       ${mine && myTurn && input.combatInspectMode ? '<p class="unit-next-action">选择红框目标</p>' : ''}
       ${mine && myTurn && isArmed(s, selectedUnit) ? `<button class="btn btn-sm btn-block combat-aim-btn" data-act="combat-aim"
         aria-pressed="${input.combatInspectMode === true}" ${readyToAttack && (input.combatTargetCount ?? 1) > 0 ? '' : 'disabled'}>
-        ${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</button>` : ''}
+        ${uiIcon('swords')}<span>${input.combatInspectMode ? '退出攻击预览' : readyToAttack && input.combatTargetCount === 0 ? '无可攻击目标' : '攻击预览'}</span></button>` : ''}
       ${
         underCamp
           ? `<button class="btn btn-sm btn-block" data-act="open-camp" data-id="${underCamp.id}" style="margin-top:10px">
@@ -1535,15 +1574,15 @@ function renderDetail(input: PanelInput, myTurn: boolean): string {
         ''
       }
       <div class="stat-grid">
-        <div class="info-row"><span>生命</span><b>${selectedUnit.hp} / ${maxHpOf(
+        <div class="info-row"><span class="stat-lbl">${uiIcon('hp', 'stat-ico stat-ico-hp')}生命</span><b>${selectedUnit.hp} / ${maxHpOf(
           s,
           selectedUnit,
         )}</b></div>
-        <div class="info-row"><span>移动力</span><b>${
+        <div class="info-row"><span class="stat-lbl">${uiIcon('move', 'stat-ico stat-ico-move')}移动力</span><b>${
           eff.move !== eff.moveBase ? `${eff.move}（基础 ${eff.moveBase}）` : eff.move
         }</b></div>
         ${atkCell}
-        <div class="info-row"><span>射程 / 视野</span><b>${effectiveRange(
+        <div class="info-row"><span class="stat-lbl">${uiIcon('range', 'stat-ico stat-ico-range')}射程 / 视野</span><b>${effectiveRange(
           s,
           selectedUnit,
         )} / ${stats.vision}</b></div>
@@ -1899,7 +1938,7 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
         items.map(unitButton),
         { key, open: folds.has(key), limit: keep, noun: '种' },
       );
-      return `<div class="recruit-group">${title}<div class="recruit-list">${body}</div></div>`;
+      return `<div class="recruit-group">${title}<div class="recruit-list recruit-grid">${body}</div></div>`;
     })
     .join('');
 
@@ -1936,17 +1975,17 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
 
   return `
     <div class="unit-head">
-      <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">城</div>
-      <div>
-        <div class="unit-title">城市 ${cityName(city)}</div>
-        <div class="unit-sub">${s.players[city.owner].name} · ${era.name} · 驻军 ${garrison}/${city.size * city.size}${city.ruined ? ' · <b>废墟</b>' : ''}</div>
+      <div class="unit-chip ${city.owner === 'A' ? 'a' : 'b'}" style="border-radius:8px">${uiIcon('city')}</div>
+      <div class="city-head-copy">
+        <div class="unit-title"><span>城市 ${cityName(city)}</span><span class="era-badge">${era.name}</span></div>
+        <div class="unit-sub">${s.players[city.owner].name} · 驻军 ${garrison}/${city.size * city.size}${city.ruined ? ' · <b>废墟</b>' : ''}</div>
       </div>
     </div>
     <div class="hpbar"><i style="width:${ratio * 100}%;background:${barColor(ratio)}"></i></div>
     <div class="stat-grid">
-      <div class="info-row"><span>耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
-      <div class="info-row"><span>护甲</span><b>${city.armor}</b></div>
-      <div class="info-row"><span>本城收入</span><b>${city.ruined ? '0 金 <small>（废墟不产出）</small>' : `${era.cityIncome} 金`}</b></div>
+      <div class="info-row"><span class="stat-lbl">${uiIcon('hp', 'stat-ico stat-ico-hp')}耐久</span><b>${city.hp} / ${city.maxHp}</b></div>
+      <div class="info-row"><span class="stat-lbl">${uiIcon('armor', 'stat-ico stat-ico-armor')}护甲</span><b>${city.armor}</b></div>
+      <div class="info-row"><span class="stat-lbl">${uiIcon('gold', 'stat-ico stat-ico-gold')}本城收入</span><b>${city.ruined ? '0 金 <small>（废墟不产出）</small>' : `${era.cityIncome} 金`}</b></div>
       ${
         /*
          * 本方总收入单独一行，且只在**自己的城**上显示。
@@ -1956,13 +1995,13 @@ function renderCity(input: PanelInput, myTurn: boolean): string {
          * 二是因为对敌城显示总收入等于白送一份经济情报，浓雾就白做了。
          */
         mine
-          ? `<div class="info-row"><span>本方每回合收入</span><b>${incomeTextOf(
+          ? `<div class="info-row"><span class="stat-lbl">${uiIcon('income', 'stat-ico stat-ico-income')}本方每回合收入</span><b>${incomeTextOf(
               s,
               city.owner,
             )}</b></div>`
           : ''
       }
-      <div class="info-row stat-wide"><span>驻军休整</span><b>${regenText}</b></div>
+      <div class="info-row stat-wide"><span class="stat-lbl">驻军休整</span><b>${regenText}</b></div>
     </div>
     ${upgradeBlock}
     ${
@@ -2223,16 +2262,22 @@ function recruitButton(
       <span class="tip-row">${escapeHtml(detail)}</span>
       ${builds.names.length > 0 ? `<span class="tip-row tip-abil">可建造：${escapeHtml(builds.names.join('、'))}（共 ${builds.names.length} 种）</span>` : ''}
     </span>`;
-  const role = `${def.category === 'combat' ? def.range > 1 ? '远程作战' : '近战作战' : CATEGORY_NAME[def.category] ?? '单位'}${def.domain === 'water' ? ' · 水上' : airLayer(def) ? ' · 空中' : ''}${mode === 'order' ? ' · ＋队列' : ''}`;
+  const role = `${def.category === 'combat' ? def.range > 1 ? '远程' : '近战' : CATEGORY_NAME[def.category] ?? '单位'}${def.domain === 'water' ? ' · 水' : airLayer(def) ? ' · 空' : ''}${mode === 'order' ? ' · ＋队列' : ''}`;
+  const microStats = `<span class="recruit-micro" aria-hidden="true"><span>${uiIcon('hp', 'micro-ico')}${def.maxHp}</span>${
+    def.atk > 0 ? `<span>${uiIcon('atk', 'micro-ico')}${def.atk}</span>` : ''
+  }<span>${uiIcon('armor', 'micro-ico')}${def.armor}</span><span>${uiIcon('move', 'micro-ico')}${def.move}</span></span>`;
   return `<div class="recruit-wrap" data-hover-tip>${tip}
-    <button class="recruit-btn" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
-    <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:26px;height:26px;font-size:var(--fs-sm)">${def.short}</span>
+    <button class="recruit-btn recruit-card" data-act="${act}" data-type="${def.id}"${siteAttr} ${blocked ? 'disabled' : ''}>
+    <span class="recruit-card-head">
+      <span class="unit-chip ${me === 'A' ? 'a' : 'b'}" style="width:24px;height:24px;font-size:var(--fs-sm)">${def.short}</span>
+      <b class="recruit-name">${def.name}${sourceTag(def)}</b>
+      <span class="price">${costLabel(payCost)}</span>
+    </span>
+    ${microStats}
     <span class="meta">
-      <b>${def.name}${sourceTag(def)}</b>
       <span>${escapeHtml(role)}${extra}</span>
       ${reason ? `<span class="recruit-reason">${escapeHtml(reason)}</span>` : ''}
     </span>
-    <span class="price">${costLabel(payCost)}</span>
   </button>
   ${panelFold(`recruit-${site}-${def.id}`, '详情', `<div class="recruit-spec">${escapeHtml(detail)}</div>${builds.names.length > 0 ? `<div class="hint">可建造：${escapeHtml(builds.names.join('、'))}</div>` : ''}`, false, 'recruit-fold', `${def.name}：属性与能力`)}
   </div>`;
@@ -2355,7 +2400,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
       );
       return `<div class="recruit-group">
         <div class="recruit-group-title">${CATEGORY_NAME[cat]}</div>
-        <div class="recruit-list">${body}</div>
+        <div class="recruit-list recruit-grid">${body}</div>
       </div>`;
     })
     .join('');
@@ -2379,7 +2424,7 @@ function renderCamp(input: PanelInput, myTurn: boolean): string {
     );
     gatedGroup = `<div class="recruit-group">
         <div class="recruit-group-title">还造不出来</div>
-        <div class="recruit-list">${body}</div>
+        <div class="recruit-list recruit-grid">${body}</div>
       </div>`;
   }
 
@@ -2678,21 +2723,12 @@ export function topbarShell(): string {
     <span class="watch-chip" data-ref="watch" title="45 秒内有心跳的观战者人数" hidden></span>
     <div class="topbar-spacer"></div>
     <div class="topbar-actions">
-      <button class="btn btn-sm" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>
-      <button class="btn btn-sm" data-act="ai-speed" data-ref="speed" hidden>速度</button>
-      <button class="btn btn-sm" data-act="toggle-ai" data-ref="toggle-ai">交给 AI</button>
-      <button class="btn btn-sm" data-act="online" data-ref="online">联机</button>
-      <button class="btn btn-sm" data-act="toggle-fog" data-ref="fog">迷雾：开</button>
-      <button class="btn btn-sm" data-act="toggle-show-all" data-ref="show-all">看全图</button>
-      <!--
-        低频入口不再是顶栏按钮（2026-11-11 第二版）。
-
-        上一版把它们收进「更多」下拉，用户看了一眼说：不如干脆叫「设置」。
-        他是对的——"更多"是在给一堆杂项找词，而它们的共同点恰恰是
-        "不常改、想起来才改"：那就是设置。现在全部进设置弹窗，
-        铃声这种同样"想起来才调"的也一起搬进去，顶栏只留每回合都要看的东西。
-      -->
-      <button class="btn btn-sm" data-act="settings" title="主题、声音、导出、规则书">设置</button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="ai-pause" data-ref="pause" hidden>暂停 AI</button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="ai-speed" data-ref="speed" hidden>速度</button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="toggle-ai" data-ref="toggle-ai">${uiIcon('ai')}<span data-label>交给 AI</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="online" data-ref="online">${uiIcon('online')}<span data-label>联机</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="toggle-show-all" data-ref="show-all">${uiIcon('eye')}<span data-label>看全图</span></button>
+      <button class="btn btn-sm btn-ghost-hud" data-act="settings" title="主题、视角、声音、导出、规则书">${uiIcon('settings')}<span data-label>设置</span></button>
     </div>
   `;
 }
@@ -2778,6 +2814,12 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     speed.textContent = `速度 ${s.speedName}`;
   }
 
+  const setBtnLabel = (el: HTMLElement, text: string): void => {
+    const span = el.querySelector<HTMLElement>('[data-label]');
+    if (span) span.textContent = text;
+    else el.textContent = text;
+  };
+
   const ai = ref('toggle-ai');
   if (ai) {
     // 沙盒里"托管某一方"这个开关没有意义：两边本来就归 AI 打，
@@ -2786,13 +2828,16 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
     // 指挥官模式：这一方本来就在 AI 手里，"交给 AI / 收回操作权"没有第二种解释。
     // 这里的按钮改成同一件事的另一个入口——执行一批再交还，和参谋部那颗同源，
     // 顺手点错不会把对面也托管掉。
-    ai.textContent = s.commander
-      ? s.commanderRunning
-        ? '参谋部执行中…'
-        : '交给参谋部'
-      : s.aiCurrent
-        ? '收回操作权'
-        : '交给 AI';
+    setBtnLabel(
+      ai,
+      s.commander
+        ? s.commanderRunning
+          ? '参谋部执行中…'
+          : '交给参谋部'
+        : s.aiCurrent
+          ? '收回操作权'
+          : '交给 AI',
+    );
     ai.classList.toggle('btn-primary', s.commander ? false : s.aiCurrent);
     (ai as HTMLButtonElement).disabled = s.commander === true && s.commanderRunning === true;
   }
@@ -2801,7 +2846,7 @@ export function updateTopbar(root: HTMLElement, s: TopbarState): boolean {
   if (fog) {
     // 浓雾扩展下不给关：这个扩展的全部意义就是"地图本身看不见"，
     // 允许关掉雾等于让它失效
-    fog.textContent = s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`;
+    setBtnLabel(fog, s.blackout ? '迷雾：浓雾（锁定）' : `迷雾：${s.fog ? '开' : '关'}`);
     fog.classList.toggle('is-locked', s.blackout);
     // 复盘里这个开关改的是"别人那局"的雾：改了既存不下来，也会把画面调歪
     fog.hidden = s.replay === true;

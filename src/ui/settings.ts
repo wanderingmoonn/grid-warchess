@@ -14,10 +14,15 @@
  * 只负责**渲染**，开合与落盘都在 main（这个文件是纯函数，方便测）。
  */
 
+import { uiIcon } from './icons.ts';
+
 export interface SettingsOptions {
-  uiLayout?: 'refined' | 'classic';
   /** 当前主题（legacy / modern） */
   theme: 'legacy' | 'modern';
+  /** 默认棋盘视角是否为斜俯视 */
+  angledBoard?: boolean;
+  /** 当前局面是否支持斜俯视切换 */
+  canAngle?: boolean;
   /** 是否减少动效 */
   reducedMotion: boolean;
   /**
@@ -74,30 +79,37 @@ export function settingsHtml(o: SettingsOptions): string {
   return `
   <div class="modal modal-narrow" role="dialog" aria-label="设置">
     <div class="modal-head">
-      <h2>设置</h2>
+      <h2 class="modal-title-ico">${uiIcon('settings')}<span>设置</span></h2>
     </div>
 
     <div class="modal-body">
       <section class="set-group">
-        <div class="set-title">外观 <span class="set-hint">仅此设备</span></div>
-        <div class="set-row">
-          <div class="set-label">界面回滚
-            <span class="set-hint">切换布局，保留进度。</span>
-          </div>
-          <div class="set-control">
-            <button class="btn btn-sm" data-act="set-ui-layout" aria-pressed="${o.uiLayout === 'classic'}">${o.uiLayout === 'classic' ? '恢复新版 UI' : '回滚到经典 UI'}</button>
-          </div>
-        </div>
+        <div class="set-title">画面与视角 <span class="set-hint">仅此设备</span></div>
         <div class="set-row">
           <div class="set-label">主题
+            <span class="set-hint">日间羊皮纸 / 夜间板岩</span>
           </div>
           <div class="chip-row">
             ${chip(o.theme === 'legacy', 'set-theme', '浅色', 'data-theme="legacy"')}
             ${chip(o.theme === 'modern', 'set-theme', '深色', 'data-theme="modern"')}
           </div>
         </div>
+        ${
+          o.canAngle !== false
+            ? `<div class="set-row">
+          <div class="set-label">默认视角
+            <span class="set-hint">斜俯视下按住中键拖转</span>
+          </div>
+          <div class="chip-row">
+            ${chip(o.angledBoard !== false, 'set-board-angle', '斜俯视', 'data-angle="angled"')}
+            ${chip(o.angledBoard === false, 'set-board-angle', '正俯视', 'data-angle="flat"')}
+          </div>
+        </div>`
+            : ''
+        }
         <div class="set-row">
-          <div class="set-label">减少动态效果
+          <div class="set-label">动态效果
+            <span class="set-hint">水波、受击与过渡动画</span>
           </div>
           <div class="chip-row">
             ${chip(!o.reducedMotion, 'set-motion', '正常', 'data-motion="full"')}
@@ -105,8 +117,8 @@ export function settingsHtml(o: SettingsOptions): string {
           </div>
         </div>
         <div class="set-row">
-          <div class="set-label">美术贴图
-            <span class="set-hint">地形与棋子</span>
+          <div class="set-label">棋盘风格
+            <span class="set-hint">正俯视地形与棋子贴图</span>
           </div>
           <div class="chip-row">
             ${chip(!(o.terrainArt || o.unitArt), 'set-fx', '原版', 'data-fx="off"')}
@@ -155,26 +167,12 @@ export function settingsHtml(o: SettingsOptions): string {
         /*
          * 「对局中」这一组只在窄屏出现。
          *
-         * 桌面顶栏本来就有「联机」「迷雾」两颗按钮，这里再放一份就是两处状态、
+         * 桌面顶栏本来就有「联机」这颗按钮，这里再放一份就是两处状态、
          * 两条路径；手机上顶栏放不下，它们才搬进来。
          */
         o.compact
           ? `<section class="set-group">
         <div class="set-title">对局中</div>
-        <div class="set-row">
-          <div class="set-label">迷雾
-            <span class="set-hint">${
-              o.blackout
-                ? '「浓雾蔽野」已锁定开启。'
-                : '关闭会改变双方迷雾规则。'
-            }</span>
-          </div>
-          <div class="chip-row">
-            <button class="chip${o.fog ? ' active' : ''}" data-act="toggle-fog" ${
-              o.blackout ? 'disabled' : ''
-            }>${o.fog ? '开' : '关'}</button>
-          </div>
-        </div>
         <div class="set-row">
           <div class="set-label">看全图
             <span class="set-hint">仅改变显示，不影响 AI 视野。</span>

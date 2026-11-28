@@ -29,7 +29,7 @@ import { abilityById } from '../src/core/ability-registry.ts';
 import { createMatch, DEFAULT_CONFIG } from '../src/core/setup.ts';
 import { actionFeedback, forecastCombat } from '../src/ui/combat-feedback.ts';
 import { unitRole } from '../src/ui/unit-insignia.ts';
-import { applyUiLayout, setUiLayout } from '../src/ui/layout.ts';
+import { applyUiLayout } from '../src/ui/layout.ts';
 import { drainDamageLedger, startDamageLedger } from '../src/core/rules.ts';
 import { buildMatchReport } from '../src/core/report.ts';
 import {
@@ -698,7 +698,7 @@ check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要�
    * 父元素的 padding box，而 `border-right/bottom` 在它外面。于是格心被灰盖暗了、
    * 那 1px 边线还留着地形原色（只叠了 4.5% 黑）——一暗一亮挨着，边线就成了亮线。
    *
-   * 修法：把 `.out` / `.remembered` 的边框也刷成同一个半透明灰。边框画在地形色之上，
+   * 修法：把 `.out` / `.remembered` 的边框刷成盖层用的半透明色。边框画在地形色之上，
    * 混出来的值和格心一致，网格自然消失。这条用例把"别只压 background"钉住。
    */
   const css = readFileSync('src/style.css', 'utf8');
@@ -717,14 +717,14 @@ check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要�
       .join(' ')
       .replace(/ +/g, ' ');
   assert.ok(
-    flat(outTile).includes('border-color: rgba(74, 70, 62, 0.52)'),
-    '边框色必须和盖层同一个灰，否则边框会亮成一张网格',
+    flat(outTile).includes('border-color: var(--fog-shade);'),
+    '边框色和盖层色应来自同一个变量',
   );
 
   const outAfter = ruleOf('.board.fog .tile.out::after');
   assert.ok(
-    flat(outAfter).includes('background: rgba(74, 70, 62, 0.52)'),
-    '盖层底色被改掉了',
+    flat(outAfter).includes('background: var(--fog-shade);'),
+    '盖层色和边框色应来自同一个变量',
   );
   assert.ok(
     flat(outAfter).includes('animation: none'),
@@ -732,7 +732,9 @@ check('迷雾里的格子边框不许发亮：盖层之外的 1px 边线也要�
   );
 
   const memTile = ruleOf('.board.blackout .tile.remembered {');
-  assert.ok(/border-color:/.test(memTile), '记忆里的格子同样要压边框，否则记忆区也是一张亮线网格');
+  const memAfter = ruleOf('.board.blackout .tile.remembered::after');
+  assert.ok(flat(memTile).includes('border-color: var(--fog-memory-shade);'));
+  assert.ok(flat(memAfter).includes('background: var(--fog-memory-shade);'));
 
   // 老规矩：修法不能退回逐格 filter（那条路会把 64×64 的标签页压垮）
   assert.ok(
@@ -2592,7 +2594,12 @@ check('产兵面板按战斗 / 经济 / 建造分组', () => {
   assert.ok(html.includes('战斗单位'), '应该有战斗单位分组');
   assert.ok(html.includes('经济单位'), '应该有经济单位分组');
   assert.ok(html.includes('建造单位'), '应该有建造单位分组');
-  assert.ok(html.includes('平原 +') || html.includes('丘陵 +'), '经济单位应该标注地形产出');
+  /*
+   * 别写死"平原 / 丘陵"：面板标的是**产出最高的那一格**，而 2026-11-24 给
+   * 台地/谷地/沼泽/沙丘补了产出之后，农民的最高档变成了「谷地 +9」。
+   * 这里只验"标了某种地形 + 数字"。
+   */
+  assert.ok(/ · (平原|森林|丘陵|台地|谷地|沼泽|沙丘|城市) \+\d+/.test(html), '经济单位应该标注地形产出');
 });
 
 check('生产前可以展开每种兵的血量属性', () => {
@@ -2850,11 +2857,11 @@ check('B 的界面上看不到 A 后场的单位', () => {
   assert.ok(doc.querySelectorAll('.tile.out').length > 0, '盘面上应该有还没探到的格子');
 });
 
-check('关掉迷雾后双方单位全部出现', () => {
+check('按「看全图」后双方单位全部出现（迷雾规则不变）', () => {
   const before = unitsCount();
-  click('[data-act="toggle-fog"]');
-  assert.ok(unitsCount() > before, '关掉迷雾应该看到更多单位');
-  assert.equal(doc.querySelectorAll('.tile.out').length, 0, '关掉迷雾后不该再有暗格');
+  click('[data-act="toggle-show-all"]');
+  assert.ok(unitsCount() > before, '看全图应该看到更多单位');
+  assert.equal(doc.querySelectorAll('.tile.out').length, 0, '看全图后不该再有暗格');
 });
 
 check('第一次来：首页隐藏「继续上一局」（启动占位局不算打过）', () => {
@@ -3207,6 +3214,33 @@ check('测试 AI 和三个档位排在同一行，并且写明自带全视野', 
   assert.equal(net(), null, '切回热座应该收起来');
 });
 
+check('斜俯视棋盘：没有 canvas 的环境里安静退化，不炸也不留半个画布', () => {
+  /*
+   * 2026-11-23。斜俯视是 canvas 渲染，而 jsdom 没有 CanvasRenderingContext2D。
+   * 这条守的是**降级**，不是渲染：
+   *   · 页面照常起来，DOM 棋盘还在（`.tile` 有货）；
+   *   · 不生成 `.angled-board` 画布，也不把 `has-angled-view` 挂到 .board 上；
+   *   · 视角按钮不出现（canUseAngledBoard 为假）。
+   * 真渲染由 `scripts/ui-shot.ts angled` 拍图验证——jsdom 里验不了"看得见"。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG }, 20261123, {});
+  const w = bootWith(st, '?loadSave=1&view=angled');
+  const d = w.document;
+  try {
+    assert.ok(d.querySelectorAll('.tile').length > 0, 'DOM 棋盘照常渲染');
+    assert.equal(d.querySelector('.angled-board'), null, '没有 canvas 就不该造画布');
+    assert.equal(
+      d.querySelector('.board')?.classList.contains('has-angled-view'),
+      false,
+      '不该挂 has-angled-view',
+    );
+    const toggle = d.querySelector<HTMLElement>('[data-act="board-angle"]');
+    assert.ok(!toggle || toggle.hidden, '没有 canvas 时视角按钮要么不存在、要么是隐藏的');
+  } finally {
+    w.close();
+  }
+});
+
 check('AI 内核：高级档位就是 v3，不再有单独的「实验 AI」按钮', () => {
   /*
    * 2026-11-21 修仙分支的「实验 AI」并进主线；2026-11-22 接着写成 v3；
@@ -3284,60 +3318,38 @@ check('能选地貌与地形对称方式', () => {
   );
 });
 
-check('地貌按钮只在勾了「地形高差」之后才出现', () => {
-  // 地貌是扩展的菜单项，不是本体的常量表：高原/峡谷/沼泽/群岛/大川
-  // 这五颗 chip 完全由"勾没勾那个扩展"决定（火山群已随熔岩/火山一起删掉）。
+check('地貌按钮属于本体：地形高差并进本体后六颗常驻，开关也不见了', () => {
+  /*
+   * 2026-11-24 用户定：地形高差不再当扩展卖，并进本体。
+   *   · 高原/峡谷/沼泽/群岛/大川五颗 chip 常驻，不再挂在扩展开关上；
+   *   · 开局面板里不该再有 `data-exp="height-terrain"` 那颗勾选框；
+   *   · 基础地貌照旧在（别为了并进来把整行弄丢）。
+   */
   const extra = ['highland', 'canyon', 'marsh', 'isles', 'river'];
-
-  // 默认没勾：一颗都不该有，否则玩家会选到一张"规则里没有高度"的图
   for (const id of extra) {
-    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `没勾扩展不该有 ${id}`);
+    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `并进本体后 ${id} 该常驻`);
   }
-  // 但那五种之外的基础地貌要在（别为了藏而把整行都藏了）
   for (const id of ['random', 'river-h', 'ridge', 'open']) {
     assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `基础地貌 ${id} 该一直在`);
   }
+  assert.equal(
+    doc.querySelector('[data-exp="height-terrain"]'),
+    null,
+    '不该再有「地形高差」的勾选框',
+  );
 
-  // 勾上扩展：五颗当场出现（面板会整块重绘，所以要重新查节点）
-  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(box, '「地形高差」应该出现在扩展列表里（它已经对玩家开放）');
-  box.checked = true;
-  box.dispatchEvent(new window.Event('change', { bubbles: true }));
-  for (const id of extra) {
-    assert.ok(doc.querySelector(`[data-mapstyle="${id}"]`), `勾了扩展应该出现 ${id}`);
-  }
-
-  // 取消勾选：又消失（选了高原地貌的还要退回随机，见下一条）
-  const off = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(off, '取消勾选时节点还在');
-  off.checked = false;
-  off.dispatchEvent(new window.Event('change', { bubbles: true }));
-  for (const id of extra) {
-    assert.equal(doc.querySelector(`[data-mapstyle="${id}"]`), null, `取消勾选后 ${id} 该收起来`);
-  }
-});
-
-check('关掉扩展时，选中的高原地貌退回随机', () => {
-  // 否则存档里会留着"上次选了群岛"，下次开局画出一张规则里没有浅流的图。
-  const box = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(box);
-  box.checked = true;
-  box.dispatchEvent(new window.Event('change', { bubbles: true }));
-  const chip = doc.querySelector<HTMLElement>('[data-mapstyle="isles"]');
-  assert.ok(chip, '勾了扩展应该有群岛');
-  chip.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  // 选了某个地貌之后点回随机，仍要能退回来（这条与扩展无关，别一起丢了）
+  doc.querySelector<HTMLElement>('[data-mapstyle="isles"]')!
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   assert.ok(
     doc.querySelector<HTMLElement>('[data-mapstyle="isles"]')?.classList.contains('active'),
     '点了群岛应该高亮',
   );
-
-  const off = doc.querySelector<HTMLInputElement>('[data-exp="height-terrain"]');
-  assert.ok(off);
-  off.checked = false;
-  off.dispatchEvent(new window.Event('change', { bubbles: true }));
+  doc.querySelector<HTMLElement>('[data-mapstyle="random"]')!
+    .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   assert.ok(
     doc.querySelector<HTMLElement>('[data-mapstyle="random"]')?.classList.contains('active'),
-    '扩展关掉之后地貌该退回随机',
+    '点随机应该退回来',
   );
 });
 
@@ -4320,6 +4332,21 @@ check('输入法组字中按 Enter 只选词，不发送（否则对方只收到
 console.log('\n指挥官模式');
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * 等某个条件成立（最多 ms 毫秒）。
+ *
+ * 2026-11-24：指挥官那几条用例原来用固定 `wait(150)` / `wait(250)`，
+ * 执行一批 5 回合的耗时会随机器负载和地图内容浮动——CI 跑满时经常等不到，
+ * 前一条红了后面跟着全红。改成轮询，条件成立立刻往下走，最多等 4 秒。
+ */
+const until = async (pred: () => boolean, ms = 4000, step = 25): Promise<boolean> => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (pred()) return true;
+    await wait(step);
+  }
+  return pred();
+};
 
 check('普通对局不显示指挥官栏', () => {
   const bar = doc.querySelector<HTMLElement>('#commander');
@@ -4424,7 +4451,12 @@ check('指挥官模式开局后，顶端是一条生产队列（初始 5 个空�
 });
 
 check('指挥官模式下点自己的部队能看属性，遣散按钮也在', () => {
-  const st = createMatch({ ...DEFAULT_CONFIG, commanderMode: true }, 20261028, {});
+  /*
+   * 2026-11-24：指挥官这批用例验的是"排队/执行/中断"这条链路，
+   * 不该被地图内容牵着走。地形高差并进本体后默认就有新地貌（沼泽/谷地会改步耗），
+   * 执行 5 回合的时序会变——这里显式关掉，只保留被验的那条链路。
+   */
+  const st = createMatch({ ...DEFAULT_CONFIG, commanderMode: true, expansionIds: [] }, 20261028, {});
   st.fog = false;
   st.current = 'A';
   // 挑一个真兵（不是建筑），属性卡上才有射程护甲这些数字
@@ -4654,7 +4686,7 @@ check('指挥官栏能定「策略」与「进攻方向」，并且落到 state 
 
 await checkAsync('点「执行 5 回合」先进进度态，可以中断', async () => {
   click('[data-cmd="run"]');
-  await wait(150);
+  await until(() => !!doc.querySelector('#commander [data-cmd="stop"]'));
 
   const running = doc.querySelector<HTMLElement>('#commander');
   assert.ok(running?.querySelector('[data-cmd="stop"]'), '执行中应该有中断按钮');
@@ -4662,7 +4694,7 @@ await checkAsync('点「执行 5 回合」先进进度态，可以中断', async
   assert.ok((running?.textContent ?? '').includes('/ 5'), `应该显示第几回合，实际：${running?.textContent}`);
 
   click('[data-cmd="stop"]');
-  await wait(250);
+  await until(() => !!doc.querySelector('#commander [data-cmd="run"]'));
 
   const back = doc.querySelector<HTMLElement>('#commander');
   assert.ok(back?.querySelector('[data-cmd="run"]'), '中断后应该回到可排计划的状态');
@@ -4670,6 +4702,7 @@ await checkAsync('点「执行 5 回合」先进进度态，可以中断', async
 });
 
 await checkAsync('每格都给出可用金币的估算', async () => {
+  await until(() => doc.querySelectorAll('#commander .cmd-chip-est').length > 0);
   const bar = doc.querySelector<HTMLElement>('#commander');
   assert.ok(bar);
   // 中断之后队列还在（单机会把计划装回去），所以估算该有内容
@@ -4682,7 +4715,9 @@ await checkAsync('每格都给出可用金币的估算', async () => {
   assert.ok(bar.querySelector('[data-est-total]'), '应该有本批结束时余额的估算');
 });
 
-check('「空过一回合」能排进队列，且和"还没排"是两种长相', () => {
+await checkAsync('「空过一回合」能排进队列，且和"还没排"是两种长相', async () => {
+  // 上一批可能还在跑：先等它回到排队态，否则队列里根本没有格子可点
+  await until(() => !doc.querySelector('#commander [data-cmd="stop"]'));
   const bar = () => doc.querySelector<HTMLElement>('#commander')!;
   // 先把上一批留下的队列清掉
   const clear = bar().querySelector<HTMLElement>('[data-cmd="clear"]');
@@ -4710,7 +4745,8 @@ check('「空过一回合」能排进队列，且和"还没排"是两种长相',
   assert.deepEqual(saved.orders?.A, ['@idle'], '空过要落成哨兵值，不是空串');
 });
 
-check('指挥官模式：推进游戏只剩「执行一批」这一条路', () => {
+await checkAsync('指挥官模式：推进游戏只剩「执行一批」这一条路', async () => {
+  await until(() => !doc.querySelector('#commander [data-cmd="stop"]'));
   // 「结束行动」只推进一个回合，而参谋部按 5 回合一批走。两个入口各推各的，
   // 玩家顺手点一下就变成"走了半批"，对面看到的回合数也对不上。
   assert.equal(
@@ -5831,9 +5867,13 @@ check('手机设置里多出「对局中」：迷雾开关和联机入口', () =
     fog: true,
     roomCode: null,
   });
-  assert.ok(phone.includes('data-act="toggle-fog"'), '手机设置里要有迷雾开关');
+  assert.equal(
+    phone.includes('data-act="toggle-fog"'),
+    false,
+    '迷雾开关已移除（2026-11-24），设置里不该再有',
+  );
   assert.ok(phone.includes('data-act="online"'), '手机设置里要有联机入口');
-  assert.ok(/class="chip active" data-act="toggle-fog"/.test(phone), '迷雾开着时开关要高亮');
+  assert.ok(phone.includes('data-act="toggle-show-all"'), '「看全图」要留在设置里');
   assert.ok(phone.includes('联机'), '要有「联机」这两个字，不能只有一个图标');
 
   // 桌面版：不传 compact 就不该出现这一组
@@ -5844,9 +5884,9 @@ check('手机设置里多出「对局中」：迷雾开关和联机入口', () =
     chimeText: '铃声 60%',
   });
   assert.equal(
-    desktop.includes('data-act="toggle-fog"'),
+    desktop.includes('data-act="toggle-show-all"'),
     false,
-    '桌面顶栏本来就有迷雾按钮，设置里不该再放一份',
+    '桌面顶栏本来就有「看全图」，设置里不该再放一份',
   );
 
   // 房间码：在房间里要写出来，不然玩家不知道该点「房间」还是「联机」
@@ -8600,7 +8640,7 @@ await checkAsync('复盘：界面按"别人的棋"渲染——能改局的东西
    * 搬进弹窗不能把这条规矩丢了。
    */
   const topBtn = (act: string) => d.querySelector<HTMLElement>(`#topbar [data-act="${act}"]`);
-  for (const act of ['toggle-ai', 'toggle-fog', 'ai-pause', 'ai-speed', 'online']) {
+  for (const act of ['toggle-ai', 'ai-pause', 'ai-speed', 'online']) {
     assert.equal(topBtn(act)?.hidden, true, `复盘里顶栏不该出现 ${act}`);
   }
   assert.ok(topBtn('settings'), '顶栏该留着「设置」');
@@ -11204,20 +11244,14 @@ check('触屏攻击：首次点击仅预览，确认后才结算并显示结果'
   }
 });
 
-check('经典 UI 鼠标交锋：悬停预览，直接点击目标执行攻击', () => {
+check('退役旧布局分支：?layout=classic 自动归并至现代布局，首页与设置不再保留回滚入口', () => {
   const fresh = bootWith(combatFixture(), '?loadSave=1&layout=classic');
   try {
-    const source = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!;
-    source.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
-    const target = fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-foe"]')!;
-    const before = fresh.localStorage.getItem('warchess:match:v1');
-    target.dispatchEvent(new fresh.MouseEvent('mouseover', { bubbles: true }));
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, false);
-    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), before);
-    target.dispatchEvent(new fresh.MouseEvent('click', { bubbles: true }));
-    assert.equal(fresh.document.querySelector<HTMLElement>('#combat-preview')!.hidden, true);
-    const after = JSON.parse(fresh.localStorage.getItem('warchess:match:v1')!);
-    assert.equal(after.units.find((unit: Unit) => unit.id === 'forecast-foe').hp, 17);
+    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    fresh.document.querySelector<HTMLElement>('[data-act="settings"]')!.click();
+    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]'), null);
+    fresh.document.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
+    assert.equal(fresh.document.querySelector('[data-title="ui-layout"]'), null);
   } finally {
     fresh.close();
   }
@@ -11345,13 +11379,7 @@ check('首页沙盘：普通启动用已有存档画整张小地图，继续时�
     const card = home.querySelector<HTMLButtonElement>('button.title-resume')!;
     assert.match(card.getAttribute('aria-label') ?? '', /继续上一局.*回合/);
     assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
-    const layoutSwitch = home.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
-    layoutSwitch.click();
-    assert.ok(card.hidden);
-    assert.ok(home.querySelector('.title-resume-fallback[data-title="continue"]:not([hidden])'));
-    layoutSwitch.click();
-    assert.equal(card.hidden, false);
-    assert.deepEqual([...home.querySelectorAll('[data-title="continue"]')], [card]);
+    assert.equal(home.querySelector('[data-title="ui-layout"]'), null);
     assert.equal(home.querySelectorAll('.hero-match-tile').length, 144);
     assert.equal(home.querySelector('.hero-match-tile')?.getAttribute('data-terrain'), 'mountain');
     assert.equal(fresh.localStorage.getItem('warchess:match:v1'), JSON.stringify(st));
@@ -11432,70 +11460,49 @@ check('首页沙盘：大地图只取局部，浓雾里的敌军和地形仍然�
   }
 });
 
-check('UI 回滚：设置立即生效、能恢复新版，不修改对局和深浅色选择', () => {
+check('Canvas-First 抽屉状态机：空闲为 idle，选兵/快捷入口切换 context，关闭回到 idle', () => {
   const fresh = bootWith(combatFixture());
   try {
-    const tap = (selector: string) => {
-      const button = fresh.document.querySelector<HTMLElement>(selector);
-      assert.ok(button, selector);
-      button.click();
-    };
-    tap('.unit[data-id="forecast-own"]');
-    const saved = fresh.localStorage.getItem('warchess:match:v1');
-    const theme = fresh.document.documentElement.dataset.ui;
-    tap('[data-act="settings"]');
-    tap('[data-act="set-ui-layout"]');
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
-    assert.equal(fresh.localStorage.getItem('warchess:ui-layout'), 'classic');
-    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]')?.textContent, '恢复新版 UI');
-    assert.equal(fresh.document.querySelector('[data-act="set-ui-layout"]'), fresh.document.activeElement);
-    assert.equal(fresh.document.documentElement.dataset.ui, theme);
-    tap('[data-act="set-ui-layout"]');
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    const drawer = fresh.document.querySelector<HTMLElement>('#side-drawer')!;
+    assert.equal(drawer.dataset.context, 'idle');
+    fresh.document.querySelector<HTMLElement>('.unit[data-id="forecast-own"]')!.dispatchEvent(
+      new fresh.MouseEvent('click', { bubbles: true }),
+    );
+    assert.equal(drawer.dataset.context, 'unit');
+    fresh.document.querySelector<HTMLElement>('[data-act="clear-selection"]')!.click();
+    assert.equal(drawer.dataset.context, 'idle');
+    fresh.document.querySelector<HTMLElement>('[data-act="dock-open"][data-dock="log"]')!.click();
+    assert.equal(drawer.dataset.context, 'dock');
+    fresh.document.querySelector<HTMLElement>('[data-act="clear-selection"]')!.click();
+    assert.equal(drawer.dataset.context, 'idle');
+  } finally {
+    fresh.close();
+  }
+});
+
+check('顶栏可动计数：显示可行动兵力并支持一键定位选中', () => {
+  const fresh = bootWith(combatFixture());
+  try {
+    const readyBtn = fresh.document.querySelector<HTMLButtonElement>('[data-ref="battle-ready"]')!;
+    assert.equal(readyBtn.hidden, false);
+    assert.match(readyBtn.textContent ?? '', /\d+\s*可动/);
+    readyBtn.click();
     assert.ok(fresh.document.querySelector('.unit.selected[data-id="forecast-own"]'));
-    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
+    assert.equal(fresh.document.querySelector<HTMLElement>('#side-drawer')!.dataset.context, 'unit');
   } finally {
     fresh.close();
   }
 });
 
-check('UI 回滚：应急链接优先、切换同步链接、存储受限也能切换', () => {
-  const fresh = new JSDOM('<!doctype html><html></html>', { url: 'http://localhost/?layout=classic&sharecode=keep#board' }).window;
-  try {
-    const root = fresh.document.documentElement;
-    fresh.localStorage.setItem('warchess:ui-layout', 'refined');
-    assert.equal(applyUiLayout(root), 'classic');
-    setUiLayout('refined', root);
-    assert.equal(new URL(fresh.location.href).searchParams.get('layout'), 'refined');
-    assert.equal(new URL(fresh.location.href).searchParams.get('sharecode'), 'keep');
-    assert.equal(fresh.location.hash, '#board');
-    fresh.history.replaceState(null, '', '/');
-    setUiLayout('classic', root);
-    delete root.dataset.uiLayout;
-    assert.equal(applyUiLayout(root), 'classic');
-    Object.defineProperty(fresh, 'localStorage', { configurable: true, get() { throw new Error('blocked'); } });
-    assert.equal(applyUiLayout(root), 'refined');
-    setUiLayout('classic', root);
-    assert.equal(root.dataset.uiLayout, 'classic');
-  } finally {
-    fresh.close();
-  }
-});
-
-check('UI 回滚：首页可独立切换，不离开首页且保留主入口', () => {
+check('布局工具：已统一收敛至 refined 现代布局，保留深浅色设置且不破坏存档', () => {
   const fresh = bootWith(combatFixture());
   try {
+    const saved = fresh.localStorage.getItem('warchess:match:v1');
+    assert.equal(applyUiLayout(fresh.document.documentElement), 'refined');
     fresh.document.querySelector<HTMLElement>('[data-act="settings"]')!.click();
-    fresh.document.querySelector<HTMLElement>('[data-act="new-game"]')!.click();
-    const button = fresh.document.querySelector<HTMLButtonElement>('[data-title="ui-layout"]')!;
-    assert.ok(button);
-    button.click();
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'classic');
-    assert.equal(button.getAttribute('aria-pressed'), 'true');
-    assert.equal(button.textContent, '恢复新版 UI');
-    assert.ok(fresh.document.querySelector('.title-screen [data-title="new"]'));
-    button.click();
-    assert.equal(fresh.document.documentElement.dataset.uiLayout, 'refined');
+    fresh.document.querySelector<HTMLElement>('[data-act="set-theme"][data-theme="modern"]')!.click();
+    assert.equal(fresh.document.documentElement.dataset.ui, 'modern');
+    assert.equal(fresh.localStorage.getItem('warchess:match:v1'), saved);
   } finally {
     fresh.close();
   }

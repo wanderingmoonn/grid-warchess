@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>民兵 · 真实地形四风格实机对比</title>
+  <style>
+    :root {
+      --bg: #e7dfd0;
+      --surface: rgba(248, 243, 232, 0.94);
+      --surface-strong: #f6f0e2;
+      --ink: #241f19;
+      --muted: #685f52;
+      --border: rgba(74, 62, 46, 0.22);
+      --accent: #9f3d33;
+      --accent-ink: #faf5ea;
+      --shadow: 0 8px 24px rgba(34, 26, 16, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 35%, #f0e9da 0%, #dfd5c2 100%);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* 顶部紧凑控制栏 */
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+      padding: 8px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-right: 4px;
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .brand .sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .ctrl-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px;
+      border-radius: 8px;
+      background: rgba(74, 62, 46, 0.07);
+      border: 1px solid rgba(74, 62, 46, 0.12);
+    }
+    .ctrl-label {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 0 5px 0 6px;
+      user-select: none;
+    }
+    .btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 120ms ease, color 120ms ease;
+      white-space: nowrap;
+    }
+    .btn:hover {
+      background: rgba(74, 62, 46, 0.10);
+    }
+    .btn[aria-pressed="true"] {
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .hint {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    /* 主沙盘画布视口 */
+    .viewport {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      touch-action: none;
+    }
+    .viewport.can-pan { cursor: grab; }
+    .viewport.is-panning { cursor: grabbing; }
+
+    .stage {
+      position: relative;
+      width: min(94vw, 1180px);
+      max-height: calc(100% - 14px);
+      aspect-ratio: 16 / 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform-origin: center center;
+      will-change: transform;
+    }
+
+    .canvas-wrap {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #militia-board {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      filter: drop-shadow(0 12px 26px rgba(34, 26, 16, 0.22));
+    }
+
+    /* 贴合真实地图坐标的行列浮动铭牌（自动跟随 360° 旋转与倍率缩放） */
+    .markers {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .map-tag {
+      position: absolute;
+      transform: translate(-50%, -50%) scale(var(--inv-zoom, 1));
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      box-shadow: 0 2px 7px rgba(24, 19, 13, 0.22);
+      border: 1px solid rgba(48, 39, 28, 0.34);
+      line-height: 1.35;
+      transition: opacity 150ms ease;
+    }
+    .map-tag.row-tag {
+      background: rgba(34, 28, 22, 0.88);
+      color: #f7f0e0;
+    }
+    .map-tag.row-tag.is-dimmed {
+      opacity: 0.32;
+    }
+    .map-tag.col-tag {
+      background: rgba(247, 241, 227, 0.92);
+      color: #362e23;
+    }
+
+    /* 选中单位右下角轻提示 */
+    .inspect-pill {
+      position: absolute;
+      right: 14px;
+      bottom: 12px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(34, 28, 22, 0.86);
+      color: #f6efe0;
+      font-size: 11.5px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      pointer-events: none;
+      z-index: 15;
+    }
+
+    /* 底部四风格简介卡片栏 */
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      padding: 8px 14px 10px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      z-index: 20;
+    }
+    .style-card {
+      text-align: left;
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--surface-strong);
+      color: var(--ink);
+      border-radius: 9px;
+      padding: 7px 10px;
+      cursor: pointer;
+      transition: border-color 140ms ease, background 140ms ease, transform 120ms ease;
+    }
+    .style-card:hover {
+      border-color: rgba(159, 61, 51, 0.55);
+      transform: translateY(-1px);
+    }
+    .style-card[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: #fff9ee;
+      box-shadow: 0 0 0 1.5px rgba(159, 61, 51, 0.30);
+    }
+    .style-card .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 3px;
+    }
+    .style-card .name {
+      font-size: 12.5px;
+      font-weight: 700;
+    }
+    .style-card .badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(159, 61, 51, 0.12);
+      color: var(--accent);
+    }
+    .style-card .desc {
+      margin: 0;
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
+    @media (max-width: 960px) {
+      .legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hint { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>民兵 · 真实地形四风格对比</h1>
+        <span class="sub">复用真实斜俯视渲染器 · 青铜 25 金征召乡勇（无盔/无盾/无甲）</span>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="视图倍率">
+        <span class="ctrl-label">倍率</span>
+        <button class="btn" data-zoom="1" aria-pressed="true">1× 实战</button>
+        <button class="btn" data-zoom="2" aria-pressed="false">2× 近景</button>
+        <button class="btn" data-zoom="3" aria-pressed="false">3× 特写</button>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="阵营与状态">
+        <span class="ctrl-label">阵营</span>
+        <button class="btn" data-team="A" aria-pressed="true">红方</button>
+        <button class="btn" data-team="B" aria-pressed="false">蓝方</button>
+        <button class="btn" data-team="C" aria-pressed="false">绿方</button>
+        <button class="btn" data-team="D" aria-pressed="false">金方</button>
+        <button class="btn" data-team="DIM" aria-pressed="false">已行动</button>
+        <button class="btn" data-team="VS" aria-pressed="false">红蓝对峙</button>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="聚焦风格">
+        <span class="ctrl-label">显示</span>
+        <button class="btn" data-focus="ALL" aria-pressed="true">全览 4×4</button>
+        <button class="btn" data-focus="A" aria-pressed="false">仅 A</button>
+        <button class="btn" data-focus="B" aria-pressed="false">仅 B</button>
+        <button class="btn" data-focus="C" aria-pressed="false">仅 C</button>
+        <button class="btn" data-focus="D" aria-pressed="false">仅 D</button>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="相机视角">
+        <span class="ctrl-label">视角</span>
+        <button class="btn" data-cam="left" title="逆时针旋转 45°">↺</button>
+        <button class="btn" data-cam="right" title="顺时针旋转 45°">↻</button>
+        <button class="btn" data-cam="reset" title="重置视角与缩放偏移">复位</button>
+      </div>
+
+      <span class="hint">右键/中键拖拽 360° 旋转 · 放大后左键拖拽平移 · 点击兵偶切换选中态</span>
+    </header>
+
+    <main class="viewport" id="viewport">
+      <div class="stage" id="stage">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="militia-board"></canvas>
+          <div class="markers" id="markers"></div>
+        </div>
+      </div>
+      <div class="inspect-pill" id="inspect-pill">点击地图任意民兵可查看选中态 · 共 4 风格 × 4 真实地形（平原 / 森林 / 丘陵 / 台地）</div>
+    </main>
+
+    <footer class="legend">
+      <button class="style-card" data-focus-card="A" aria-pressed="false">
+        <div class="head">
+          <span class="name">A · 陷阵像素微缩</span>
+          <span class="badge">Into the Breach</span>
+        </div>
+        <p class="desc">34×28 硬像素双人精灵，不抗锯齿像素边，战棋硬核感与剪影锐度极强。</p>
+      </button>
+      <button class="style-card" data-focus-card="B" aria-pressed="false">
+        <div class="head">
+          <span class="name">B · 几何微缩兵阵</span>
+          <span class="badge">同源 3D 雕塑</span>
+        </div>
+        <p class="desc">零黑描边纯受光切面 3 人小队 + 实木薄底座，与现有 3D 青铜城池最融为一体。</p>
+      </button>
+      <button class="style-card" data-focus-card="C" aria-pressed="false">
+        <div class="head">
+          <span class="name">C · 旗帜冷峻厚涂</span>
+          <span class="badge">Banner Saga</span>
+        </div>
+        <p class="desc">深褐暗影剪影 + 暖亮受光棱 + 克制围布，前矛后棍，历史冷峻氛围最强。</p>
+      </button>
+      <button class="style-card" data-focus-card="D" aria-pressed="false">
+        <div class="head">
+          <span class="name">D · 兵偶 + 纹章台座</span>
+          <span class="badge">远景高辨识</span>
+        </div>
+        <p class="desc">双人写实兵偶立于斜切战术台座，前缘嵌矛尖徽章，适配 60+ 兵种大图一眼分清。</p>
+      </button>
+    </footer>
+  </div>
+
+  <script type="module" src="/src/prototypes/militia-styles.ts"></script>
+</body>
+</html>

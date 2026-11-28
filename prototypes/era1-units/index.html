@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>时代 1（青铜时代）全 13 兵种与建筑实机总览</title>
+  <style>
+    :root {
+      --bg: #e7dfd0;
+      --surface: rgba(248, 243, 232, 0.94);
+      --surface-strong: #f6f0e2;
+      --ink: #241f19;
+      --muted: #685f52;
+      --border: rgba(74, 62, 46, 0.22);
+      --accent: #9f3d33;
+      --accent-ink: #faf5ea;
+      --shadow: 0 8px 24px rgba(34, 26, 16, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 35%, #f0e9da 0%, #dfd5c2 100%);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+    }
+
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+      padding: 8px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-right: 4px;
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .brand .sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .ctrl-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px;
+      border-radius: 8px;
+      background: rgba(74, 62, 46, 0.07);
+      border: 1px solid rgba(74, 62, 46, 0.12);
+    }
+    .ctrl-label {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 0 5px 0 6px;
+      user-select: none;
+    }
+    .btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 120ms ease, color 120ms ease;
+      white-space: nowrap;
+    }
+    .btn:hover { background: rgba(74, 62, 46, 0.10); }
+    .btn[aria-pressed="true"] {
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .hint {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .viewport {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      touch-action: none;
+    }
+    .viewport.can-pan { cursor: grab; }
+    .viewport.is-panning { cursor: grabbing; }
+
+    .stage {
+      position: relative;
+      width: min(94vw, 1180px);
+      max-height: calc(100% - 14px);
+      aspect-ratio: 16 / 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform-origin: center center;
+      will-change: transform;
+    }
+
+    .canvas-wrap {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #era1-board {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      filter: drop-shadow(0 12px 26px rgba(34, 26, 16, 0.22));
+    }
+
+    .markers {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .markers.hidden { opacity: 0; }
+
+    .unit-tag {
+      position: absolute;
+      transform: translate(-50%, -100%) scale(var(--inv-zoom, 1));
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(34, 28, 22, 0.84);
+      color: #f7f0e0;
+      font-size: 10.5px;
+      font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid rgba(250, 242, 224, 0.24);
+      box-shadow: 0 2px 6px rgba(24, 19, 13, 0.22);
+      line-height: 1.35;
+    }
+    .group-tag {
+      position: absolute;
+      transform: translate(-50%, -50%) scale(var(--inv-zoom, 1));
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(247, 241, 227, 0.92);
+      color: #3a3125;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      border: 1px solid rgba(74, 62, 46, 0.28);
+      box-shadow: 0 2px 6px rgba(24, 19, 13, 0.18);
+    }
+
+    .inspect-pill {
+      position: absolute;
+      right: 14px;
+      bottom: 12px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: rgba(34, 28, 22, 0.86);
+      color: #f6efe0;
+      font-size: 11.5px;
+      font-weight: 600;
+      box-shadow: var(--shadow);
+      pointer-events: none;
+      z-index: 15;
+    }
+
+    .footer-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 12px;
+      padding: 7px 14px 9px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11.5px;
+      color: var(--muted);
+      z-index: 20;
+    }
+    .footer-bar strong { color: var(--ink); }
+    .footer-bar a {
+      margin-left: auto;
+      color: var(--accent);
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .footer-bar a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>时代 1 · 青铜时代全 13 单位实机总览</h1>
+        <span class="sub">统一写实微缩战棋风格 · 与已定稿民兵 &amp; E1 青铜城池同源</span>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="视图倍率">
+        <span class="ctrl-label">倍率</span>
+        <button class="btn" data-zoom="1" aria-pressed="true">1× 实战</button>
+        <button class="btn" data-zoom="2" aria-pressed="false">2× 近景</button>
+        <button class="btn" data-zoom="3" aria-pressed="false">3× 特写</button>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="阵营与状态">
+        <span class="ctrl-label">阵营</span>
+        <button class="btn" data-team="A" aria-pressed="true">红方</button>
+        <button class="btn" data-team="B" aria-pressed="false">蓝方</button>
+        <button class="btn" data-team="C" aria-pressed="false">绿方</button>
+        <button class="btn" data-team="D" aria-pressed="false">金方</button>
+        <button class="btn" data-team="DIM" aria-pressed="false">已行动</button>
+        <button class="btn" data-team="VS" aria-pressed="false">红蓝对峙</button>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="标签开关">
+        <button class="btn" id="toggle-tags" aria-pressed="true">显示名称标签</button>
+      </div>
+
+      <div class="ctrl-group" role="group" aria-label="相机视角">
+        <span class="ctrl-label">视角</span>
+        <button class="btn" data-cam="left" title="逆时针旋转 45°">↺</button>
+        <button class="btn" data-cam="right" title="顺时针旋转 45°">↻</button>
+        <button class="btn" data-cam="reset" title="重置视角与缩放">复位</button>
+      </div>
+
+      <span class="hint">右键/中键 360° 旋转 · 放大后左键拖拽 · 点击单位看选中态</span>
+    </header>
+
+    <main class="viewport" id="viewport">
+      <div class="stage" id="stage">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="era1-board"></canvas>
+          <div class="markers" id="markers"></div>
+        </div>
+      </div>
+      <div class="inspect-pill" id="inspect-pill">共 13 个时代 1 单位：陆战 4 · 经济/工兵 3 · 建筑 3 · 水上/桥梁 3</div>
+    </main>
+
+    <footer class="footer-bar">
+      <span><strong>陆战：</strong>民兵 / 戈兵 / 弓手 / 斥候</span>
+      <span><strong>经济与建造：</strong>农民 / 牧民 / 奴隶</span>
+      <span><strong>建筑：</strong>箭塔 / 磨坊 / 军营</span>
+      <span><strong>水上与架桥：</strong>舢板 / 渡船 / 木桥</span>
+      <a href="../../" target="_self">回到正式游戏实机体验 →</a>
+    </footer>
+  </div>
+
+  <script type="module" src="/src/prototypes/era1-units.ts"></script>
+</body>
+</html>

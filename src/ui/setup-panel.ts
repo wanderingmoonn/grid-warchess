@@ -58,7 +58,7 @@ import { toast } from './toast.ts';
 import { openLevelEditor } from './level-editor.ts';
 import { openLevelManager } from './level-manager.ts';
 import { mapThumbSvg } from './map-thumb.ts';
-import { currentUiLayout } from './layout.ts';
+import { uiIcon } from './icons.ts';
 import {
   BOARD_SIZES,
   DEFAULT_CONFIG,
@@ -483,7 +483,6 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     };
 
     const paint = () => {
-      const classic = currentUiLayout(mask.ownerDocument.documentElement) === 'classic';
       autoFetchCloudLevels();
       advancedOpen = mask.querySelector<HTMLDetailsElement>('.start-advanced')?.open ?? advancedOpen;
       // 面板是整块 innerHTML 换掉的，重绘会把滚动位置和键盘焦点一起清零。
@@ -658,7 +657,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
           : netAllowed
             ? '初级熟悉规则 · 中级战术变化 · 高级 = v3 内核（目标规划 + 产能放开）'
             : 'AI 按你的队列生产。';
-      const compact = !classic && !config.level;
+      const compact = !config.level;
       const aiLevelChips = aiOn
         ? `<div class="chip-row ai-level-row">
             <button class="chip ${aiLevelOn && config.aiLevel === 'basic' ? 'active' : ''}" data-ailevel="basic" title="只想着往前推：不算对面能打到哪，也不挑交换比">初级 AI</button>
@@ -822,19 +821,36 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             : '';
         return lockLine + warnLine;
       })();
-      const expItems = availableExpansions().map(
-        (e) => {
-          const lock = lockedRequire.has(e.id) ? 'on' : lockedForbid.has(e.id) ? 'off' : '';
-          const on = lock === 'on' || (lock === '' && config.expansionIds.includes(e.id));
-          const tag =
-            lock === 'on'
-              ? '<span class="expansion-req">这一关必须开</span>'
-              : lock === 'off'
-                ? '<span class="expansion-req is-clash">这一关禁用</span>'
-                : warned.has(e.id)
-                  ? '<span class="expansion-req is-warn">这一关会变难</span>'
-                  : '';
-          return `
+      const EXP_CATS: ReadonlyArray<{ title: string; ids: ReadonlySet<string> }> = [
+        {
+          title: '时代与兵种包',
+          ids: new Set(['pack-contemporary', 'armor-era7', 'armor-era8', 'era-arms', 'naval', 'air', 'space-age', 'space-war']),
+        },
+        {
+          title: '地形与环境',
+          // 2026-11-24：地形高差并进本体，不再出现在可勾列表里
+          ids: new Set(['seasons', 'city-works', 'night-raid', 'blackout']),
+        },
+        {
+          title: '战术与规则机制',
+          ids: new Set([
+            'war-economy', 'veterans', 'trench', 'blitz', 'conscription', 'fortress',
+            'bloodbath', 'turn-order-comp', 'last-stand', 'scorched-earth', 'action-points', 'high-mobility',
+          ]),
+        },
+      ];
+      const renderExpCard = (e: ReturnType<typeof availableExpansions>[number]): string => {
+        const lock = lockedRequire.has(e.id) ? 'on' : lockedForbid.has(e.id) ? 'off' : '';
+        const on = lock === 'on' || (lock === '' && config.expansionIds.includes(e.id));
+        const tag =
+          lock === 'on'
+            ? '<span class="expansion-req">这一关必须开</span>'
+            : lock === 'off'
+              ? '<span class="expansion-req is-clash">这一关禁用</span>'
+              : warned.has(e.id)
+                ? '<span class="expansion-req is-warn">这一关会变难</span>'
+                : '';
+        return `
         <label class="expansion-item ${on ? 'on' : ''} ${lock ? 'is-locked' : ''}">
           <input type="checkbox" data-exp="${e.id}" ${on ? 'checked' : ''} ${lock ? 'disabled' : ''} />
           <span class="expansion-body">
@@ -844,8 +860,33 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             ${tag}
           </span>
         </label>`;
-        },
-      ).join('');
+      };
+      /*
+       * 2026-11-24：地形高差并进本体，不再作为可勾选项出现。
+       * 它仍然是注册表里的一个 pack（地形表/钩子/等高线地貌挂上面），
+       * 但玩家不该再看到这颗开关 —— 默认就是开着的。
+       */
+      const allExps = availableExpansions().filter((e) => e.id !== 'height-terrain');
+      const groupedIds = new Set<string>();
+      const expGroupBlocks = EXP_CATS.map((cat) => {
+        const list = allExps.filter((e) => cat.ids.has(e.id));
+        for (const e of list) groupedIds.add(e.id);
+        if (list.length === 0) return '';
+        const onCount = list.filter((e) => lockedRequire.has(e.id) || (!lockedForbid.has(e.id) && config.expansionIds.includes(e.id))).length;
+        return `<div class="exp-group">
+          <div class="exp-group-head"><span>${cat.title}</span>${onCount > 0 ? `<em class="exp-group-count">已选 ${onCount}</em>` : ''}</div>
+          <div class="expansion-list expansion-grid">${list.map(renderExpCard).join('')}</div>
+        </div>`;
+      }).filter(Boolean);
+      const otherExps = allExps.filter((e) => !groupedIds.has(e.id));
+      if (otherExps.length > 0) {
+        const onCount = otherExps.filter((e) => lockedRequire.has(e.id) || (!lockedForbid.has(e.id) && config.expansionIds.includes(e.id))).length;
+        expGroupBlocks.push(`<div class="exp-group">
+          <div class="exp-group-head"><span>奇幻与主题扩展</span>${onCount > 0 ? `<em class="exp-group-count">已选 ${onCount}</em>` : ''}</div>
+          <div class="expansion-list expansion-grid">${otherExps.map(renderExpCard).join('')}</div>
+        </div>`);
+      }
+      const expItems = expGroupBlocks.join('');
 
       /* ── 战役页：这一局怎么打 ── */
       /*
@@ -954,6 +995,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
                 ${presetCard('learn', '入门人机', '青铜 · 12×12<br>初级 AI')}
                 ${presetCard('standard', '标准人机', '铁器 · 16×16<br>中级 AI')}
                 ${presetCard('hotseat', '本地双人', '青铜 · 12×12<br>轮流操作')}
+                ${presetCard('elevation', '高差战略', '铁器 · 16×16<br>地形高差 · 高级 AI')}
               </div>
             </section>` : ''}
             <section class="field" aria-label="地图">
@@ -1014,7 +1056,7 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             ${compact ? '' : sizeField}
 
             <details class="start-advanced"${advancedOpen ? ' open' : ''}>
-              <summary><span><b>高级设置</b><small>${compact ? '人数 · 棋盘大小 · 先手 · 扩展' : `${config.expansionIds.length} 个扩展 · ${config.godMode ? '上帝模式' : config.commanderMode ? '指挥官模式' : '亲自指挥'}${config.draftMode ? ' · 已开选卡' : ''}`}</small></span><span class="setup-expand-label" aria-hidden="true"></span></summary>
+              <summary><span><b>高级与扩展设置</b><small>${compact ? `${config.expansionIds.length > 0 ? `已选 ${config.expansionIds.length} 个扩展 · ` : ''}人数 · 棋盘大小 · 先手 · 扩展` : `${config.expansionIds.length} 个扩展 · ${config.godMode ? '上帝模式' : config.commanderMode ? '指挥官模式' : '亲自指挥'}${config.draftMode ? ' · 已开选卡' : ''}`}</small></span><span class="setup-expand-label" aria-hidden="true"></span></summary>
               <div class="start-advanced-body">
             ${compact ? playerField + sizeField + firstField : ''}
             <section class="field">
@@ -1116,10 +1158,10 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </section>
 
             <section class="field">
-              <div class="field-label">扩展规则</div>
+              <div class="field-label">扩展规则 <span class="field-hint">${config.expansionIds.length > 0 ? `已启用 ${config.expansionIds.length} 项` : '按题材分类，勾选即生效'}</span></div>
               ${compact && lockedPacks.length > 0 ? `<div class="field-hint">${eraHint}</div>` : ''}
               ${expLockNote}
-              <div class="expansion-list">${expItems}</div>
+              <div class="exp-groups">${expItems}</div>
               ${expNote ? `<div class="map-note is-bad">${esc(expNote)}</div>` : ''}
             </section>
 
@@ -1637,19 +1679,18 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
             </div>
             <nav class="start-nav">
               <button class="start-nav-item ${tab === 'levels' ? 'active' : ''}" data-tab="levels">
-                <b>关卡</b>
+                <b>${uiIcon('flag')}<span>关卡</span></b>
                 <span>主线 · 教学</span>
               </button>
               <button class="start-nav-item ${tab === 'battle' ? 'active' : ''}" data-tab="battle">
-                <b>战役</b>
+                <b>${uiIcon('swords')}<span>战役</span></b>
                 <span>规则 · 时代 · 兵种</span>
               </button>
               <button class="start-nav-item ${tab === 'editor' ? 'active' : ''}" data-tab="editor">
-                <b>编辑器</b>
+                <b>${uiIcon('iso')}<span>编辑器</span></b>
                 <span>关卡 · 地图</span>
               </button>
             </nav>
-            ${classic ? '<div class="start-rail-foot">同一个种子永远生成同一张地图</div>' : ''}
           </aside>
 
           <div class="start-col">
@@ -1787,16 +1828,17 @@ export function openSetupPanel(initial: MatchConfig, seed: number): Promise<Setu
     mask.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
       const preset = target.closest<HTMLElement>('[data-preset]')?.dataset.preset;
-      if (preset === 'learn' || preset === 'standard' || preset === 'hotseat') {
+      if (preset === 'learn' || preset === 'standard' || preset === 'hotseat' || preset === 'elevation') {
         const recordDetail = config.recordDetail;
         for (const key of Object.keys(config)) Reflect.deleteProperty(config, key);
+        const presetExps = preset === 'elevation' ? ['height-terrain'] : [...DEFAULT_CONFIG.expansionIds];
         Object.assign(config, DEFAULT_CONFIG, {
           enabledUnits: [...DEFAULT_CONFIG.enabledUnits],
-          expansionIds: [...DEFAULT_CONFIG.expansionIds],
+          expansionIds: presetExps,
           disabledUnits: [],
           playerCount: 2,
-          startEra: preset === 'standard' ? 2 : 1,
-          size: preset === 'standard' ? 16 : 12,
+          startEra: preset === 'standard' || preset === 'elevation' ? 2 : 1,
+          size: preset === 'standard' || preset === 'elevation' ? 16 : 12,
           aiOpponent: preset !== 'hotseat',
           aiAlly: false,
           aiLevel: preset === 'learn' ? 'basic' : preset === 'standard' ? 'tactic' : 'advanced',

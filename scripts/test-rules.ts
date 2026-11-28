@@ -4692,46 +4692,49 @@ test('时代越靠后射程越长，长弓手不再是天花板', () => {
       assert.ok(d.range >= 4, `${d.name} 是时代 ${d.era} 的远程，射程 ${d.range} 还不如长弓手`);
     }
   }
-  // 顶级火力要真的压过后排：火炮 5 格，长弓手 4 格。
-  // 水面上负责这一档的是 E5 的那几条钢铁舰队（重巡/战列舰），
-  // 铁甲舰 2026-11-02 挪回 E4、射程也跟着降到 4——它在蒸汽时代算远的，
-  // 但不该和火炮/战列舰同格。
+  // 顶级火力要真的压过后排：火炮 7 格，长弓手 4 格。
+  // 2026-11-28 调整：时代 4/5 的远程集体 +1，时代 5 射程最高的那一档（火炮/火箭炮/
+  // 驱逐舰、水面上的重巡与战列舰不在这次范围里）再 +2 到 7。水面上负责这一档的
+  // 仍是 E5 那几条钢铁舰队，5 格没动——它们属于海军包，不跟着这次调整走。
   assert.equal(UNIT_TYPES.longbow.range, 4);
-  assert.equal(UNIT_TYPES.artillery.range, 5);
-  assert.equal(UNIT_TYPES.ironclad!.range, 4, '铁甲舰是蒸汽时代的船，射程不该追平火炮');
+  assert.equal(UNIT_TYPES.artillery.range, 7);
+  assert.equal(UNIT_TYPES.ironclad!.range, 5, '铁甲舰随时代 4 远程 +1 落到 5，仍低于火炮');
   assert.equal(nvDef('nv_heavy_cruiser').range, 5, '重巡的 8 吋炮要打到 5 格');
   assert.equal(nvDef('nv_battleship').range, 5);
-  // 载具也上了一个台阶：射程 3 意味着能站在近战够不到的地方开火
-  assert.equal(UNIT_TYPES.tank.range, 3);
-  assert.equal(UNIT_TYPES.armoredcar.range, 3);
+  // 载具也上了一个台阶：射程 4 意味着能站在近战够不到的地方开火
+  assert.equal(UNIT_TYPES.tank.range, 4);
+  assert.equal(UNIT_TYPES.armoredcar.range, 4);
 });
 
 test('关键数值按方案落定', () => {
   const want: Array<[string, Partial<Record<'cost' | 'atk' | 'armor' | 'maxHp' | 'range', number>>]> = [
     ['archer', { cost: 35 }],
-    ['longbow', { cost: 90 }],
+    // 2026-11-28 平衡批次：长弓手 90→60、弓手系整体下调；长枪兵 65→55 且去盾墙；
+    // 戟兵 100→90；装甲车 250→270（移速/视野/甲同步上调）；
+    // 时代 5 全体再乘 费×1.1 / 攻×1.15 / 血×1.15 / 甲+1（向上取整）。
+    ['longbow', { cost: 60 }],
     ['musketeer', { cost: 130 }],
     ['rifleman', { cost: 200 }],
-    ['squad', { cost: 300 }],
-    ['spearman', { cost: 65 }],
-    ['halberdier', { cost: 100, range: 2 }],
-    ['tank', { cost: 400, range: 3 }],
-    ['armoredcar', { cost: 250, range: 3 }],
+    ['commando', { cost: 341 }],
+    ['spearman', { cost: 55 }],
+    ['halberdier', { cost: 90, range: 2 }],
+    ['tank', { cost: 440, range: 4 }],
+    ['armoredcar', { cost: 270, range: 4 }],
     ['militia', { atk: 13 }],
-    ['hmg', { atk: 17 }],
+    ['hmg', { atk: 20 }],
     ['boat', { atk: 11, maxHp: 34 }],
     ['armoredcar', { maxHp: 54 }],
     // 第二轮改：长枪兵加血、箭塔射程 +1、水军与高时代单位集体上调
-    ['spearman', { maxHp: 40 }],
+    ['spearman', { maxHp: 35 }],
     ['tower', { range: 3 }],
     ['gunboat', { atk: 25, maxHp: 46 }],
-    ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 4 }],
-    ['tank', { atk: 56, maxHp: 88 }],
-    ['artillery', { atk: 47, maxHp: 54 }],
-    ['squad', { atk: 47, maxHp: 48 }],
+    ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 5 }],
+    ['tank', { atk: 65, maxHp: 102 }],
+    ['artillery', { atk: 55, maxHp: 63 }],
+    ['commando', { atk: 49, maxHp: 53 }],
     ['rifleman', { atk: 36 }],
     ['mg', { atk: 20 }],
-    ['hmg', { atk: 17 }],
+    ['hmg', { atk: 20 }],
   ];
   // 二级城升级费回调到 220：开局收入修好之后玩家手上有两百出头，
   // 定在 200 会让"第一回合就升二级"变成毫无代价的默认动作。
@@ -5701,6 +5704,37 @@ test('破甲：无视目标一半护甲', () => {
   // 民兵攻 13、甲 2：普通 11；破甲把对方甲砍半算 1，伤害 12
   assert.equal(normal, 11);
   assert.equal(pierced, 12);
+});
+
+test('破甲Ⅱ：无视目标全部护甲', () => {
+  const s = fresh();
+  const { a, b } = duel(s);
+  const normal = computeDamage(s, a, b);
+  grantAbility(s, 'militia', 'armor-pierce-2');
+  // 民兵攻 13、甲 2：普通 11；破甲Ⅱ 把护甲清成 0，满伤 13
+  assert.equal(normal, 11);
+  assert.equal(computeDamage(s, a, b), 13);
+});
+
+test('破甲Ⅱ 压过破甲：两条都带时护甲仍是 0，不会"砍一半再砍一半"', () => {
+  const s = fresh();
+  const { a, b } = duel(s);
+  grantAbility(s, 'militia', 'armor-pierce');
+  grantAbility(s, 'militia', 'armor-pierce-2');
+  assert.equal(computeDamage(s, a, b), 13, '13 − 0，而不是 13 − 0.5');
+});
+
+test('反空：对飞行目标伤害 ×2（先翻倍再减甲），对地面不生效', () => {
+  const s = fresh();
+  const { a, b } = duel(s);
+  const ground = computeDamage(s, a, b);
+  grantAbility(s, 'militia', 'anti-air-2');
+  assert.equal(computeDamage(s, a, b), ground, '打地面目标不该有加成');
+  // 原版没有飞行单位，这里直接把靶子那一份兵种表改成空中层
+  // （grantAbility 改的也是同一份 per-state 的表，做法一致）
+  s.unitTypes.militia!.layer = 'air';
+  // 13 ×2 = 26，再减 2 甲 = 24——倍率在减甲之前，这就是"结算顺序同破城"
+  assert.equal(computeDamage(s, a, b), 24);
 });
 
 test('盾墙：本回合没移动时减伤 2', () => {
@@ -7147,8 +7181,10 @@ console.log('\n平衡：机动与视野');
 
 test('机动与视野整体削过一轮（回归锚点）', () => {
   const all = Object.values(UNIT_TYPES);
-  assert.equal(Math.max(...all.map((u) => u.move)), 4, '最快的单位是 4 格（原来 5）');
-  assert.equal(Math.max(...all.map((u) => u.vision)), 5, '视野最远 5 格（原来 6）');
+  // 2026-11-28：装甲车移速 4→5，锚点跟着抬一格（这是原版里唯一的移 5）。
+  assert.equal(Math.max(...all.map((u) => u.move)), 5, '最快的单位是 5 格（装甲车）');
+  // 2026-11-28：骠骑兵视野 4→6，重新成为原版里看得最远的（当年削到 5 的那个锚点作废）。
+  assert.equal(Math.max(...all.map((u) => u.vision)), 6, '视野最远 6 格（骠骑兵）');
 
   // move 2 是地板：森林和丘陵的进入消耗是 2，再削就永远进不了林子
   assert.ok(Math.min(...all.filter((u) => u.move > 0).map((u) => u.move)) >= 1, '没有单位被削成 0');
@@ -7376,8 +7412,11 @@ test('溅射：主目标周围的人一起挨，自己人不吃', () => {
   if (!r.ok) return;
 
   const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp;
-  assert.equal(hp(main.id), (UNIT_TYPES.militia?.maxHp ?? 0) - full, '主目标吃满伤害');
-  assert.equal(hp(side.id), (UNIT_TYPES.militia?.maxHp ?? 0) - splash, '旁边的敌人吃打折伤害');
+  // 2026-11-28：臼炮 19→30 攻，一发就能打掉民兵（28 血 − 2 甲 = 26 … 现在直接 28）。
+  // 死亡的单位会从 state 里移除，`hp()` 拿到 undefined，所以按"至少扣到 0"来断言。
+  const militiaMax = UNIT_TYPES.militia?.maxHp ?? 0;
+  assert.equal(hp(main.id) ?? 0, Math.max(0, militiaMax - full), '主目标吃满伤害');
+  assert.equal(hp(side.id) ?? 0, Math.max(0, militiaMax - splash), '旁边的敌人吃打折伤害');
   assert.equal(hp(farAway.id), UNIT_TYPES.militia?.maxHp, '范围外不该受伤');
   assert.equal(hp(friend.id), UNIT_TYPES.militia?.maxHp, '自己人不该被炸');
   assert.ok(
@@ -7496,7 +7535,10 @@ test('多动次数按兵种不同，不是固定三次', () => {
   const mg = UNIT_TYPES.mg;
   const hmg = UNIT_TYPES.hmg;
   assert.ok(mg && hmg);
-  assert.ok(hmg.atk < mg.atk, '四动的单发攻击力应该比三动低');
+  // 2026-11-28：时代 5 全体攻 ×1.15 之后，hmg（E5）和 mg（E4）的单发都到了 20。
+  // 两代基准已经不同，跨代要求"严格更弱"没有意义，这里放宽成"不更强"。
+  assert.ok(hmg.atk <= mg.atk, '四动的单发攻击力不该比三动高');
+  assert.ok(hmg.burst! > mg.burst!, '但次数要真的更多');
 });
 
 test('溅射半径按兵种不同：火炮能打到更远的一片', () => {
@@ -9031,12 +9073,12 @@ test('新对局默认开着血战，也可以手动关掉', () => {
   // 否则"测出来的平衡"和"玩家实际开的默认规则"就是两回事。
   assert.deepEqual(
     DEFAULT_CONFIG.expansionIds,
-    ['bloodbath', 'turn-order-comp'],
-    '血战和先后手补偿应该是默认扩展',
+    ['bloodbath', 'turn-order-comp', 'height-terrain'],
+    '血战、先后手补偿、地形高差（2026-11-24 并入本体）应该是默认扩展',
   );
 
   const on = createMatch({ ...DEFAULT_CONFIG }, 31);
-  assert.deepEqual(on.config.expansionIds, ['bloodbath', 'turn-order-comp'], '开局状态要带上这两个规则');
+  assert.deepEqual(on.config.expansionIds, ['bloodbath', 'turn-order-comp', 'height-terrain'], '开局状态要带上这三个规则');
 
   const off = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 31);
   assert.equal(off.config.expansionIds.length, 0, '取消勾选之后一个扩展都不该开');
@@ -9076,7 +9118,7 @@ test('先后手补偿：12×12 补 20%、16×16 补 5%，跟着棋盘尺寸走',
   const p = startGoldFor(1);
 
   const small = createMatch({ ...DEFAULT_CONFIG, size: 12 }, 41);
-  const smallOff = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath'] }, 41);
+  const smallOff = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath', 'height-terrain'] }, 41);
   assert.equal(
     small.players.B.gold - smallOff.players.B.gold,
     Math.round(p * 0.2),
@@ -9084,7 +9126,7 @@ test('先后手补偿：12×12 补 20%、16×16 补 5%，跟着棋盘尺寸走',
   );
 
   const big = createMatch({ ...DEFAULT_CONFIG, size: 16 }, 41);
-  const bigOff = createMatch({ ...DEFAULT_CONFIG, size: 16, expansionIds: ['bloodbath'] }, 41);
+  const bigOff = createMatch({ ...DEFAULT_CONFIG, size: 16, expansionIds: ['bloodbath', 'height-terrain'] }, 41);
   assert.equal(
     big.players.B.gold - bigOff.players.B.gold,
     Math.round(p * 0.05),
@@ -9147,7 +9189,7 @@ test('先后手：两人局可选红/蓝先手，随机按种子抽且抽完落�
 
 test('先后手：补偿和开局收入都跟着先手方走，不看席位名', () => {
   const p = startGoldFor(1);
-  const off = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath'], firstSide: 'B' }, 41);
+  const off = createMatch({ ...DEFAULT_CONFIG, size: 12, expansionIds: ['bloodbath', 'height-terrain'], firstSide: 'B' }, 41);
   const on = createMatch({ ...DEFAULT_CONFIG, size: 12, firstSide: 'B' }, 41);
 
   // 先手是 B 时，拿补偿的应该变成 A
@@ -9407,8 +9449,9 @@ test('隔河拆桥：远程能放箭，但一发只算一半', () => {
     Math.round(nearDmg * CONFIG.bridgeRangedDamageRatio),
     `隔河一发只算 ${CONFIG.bridgeRangedDamageRatio}：近身 ${nearDmg}、隔河 ${farDmg}`,
   );
-  // 40 血的木桥：贴桥头 3 下、隔河 6 下。这个倍差就是"快"与"慢"的区别
-  assert.ok(nearDmg * 3 >= bridgeMax, `贴桥头要能在 3 下内拆掉：${nearDmg}×3`);
+  // 40 血的木桥：贴桥头 4 下、隔河 8 下。这个倍差就是"快"与"慢"的区别
+  // （2026-11-28：长弓手 14→11 攻，贴桥头从 3 下变 4 下；倍差本身没变）
+  assert.ok(nearDmg * 4 >= bridgeMax, `贴桥头要能在 4 下内拆掉：${nearDmg}×4`);
   assert.ok(farDmg * 3 < bridgeMax, `隔河 3 下不该拆得掉：${farDmg}×3`);
 });
 
@@ -9582,7 +9625,9 @@ test('编队模板：兵种按职能归类，缺哪一档补哪一档', () => {
   };
   assert.equal(role('民兵'), 'melee', '没甲没血的近战就是近战输出');
   assert.equal(role('弓手'), 'ranged');
-  assert.equal(role('长枪兵'), 'tank', '血厚甲高的近战是在顶前排');
+  // 2026-11-28：长枪兵 血 40→35、盾墙被移走，职能判定从"前排"掉回"近战输出"。
+  // 它现在是"便宜的两格长兵器"，不再是顶前排的兵。
+  assert.equal(role('长枪兵'), 'melee', '去掉盾墙又瘦了血之后，它不再算前排');
   assert.equal(role('臼炮'), 'siege');
   assert.equal(role('牧师'), 'support', '自己打不动的治疗算支援');
   assert.equal(role('天使'), 'tank', '天使能打能顶，治疗光环只是顺带');
@@ -13713,25 +13758,37 @@ test('地貌选项跟着扩展开关增减', () => {
   assert.equal(seen.has('highland'), false, '关扩展的随机地貌里抽到了高原');
 });
 
-test('地形高差可选，但默认不开：不勾就一格新地形都不会落到图上', () => {
-  // 这个包已经对玩家开放（开局界面里能勾），但**默认不勾**：
-  // 不勾就等于不存在——地图是按这一局的扩展现生成的，规则钩子也不挂。
-  assert.ok(expansionById('height-terrain'), '扩展要在注册表里');
+test('地形高差已并入本体：默认就开，显式关掉时一格新地形都不落', () => {
+  /*
+   * 2026-11-24 用户定：这套东西不再当"可选扩展"卖，直接并进本体。
+   *
+   * 两半都要守：
+   *   1. 默认对局（DEFAULT_CONFIG）就带着它 —— 台地/谷地/沼泽/沙丘会随机出现；
+   *   2. 显式传 `expansionIds: []` 时仍然逐格与从前相同 —— 沙盒、老存档和
+   *      那些"只测规则不测地图"的用例靠这条保持确定性。
+   */
+  assert.ok(expansionById('height-terrain'), '扩展还在注册表里');
   assert.ok(
-    availableExpansions().some((e) => e.id === 'height-terrain'),
-    '开放的扩展要出现在开局面板/规则书的可选列表里',
+    DEFAULT_CONFIG.expansionIds.includes('height-terrain'),
+    '默认配置要带上地形高差',
   );
 
-  const s = createMatch({ ...DEFAULT_CONFIG }, 4242);
-  // 地形表是 `readonly Terrain[]`（字符串），别再按对象取 .id
-  // 浅滩除外：2026-11-08 起它是**本体地形**——渡口一律画浅滩（不然河会被渡口切断，
-  // 船开不过去）。所以"没开高差就不该出现浅滩"这条不再成立，其余高差地形照旧。
   const heightTerrains = new Set(
     (expansionById('height-terrain')?.terrains ?? []).filter((t) => t !== 'shallow'),
   );
   assert.ok(heightTerrains.size > 0, '这条用例依赖扩展自己声明的地形表');
-  const leaked = s.tiles.filter((t) => heightTerrains.has(t.terrain));
-  assert.equal(leaked.length, 0, `没开扩展却生成了 ${leaked.length} 格高差地形`);
+
+  const off = createMatch({ ...DEFAULT_CONFIG, expansionIds: [] }, 4242);
+  const leaked = off.tiles.filter((t) => heightTerrains.has(t.terrain));
+  assert.equal(leaked.length, 0, `显式关掉扩展却生成了 ${leaked.length} 格高差地形`);
+
+  // 默认开着：多试几个种子，至少要有能抽到新地形的（单张图不一定四种都有）
+  let seen = 0;
+  for (const seed of [4242, 7, 31, 99, 1234]) {
+    const s = createMatch({ ...DEFAULT_CONFIG }, seed);
+    if (s.tiles.some((t) => heightTerrains.has(t.terrain))) seen += 1;
+  }
+  assert.ok(seen >= 3, `默认 5 个种子里只有 ${seen} 张图抽到新地形，随机没接上`);
 });
 
 test('上帝模式的画笔跟着扩展开关走', () => {
@@ -14720,8 +14777,9 @@ test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   if (!r.ok) return;
   const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp;
   const maxHp = UNIT_TYPES.militia?.maxHp ?? 0;
-  assert.equal(hp(quarter.main.id), maxHp - full, '主目标照旧吃满');
-  assert.equal(hp(quarter.side.id), maxHp - expected, '旁边那格按 25% 结算，而不是默认的 50%');
+  // 2026-11-28 起臼炮一发能打掉民兵，死掉的目标会从 state 里消失 → 用"至少扣到 0"断言
+  assert.equal(hp(quarter.main.id) ?? 0, Math.max(0, maxHp - full), '主目标照旧吃满');
+  assert.equal(hp(quarter.side.id) ?? 0, Math.max(0, maxHp - expected), '旁边那格按 25% 结算，而不是默认的 50%');
 });
 
 test('石堡射程 2 → 3：三格外能还手，四格外打不到，其它防御建筑不受影响', () => {
@@ -17798,7 +17856,7 @@ test('战报：挨打的一方也能看到自己为什么掉血', () => {
   s.cities = [];
   for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
 
-  // 火炮：射程 5、溅射 2 —— 一发能影响到离它 7 格的人
+  // 火炮（2026-11-28 起叫「火箭炮」）：射程 7、溅射 2 —— 一发能影响到离它 9 格的人
   const gun = place(s, 'A', 'artillery', 2, 2);
   const hit = place(s, 'B', 'militia', 7, 2); // 正好在射程上
   const splash = place(s, 'B', 'militia', 9, 2); // 主目标旁边 2 格，被溅射
@@ -17811,12 +17869,12 @@ test('战报：挨打的一方也能看到自己为什么掉血', () => {
 
   const mine = r.state.log.filter((l) => l.player === 'A').map((l) => l.text);
   const theirs = r.state.log.filter((l) => l.player === 'B').map((l) => l.text);
-  assert.ok(mine.some((t) => t.includes('火炮') && t.includes('攻击')), '出手方有自己的战报');
+  assert.ok(mine.some((t) => t.includes('火箭炮') && t.includes('攻击')), '出手方有自己的战报');
   // 关键：防守方也必须有一条。以前这条只发给出手的人，
   // 挨打的人看到的就是"血量掉了、战报里什么都没有"
   const notice = theirs.find((t) => t.includes('伤害'));
   assert.ok(notice, `防守方要能看到自己被谁打了，实际：${JSON.stringify(theirs)}`);
-  assert.ok(notice!.includes('火炮'), '要写出是什么打过来的');
+  assert.ok(notice!.includes('火箭炮'), '要写出是什么打过来的');
   assert.ok(notice!.includes('溅射'), '被溅射到的人也要写清楚');
 
   // 隐匿中的袭击者不给名字：否则"是谁打的我"这条信息把隐匿本身废掉了
@@ -18691,10 +18749,10 @@ test('数值调整（2026-11-07）：炼金术士升 4 代加价、龙骑兵升 
   assert.equal(drg.flight, true, '还是飞行');
   assert.equal(drg.splash, 1, '还是溅射');
 
-  // 弩兵：只加攻击，价格不动
+  // 弩兵：只加攻击，价格不动 → 2026-11-28 又降了 2 金（82 → 80）
   const cb = s.unitTypes['crossbow']!;
   assert.equal(cb.atk, 19, '弩兵攻击 16 → 19');
-  assert.equal(cb.cost, 82, '弩兵价格不动');
+  assert.equal(cb.cost, 80, '弩兵价格 82 → 80');
   assert.equal(cb.range, 3, '射程不动');
   assert.deepEqual(cb.abilities, ['armor-pierce'], '破甲不变');
 });

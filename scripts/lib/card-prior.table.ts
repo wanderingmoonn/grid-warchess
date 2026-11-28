@@ -45,7 +45,6 @@ export const CARD_PRIOR: Record<string, CardPriorRow> = {
   'cursed-knight': { n: 26, resid: 0.1975, shrunk: 0.0778, factor: 1.0778 },
   'swordsman': { n: 87, resid: 0.0877, shrunk: 0.0601, factor: 1.0601 },
   'paladin': { n: 69, resid: 0.0913, shrunk: 0.0578, factor: 1.0578 },
-  'squad': { n: 112, resid: 0.0678, shrunk: 0.0499, factor: 1.0499 },
   'knight': { n: 46, resid: 0.0721, shrunk: 0.0386, factor: 1.0386 },
   'minotaur': { n: 10, resid: 0.1849, shrunk: 0.0370, factor: 1.0370 },
   'halberdier': { n: 70, resid: 0.0573, shrunk: 0.0364, factor: 1.0364 },
