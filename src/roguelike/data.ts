@@ -11,37 +11,39 @@
  *   · 加事件 → `EVENTS` 里加一条，选项效果同样是 `Effect`。
  *   · 加休整选项 → `REST_OPTIONS` 加一行，`run.ts` 的 `restOptions` 认 id。
  */
-import type { LayerId, EventDef, ArmyEntry } from './types.ts';
+import type { LayerId, EventDef, ArmyEntry, TrialDef } from './types.ts';
+import type { UnitTypeDef } from '../core/types.ts';
+import { UNIT_TYPES } from '../core/config.ts';
+import { EXPANSIONS } from '../core/expansions.ts';
+import { CULTIVATOR_IDS } from '../core/cultivation/identity.ts';
+import { expansionUnitsFor } from '../core/setup.ts';
+import { CORE_PACK, poolOf } from './packs.ts';
 
-/** 兵种中文名 */
-export const UNIT_NAME: Record<string, string> = {
-  militia: '民兵',
-  archer: '弓手',
-  scout: '斥候',
-  ge: '戈兵',
-  spearman: '长枪兵',
-  longbow: '长弓手',
-  knight: '骑士',
-  crossbow: '弩兵',
-  musketeer: '火枪兵',
-  mortar: '臼炮',
-  halberdier: '戟兵',
-  hussar: '骠骑兵',
-  rifleman: '步枪兵',
-  mg: '机枪队',
-  armoredcar: '装甲车',
-  hmg: '重机枪组',
-  squad: '步兵班',
-  tank: '坦克',
-  artillery: '榴弹炮',
-  ct_infantry: '摩托化步兵',
-  ct_tank: '中型坦克',
-  ct_howitzer: '自行榴弹炮',
-  ct_recon: '装甲侦察车',
-};
+/**
+ * **全量兵种索引**：基础表 + 所有扩展包（含 `requiresPack` 的前置包单位）。
+ *
+ * 这是"查名字 / 查造价 / 查是不是英雄"用的目录，**不是本局可用白名单**——
+ * 后者由 `createMatch` 按 `expansionIds` 决定（见 `battle.ts` 的 `buildBattle`）。
+ *
+ * 为什么不用 `expansionUnitsFor([...])` 拼：那个函数会按 `requiresPack` 过滤，
+ * 只传 `['fantasy']` 时拿不到「圣剑勇者」（它还要 `pack-contemporary`），
+ * 于是 `costOf` 返回 0、`isHero` 返回 false、商店标价 0——上一版就踩了这个坑。
+ * 这里遍历 `EXPANSIONS` 原表，不做可用性过滤；要不要上场由 `createMatch` 管。
+ */
+export const ALL_UNITS: Record<string, UnitTypeDef> = { ...UNIT_TYPES };
+for (const e of EXPANSIONS) {
+  for (const u of e.units ?? []) ALL_UNITS[u.id] ??= { ...u };
+}
 
+/**
+ * 兵种中文名：**只查扩展包的真实定义**，不再手抄一份名字表。
+ *
+ * 上一版这里有一张 23 条的 `UNIT_NAME`，已经出现两条和定义不一致
+ * （火炮写成榴弹炮、自行榴弹炮写成榴弹炮）。名字属于 DLC 数据，
+ * 肉鸽要做的是查表，不是复制。
+ */
 export function unitName(id: string): string {
-  return UNIT_NAME[id] ?? id;
+  return ALL_UNITS[id]?.name ?? id;
 }
 
 /**
@@ -56,6 +58,16 @@ export interface LayerTheme {
   /** 本层低代（开局）/ 高代（层末） */
   eraLow: number;
   eraHigh: number;
+  /**
+   * 这一层的兵池是**哪几个包算出来的**（`core` = 原版）。
+   *
+   * 2026-11-28 起不再手写单位名单：池子由 `packs.ts` 的 `poolOf()` 按
+   * 包 + 时代 + 编制口径现算。`packs` 同时决定这一关要开的扩展——
+   * 和原版战役的 `LevelDef.expansions.require` 是同一件事。
+   */
+  packs: string[];
+  /** 算"上一代兵池"用的包（通常只放 core；第三层会加上本世界的兵种包） */
+  prevPacks: string[];
   /** 上一代的兵池：开局两关混进来一些，玩家的老兵还有得打（L1 没有） */
   prevPool: string[];
   prevEra: number;
@@ -63,7 +75,7 @@ export interface LayerTheme {
   pool: string[];
   /** 时代钟靠后 / 层末的高代兵池 */
   poolHigh: string[];
-  /** 这一层要开哪些扩展（第 6 代要「信息化」解锁，它没有规则钩子） */
+  /** 这一层要开哪些扩展（`packs` 去掉 `core`；保留旧字段名，调用点不必全改） */
   expansions: string[];
   /** 地图边长：遭遇 / 精英 / 攻坚 / boss */
   size: readonly [number, number, number, number];
@@ -71,60 +83,321 @@ export interface LayerTheme {
   bosses: ReadonlyArray<{ title: string; sub: string }>;
 }
 
+/** 从包算出一层的三个池子。所有主题（含四支史）都走它，不允许再手抄 id */
+function themePools(packs: string[], prevPacks: string[], layer: LayerId): Pick<LayerTheme, 'pool' | 'poolHigh' | 'prevPool'> {
+  return {
+    pool: poolOf(packs, layer, 'low'),
+    poolHigh: poolOf(packs, layer, 'high'),
+    prevPool: prevPacks.length > 0 ? poolOf(prevPacks, layer, 'prev') : [],
+  };
+}
+
+const CORE = CORE_PACK;
+
 export const LAYERS: Record<LayerId, LayerTheme> = {
-  1: {
-    id: 1,
-    name: '第一层 · 旧垒',
-    subtitle: '墙还站在那儿，人已经换过三茬',
-    eraLow: 1,
-    eraHigh: 2,
-    // 第一层没有"上一代"，开局就是第一代
-    prevPool: [],
-    prevEra: 0,
-    pool: ['militia', 'archer', 'scout', 'ge'],
-    poolHigh: ['spearman', 'longbow', 'crossbow', 'knight'],
-    expansions: [],
-    size: [8, 10, 10, 12],
-    bosses: [
-      { title: '守墙人的土垣', sub: '他守的不是城，是"这里归谁"这件事' },
-      { title: '持秤者的货栈', sub: '账本比城墙厚，也比特么城墙硬' },
-      { title: '守钟人的石龛', sub: '钟还没响，他先站到了门口' },
-    ],
-      },
-  2: {
+  1: (() => {
+    const packs = [CORE];
+    return {
+      id: 1,
+      name: '第一层 · 旧垒',
+      subtitle: '墙还站在那儿，人已经换过三茬',
+      eraLow: 1,
+      eraHigh: 2,
+      packs,
+      prevPacks: [],
+      prevEra: 0,
+      ...themePools(packs, [], 1),
+      expansions: [],
+      size: [8, 10, 10, 12],
+      bosses: [
+        { title: '守墙人的土垣', sub: '他守的不是城，是"这里归谁"这件事' },
+        { title: '持秤者的货栈', sub: '账本比城墙厚，也比特么城墙硬' },
+        { title: '守钟人的石龛', sub: '钟还没响，他先站到了门口' },
+      ],
+    };
+  })(),
+  2: (() => {
+    const packs = [CORE];
+    return {
+      id: 2,
+      name: '第二层 · 商道',
+      subtitle: '同一条路，昨天运粮，今天运兵',
+      eraLow: 3,
+      eraHigh: 4,
+      packs,
+      prevPacks: [CORE],
+      prevEra: 2,
+      ...themePools(packs, [CORE], 2),
+      expansions: [],
+      size: [10, 12, 12, 14],
+      bosses: [
+        { title: '守墙人的棱堡', sub: '墙学会了拐弯，人就学会了绕路' },
+        { title: '持秤者的商埠', sub: '你打下的每一寸地，他都算过价' },
+        { title: '守钟人的修道院', sub: '院里不敲钟了，改抄账' },
+      ],
+    };
+  })(),
+  3: (() => {
+    /*
+     * 第三层的底座是原版 e5 + 信息化 e6。
+     *
+     * 之前这里是两张手写名单（`hmg/squad/tank/artillery` 与
+     * `ct_infantry/ct_tank/ct_howitzer/ct_recon`）。现在只写"开哪几个包"，
+     * 具体是谁由包自己的 `era` 决定——信息化补到 e6 时，池子会自动跟着变。
+     */
+    const packs = [CORE, 'pack-contemporary'];
+    return {
+      id: 3,
+      name: '第三层 · 钟楼',
+      subtitle: '三家的旗都挂在同一座楼上，谁也不敢先摘',
+      eraLow: 5,
+      eraHigh: 6,
+      packs,
+      prevPacks: [CORE],
+      prevEra: 4,
+      ...themePools(packs, [CORE], 3),
+      expansions: ['pack-contemporary'],
+      size: [12, 14, 14, 16],
+      bosses: [{ title: '钟楼', sub: '三家共守的地方——谁都不能让你砸这口钟' }],
+    };
+  })(),
+};
+
+/**
+ * 世界（第二层的四种样子）。
+ *
+ * 设计里 L1 末要选"这条历史怎么走"：原版（正史）/ 时代军备（加速史）走技术史，
+ * 奇想（神话史）/ 修真（修行史）走神话史；**第二层就是这一支史的样子**。
+ * 四种世界的区别不是换个名字，是**兵池、扩展开关、层末 boss、第三层的溢出**全都换。
+ *
+ * 实现方式：一局在 `RunState.world` 里记一个 id，`themeFor(world, layer)` 按它取主题。
+ * 第一层和第三层共用一套（L3 是科技层，只把本世界的高代兵混进去）。
+ */
+export type WorldId = 'base' | 'arms' | 'fantasy' | 'cultivation';
+
+export interface WorldDef {
+  id: WorldId;
+  /** 选项名 */
+  name: string;
+  /** 这一支史最后通向 L4 的哪一边 */
+  history: 'technology' | 'myth';
+  /** 选择界面上的说明 */
+  blurb: string;
+  /** 第二层的主题（层名 / 兵池 / 扩展开关 / 层末 boss） */
+  theme: LayerTheme;
+  /** 修真：修士按时代钟拿到的"境界档位"（其它世界没有） */
+  rankOf?: (clock: number) => number;
+  /**
+   * 敌方预算的折算系数（缺省 1）。
+   *
+   * 奇想和修真的兵"每块钱买到的战力"比原版高：奇想带魔法/飞行/治疗，
+   * 修真带境界。同样的预算，他们会明显更难打——所以按世界给预算打个折。
+   */
+  power?: number;
+  /**
+   * 第三层的"本世界溢出"：这几个包并进 L3 的兵池（按它们自己的时代算）。
+   *
+   * 上一版这里是 `l3Pool: string[]`（手写单位名）。改成包之后，
+   * "军备的 e5 兵"、"奇想的 e5/e6 兵"都由包自己说，不在这里点名。
+   */
+  l3Packs: string[];
+  /** 第三层层名若不是默认的科技层，在这里覆盖 */
+  l3Subtitle?: string;
+}
+
+/** 第二层的地图尺寸：四个世界通用 */
+const L2_SIZE = [10, 12, 12, 14] as const;
+
+function l2(
+  name: string,
+  subtitle: string,
+  /** 这一支史的兵种包（第二层只开它，不和别的史混池） */
+  packs: string[],
+  bosses: ReadonlyArray<{ title: string; sub: string }>,
+): LayerTheme {
+  return {
     id: 2,
-    name: '第二层 · 商道',
-    subtitle: '同一条路，昨天运粮，今天运兵',
+    name,
+    subtitle,
     eraLow: 3,
     eraHigh: 4,
-    // 开局两关混一半第二代的兵：玩家刚带着第一层的老兵上来，第一关不该全是火枪
-    prevPool: ['spearman', 'longbow', 'crossbow', 'knight'],
+    packs,
+    /*
+     * 「上一代」永远从原版算：玩家是从第一层（原版 e1/e2）带着老兵上来的。
+     * 奇想的 e2 兵不该出现在开局两关里——那等于第二层一进门就换了一整套世界，
+     * 而这支史是玩家在第一层里"挣"来的，不是开局就存在的。
+     */
+    prevPacks: [CORE],
     prevEra: 2,
-    pool: ['musketeer', 'halberdier', 'hussar', 'mortar'],
-    poolHigh: ['rifleman', 'mg', 'armoredcar'],
-    expansions: [],
-    size: [10, 12, 12, 14],
-    bosses: [
-      { title: '守墙人的棱堡', sub: '墙学会了拐弯，人就学会了绕路' },
-      { title: '持秤者的商埠', sub: '你打下的每一寸地，他都算过价' },
-      { title: '守钟人的修道院', sub: '院里不敲钟了，改抄账' },
-    ],
+    ...themePools(packs, [CORE], 2),
+    expansions: packs.filter((p) => p !== CORE),
+    size: L2_SIZE,
+    bosses,
+  };
+}
+
+/**
+ * 修真里会"长境界"的单位：**直接复用扩展包的身份表**。
+ *
+ * 上一版手抄了 5 个 id，漏了灵体（`spirit`）——重复维护迟早会和 DLC 走散。
+ * 身份判据只有一个来源：`core/cultivation/identity.ts` 的 `CULTIVATOR_IDS`。
+ */
+export const CULTIVATORS: ReadonlySet<string> = CULTIVATOR_IDS;
+
+export const WORLDS: Record<WorldId, WorldDef> = {
+  base: {
+    id: 'base',
+    name: '正史',
+    history: 'technology',
+    blurb: '没有魔法，也没有被提前造出来的枪。一切按本来的时间表走。',
+    theme: LAYERS[2],
+    l3Packs: [],
   },
-  3: {
-    id: 3,
-    name: '第三层 · 钟楼',
-    subtitle: '三家的旗都挂在同一座楼上，谁也不敢先摘',
-    eraLow: 5,
-    eraHigh: 6,
-    // 同上：开局还留着第四代的兵，钟过 3 之后才全是第五代
-    prevPool: ['rifleman', 'mg', 'armoredcar'],
-    prevEra: 4,
-    pool: ['hmg', 'commando', 'tank', 'artillery'],
-    poolHigh: ['ct_infantry', 'ct_tank', 'ct_howitzer', 'ct_recon'],
-    expansions: ['pack-contemporary'],
-    size: [12, 14, 14, 16],
-    bosses: [{ title: '钟楼', sub: '三家共守的地方——谁都不能让你砸这口钟' }],
+  arms: {
+    id: 'arms',
+    name: '时代军备',
+    history: 'technology',
+    blurb: '有人把三代以后的枪提前造了出来。线列、胸甲、加农炮，然后直接跳进堑壕与坦克。',
+    theme: l2(
+      '第二层 · 军械库',
+      '铁比人多，炮比话多',
+      ['era-arms'],
+      [
+        { title: '守墙人的兵工厂', sub: '墙靠人守，人靠厂养' },
+        { title: '持秤者的军械库', sub: '他连炮弹都按斤称' },
+        { title: '守钟人的试炮场', sub: '他们拿钟当靶子试射程' },
+      ],
+    ),
+    l3Packs: ['era-arms'],
   },
+  fantasy: {
+    id: 'fantasy',
+    name: '奇想',
+    history: 'myth',
+    blurb: '龙、法师、精灵从故事里走了出来，站到了战场上。脆，但什么都干得出来。',
+    theme: l2(
+      '第二层 · 异境',
+      '树上挂着龙，井里游着精灵',
+      /*
+       * 飞行单位**照常入池**（2026-11-25 按反馈改）。
+       *
+       * 上一版把它们剔掉了，理由是"空中层地面打不到"——但那条理由不成立：
+       * 规则层对空中目标只加一格距离（`strikeDistance`），有射程的兵照样能打；
+       * 而且剔除是**剔不干净**的，玩家照样会在别处撞见会飞的东西——说一套做一套
+       * 比平衡问题更糟。现在改用编成侧的两条约束（见 `run.ts` 的
+       * `sanitizeAir`）：一场最多一个飞行单位、且我方没有任何射程 ≥2 的兵时不给，
+       * 既保住"奇想就该有会飞的东西"，也不会出现打不完的仗。
+       *
+       * 便宜的蝙蝠/小恶魔不进池：它们会拉低池内最低价，让整套"按人头摊钱"
+       * 的编成算法把敌人换成一堆杂兵。
+       */
+      /*
+       * 2026-11-28：池子不再手写，改为 `poolOf(['fantasy'], 2, ...)` 按 e3/e4 现算。
+       * 召唤物（蝙蝠/小恶魔/小史莱姆……）是 `summonedOnly`，本来就不会进池，
+       * 所以"便宜货拉低池内最低价"的问题从数据层就不存在了。
+       */
+      ['fantasy'],
+      [
+        { title: '邪龙王的巢', sub: '它不是守城，它只是睡在城里' },
+        { title: '精灵女王的庭院', sub: '每一棵树都记得你砍过谁' },
+        { title: '至尊法师的高塔', sub: '塔里没有楼梯，只有上一层的门' },
+      ],
+    ),
+    l3Packs: ['fantasy'],
+    power: 1.8,
+  },
+  cultivation: {
+    id: 'cultivation',
+    name: '修真',
+    history: 'myth',
+    blurb: '有人不靠机器，靠自己往上修。人少，贵，但境界压人。',
+    theme: l2(
+      '第二层 · 山门',
+      '山门还在，灵气不多了',
+      ['cultivation'],
+      [
+        { title: '掌门与护山大阵', sub: '山门不破，是因为阵还没破' },
+        { title: '魔修的洞府', sub: '洞里没有灯，只有人在发光' },
+        { title: '魂修的祭坛', sub: '坛上摆的不是供品，是名字' },
+      ],
+    ),
+    /*
+     * 境界：门口炼气，越往钟后越深，**封顶金丹(3)**。
+     *
+     * 这个上限是照 DLC 的真实护甲曲线定的：甲 = −1 + r² + 1.5^r
+     * （炼气 +2、筑基 +6、金丹 +12、元婴 +21、化神 +32）。第二层的兵是
+     * e3/e4（攻 14–30），撞上元婴的 21 甲就是"每下 0–9"，层末长老再叠
+     * 体格，直接是一堵铁墙。第二层最高金丹；元婴往上留给 L3/L4
+     * （修真线 L3 是末法之世，本来就没有修士）。
+     */
+    rankOf: (clock) => Math.min(3, 1 + Math.floor(clock / 3)),
+    power: 2.2,
+    l3Packs: [],
+    l3Subtitle: '末法之世——灵气被钢铁抽干了，这一层没有修士，只有机器',
+  },
+};
+
+// 名字统一走 `ALL_UNITS`（基础表 + 全部扩展），这里不再维护第二份。
+
+/**
+ * 防御工事（精英战 / 攻坚 / 层末 / 守城战都会用）。
+ *
+ * 按**时代**给一套，而不是按层写死：第一层的箭塔和第三层的碉堡不是同一种东西，
+ * 但"每一层都有一座塔"这件事是一样的。塔负责火力，墙负责挡路——
+ * 墙的 atk 很低甚至为 0，它的价值是让你必须先拆它才能摸到城。
+ */
+export interface DefenseSet {
+  tower: string;
+  wall?: string;
+  /**
+   * 数值缩放（缺省 1）。
+   *
+   * 奇想和修真的建筑本身偏弱（哥布林战营 4 攻、散灵台 12 攻），
+   * 放在第三层会被玩家当纸糊。按世界放大一点，既保住风味，又不至于没用。
+   */
+  scale?: { atk: number; hp: number };
+}
+
+/**
+ * 按时代的默认防御工事（第一/三层用；第二层看世界）。
+ *
+ * **墙必须是墙**：这里曾经写的是 `camp` / `camp2` / …（军营、寨垒、堡寨），
+ * 它们在本体里是 `produce: true` 的产兵建筑——玩家在肉鸽里没有产兵面板，
+ * 拿到一座军营等于拿到一块 34 血的石头，"防御工事"这件事就落空了。
+ * 现在换成时代军备包里真正的墙体（栅栏 / 城墙 / 混凝土胸墙 / 掩体墙），
+ * 它们 `atk: 0, move: 0`，价值全在血和护甲上。
+ *
+ * 这四件**不靠开整个 era-arms 包**来注册（那会把 89 个近现代兵一起塞进
+ * 招募池），而是随关卡以 `LevelDef.units` 的形式带进去——见 `battle.ts`。
+ */
+export const DEFENSE_BY_ERA: Record<number, DefenseSet> = {
+  1: { tower: 'tower', wall: 'anc_palisade' },
+  2: { tower: 'keep', wall: 'med_wall' },
+  3: { tower: 'battery', wall: 'ind_concrete' },
+  4: { tower: 'fortress', wall: 'ind_concrete' },
+  5: { tower: 'bunker', wall: 'mod_concretewall' },
+  6: { tower: 'bunker', wall: 'mod_concretewall' },
+};
+
+/**
+ * 关卡自带的工事兵种（`LevelDef.units`）。
+ *
+ * 只取肉鸽用得到的那几个墙体：它们不在本体的 `UNIT_TYPES` 里，也不是本项目
+ * 常开的扩展，所以必须由关卡自己登记，否则 `deploy` 会当成"不存在的兵"跳过，
+ * 场上的墙就凭空消失。
+ */
+const ERA_ARMS_UNITS = expansionUnitsFor(['era-arms']);
+export const DEFENSE_UNIT_DEFS: Record<string, import('../core/types.ts').UnitTypeDef> = Object.fromEntries(
+  ['tower', 'keep', 'battery', 'fortress', 'bunker', 'anc_palisade', 'med_wall', 'ind_concrete', 'mod_concretewall']
+    .map((id) => [id, ERA_ARMS_UNITS[id]])
+    .filter(([, def]) => Boolean(def)) as Array<[string, import('../core/types.ts').UnitTypeDef]>,
+);
+
+/** 第二层四个世界各自的工事（只换外壳，数值按 scale 对齐） */
+export const WORLD_DEFENSE: Partial<Record<WorldId, DefenseSet>> = {
+  arms: { tower: 'gp_bastion', wall: 'gp_earthwork' },
+  fantasy: { tower: 'goblin-warcamp', wall: 'earth-wall', scale: { atk: 3.2, hp: 1.7 } },
+  cultivation: { tower: 'cultivation-spirit-tower', wall: 'cultivation-kill-formation', scale: { atk: 1.7, hp: 1.8 } },
 };
 
 /** 方略：开局身份 + 一条被动。被动在 battle.ts 里翻译成具体加成 */
@@ -134,6 +407,14 @@ export interface Strategy {
   sub: string;
   army: ArmyEntry[];
   passive: string;
+  /** 开局金币（缺省 180）：试验型方略会穷一点 */
+  gold?: number;
+  /** 角标：`试验` 表示强度没调，先放出来试 */
+  tag?: string;
+  /** 试验型的补偿：敌方多几个人（你带了不该带的东西，对面也加派了人手） */
+  enemyBonus?: number;
+  /** 试验型的补偿：敌方预算乘这个系数 */
+  power?: number;
 }
 
 export const STRATEGIES: Strategy[] = [
@@ -170,10 +451,123 @@ export const STRATEGIES: Strategy[] = [
     ],
     passive: '我军全体移动 +1',
   },
+  /*
+   * ---- 试验型（2026-11-26 重做）----
+   *
+   * 上一版是"满编的完全体提前发下来"，在第一层就是降维打击（实测神圣骑士长
+   * 护甲 14，第一层的兵打它每下 1 点）。现在改成**成长型**：
+   *
+   *   · 进第一层时是半成品（数值见 `GROWTH_UNITS`）；
+   *   · **每层末成长一次**，到它自己所属的时代（第 3 层）才是完全体；
+   *   · 成长幅度参照各层敌军的"人均价值"（L1 28 / L2 65 / L3 178 金），
+   *     但比那条曲线缓——只有三层，而"完全体"是个固定靶，真要按 2.3 倍
+   *     一级地涨，第一层就得砍到 1/5，一个兵打两个兵根本活不下来。
+   *
+   * 既然起手弱了，上一版给的"敌方 +1 人 / 预算 ×1.35~1.6"的补偿也一起撤掉。
+   */
+  {
+    id: 'vanguard',
+    name: '试验队',
+    sub: '上面发下来的新家伙，没人会用',
+    tag: '试验',
+    gold: 150,
+    army: [
+      { type: 'tank', count: 1 },
+      { type: 'militia', count: 2 },
+      { type: 'archer', count: 1 },
+    ],
+    passive: '带一件还在试验的家伙（坦克）：每层末成长，第 3 层才是完全体',
+  },
+  {
+    id: 'champion',
+    name: '英雄',
+    sub: '一个人就是一支队伍——现在只是半个',
+    tag: '试验',
+    // 一个人就是一支队伍，钱是你唯一能"添人"的路子，所以比别的方略宽一点
+    gold: 220,
+    army: [{ type: 'holy-knight-lord', count: 1 }],
+    passive: '只有这一位英雄：第 1 层末成长一次，第 2 层长成完全体（e4）',
+  },
 ];
+
+/**
+ * 兵种 → 它需要开哪几个扩展包。
+ *
+ * 2026-11-28 起这份表搬到 `packs.ts`（和"包级 requires 闭包"放在一起）：
+ * 上一版只记 `[包, unit.requiresPack]`，漏了**包自己的前置**
+ * （armor-era8 → armor-era7、dark-turmoil → cultivation），
+ * 那种兵部署时会被当成"不存在"直接跳过。这里只做转发，不再维护第二份。
+ */
+export { packsForUnit } from './packs.ts';
 
 export function strategyById(id: string): Strategy {
   return STRATEGIES.find((s) => s.id === id) ?? (STRATEGIES[0] as Strategy);
+}
+
+/**
+ * 成长型单位：试验队 / 英雄开局带的那一件"还没长成的东西"。
+ *
+ * 为什么要有这张表：把 e5–e6 的兵直接丢进第一层是降维打击（敌方人均价值
+ * 只有 28 金），可要是按"敌方人均价值"的曲线（28 → 65 → 178，每层 ×2.3）
+ * 去砍，第一层就只剩完全体的 1/5——一个兵打两个兵，活不下来。
+ * 所以三档是**手调的**：以"能单挑同层两个兵"为下限，以完全体为上限。
+ *
+ *   atk / hp / armor 分开走：
+ *     · 攻和血大致同步（伤害是 `atk − armor`，血是它的分母）；
+ *     · **护甲压得最狠**——减法公式里护甲是超线性的，第一层给到完全体的
+ *       1/3 就已经"打不动"了。
+ *
+ * `fullAt` = 它自己所属的时代到达的那一层：到这一层就是完全体，不再长。
+ * （英雄是 e4 → 第 2 层长满；坦克是 e5 → 第 3 层长满。）
+ */
+export interface GrowthSpec {
+  /** 长成完全体的层（1–3） */
+  fullAt: number;
+  /** 各层的攻击系数，索引 0 = 第一层 */
+  atk: number[];
+  hp: number[];
+  armor: number[];
+  /**
+   * 移动力系数（可选）。半成品"走不利索"。
+   *
+   * 这一条是给**远程英雄**准备的：攻/血/甲砍下去它照样能一边退一边打，
+   * 对面永远摸不到（实测残血 100%）。把移动一起压住，它才需要真的接战。
+   */
+  move?: number[];
+}
+
+export const GROWTH_UNITS: Record<string, GrowthSpec> = {
+  /*
+   * 神圣骑士长：e4，完全体 36 攻 / 170 血 / 14 甲 / 移 2 / **近战**。
+   *
+   * 为什么英雄必须是近战：这个引擎里"打完还能走"，远程只要移动力不落下风
+   * 就能一直退着打（实测圣剑勇者 射 3 移 4，从第一层到第三层**一滴血没掉**）。
+   * 所以英雄只能是 range 1 的，才不会变成"无敌的放风筝机器"。
+   *
+   * e4 的时代是第 2 层 → 它只长一次，第 2 层就是完全体；第 3 层要靠你自己
+   * 补的兵跟它并肩（这也符合"到它自己的时代就长满了"）。
+   */
+  'holy-knight-lord': { fullAt: 2, atk: [0.55, 1, 1], hp: [0.6, 1, 1], armor: [0.4, 1, 1] },
+  // 坦克：e5，完全体 56 攻 / 88 血 / 10 甲 / 移 3 / 射 3 —— e5 的时代是第 3 层，长两次
+  tank: { fullAt: 3, atk: [0.46, 0.7, 1], hp: [0.5, 0.72, 1], armor: [0.36, 0.62, 1] },
+};
+
+/** 这个兵种在某一层的成熟度；不是成长型就返回 null */
+export function growthOf(
+  type: string,
+  layer: number,
+): { atk: number; hp: number; armor: number; move: number; step: number; fullAt: number } | null {
+  const g = GROWTH_UNITS[type];
+  if (!g) return null;
+  const i = Math.max(0, Math.min(g.atk.length - 1, layer - 1));
+  return {
+    atk: g.atk[i] ?? 1,
+    hp: g.hp[i] ?? 1,
+    armor: g.armor[i] ?? 1,
+    move: g.move?.[i] ?? 1,
+    step: i + 1,
+    fullAt: g.fullAt,
+  };
 }
 
 /**
@@ -192,6 +586,13 @@ export interface Relic {
   id: string;
   name: string;
   desc: string;
+  /**
+   * 摊子上的标价（基准价，结算时再乘层价水位）。
+   *
+   * 上一版所有藏品一个价（200）：急行靴和行军图卖同一个数，等于把"哪个更值"
+   * 这件事藏起来。现在按强度分档——不是让贵的更强，而是让**价格说真话**。
+   */
+  price?: number;
   effect: {
     atk?: number;
     move?: number;
@@ -206,33 +607,64 @@ export interface Relic {
   };
 }
 
+/**
+ * 藏品列表。
+ *
+ * **数值藏品按层成长**（2026-11-25）：攻击/护甲/生命是减法公式里的绝对值，
+ * 第一层 +1 攻很值钱，到第三层（中位攻 55）就只剩 2%；而"移动 +1"的收益
+ * 是节奏，不随时代缩水。结果就是越往后"移速藏品"越一家独大。
+ * 现在这三件按层取 `RELIC_GROWTH`（+1/2/3 攻、+1/2/2 甲、+6/9/12 血），
+ * 相对价值在第一层和第三层差不多；`desc` 里写的是第一层的数，实际值见 `relicDesc`。
+ */
 export const RELICS: Relic[] = [
-  { id: 'forge', name: '铁匠铺', desc: '我军全体攻击 +1', effect: { atk: 1 } },
-  { id: 'boots', name: '急行靴', desc: '我军全体移动 +1', effect: { move: 1 } },
-  { id: 'armorplate', name: '铁甲', desc: '我军全体护甲 +1', effect: { armor: 1 } },
-  { id: 'rampart', name: '壁垒图', desc: '我军全体最大生命 +6', effect: { hp: 6 } },
-  { id: 'scoutnet', name: '斥候网', desc: '每场战斗敌人少 1 个兵', effect: { enemyCut: 1 } },
-  { id: 'powder', name: '火药桶', desc: '攻坚与层末：敌城初始耐久 −30%', effect: { cityDamage: 0.3 } },
-  { id: 'purse', name: '军饷袋', desc: '每层开始 +90 金', effect: { goldPerLayer: 90 } },
-  { id: 'ration', name: '军粮袋', desc: '每层开始 +1 个本层基础兵', effect: { unitPerLayer: 1 } },
-  { id: 'marchmap', name: '行军图', desc: '商店价格 −20%', effect: { shopOff: 0.2 } },
-  { id: 'medic', name: '随军医官', desc: '战斗结束后返还 1 个阵亡单位', effect: { revive: 1 } },
+  { id: 'forge', name: '铁匠铺', desc: '我军全体攻击 +1（第三层 +3）', price: 190, effect: { atk: 1 } },
+  {
+    id: 'boots',
+    name: '急行靴',
+    desc: '我军全体移动 +1（基础移速 4 以上不受影响）',
+    price: 300,
+    effect: { move: 1 },
+  },
+  { id: 'armorplate', name: '铁甲', desc: '我军全体护甲 +1（第三层 +2）', price: 220, effect: { armor: 1 } },
+  { id: 'rampart', name: '壁垒图', desc: '我军全体最大生命 +6（第三层 +12）', price: 170, effect: { hp: 6 } },
+  { id: 'scoutnet', name: '斥候网', desc: '每场战斗敌人少 1 个兵', price: 240, effect: { enemyCut: 1 } },
+  { id: 'powder', name: '火药桶', desc: '攻坚与层末：敌城初始耐久 −30%', price: 160, effect: { cityDamage: 0.3 } },
+  { id: 'purse', name: '军饷袋', desc: '每层开始 +90 金（按层换算）', price: 150, effect: { goldPerLayer: 90 } },
+  { id: 'ration', name: '军粮袋', desc: '每层开始 +1 个本层基础兵', price: 180, effect: { unitPerLayer: 1 } },
+  { id: 'marchmap', name: '行军图', desc: '商店价格 −25%', price: 140, effect: { shopOff: 0.25 } },
+  {
+    id: 'medic',
+    name: '随军医官',
+    desc: '每层最多救回 2 个阵亡单位（用最便宜的兵补员）',
+    price: 300,
+    effect: { revive: 1 },
+  },
 ];
 
 export function relicById(id: string): Relic | undefined {
   return RELICS.find((r) => r.id === id);
 }
 
-/** 事件池：每次进普通事件房从这里随机抽一条 */
+/**
+ * 事件池。
+ *
+ * 和临战决议的分工（2026-11-24 明确）：
+ *   · **事件 = 这一趟值不值**：金币、兵、藏品、整编、赌博。影响的是整局。
+ *   · **决议 = 这一仗怎么打**：只在层末出现，只影响那一场，全部是战术修正。
+ * 所以事件里**不再出现**"下一战攻击 +2"这种临时加成——那是决议的活。
+ *
+ * 选项的骨架也刻意做得不一样：有的两选、有的四选；有的给东西、有的要你拿兵去换、
+ * 有的纯赌。这样玩家读到的不是"三个数值选一个"，是"这伙人想从你这儿拿什么"。
+ */
 export const EVENTS: EventDef[] = [
   {
     id: 'levy',
     title: '征兵令',
     body: '里正把名册摊在你面前。名字比粮多，粮比人少。他说：抽几个吧，反正明年还得抽。',
     choices: [
-      { label: '按册抽丁', hint: '民兵 ×2，−30 金', effect: { add: { type: 'militia', count: 2 }, gold: -30 } },
+      { label: '按册抽丁', hint: '本层基础兵 ×2，−30 金', effect: { add: { type: 'layer-low', count: 2 }, gold: -30 } },
       { label: '只征粮', hint: '+70 金', effect: { gold: 70 } },
-      { label: '把册子还给他', hint: '下一战攻击 +2', effect: { nextAtk: 2 } },
+      { label: '从册子里挑老兵', hint: '把 1 个最差的兵换成 1 个高级兵', effect: { promote: 1 } },
     ],
   },
   {
@@ -241,8 +673,20 @@ export const EVENTS: EventDef[] = [
     body: '半个村子没了，另外半个还没决定要不要没。有人在灰里翻东西，有人在门口坐着。',
     choices: [
       { label: '搜能用的', hint: '+90 金', effect: { gold: 90 } },
-      { label: '收拢散兵', hint: '弓手 ×1', effect: { add: { type: 'archer', count: 1 } } },
-      { label: '帮着埋人', hint: '下一战攻击 +3', effect: { nextAtk: 3 } },
+      { label: '收拢散兵', hint: '本层中档兵 ×1', effect: { add: { type: 'layer-mid', count: 1 } } },
+      {
+        label: '在灰里挖',
+        hint: '五成：得 1 件藏品；否则 +30 金',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            lose: { gold: 30 },
+            winText: '挖出一只没烧透的箱子',
+            loseText: '只有灰和骨头，顺手捡了点铜',
+          },
+        },
+      },
     ],
   },
   {
@@ -253,6 +697,11 @@ export const EVENTS: EventDef[] = [
       { label: '买他的货', hint: '−120 金，得 1 件藏品', effect: { gold: -120, relic: 'random' } },
       { label: '照价收税', hint: '+140 金', effect: { gold: 140 } },
       { label: '让他过去', hint: '+20 金', effect: { gold: 20 } },
+      {
+        label: '连车带人扣下',
+        hint: '+220 金，损 1 个基础兵',
+        effect: { gold: 220, remove: { type: 'layer-low', count: 1 } },
+      },
     ],
   },
   {
@@ -260,8 +709,12 @@ export const EVENTS: EventDef[] = [
     title: '旧战场',
     body: '两年前这里打过一场，现在草长得很好。兵器还插在土里，像谁忘了收。',
     choices: [
-      { label: '捡兵器', hint: '得 1 个本层兵', effect: { add: { type: 'layer-mid', count: 1 } } },
-      { label: '找那面旗', hint: '下一战攻击 +2', effect: { nextAtk: 2 } },
+      { label: '捡兵器', hint: '得 1 个中档兵', effect: { add: { type: 'layer-mid', count: 1 } } },
+      /*
+       * 免费藏品是**故意的**（2026-11-26 定）：事件节点的收益必须高于一场战斗，
+       * 否则玩家最优解是"只走战斗、绕开事件"。藏品 ≈ 5~6 个兵，白拿才值得绕路。
+       */
+      { label: '找那面旗', hint: '得 1 件藏品', effect: { relic: 'random' } },
       { label: '什么都不动', hint: '+40 金', effect: { gold: 40 } },
     ],
   },
@@ -270,8 +723,32 @@ export const EVENTS: EventDef[] = [
     title: '钟楼的影子',
     body: '太阳落下去的时候，远处那座楼的影子刚好盖到你脚边。老兵说：别在那儿站着。',
     choices: [
-      { label: '敲一下', hint: '得 1 件藏品', effect: { relic: 'random' } },
+      {
+        label: '敲一下',
+        hint: '五成：得 1 件藏品；否则损 1 个基础兵',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            lose: { remove: { type: 'layer-low', count: 1 } },
+            winText: '钟声里掉出一样东西',
+            loseText: '有人当场扔了兵器就走',
+          },
+        },
+      },
       { label: '移开眼', hint: '+60 金', effect: { gold: 60 } },
+      {
+        label: '在影子里站到天黑',
+        hint: '五成：得 1 个高级兵；否则什么都没有',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: { add: { type: 'layer-high', count: 1 } },
+            winText: '有个人从影子里走出来，跟上了队伍',
+            loseText: '什么也没有发生，只是天黑了',
+          },
+        },
+      },
     ],
   },
   {
@@ -279,9 +756,9 @@ export const EVENTS: EventDef[] = [
     title: '三家的账房',
     body: '账房先生把三本账并排放着，说：哪家都行，只要押得准。他连笔都替你备好了。',
     choices: [
-      { label: '借兵', hint: '−80 金，得 1 个本层高级兵', effect: { gold: -80, add: { type: 'layer-high', count: 1 } } },
+      { label: '借兵', hint: '−80 金，得 1 个高级兵', effect: { gold: -80, add: { type: 'layer-high', count: 1 } } },
       { label: '卖情报', hint: '+110 金', effect: { gold: 110 } },
-      { label: '不欠人情', hint: '下一战攻击 +1', effect: { nextAtk: 1 } },
+      { label: '抄一份账本', hint: '得 1 件藏品', effect: { relic: 'random' } },
     ],
   },
   {
@@ -289,9 +766,9 @@ export const EVENTS: EventDef[] = [
     title: '溃兵',
     body: '二十来个人蹲在沟里，旗扔了，甲还在。领头的不敢看你，只说：给口饭，跟你走。',
     choices: [
-      { label: '收编', hint: '得 2 个本层基础兵', effect: { add: { type: 'layer-low', count: 2 } } },
-      { label: '拿走他们的甲', hint: '下一战我军护甲 +2', effect: { nextArmor: 2 } },
-      { label: '指条路让他们走', hint: '+60 金', effect: { gold: 60 } },
+      { label: '收编', hint: '−20 金，得 2 个基础兵', effect: { gold: -20, add: { type: 'layer-low', count: 2 } } },
+      { label: '拿走他们的甲', hint: '+90 金', effect: { gold: 90 } },
+      { label: '给他们一口饭', hint: '−40 金，得 1 件藏品', effect: { gold: -40, relic: 'random' } },
     ],
   },
   {
@@ -299,9 +776,13 @@ export const EVENTS: EventDef[] = [
     title: '渡口',
     body: '摆渡的老头一天只跑两趟。他说：兵过河，船就沉。要过，得加钱。',
     choices: [
-      { label: '给钱', hint: '−50 金，下一战攻击 +3', effect: { gold: -50, nextAtk: 3 } },
-      { label: '抢船', hint: '得 1 个本层兵，+20 金', effect: { add: { type: 'layer-mid', count: 1 }, gold: 20 } },
-      { label: '绕路', hint: '下一战我军最大生命 +6', effect: { nextHp: 6 } },
+      { label: '给钱', hint: '−50 金，得 1 个中档兵', effect: { gold: -50, add: { type: 'layer-mid', count: 1 } } },
+      {
+        label: '抢船',
+        hint: '+20 金，得 1 个中档兵，损 1 个基础兵',
+        effect: { gold: 20, add: { type: 'layer-mid', count: 1 }, remove: { type: 'layer-low', count: 1 } },
+      },
+      { label: '替他们摆渡', hint: '+60 金', effect: { gold: 60 } },
     ],
   },
   {
@@ -309,9 +790,213 @@ export const EVENTS: EventDef[] = [
     title: '路边的祭坛',
     body: '石头垒的，不知道供的是谁。供品还在，说明这附近已经没人敢来拿了。',
     choices: [
-      { label: '上供', hint: '−60 金，得 1 件藏品', effect: { gold: -60, relic: 'random' } },
-      { label: '把供品拿走', hint: '+100 金', effect: { gold: 100 } },
-      { label: '拜一拜就走', hint: '下一战我军护甲 +1', effect: { nextArmor: 1 } },
+      {
+        label: '上供',
+        hint: '−60 金，六成：得 1 件藏品；否则什么都没有',
+        effect: {
+          gold: -60,
+          risk: {
+            chance: 0.6,
+            win: { relic: 'random' },
+            winText: '石头底下压着东西',
+            loseText: '供品没了，石头还是石头',
+          },
+        },
+      },
+      { label: '拿走供品', hint: '+100 金', effect: { gold: 100 } },
+      {
+        label: '撬开石座',
+        hint: '得 1 件藏品，损 1 个基础兵',
+        effect: { relic: 'random', remove: { type: 'layer-low', count: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'smith',
+    title: '铁匠',
+    body: '炉子还热着，人已经跑了。砧上放着一块没打完的铁，锤子还在旁边。',
+    choices: [
+      { label: '打一件兵器', hint: '−100 金，得 1 件藏品', effect: { gold: -100, relic: 'random' } },
+      { label: '修甲', hint: '−60 金，得 1 个中档兵', effect: { gold: -60, add: { type: 'layer-mid', count: 1 } } },
+      { label: '把废铁卖了', hint: '+80 金', effect: { gold: 80 } },
+    ],
+  },
+  {
+    id: 'captives',
+    title: '俘虏',
+    body: '沟里蹲着七个，绳子不够，只能用他们的腰带。看见你过来，有人先跪了。',
+    choices: [
+      { label: '收编', hint: '−30 金，得 1 个中档兵', effect: { gold: -30, add: { type: 'layer-mid', count: 1 } } },
+      { label: '换赎金', hint: '+120 金', effect: { gold: 120 } },
+      { label: '问完话放走', hint: '+40 金', effect: { gold: 40 } },
+    ],
+  },
+  {
+    id: 'plague',
+    title: '瘟疫',
+    body: '先是炊事班，然后是马夫。军医说别数了，数了也没用。',
+    choices: [
+      { label: '请医', hint: '−90 金，无人损失', effect: { gold: -90 } },
+      { label: '隔离', hint: '损 1 个基础兵', effect: { remove: { type: 'layer-low', count: 1 } } },
+      {
+        label: '硬扛',
+        hint: '五成：没事；否则损 2 个基础兵',
+        effect: {
+          risk: {
+            chance: 0.5,
+            win: {},
+            lose: { remove: { type: 'layer-low', count: 2 } },
+            winText: '扛过去了',
+            loseText: '一夜抬出去两个',
+          },
+        },
+      },
+    ],
+  },
+  {
+    id: 'gamble',
+    title: '赌局',
+    body: '几个兵蹲在墙根下掷骰子。见你来了，把碗往前推了推，谁也没收。',
+    choices: [
+      {
+        label: '押大',
+        hint: '−100 金，五成：+320 金',
+        effect: {
+          gold: -100,
+          risk: { chance: 0.5, win: { gold: 320 }, winText: '开了大', loseText: '开了小' },
+        },
+      },
+      {
+        label: '押小',
+        hint: '−50 金，五成：+140 金',
+        effect: {
+          gold: -50,
+          risk: { chance: 0.5, win: { gold: 140 }, winText: '开了小', loseText: '开了大' },
+        },
+      },
+      { label: '看场子', hint: '+40 金', effect: { gold: 40 } },
+    ],
+  },
+  {
+    id: 'refugees',
+    title: '逃难的人',
+    body: '路上全是人，往北走。有人把最后一袋粮换成了你的旗，说：跟着旗走，总比跟着路走强。',
+    choices: [
+      { label: '给粮', hint: '−60 金，得 2 个基础兵', effect: { gold: -60, add: { type: 'layer-low', count: 2 } } },
+      { label: '征兵', hint: '−20 金，得 1 个基础兵', effect: { gold: -20, add: { type: 'layer-low', count: 1 } } },
+      { label: '抢', hint: '+100 金', effect: { gold: 100 } },
+    ],
+  },
+  {
+    id: 'grave',
+    title: '老兵的坟',
+    body: '一块木牌，字被雨打花了。看得出是"某某营，十七人"。土是新翻的，翻的人没留下名字。',
+    choices: [
+      {
+        label: '立块碑',
+        hint: '−40 金，把 1 个最差的兵换成 1 个高级兵',
+        effect: { gold: -40, promote: 1 },
+      },
+      {
+        label: '挖开',
+        hint: '得 1 件藏品，损 1 个基础兵',
+        effect: { relic: 'random', remove: { type: 'layer-low', count: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'armsdealer',
+    title: '军械贩子',
+    body: '他掀开油布，底下一排枪，擦得比你的兵干净。他说：这些东西来路不正，所以便宜。',
+    choices: [
+      { label: '买一批', hint: '−150 金，得 1 件藏品', effect: { gold: -150, relic: 'random' } },
+      { label: '卖旧兵器', hint: '+90 金，损 1 个基础兵', effect: { gold: 90, remove: { type: 'layer-low', count: 1 } } },
+      {
+        label: '以旧换新',
+        hint: '损 1 个基础兵，得 1 个高级兵',
+        effect: { add: { type: 'layer-high', count: 1 }, remove: { type: 'layer-low', count: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'kid',
+    title: '拾荒的孩子',
+    body: '他在死人身上翻东西，翻得很熟练。看见你，先把手里的东西举起来，像是在等你开价。',
+    choices: [
+      {
+        label: '给他钱',
+        hint: '−30 金，五成：得 1 件藏品；否则什么都没有',
+        effect: {
+          gold: -30,
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            winText: '他从怀里掏出一件东西',
+            loseText: '他拿了钱就跑',
+          },
+        },
+      },
+      { label: '带走', hint: '得 1 个基础兵', effect: { add: { type: 'layer-low', count: 1 } } },
+      { label: '不管', hint: '+10 金', effect: { gold: 10 } },
+    ],
+  },
+  {
+    id: 'well',
+    title: '古井',
+    body: '井沿上刻着字，磨得只剩半个"守"。往下看，水面上有个你，比你干净。',
+    choices: [
+      {
+        label: '投钱',
+        hint: '−50 金，五成：得 1 件藏品；否则 +20 金',
+        effect: {
+          gold: -50,
+          risk: {
+            chance: 0.5,
+            win: { relic: 'random' },
+            lose: { gold: 20 },
+            winText: '井底有东西',
+            loseText: '捞上来一只铜桶',
+          },
+        },
+      },
+      { label: '打水', hint: '+30 金', effect: { gold: 30 } },
+    ],
+  },
+  /*
+   * ---- 史线事件（2026-11-27）----
+   *
+   * 把「第二层走哪支史」从通关时的四选一，挪进第一层：路不是打完挑的，
+   * 是一路上"帮了谁、打了谁、没管谁"积出来的。军备走这条"听说—表态"的
+   * 事件；奇想与修真走特殊战斗（见 `TRIALS`）。
+   *
+   * 四条选项刻意不对称：
+   *   · 出钱 → 多拿一个当代兵，锁定军备；
+   *   · 只表态 → 白拿锁定（"这是好事啊"就是不花钱的支持）；
+   *   · 观望 → 什么都不发生（留给正史）；
+   *   · 排斥 → 把军备从这一局划掉，但也不会自动给你别的路。
+   */
+  {
+    id: 'story-arms',
+    story: 'arms',
+    title: '守墙人的突破',
+    body: '你听说守墙人那边在技术上有了一些突破，有望发明出一些先进的武器装备。',
+    choices: [
+      {
+        label: '支持一下也未尝不可',
+        hint: '−300 金，得 1 个时代军备的 e3/e4 兵（钟越靠后越可能高代）；L2 必定走时代军备',
+        effect: { gold: -300, addByClock: { world: 'arms', count: 1 }, world: { lock: 'arms' } },
+      },
+      {
+        label: '这是好事啊',
+        hint: 'L2 必定走时代军备（不再可进入其它三支）',
+        effect: { world: { lock: 'arms' } },
+      },
+      { label: '观望一下先', hint: '无事发生', effect: {} },
+      {
+        label: '武器又不是什么好东西',
+        hint: 'L2 不再可以进入时代军备',
+        effect: { world: { ban: 'arms' } },
+      },
     ],
   },
 ];
@@ -320,7 +1005,51 @@ export function eventById(id: string): EventDef {
   return EVENTS.find((e) => e.id === id) ?? (EVENTS[0] as EventDef);
 }
 
-/** 休整房的选项池（每次随机抽 3 个） */
+/**
+ * 史线试炼（2026-11-27）。
+ *
+ * 和「第一层末四选一」的区别：**路是打出来的**。试炼只出现在第一层，
+ * 敌人是写死的少量当代兵——不是按预算生成的一队，所以它明显比同层遭遇战硬。
+ * 赢了：第二层锁定这支史，投降的人直接进队；输了：这一局结束；
+ * 绕开：什么都没发生（最后走正史）。
+ *
+ * 每局第一层只放**一个**试炼（从池里抽），另一扇门是普通战斗：
+ * 想走哪支史，得先敢打。
+ */
+export const TRIALS: TrialDef[] = [
+  {
+    id: 'cave',
+    world: 'fantasy',
+    title: '洞穴里的原住民',
+    sub: '与世隔绝的人，不欢迎外来者',
+    // e3 前期：幽灵 + 刺客 + 法师。射手方略好打（能先手），近战要掂量
+    enemy: ['ghost', 'assassin', 'mage'],
+    // 投降的是"较弱的两个"：不把池子里最贵的直接送出去
+    reward: ['ghost', 'assassin'],
+  },
+  {
+    id: 'sect',
+    world: 'cultivation',
+    title: '山门禁地',
+    sub: '守山弟子没有问你为什么来，只问你还走不走',
+    /*
+     * 两个炼气弟子 + 一个筑基师兄（剑修最贵，自动当师兄）。
+     * 全员炼气太送（10/10）；全员筑基 +6 甲，L1 的 e1 兵（攻 10–14）打不动（0/10）。
+     */
+    enemy: ['qi-cultivator', 'body-cultivator', 'sword-cultivator'],
+    rank: 1,
+    seniorRank: 2,
+    // 明确让剑修当师兄：体修的 +6 甲叠到 9 甲，L1 的射手一轮只打得动 1 点
+    seniorType: 'sword-cultivator',
+    reward: ['qi-cultivator', 'body-cultivator'],
+  },
+];
+
+/**
+ * 休整房的选项池（每次随机抽 3 个）。
+ *
+ * 只做**人、钱、编制**三件事——战斗加成全部让给临战决议，否则两个池子又会撞。
+ */
 export interface RestOption {
   id: string;
   label: string;
@@ -330,34 +1059,48 @@ export interface RestOption {
 export const REST_OPTIONS: RestOption[] = [
   { id: 'reinforce', label: '补员', hint: '得 1 个本层基础兵' },
   { id: 'wage', label: '募饷', hint: '+90 金' },
-  { id: 'drill', label: '演武', hint: '下一战我军攻击 +2' },
-  { id: 'harden', label: '加固', hint: '下一战我军最大生命 +6' },
   { id: 'recruit', label: '征召', hint: '−80 金，得 1 个本层高级兵' },
+  { id: 'reform', label: '整编', hint: '把 1 个最低级的兵换成 1 个本层高级兵' },
+  { id: 'muster', label: '犒军', hint: '−60 金，得 2 个本层基础兵' },
 ];
 
-/** 临战决议：层末 boss 前抽 3 个给玩家选 1 个 */
+/**
+ * 临战决议：层末 boss 前抽 3 个给玩家选 1 个。
+ *
+ * 全部是**这一场**的战术修正，不带金币/兵/藏品的收益（那是事件的活）。
+ * 每一个都带一点代价：要么花钱，要么拿别的属性换——没有"纯赚"的选项，
+ * 所以选起来是"这一仗我打算怎么打"，不是"哪个数大"。
+ */
 export interface DecisionOption {
   id: string;
   label: string;
   hint: string;
   /** 立刻扣的钱（不够就不能选） */
   cost?: number;
-  /** 本场加成 */
+  /** 本场加成（可以是负数：拿一样换另一样） */
   atk?: number;
   hp?: number;
   armor?: number;
+  move?: number;
   enemyCut?: number;
   cityDamage?: number;
+  /** 敌人工事（塔/墙）开场耐久 −N% */
+  defenseDamage?: number;
+  /** 敌军开场掉 N% 血 */
+  enemyHp?: number;
   /** 本场临时兵（本层基础兵） */
   tempUnits?: number;
 }
 
 export const DECISIONS: DecisionOption[] = [
-  { id: 'night', label: '夜袭', hint: '本场我军攻击 +2', atk: 2 },
-  { id: 'press', label: '强攻', hint: '本场我军最大生命 +8', hp: 8 },
+  { id: 'night', label: '夜袭', hint: '本场我军攻击 +3、护甲 −1', atk: 3, armor: -1 },
+  { id: 'press', label: '强攻', hint: '本场我军最大生命 +10、移动 −1', hp: 10, move: -1 },
   { id: 'bribe', label: '买通', hint: '−120 金，本场敌人少 2 个兵', cost: 120, enemyCut: 2 },
   { id: 'levy', label: '就地征召', hint: '本场多 2 个基础兵（活下来就带走）', tempUnits: 2 },
-  { id: 'sappers', label: '工兵破墙', hint: '本场敌城初始耐久 −40%', cityDamage: 0.4 },
+  { id: 'sappers', label: '工兵破墙', hint: '本场敌城与工事耐久 −45%', cityDamage: 0.45, defenseDamage: 0.45 },
+  { id: 'fire', label: '火攻', hint: '本场敌军开场即带伤（−25% 生命）', enemyHp: 0.25 },
+  { id: 'flank', label: '迂回', hint: '本场我军移动 +1、攻击 −1', move: 1, atk: -1 },
+  { id: 'dig', label: '掘壕', hint: '本场我军护甲 +2、移动 −1', armor: 2, move: -1 },
 ];
 
 /** 房间标题里用的地名，纯装饰 */
@@ -382,23 +1125,83 @@ export function pickEnemyTypes(
   budget: number,
   cost: (id: string) => number,
   count: number,
+  /**
+   * 这一支编成里**最多只能有一个英雄**（本体规则：同一方场上英雄唯一）。
+   *
+   * 不传 = 不限制（老的调用点行为不变）。传了之后，第二个英雄位置会被
+   * 同价位的普通兵顶掉——不这样做，L2 奇想的 boss 会带着两个英雄出场，
+   * 而玩家那边一个都凑不齐。
+   */
+  isHero?: (id: string) => boolean,
 ): string[] {
   const sorted = [...pool].filter((id) => cost(id) > 0).sort((a, b) => cost(b) - cost(a));
   if (sorted.length === 0) return [];
   const cheapest = sorted[sorted.length - 1] as string;
+  const cheapestCost = Math.max(1, cost(cheapest));
 
   const out: string[] = [];
+  const heroTaken = (): boolean => (isHero ? out.some((id) => isHero(id)) : false);
   let left = budget;
   const slots = Math.max(1, Math.min(14, count));
   for (let i = 0; i < slots; i += 1) {
-    // 每个位置分到"剩余 ÷ 剩余位置"：不这么分的话，前面几件贵货会把预算吃光，
-    // 后面的人头就落空了（实测 3 个人头只出场 2 个）
-    const cap = Math.max(1, Math.floor(left / (slots - i)));
-    const pick = sorted.find((id) => cost(id) <= cap) ?? cheapest;
+    /*
+     * 每一个位置先**扣掉后面所有人的最低开销**，剩下的才是这个位置能花的钱。
+     *
+     * 上一版第一个位置直接拿一半预算，钱少的局里这一半刚好买一个贵兵，
+     * 剩下的位置连最便宜的都不够——"算 4 个人、场上只来 3 个"。
+     * 先留底再花，人数才一定凑得齐；第一个位置仍然多分一点，编成里才有尖子。
+     */
+    const rest = slots - i - 1;
+    const reserve = rest * cheapestCost;
+    const spendable = Math.max(cheapestCost, left - reserve);
+    const cap = spendable;
+    const affordable = sorted.filter((id) => cost(id) <= cap);
+    /*
+     * 英雄名额：已经有一个了，就只剩下普通兵可选。
+     * 全都够不着时退回"买得起的最便宜那个"，人数优先。
+     */
+    const banned = heroTaken();
+    const cands = (banned ? affordable.filter((id) => !isHero?.(id)) : affordable);
+    const usable = cands.length > 0 ? cands : affordable.filter((id) => !isHero?.(id));
+    const pickPool = usable.length > 0 ? usable : affordable;
+    let pick = pickPool[0] ?? cheapest;
+    /*
+     * 别连着买四个一样的。
+     *
+     * 价格差在 15% 以内的两个兵战力接近，换着买不影响强度，但看起来是
+     * "一支什么样的队伍"，而不是"四个同一个模子"。价格差得远就不换——
+     * 宁可重复，也不要为了好看把编成拉垮。
+     */
+    if (out.length > 0 && pick === out[out.length - 1]) {
+      const alt = pickPool.find((id) => id !== pick && cost(id) >= cost(pick) * 0.85);
+      if (alt) pick = alt;
+    }
     if (cost(pick) > left) break;
     out.push(pick);
     left -= cost(pick);
   }
   if (out.length === 0) out.push(cheapest);
   return out;
+}
+
+/*
+ * 开发期护栏：池子/试炼里写了一个不存在的兵种 id，最常见的表现是
+ * "这一关静默少一个敌人"或"试炼里少一个弟子"——不报错，很难查。
+ * 不抛异常（一局内容坏不该让游戏开不了），只在控制台点名。
+ */
+{
+  const ids = new Set<string>();
+  for (const l of Object.values(LAYERS)) {
+    for (const id of [...l.pool, ...l.poolHigh, ...l.prevPool]) ids.add(id);
+  }
+  for (const w of Object.values(WORLDS)) {
+    for (const id of [...w.theme.pool, ...w.theme.poolHigh, ...w.theme.prevPool]) ids.add(id);
+  }
+  for (const t of TRIALS) {
+    for (const id of [...t.enemy, ...t.reward]) ids.add(id);
+  }
+  const missing = [...ids].filter((id) => !ALL_UNITS[id]);
+  if (missing.length > 0) {
+    console.warn('[肉鸽] 兵池/试炼里有查不到的兵种 id（会被静默跳过）：', missing);
+  }
 }

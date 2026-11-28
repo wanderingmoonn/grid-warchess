@@ -10,6 +10,17 @@
   position: fixed;
   inset: 0;
   overflow: auto;
+  /*
+   * 不给横向滚动留任何机会（2026-11-25）。
+   *
+   * 反馈是"选中兵再取消选中，页面会左右平移"。根因不是棋盘变宽了，而是
+   * 侧栏内容高度在"选中/未选中"两态之间变了 20~30px：一旦恰好越过视口高度，
+   * 滚动条出现/消失会吃掉 15px 宽度，整个居中布局就横跳一次。
+   * `scrollbar-gutter` 先给滚动条留固定位置（不再挤内容），`overflow-x: hidden`
+   * 再把任何意外的横向溢出按死。
+   */
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   background: #eae6dc;
   color: #3c3a33;
   font: 14px/1.6 system-ui, 'Microsoft YaHei', sans-serif;
@@ -55,6 +66,19 @@
   gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
+}
+.rg-strat-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #b3541e;
+  color: #fff8ea;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  vertical-align: 1px;
 }
 .rg-tag {
   font-size: 13px;
@@ -282,6 +306,21 @@
 .rg-door.k-siege b {
   color: #a43e2c;
 }
+/* 守城战：也是红事，但它是"替别人守"，用偏冷的绛色区分 */
+.rg-door.k-special b {
+  color: #7b3f5e;
+}
+/*
+ * 史线试炼：不是普通战斗，是"这一仗会把第二层改掉"。
+ * 金色虚线边框 + 暖底，和普通战斗（实线、米白）一眼能分开。
+ */
+.rg-door.k-trial {
+  border: 1px dashed #b08a2e;
+  background: #fdf8e8;
+}
+.rg-door.k-trial b {
+  color: #8a6b1f;
+}
 .rg-bossrow {
   margin-top: 14px;
   padding: 14px 16px;
@@ -337,6 +376,8 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+  /* 滚动只发生在棋盘和侧栏各自的容器里：战斗屏本身永远不撑破舞台 */
+  overflow: hidden;
 }
 .rg-battle-head {
   display: flex;
@@ -362,7 +403,21 @@
 .rg-battle-btns {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+/* 强制移动 / 强制攻击：扣住时反白，再点一次退出（和本体一个手感） */
+.rg-btn.armed {
+  background: #2f6ea8;
+  border-color: #26587f;
+  color: #fff;
+}
+.rg-battle-btns kbd {
+  font: inherit;
+  font-size: 10px;
+  opacity: 0.65;
+  margin-left: 2px;
 }
 .rg-battle-body {
   flex: 1;
@@ -374,6 +429,9 @@
 }
 .rg-boardwrap {
   min-width: 0;
+  /* 和 .rg-side 一样要有 min-height：否则棋盘的固有高度会把 grid 行顶高，
+     整个战斗屏越过 100%，滚动的就变成 #rogue-root（页面横跳的来源之一） */
+  min-height: 0;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -412,6 +470,7 @@
   display: flex;
   flex-direction: column;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 .rg-army {
   display: flex;
@@ -443,6 +502,165 @@
 .rg-unitrow.done {
   opacity: 0.55;
 }
+/* 成长型单位的角标（试验队 / 英雄）：它是这一局里唯一"越打越强"的东西 */
+.rg-grow {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e8dcc4;
+  color: #7a5a1e;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+/* 局外面板：军队属性 / 藏品 / 待生效 */
+.rg-armylist,
+.rg-reliclist,
+.rg-bufflist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/*
+ * 局外军队行：名字和数值一行，境界/修为与能力各占一行。
+ * 原来是一条 flex 行，加了「修为 / 能力」之后会挤成一团；修真单位的
+ * 信息量大头在这些行里，必须让它们换行显示，而不是被省略。
+ */
+.rg-armyrow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e0d8c6;
+}
+.rg-armyhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.rg-armyline {
+  color: #837b6b;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.rg-armyrow:last-child {
+  border-bottom: 0;
+}
+.rg-armyrow .n {
+  font-weight: 600;
+}
+.rg-armyrow b {
+  color: #837b6b;
+  font-size: 11px;
+  font-weight: 400;
+}
+.rg-realm,
+.rg-hero,
+.rg-hurt {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.rg-realm {
+  background: #e3ebf6;
+  color: #2f5f8f;
+}
+.rg-hero {
+  background: #f6e2c8;
+  color: #8a5a12;
+}
+.rg-hurt {
+  background: #f7dcd8;
+  color: #a33f2c;
+}
+.rg-relicrow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 0;
+  border-bottom: 1px dashed #e0d8c6;
+}
+.rg-relicrow:last-child {
+  border-bottom: 0;
+}
+.rg-relicrow b {
+  font-size: 12px;
+}
+.rg-relicrow span {
+  color: #6d6659;
+  font-size: 11px;
+}
+.rg-buffrow {
+  font-size: 12px;
+  color: #4b4740;
+}
+/* 外人：两侧的中立单位，场外交涉 */
+.rg-neutral-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #e0d8c6;
+}
+.rg-neutral-row:last-child {
+  border-bottom: 0;
+}
+.rg-neutral-row .n {
+  flex: 1 1 100%;
+  font-weight: 600;
+}
+.rg-neutral-row .n i {
+  margin-left: 6px;
+  color: #837b6b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
+.rg-btn.mini {
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+/* 技能栏：一个兵一行按钮，和本体的"指挥官技能"同一个手感 */
+.rg-skills {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 同上：有没有技能按钮不该改变侧栏高度 */
+  min-height: 46px;
+}
+.rg-skill {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #cbb98d;
+  background: #fffaf0;
+  border-radius: 7px;
+  padding: 5px 9px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rg-skill b {
+  color: #5a3f14;
+}
+.rg-skill span {
+  color: #837b6b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.rg-skill:hover:not([disabled]) {
+  border-color: #b08a3c;
+  background: #fdf3dd;
+}
+.rg-skill[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
 .rg-recruit {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -471,6 +689,12 @@
   color: #6d6659;
   font-size: 12px;
   line-height: 1.7;
+  /*
+   * 高度**锁定为两行**。选中/未选中时提示文案长度不同（"绿点走，红框打" vs
+   * 带 <br> 的入门说明），不锁的话侧栏高度会跟着抖，滚动条一开一关，
+   * 整个页面就横跳一次——这就是"选中兵再取消，页面左右平移"的来源。
+   */
+  min-height: 72px;
 }
 
 /* ---------- 弹层 ---------- */
@@ -638,14 +862,22 @@
 .rg-hovercard {
   position: fixed;
   z-index: 6000;
-  width: 208px;
-  pointer-events: none;
+  width: 252px;
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+  /*
+   * 卡片要能滚：修真单位的能力 / 技能段落多，鼠标停在卡上滚轮看全文。
+   * `pointer-events` 从 none 改成 auto 是为此——对应的 mouseout 会判断
+   * 「relatedTarget 在不在卡里」，不会一移上去就消失。
+   */
+  pointer-events: auto;
   background: #fffdf6;
   border: 1px solid #cabfa8;
   border-radius: 10px;
   padding: 8px 10px;
   box-shadow: 0 10px 26px rgba(40, 34, 20, 0.22);
   font-size: 12px;
+  line-height: 1.45;
   color: #3c3a33;
 }
 .rg-hc-head {
@@ -691,4 +923,455 @@
 .rg-hc-line {
   color: #837b6b;
   line-height: 1.5;
+}
+/* 修士的境界行：和普通说明分开，玩家一眼能看到"这只修到哪了" */
+.rg-hc-realm {
+  color: #2f6b5e;
+}
+.rg-hc-realm b {
+  color: #1f5147;
+}
+
+/* ---------- 第二层的岔口：四种历史 ---------- */
+
+.rg-worlds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+.rg-world {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  border: 1px solid #d5cdbb;
+  background: #fffdf6;
+  border-radius: 10px;
+  padding: 11px 13px;
+  font: inherit;
+  cursor: pointer;
+}
+.rg-world:hover {
+  border-color: #2f6ea8;
+  background: #f2f7fc;
+}
+.rg-world b {
+  font-size: 15px;
+  color: #2b2a26;
+}
+.rg-world em {
+  align-self: flex-start;
+  font-style: normal;
+  font-size: 11px;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.rg-world span {
+  font-size: 12px;
+  color: #6d6659;
+  line-height: 1.55;
+}
+.rg-world i {
+  font-style: normal;
+  font-size: 12px;
+  color: #8a6b1f;
+}
+.rg-world-tag {
+  font-style: normal;
+  font-size: 11px;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-left: 8px;
+  vertical-align: 2px;
+}
+/* 第一层：路已经定了（事件/试炼锁的），换成实心的绿色，和"未定"分开 */
+.rg-world-tag.locked {
+  color: #3f6b45;
+  border-color: #9dc0a5;
+  background: #eef7ef;
+}
+
+/* ==========================================================================
+ * 2026-11-28：战斗屏改为**复用战役模式的组件**
+ *
+ * 结构是 .app > .battle-header(.topbar + .battle-status) + .main(.board-wrap + .side-drawer)
+ * ——和 index.html 里主对局那套一模一样，样式也直接吃 style.css。
+ * 这里只补三件它不知道的事：
+ *   1. 根节点的字体/背景（主对局是 body 给的，我们在 #rogue-root 里）；
+ *   2. 棋盘宽高由 JS 的 fitBoard 写死像素，撤掉旧版那条 width:min(76vh,100%)；
+ *   3. 肉鸽独有的「外人」卡和开局扩展选择。
+ * ======================================================================== */
+
+.rg-battle-app {
+  height: 100%;
+  background: var(--bg, #eae6dc);
+  color: var(--text, #3c3a33);
+  font: 14px/1.6 system-ui, 'Microsoft YaHei', sans-serif;
+}
+
+/* 旧版那条"棋盘占 76vh"是给自绘布局用的；现在尺寸由 fitBoard 写 inline，
+   旧规则一旦压过 inline 就会和缩放/滚动容器对不上。 */
+.rg-battle-app .board.rg-board {
+  width: auto;
+  max-width: none;
+  flex: 0 0 auto;
+}
+
+/* 棋盘上的高亮保留（本体那套在浅色平原上偏淡） */
+.rg-battle-app .board.rg-board .tile.reach {
+  background-color: rgba(47, 110, 168, 0.16);
+  box-shadow: inset 0 0 0 3px rgba(47, 110, 168, 0.5);
+}
+.rg-battle-app .board.rg-board .tile.attackable {
+  background-color: rgba(176, 58, 40, 0.14);
+  box-shadow: inset 0 0 0 3px rgba(176, 58, 40, 0.55);
+}
+
+/* 战斗屏里的顶栏：主对局那套按钮更多，肉鸽只有暂停/速度，别让它把
+   回合与目标挤到看不见。 */
+.rg-battle-app .topbar {
+  min-width: 0;
+}
+.rg-battle-app .level-goal {
+  max-width: 42ch;
+}
+.rg-battle-app .battle-status {
+  align-self: center;
+  margin-right: 14px;
+}
+
+/* 「外人」：中立单位的场外交涉。战役里没有这种对象，所以这张卡只能补在
+   面板末尾；样式沿用 .card，只把两行按钮排紧一点。 */
+.rg-parley-card .rg-parley-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--line, #d9d2c2);
+}
+.rg-parley-card .rg-parley-row:first-of-type {
+  border-top: 0;
+}
+.rg-parley-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.rg-parley-name i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted, #837b6b);
+}
+.rg-parley-card .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ---------- 开局面板的「本局扩展」 ---------- */
+
+.rg-dlc {
+  margin: 26px 0 8px;
+  padding: 18px 20px;
+  border: 1px solid #d5cdbb;
+  border-radius: 14px;
+  background: #f7f4ec;
+}
+.rg-dlc-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.rg-dlc-head h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.rg-dlc-head h2 small,
+.rg-dlc-group h3 small {
+  font-weight: 400;
+  font-size: 12px;
+  color: #837b6b;
+  margin-left: 6px;
+}
+.rg-dlc-head p {
+  margin: 0;
+  font-size: 12px;
+  max-width: 68ch;
+  line-height: 1.55;
+}
+.rg-dlc-fixed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+.rg-dlc-label {
+  font-size: 12px;
+  color: #837b6b;
+}
+.rg-dlc-note {
+  font-size: 11px;
+  color: #9a9282;
+}
+.rg-pack-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid #cbbfa8;
+  background: #fffdf6;
+  font-size: 12px;
+  color: #6d6659;
+}
+.rg-dlc-group {
+  margin-top: 16px;
+}
+.rg-dlc-group h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.rg-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.rg-pack {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid #d5cdbb;
+  border-radius: 10px;
+  background: #fffdf6;
+  color: #4b4740;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.rg-pack:hover {
+  border-color: #9dbfdc;
+}
+.rg-pack.on {
+  border-color: #2f6ea8;
+  background: #eef5fb;
+  box-shadow: inset 3px 0 0 #2f6ea8;
+}
+.rg-pack b {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rg-pack b u {
+  text-decoration: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: #2f6ea8;
+  border: 1px solid #9dbfdc;
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.rg-pack span {
+  font-size: 12px;
+  color: #6d6659;
+  line-height: 1.45;
+}
+.rg-pack em {
+  font-style: normal;
+  font-size: 11px;
+  color: #8a8272;
+  line-height: 1.45;
+}
+.rg-pack i {
+  font-style: normal;
+  font-size: 11px;
+  color: #9a9282;
+  align-self: flex-end;
+}
+.rg-pack.on i {
+  color: #2f6ea8;
+  font-weight: 600;
+}
+.rg-dlc-off {
+  margin-top: 14px;
+  border-top: 1px dashed #d5cdbb;
+  padding-top: 10px;
+}
+.rg-dlc-off summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #837b6b;
+}
+.rg-dlc-offlist {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rg-dlc-offrow {
+  display: grid;
+  grid-template-columns: 8.5em 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  color: #6d6659;
+}
+.rg-dlc-offrow b {
+  font-weight: 600;
+  color: #4b4740;
+}
+.rg-dlc-offrow i {
+  font-style: normal;
+  font-size: 10px;
+  color: #9a9282;
+  border: 1px solid #d5cdbb;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+@media (max-width: 720px) {
+  .rg-dlc-offrow {
+    grid-template-columns: 1fr auto;
+  }
+  .rg-dlc-offrow span {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 战斗屏挂在 app.ts 临时造的 host 上；不给高度，.app 的 100dvh 就撑不开，
+   棋盘也会按"内容高度"量出一个很小的尺寸。 */
+.rg-battle-host {
+  height: 100%;
+}
+
+/* 我军 / 友军 / 敌军：一条横向的小徽章带。
+   上一版是竖着的"我军清单"，8 个兵要占 280px，把单位详情顶到屏幕外；
+   现在一行一个阵营、每只兵只占 30×34，点一下照样能选中/查看。 */
+.rg-army-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line, #d5cdbb);
+  border-radius: 10px;
+  background: var(--panel, #f7f4ec);
+}
+.rg-armygroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.rg-army-tag {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--muted, #837b6b);
+  white-space: nowrap;
+}
+.rg-army-tag b {
+  color: var(--text, #3c3a33);
+  font-size: 12px;
+}
+.rg-army-tag i {
+  font-style: normal;
+  margin-left: 3px;
+  font-size: 10px;
+  color: #9a9282;
+}
+.rg-army-chips {
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.rg-armychip {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  border: 1px solid #cbbfa8;
+  border-radius: 7px;
+  background: #fffdf6;
+  color: var(--on-light, #3c3a33);
+  font: inherit;
+  line-height: 1.15;
+  cursor: pointer;
+}
+.rg-armychip:hover {
+  background: #fff;
+}
+.rg-armychip b {
+  font-size: 12px;
+  font-weight: 600;
+}
+.rg-armychip span {
+  font-size: 9px;
+  color: #837b6b;
+}
+.rg-armychip.mine {
+  border-color: #9dbfdc;
+}
+.rg-armychip.ally {
+  border-color: #9dc0a5;
+  background: #f3faf4;
+}
+.rg-armychip.foe {
+  border-color: #d4a99e;
+  background: #fdf6f3;
+}
+.rg-armychip.sel {
+  outline: 2px solid #2f6ea8;
+  outline-offset: 1px;
+}
+.rg-armychip.done {
+  opacity: 0.55;
+}
+.rg-armychip.part span {
+  color: #8a6b1f;
+}
+
+/* .seat-row 自己写了 display:flex，会压住 [hidden] 的 UA 样式；
+   中立单位的隐藏席位（C）就靠这个属性不出现在席位栏。 */
+.rg-battle-app .seat-row[hidden] {
+  display: none;
+}
+
+/* 开局「本局扩展」：全部关闭 / 全部打开（调试） */
+.rg-dlc-btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 成长型单位在徽章右上角挂一个 ↑（点开/悬停能看到 1/2） */
+.rg-armychip {
+  position: relative;
+}
+.rg-armychip-grow {
+  position: absolute;
+  top: -5px;
+  right: -4px;
+  font-style: normal;
+  font-size: 9px;
+  line-height: 1;
+  color: #8a6b1f;
+  background: #fff6dc;
+  border: 1px solid #d9c48a;
+  border-radius: 999px;
+  padding: 0 2px;
 }

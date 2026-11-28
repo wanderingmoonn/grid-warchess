@@ -4,8 +4,21 @@
  * 全部是一块 DOM 反复重写，不引框架。房间图、金币、军队这些状态都活在
  * `RunState` 里，这里只负责"显示它、把点击变成对它的修改"。
  */
-import { STRATEGIES, armyText, eventById, relicById, themeOf } from './run.ts';
+import { STRATEGIES, armyText, eventById, relicById, relicDesc, rankOfExp, themeOf, unitDefOf, unitName } from './run.ts';
+import { CULTIVATORS, EVENTS, WORLDS } from './data.ts';
 import {
+  PACK_PLANS,
+  defaultExtraPacks,
+  ruleChoices,
+  supportChoices,
+  unavailablePacks,
+} from './packs.ts';
+import { EXPANSIONS } from '../core/expansions.ts';
+import { expForRank, REALMS, totalHpBonusForRank } from '../core/cultivation/progression.ts';
+import { moveForRank, realmArmorBase, realmAtkBase, realmRangeBase } from '../core/cultivation/stats.ts';
+import { abilityById } from '../core/ability-registry.ts';
+import {
+  addUnits,
   applyDecision,
   decisionOptions,
   refreshCost,
@@ -18,17 +31,30 @@ import {
   finishBattle,
   loseRun,
   nextLayer,
+  resolveWorld,
   restOptions,
   rewardOptions,
   shopStock,
+  specialRewards,
+  isHeroUnit,
+  effectiveGold,
   startRun,
   STEPS_PER_LAYER,
+  trialActive,
 } from './run.ts';
 import { makeRng, randomSeed } from './rng.ts';
 import type { Rng } from './rng.ts';
-import type { BattleResult, RewardOption, RoomNode, RunState } from './types.ts';
+import type { ArmyEntry, BattleResult, Effect, EventDef, RewardOption, RoomNode, RunState } from './types.ts';
 
 let run: RunState | null = null;
+/**
+ * 开局勾选的可选扩展。
+ *
+ * 放在模块层而不是每次画开局面板时重建：玩家会先勾几个包、再比较几个方略，
+ * 每次点方略都重置选择的话，"勾选"就成了摆设。回到标题再进来时保留上一次的
+ * 选择（和原版开局面板的记忆一致），点「恢复推荐」才回默认。
+ */
+let pickedPacks = new Set<string>(defaultExtraPacks());
 /** 退出回标题（由 mount.ts 传进来；地址直开时也有） */
 let exitToTitle: (() => void) | null = null;
 
@@ -57,6 +83,83 @@ function exitBtn(cls = 'rg-exit'): string {
 
 // ------------------------------------------------------------------ 开局
 
+/** 一张可选扩展的卡：点一下开/关，勾选状态写在 `pickedPacks` 里 */
+function packCard(c: { id: string; name: string; blurb: string; reason: string; defaultOn: boolean }): string {
+  const on = pickedPacks.has(c.id);
+  return `<button class="rg-pack ${on ? 'on' : ''}" data-pack="${escapeHtml(c.id)}" aria-pressed="${on}">
+    <b>${escapeHtml(c.name)}</b>
+    <span>${escapeHtml(c.blurb)}</span>
+    <em>${escapeHtml(c.reason)}</em>
+    <i>${on ? '已开启' : '关闭'}</i>
+  </button>`;
+}
+
+/**
+ * 「本局扩展」这一块。
+ *
+ * 结构照原版开局面板：
+ *   · **随史线**的兵种包只读（第一层的事件/试炼决定第二层走哪支，不能开局点）；
+ *   · **规则包 / 联动兵种包**可勾，勾了就是这一局的 `config.expansionIds`；
+ *   · **本版不接的包**单列一段并写明缺哪套系统——不然下次接手的人会以为漏了。
+ */
+function dlcSection(): string {
+  const fixed = EXPANSIONS.filter((e) => {
+    const plan = PACK_PLANS[e.id];
+    return plan?.kind === 'story' || (plan?.kind === 'support' && plan.choosable !== true);
+  });
+  const rules = ruleChoices();
+  const support = supportChoices();
+  const off = unavailablePacks();
+  return `<section class="rg-dlc">
+    <header class="rg-dlc-head">
+      <div>
+        <h2>本局扩展 <small>（照战役模式的接法：包决定兵池与规则）</small></h2>
+        <p class="rg-dim">兵池不再手写：每个包按自己的时代、编制与前置条件进场。剧情兵种包跟着第一层的选择走。
+        <b>本版所有可选扩展默认关闭</b>；正式版由道中事件解锁（接口已留），现在想先试规则可以手动打开。</p>
+      </div>
+      <div class="rg-dlc-btns">
+        <button class="rg-btn ghost mini" data-pack-reset>全部关闭</button>
+        <button class="rg-btn ghost mini" data-pack-all>全部打开（调试）</button>
+      </div>
+    </header>
+    <div class="rg-dlc-fixed">
+      <span class="rg-dlc-label">随史线</span>
+      ${fixed
+        .map(
+          (e) =>
+            `<span class="rg-pack-chip" title="${escapeHtml(PACK_PLANS[e.id]?.reason ?? '')}">${escapeHtml(e.name)}</span>`,
+        )
+        .join('')}
+      <span class="rg-dlc-note">剧情包由第一层的事件/试炼决定；信息化由第三层结构固定开启</span>
+    </div>
+    <div class="rg-dlc-group">
+      <h3>规则扩展 <small>不影响兵池，只改这一局的规则</small></h3>
+      <div class="rg-pack-grid">${rules.map(packCard).join('')}</div>
+    </div>
+    ${
+      support.length > 0
+        ? `<div class="rg-dlc-group">
+             <h3>联动兵种 <small>按时代进入对应层，不和史线抢主体</small></h3>
+             <div class="rg-pack-grid">${support.map(packCard).join('')}</div>
+           </div>`
+        : ''
+    }
+    <details class="rg-dlc-off">
+      <summary>本版不接的扩展（${off.length}）——每条都写了缺哪一块</summary>
+      <div class="rg-dlc-offlist">
+        ${off
+          .map(
+            (p) =>
+              `<div class="rg-dlc-offrow"><b>${escapeHtml(p.name)}</b><span>${escapeHtml(p.reason)}</span><i>${
+                p.kind === 'locked' ? '无作用' : '缺系统'
+              }</i></div>`,
+          )
+          .join('')}
+      </div>
+    </details>
+  </section>`;
+}
+
 function showStart(root: HTMLElement): void {
   root.innerHTML = `
     <div class="rg-start">
@@ -69,14 +172,15 @@ function showStart(root: HTMLElement): void {
       <section class="rg-strategies">
         ${STRATEGIES.map(
           (s) => `<button class="rg-strategy" data-strategy="${s.id}">
-            <b>${s.name}</b>
+            <b>${s.name}${s.tag ? `<u class="rg-strat-tag">${s.tag}</u>` : ''}</b>
             <i>${s.sub}</i>
             <span>${armyText(s.army)}</span>
             <em>${s.passive}</em>
           </button>`,
         ).join('')}
       </section>
-      <p class="rg-note">选一个方略出发。开局 180 金、三层房图随机、敌人编成随时代钟变硬。</p>
+      ${dlcSection()}
+      <p class="rg-note">选一个方略出发。开局 80–180 金（方略不同）、三层房图随机、敌人编成随时代钟变硬。</p>
     </div>`;
 
   // 用 onclick 而不是 addEventListener：回到开局页会重跑这一段，
@@ -87,6 +191,31 @@ function showStart(root: HTMLElement): void {
       exitToTitle?.();
       return;
     }
+    if (el?.closest('[data-pack-reset]')) {
+      pickedPacks = new Set(defaultExtraPacks());
+      showStart(root);
+      return;
+    }
+    if (el?.closest('[data-pack-all]')) {
+      // 调试用：把可选包一次全打开（正式版走事件解锁）
+      pickedPacks = new Set([...ruleChoices(), ...supportChoices()].map((c) => c.id));
+      showStart(root);
+      return;
+    }
+    const pack = el?.closest<HTMLElement>('[data-pack]')?.dataset.pack;
+    if (pack) {
+      if (pickedPacks.has(pack)) pickedPacks.delete(pack);
+      else pickedPacks.add(pack);
+      const card = el?.closest<HTMLElement>('[data-pack]');
+      if (card) {
+        const on = pickedPacks.has(pack);
+        card.classList.toggle('on', on);
+        card.setAttribute('aria-pressed', String(on));
+        const tag = card.querySelector('i');
+        if (tag) tag.textContent = on ? '已开启' : '关闭';
+      }
+      return;
+    }
     const id = el?.closest<HTMLElement>('[data-strategy]')?.dataset.strategy;
     if (!id) return;
     beginRun(root, id);
@@ -94,19 +223,100 @@ function showStart(root: HTMLElement): void {
 }
 
 function beginRun(root: HTMLElement, strategyId: string): void {
-  const seed = randomSeed();
-  run = startRun(seed, strategyId);
+  /*
+   * `?rogueSeed=123` 固定这一局：冒烟脚本靠它复现，玩家想复盘同一张图也能用。
+   * 没写就随机——正常开局不受影响。
+   */
+  const fixed = Number(new URLSearchParams(window.location.search).get('rogueSeed'));
+  const seed = Number.isFinite(fixed) && fixed > 0 ? fixed >>> 0 : randomSeed();
+  run = startRun(seed, strategyId, [...pickedPacks]);
   rng = makeRng((seed ^ 0x85ebca6b) >>> 0);
   showMap(root);
 }
 
 // ------------------------------------------------------------------ 层地图
 
+/**
+ * 局外面板里的一行兵。
+ *
+ * 以前这里只有一行 `armyText`（"戈兵×3、弓手×2"），属性、境界、伤一概看不见——
+ * 玩家要在"买兵 / 换兵 / 走哪条路"上做决定，却看不到手里这些兵到底是什么。
+ * 现在把**能查到的都写出来**，不再需要点进战斗才认得出自己的队伍。
+ */
+export function armyRow(r: RunState, entry: ArmyEntry): string {
+  const def = unitDefOf(entry.type);
+  const name = def?.name ?? unitName(entry.type);
+  const stats = !def
+    ? ''
+    : def.category === 'building'
+      ? `攻 ${def.atk} · 耐久 ${def.maxHp}`
+      : `攻 ${def.atk} · 甲 ${def.armor} · 血 ${def.maxHp} · 射 ${def.range} · 移 ${def.move}`;
+  let realm = '';
+  let realmLine = '';
+  if (CULTIVATORS.has(entry.type)) {
+    // 修士的境界 = 时代钟给的下限与修出来的取高者（和 `battleFor` 一个口径）
+    const base = WORLDS[r.world].rankOf?.(r.clock) ?? 0;
+    const exp = r.cultivation[entry.type] ?? 0;
+    const rank = Math.max(base, rankOfExp(exp));
+    const shown = Math.max(0, Math.min(9, rank));
+    realm = `<i class="rg-realm">${REALMS[shown] ?? '凡人'}</i>`;
+    /*
+     * 只写"筑基"不够：修为涨到哪、下一级还差多少，决定这个修士还值不值得带。
+     * 局外没有 `Unit`，就用 `run.cultivation` 里存的 exp 和同一套门槛算。
+     */
+    const next = shown < 9 ? expForRank(shown) : 0;
+    realmLine = `<div class="rg-armyline">修为 ${exp}${
+      shown >= 9 ? '（已至顶）' : ` / ${next}`
+    } · 境界加成 攻 +${realmAtkBase(shown)} / 甲 +${realmArmorBase(
+      shown,
+    )} / 血 +${totalHpBonusForRank(shown)} / 射 +${realmRangeBase(shown)} / 移 +${moveForRank(shown)}</div>`;
+  }
+  /*
+   * 能力与技能：修真单位的信息量大头在这里（真元伤害、剑扫、化灵……）。
+   * 以前局外只有一行数值，玩家得点进战斗、再把鼠标悬上去才知道自己买的是什么。
+   */
+  const traits = [
+    ...(def?.abilities ?? []).map((id) => abilityById(id)?.name ?? id),
+    ...(def?.skills ?? []).map((k) => k.name),
+  ];
+  const traitLine =
+    traits.length > 0 ? `<div class="rg-armyline">能力：${escapeHtml(traits.join('、'))}</div>` : '';
+  const wound = r.wounds[entry.type];
+  const hurt =
+    wound !== undefined && wound < 0.995
+      ? `<i class="rg-hurt">伤 ${Math.round(wound * 100)}%</i>`
+      : '';
+  const tag = def?.hero ? '<i class="rg-hero">英雄</i>' : '';
+  return `<div class="rg-armyrow">
+    <div class="rg-armyhead">
+      <span class="n">${escapeHtml(name)}${entry.count > 1 ? ` ×${entry.count}` : ''}</span>
+      <b>${stats}</b>${realm}${tag}${hurt}
+    </div>
+    ${realmLine}${traitLine}
+  </div>`;
+}
+
+/** "下一战生效"的那几条加成，翻成人话 */
+function buffRows(r: RunState): string[] {
+  const b = r.buffs;
+  const out: string[] = [];
+  if (b.atk) out.push(`我军攻击 +${b.atk}`);
+  if (b.armor) out.push(`我军护甲 +${b.armor}`);
+  if (b.hp) out.push(`我军最大生命 +${b.hp}`);
+  if (b.move) out.push(`我军移动 +${b.move}`);
+  if (b.enemyCut) out.push(`敌军少 ${b.enemyCut} 个兵`);
+  if (b.enemyHp) out.push(`敌军开场掉 ${Math.round(b.enemyHp * 100)}% 血`);
+  if (b.cityDamage) out.push(`敌城耐久 −${Math.round(b.cityDamage * 100)}%`);
+  if (b.defenseDamage) out.push(`敌工事 −${Math.round(b.defenseDamage * 100)}%`);
+  if (b.tempUnits) out.push(`临时兵 +${b.tempUnits} 个`);
+  return out;
+}
+
 function showMap(root: HTMLElement): void {
   if (!run) return;
   cleanup();
   const r = run;
-  const theme = themeOf(r.layer);
+  const theme = themeOf(r);
   const rows = r.plan.steps
     .map((doors, i) => {
       const state = i < r.step ? 'done' : i === r.step ? 'now' : 'next';
@@ -141,13 +351,22 @@ function showMap(root: HTMLElement): void {
     <div class="rg-map">
       <header class="rg-top">
         <div class="rg-top-title">
-          <b>${theme.name}</b><span>${theme.subtitle}</span>
+          <b>${theme.name}</b>${
+            r.layer === 1
+              ? `<em class="rg-world-tag${r.worldLock ? ' locked' : ''}">${
+                  r.worldLock ? `史线：${WORLDS[r.worldLock].name}` : '史线：未定'
+                }</em>`
+              : r.layer === 2
+                ? `<em class="rg-world-tag">${WORLDS[r.world].name}</em>`
+                : ''
+          }<span>${theme.subtitle}</span>
         </div>
         <div class="rg-top-stats">
           <span>步 <b>${Math.min(r.step, STEPS_PER_LAYER)}</b>/${STEPS_PER_LAYER}</span>
           <span>钟 <b>${r.clock}</b></span>
           <span>金 <b>${r.gold}</b></span>
           <span>兵 <b>${armyCount(r.army)}</b></span>
+          <span title="${escapeHtml(r.packs.join('、') || '没有可选扩展')}">扩展 <b>${r.packs.length}</b></span>
           ${exitBtn('rg-btn ghost rg-exit-inline')}
         </div>
       </header>
@@ -155,16 +374,35 @@ function showMap(root: HTMLElement): void {
         <div class="rg-steps">${rows}${bossRow}</div>
         <aside class="rg-inspect">
           <div class="rg-side-card">
-            <h4>军队</h4>
-            <p class="rg-armytext">${armyText(r.army)}</p>
+            <h4>军队（${armyCount(r.army)}）</h4>
+            <div class="rg-armylist">${
+              r.army.length === 0
+                ? '<p class="rg-dim">一个兵都没有。</p>'
+                : r.army.map((a) => armyRow(r, a)).join('')
+            }</div>
           </div>
           <div class="rg-side-card">
             <h4>藏品（${r.relics.length}）</h4>
-            <p class="rg-dim">${
+            <div class="rg-reliclist">${
               r.relics.length === 0
-                ? '还没有。'
-                : r.relics.map((id) => `${relicById(id)?.name ?? id}`).join('、')
-            }</p>
+                ? '<p class="rg-dim">还没有。</p>'
+                : r.relics
+                    .map(
+                      (id) =>
+                        `<div class="rg-relicrow"><b>${escapeHtml(relicById(id)?.name ?? id)}</b><span>${escapeHtml(
+                          relicDesc(id, r.layer),
+                        )}</span></div>`,
+                    )
+                    .join('')
+            }</div>
+          </div>
+          <div class="rg-side-card">
+            <h4>待生效</h4>
+            <div class="rg-bufflist">${
+              buffRows(r).length === 0
+                ? '<p class="rg-dim">没有待生效的加成。下一战从头打。</p>'
+                : buffRows(r).map((t) => `<div class="rg-buffrow">${escapeHtml(t)}</div>`).join('')
+            }</div>
           </div>
           <div class="rg-side-card grow">
             <h4>行记</h4>
@@ -198,30 +436,90 @@ function showMap(root: HTMLElement): void {
   };
 }
 
+/**
+ * 事件房实际会弹哪一条。
+ *
+ * 史线事件（军备）在路已经定了、或这支史被明确排斥之后，就不该再问一遍
+ * "要不要支持"——退回普通事件池里稳定抽一条（同一扇门每次看都是同一条）。
+ */
+function eventFor(d: RoomNode): EventDef {
+  const base = eventById(d.eventId ?? '');
+  if (!base.story || !run) return base;
+  if (!run.worldLock && !run.worldBan.includes(base.story)) return base;
+  const normal = EVENTS.filter((e) => !e.story);
+  const key = Array.from(d.eventId ?? '').reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7);
+  return normal[key % normal.length] as EventDef;
+}
+
 function doorTitle(d: RoomNode): string {
-  if (d.kind === 'event') return `事件 · ${eventById(d.eventId ?? '').title}`;
+  if (d.kind === 'event') return `事件 · ${eventFor(d).title}`;
+  if (d.kind === 'special') return `守城战 · ${d.special?.name ?? ''}`;
+  /*
+   * 试炼：门牌直接写"特殊"。路已经定了 / 这支史被排斥之后，它退回成一场
+   * 普通战斗——门牌也跟着变，不然玩家会以为还能靠它改路。
+   */
+  if (d.kind === 'trial') return run && trialActive(run, d) ? `特殊 · ${d.title}` : '遭遇战';
   if (d.kind === 'boss') return '层末会战';
   return d.title;
 }
 
 // ------------------------------------------------------------------ 房间
 
+/**
+ * 把选项里的"N 金"换成**实际会进账/扣掉**的数（只改显示，不改效果）。
+ *
+ * 数据里写的是**第一层的钱**（−30 / +70），效果结算时 `applyEffect` 会按同一张
+ * 水位表换算；这里让玩家看到的数字和真正扣的钱一致。休整与决议的文案
+ * 在生成时已经算好了，不走这里。
+ */
+function priceHint(hint: string, effect: Effect, r: RunState): string {
+  const gold = effectiveGold(effect, r);
+  if (gold === 0) return hint;
+  return hint.replace(/[+−-]?\d+ 金/, `${gold > 0 ? '+' : '−'}${Math.abs(gold)} 金`);
+}
+
 function enterRoom(root: HTMLElement, node: RoomNode): void {
   if (!run) return;
-  if (node.kind === 'battle' || node.kind === 'elite' || node.kind === 'siege') {
+  /*
+   * 试炼：路已经定了（或这支史被 ban）就退回普通战斗——房间不能凭空消失，
+   * 但也不该再给锁定奖励。`trialActive` 是唯一判据，门牌和这里共用。
+   */
+  if (node.kind === 'trial') {
+    startBattle(root, trialActive(run, node) ? node : { ...node, kind: 'battle', title: '遭遇战' });
+    return;
+  }
+  if (node.kind === 'battle' || node.kind === 'elite' || node.kind === 'siege' || node.kind === 'special') {
     startBattle(root, node);
     return;
   }
   if (node.kind === 'event') {
-    const def = eventById(node.eventId ?? '');
+    const def = eventFor(node);
+    /*
+     * 掏不起钱的选项**不出现**。
+     *
+     * 以前钱是写死的 30/50，几乎总掏得起；按层换算之后第三层一个选项要
+     * 几百金，"点了照样给"就变成了白嫖。过滤掉比事后扣成负数干净。
+     * 全掏不起时退回全部选项（至少让人有得选）。
+     */
+    const r = run;
+    const indexed = def.choices.map((c, i) => ({ c, i }));
+    const affordable = indexed.filter(({ c }) => {
+      const g = effectiveGold(c.effect, r);
+      return g >= 0 || r.gold >= Math.abs(g);
+    });
+    const choices = affordable.length > 0 ? affordable : indexed;
     openModal(
       root,
       `<h3>${def.title}</h3><p class="rg-body">${def.body}</p>`,
-      def.choices.map((c, i) => ({ id: String(i), title: c.label, sub: c.hint ?? '' })),
+      choices.map(({ c, i }) => ({
+        id: String(i),
+        title: c.label,
+        sub: priceHint(c.hint ?? '', c.effect, r),
+      })),
       (pick) => {
         const choice = def.choices[Number(pick)];
         if (!choice) return;
-        const notes = applyEffect(run!, choice.effect, rng);
+        const notes = applyEffect(run!, choice.effect, rng, { scaleGold: true });
         run!.log.push(`事件「${def.title}」：${choice.label}`);
         afterRoom(run!);
         showResultThen(root, `事件 · ${def.title}`, notes.length ? notes.join('，') : '什么都没发生');
@@ -329,6 +627,7 @@ function openShop(root: HTMLElement): void {
   document.body.appendChild(host);
 
   const paint = (): void => {
+    const heroLocked = r.army.some((a) => isHeroUnit(a.type));
     const row = (group: 'unit' | 'relic' | 'supply', title: string): string => {
       const items = stock.filter((it) => it.group === group);
       if (items.length === 0) return '';
@@ -338,12 +637,16 @@ function openShop(root: HTMLElement): void {
             // 兵是**按人头卖**的：有钱就能一直买（不然金币会堆成死钱）；
             // 藏品和补给是摊子上就那一件，买完没了。
             const repeatable = it.group === 'unit';
+            const addType = it.effect.add?.type;
+            const heroBlocked = !!addType && isHeroUnit(addType) && heroLocked;
             const sold = !repeatable && bought.has(it.id);
             const poor = r.gold < it.price;
-            return `<button class="rg-shop-item" data-buy="${it.id}" ${sold || poor ? 'disabled' : ''}>
+            return `<button class="rg-shop-item" data-buy="${it.id}" ${
+              sold || poor || heroBlocked ? 'disabled' : ''
+            }>
               <b>${escapeHtml(it.title)}</b>
               <span>${escapeHtml(it.sub)}</span>
-              <em>${sold ? '已售' : poor ? '钱不够' : `${it.price} 金`}</em>
+              <em>${heroBlocked ? '队里已有英雄' : sold ? '已售' : poor ? '钱不够' : `${it.price} 金`}</em>
             </button>`;
           })
           .join('')}
@@ -358,7 +661,7 @@ function openShop(root: HTMLElement): void {
         ${row('supply', '补给')}
       </div>
       <div class="rg-shop-foot">
-        <button class="rg-btn ghost" data-shop="refresh">刷新（${refreshCost()} 金）</button>
+        <button class="rg-btn ghost" data-shop="refresh">刷新（${refreshCost(r)} 金）</button>
         <button class="rg-btn" data-shop="leave">离开</button>
       </div>
     </div>`;
@@ -371,6 +674,12 @@ function openShop(root: HTMLElement): void {
       const item = stock.find((it) => it.id === buyId);
       if (!item || r.gold < item.price) return;
       if (item.group !== 'unit' && bought.has(item.id)) return;
+      const addType = item.effect.add?.type;
+      if (addType && isHeroUnit(addType) && r.army.some((a) => isHeroUnit(a.type))) {
+        r.log.push('队里只能有一位英雄，这一件没有买');
+        paint();
+        return;
+      }
       r.gold -= item.price;
       applyEffect(r, item.effect, rng);
       r.log.push(`买下 ${item.title}（${item.price} 金）`);
@@ -380,7 +689,7 @@ function openShop(root: HTMLElement): void {
     }
     const act = el?.closest<HTMLElement>('[data-shop]')?.dataset.shop;
     if (act === 'refresh') {
-      const cost = refreshCost();
+      const cost = refreshCost(r);
       if (r.gold < cost) return;
       r.gold -= cost;
       stock = shopStock(r, rng);
@@ -419,6 +728,32 @@ function onBattleDone(root: HTMLElement, node: RoomNode, result: BattleResult): 
   }
   finishBattle(r, result);
   r.log.push(`打赢「${node.title}」，剩 ${armyCount(r.army)} 人`);
+  /*
+   * 守城战：报酬是**定好的**（东家给的兵 + 一件藏品 + 一笔钱），不给三选一。
+   * 你答应了谁，就拿谁的东西——这跟"打完捡战利品"是两件事，所以单独走一条。
+   */
+  if (node.kind === 'special') {
+    const notes = specialRewards(r, node, rng);
+    afterRoom(r);
+    showResultThen(root, `${node.title} · 守住了`, `报酬：${notes.join('；')}。`);
+    return;
+  }
+  /*
+   * 史线试炼：赢了不是三选一，是**把整条历史拽过来**——第二层锁定这支史，
+   * 投降的人直接进队（写死的两个弱兵，不按本层池子抽）。
+   * 只有在 `trialActive` 还成立时才算；路已经定了的话，上面已经把它当普通
+   * 战斗打了，走不到这里。
+   */
+  if (node.kind === 'trial' && node.trial && trialActive(r, node)) {
+    const t = node.trial;
+    const notes = applyEffect(r, { world: { lock: t.world } }, rng);
+    for (const type of t.reward) addUnits(r.army, type, 1);
+    notes.push(...t.reward.map((type) => `${unitName(type)} ×1`));
+    r.log.push(`打赢试炼「${node.title}」：${WORLDS[t.world].name}`);
+    afterRoom(r);
+    showResultThen(root, `${node.title} · 打服了`, `${notes.join('，')}。他们放下了武器。`);
+    return;
+  }
   const options = rewardOptions(r, node.kind, rng);
   openModal(
     root,
@@ -451,25 +786,56 @@ function onBossDone(root: HTMLElement, node: RoomNode, result: BattleResult): vo
   r.bossDone = true;
   r.log.push(`破「${node.title}」`);
 
-  const notes = bossRewards(r, rng);
-  const last = r.layer >= 3;
-  if (last) {
-    r.over = {
-      win: true,
-      title: '常规结局 · 破钟',
-      body: '钟楼倒了，钟声断在半途。这一代到此为止——你没有再往前走。',
-    };
-  } else {
-    nextLayer(r, r.seed);
-  }
-  showResultThen(root, `${node.title} · 已破`, `战利品：${notes.join('；')}。`, () =>
-    last ? showOver(root) : showInterlude(root),
-  );
+  /*
+   * 结算顺序：**先选路，再发战利品**。
+   *
+   * 战利品里有一项是"下一层的初级兵"，而下一层是哪一层要等选完路才知道
+   * （奇想的下一层兵和修真的不是同一批）。所以第一层末的那次结算，
+   * 岔口必须排在发奖前面。
+   */
+  const award = (): void => {
+    if (!run) return;
+    const notes = bossRewards(run, rng);
+    const last = run.layer >= 3;
+    if (last) {
+      run.over = {
+        win: true,
+        title: '常规结局 · 破钟',
+        body: '钟楼倒了，钟声断在半途。这一代到此为止——你没有再往前走。',
+      };
+    }
+    showResultThen(root, `${node.title} · 已破`, `战利品：${notes.join('；')}。`, () => {
+      if (!run) return;
+      if (run.layer >= 3) {
+        showOver(root);
+        return;
+      }
+      nextLayer(run, run.seed);
+      showInterlude(root);
+    });
+  };
+
+  /*
+   * 第一层末**不再弹四选一**：路在这一层里已经由事件/试炼决定了。
+   * 没锁任何一支 = 正史——"完全不作为，自然就进原版"。
+   * `resolveWorld` 必须在 `award()` 之前：战利品里那一个"下一层的兵"
+   * 要按已经定下来的世界抽。
+   */
+  if (r.layer === 1) resolveWorld(r);
+  award();
 }
+
+/*
+ * 这里原来是「四种历史」的四选一面板（`showWorldChoice`）。
+ *
+ * 2026-11-27 按反馈删掉：路不再在通关时挑，而是第一层的事件（军备）与
+ * 特殊战斗（奇想 / 修真）里一点点定下来的；什么都没做就是正史。
+ * 所以 L1 末只需要 `resolveWorld`，没有面板。
+ */
 
 function showInterlude(root: HTMLElement): void {
   if (!run) return;
-  const theme = themeOf(run.layer);
+  const theme = themeOf(run);
   root.innerHTML = `
     <div class="rg-inter">
       <h2>${theme.name}</h2>

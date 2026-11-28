@@ -57,7 +57,7 @@ export const UNIT_IDS = {
 // 身份只是"这个兵种吃修炼规则"。两者今天一致，明天就不一定了。
 //
 // 加新流派 → 在 UNIT_IDS 加一行 id、在 CULTIVATOR_IDS 里也加一行；别的钩子一个字都不用改。
-const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
+export const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.QI_CULTIVATOR,
   UNIT_IDS.SWORD_CULTIVATOR,
   UNIT_IDS.SPIRIT,
@@ -66,9 +66,23 @@ const CULTIVATOR_IDS: ReadonlySet<string> = new Set([
   UNIT_IDS.SOUL_CULTIVATOR,
 ]);
 
+/**
+ * 变体 id → 原始兵种 id。
+ *
+ * 肉鸽（`src/roguelike`）会给单位套"变体"：我方加成、境界加成会把 `u.type`
+ * 改写成 `rg:qi-cultivator@攻@移@甲@血`，工事还有自己的缩放变体。
+ * 本扩展认兵种**只认 id**，不剥这一层的话，玩家带加成的修士会一夜之间
+ * 不被当成修士：不打坐涨修为、不放法术、吃不到境界——而它看起来还叫炼气士。
+ *
+ * 只剥"前缀"和"@参数"，不碰真实 id（真实 id 里没有冒号也没有 @）。
+ */
+export function baseUnitId(id: string): string {
+  return id.replace(/^(?:[^:@]+:)+/, '').split('@')[0] as string;
+}
+
 /** 从兵种定义查。给"手里只有 def"的场合用。 */
 export function isCultivatorDef(def: UnitTypeDef | undefined | null): boolean {
-  return !!def && CULTIVATOR_IDS.has(def.id);
+  return !!def && CULTIVATOR_IDS.has(baseUnitId(def.id));
 }
 
 /** 从单位查。给钩子用——钩子里拿到的几乎都是 Unit。 */
@@ -84,7 +98,7 @@ export function isCultivatorUnit(s: GameState, u: Unit): boolean {
  * 剑修这一支的特殊规则（打坐减半、击杀翻倍、境界加成 ×0.8/×1.2）全走它。
  */
 export function isSwordCultivatorType(type: string): boolean {
-  return type === UNIT_IDS.SWORD_CULTIVATOR;
+  return baseUnitId(type) === UNIT_IDS.SWORD_CULTIVATOR;
 }
 
 /**
@@ -94,7 +108,7 @@ export function isSwordCultivatorType(type: string): boolean {
  * `stats.ts` 里按流派分支；身份判定留在这里，避免 stats 反过来import 兵种表。
  */
 export function isBodyCultivatorType(type: string): boolean {
-  return type === UNIT_IDS.BODY_CULTIVATOR;
+  return baseUnitId(type) === UNIT_IDS.BODY_CULTIVATOR;
 }
 
 /**
@@ -105,11 +119,11 @@ export function isBodyCultivatorType(type: string): boolean {
  * 每回合击杀上限，所以它不能同时再吃一份击杀经验，否则节奏直接翻倍。
  */
 export function isBloodCultivatorType(type: string): boolean {
-  return type === UNIT_IDS.BLOOD_CULTIVATOR;
+  return baseUnitId(type) === UNIT_IDS.BLOOD_CULTIVATOR;
 }
 
 export function isSpirit(u: Unit): boolean {
-  return u.type === UNIT_IDS.SPIRIT;
+  return baseUnitId(u.type) === UNIT_IDS.SPIRIT;
 }
 
 /**
@@ -149,7 +163,7 @@ const SOUL_MASTER_IDS = new Set<string>([UNIT_IDS.SOUL_CULTIVATOR]);
 
 /** 只看 type 字符串：化灵那一刻 `u.type` 还没换成灵体，拿不到 `isSpirit` */
 export function isSoulMasterType(type: string): boolean {
-  return SOUL_MASTER_IDS.has(type);
+  return SOUL_MASTER_IDS.has(baseUnitId(type));
 }
 
 export function isSoulMasterSpirit(u: Unit): boolean {
