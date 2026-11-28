@@ -68,6 +68,23 @@ function targetOf(s: GameState, sq: Squad): { x: number; y: number } | undefined
  *   ③ 有任务的，朝目标走
  *   ④ 没任务的，不动
  */
+/**
+ * **遭遇读数的计数**（阶段 5 §2.6 第 0 步）。
+ *
+ * 一手之内 `actFor` 会被调很多次（每个单位一次，每次 `aiNextAction` 还会重建），
+ * 所以只能按"回合号 + 情况"累加，由入口在"一手只打一次"的地方统一输出并清零。
+ */
+const encTally = new Map<string, number>();
+export function tallyEnc(kind: string): void {
+  encTally.set(kind, (encTally.get(kind) ?? 0) + 1);
+}
+/** 取出并清零（入口每手调一次） */
+export function takeEnc(): Array<[string, number]> {
+  const out = [...encTally.entries()];
+  encTally.clear();
+  return out;
+}
+
 export function actFor(
   s: GameState,
   world: World,
@@ -197,6 +214,36 @@ export function actFor(
   /*
    * ①.9 **临时调令**的位置见下面（排在开火之后）。
    */
+
+  /*
+   * **①.6 遭遇（阶段 5 §2.6，2026-11-28）**：这一手按计划走之前，先看眼前有没有敌人。
+   *
+   * 这件事必须排在**让开之前**：`V-1-01` 实测，三个兵还没离开城圈就都挂着"让开"，
+   * 排在让开之后的话，这里一次都数不到（也永远打不到人）。
+   *
+   * 现状（第 0 步）：**只数不改**。三种情况按"每一个兵每一手"记一次：
+   *   · `打了`      —— 现在就能打到（射程内有人），那是"没放过"；
+   *   · `够了没打`  —— 偏一步就能打到某个看得见的敌人，但现在按计划走；
+   *   · `没够着`    —— 视野里有人、但这一步够不着（离得还远）。
+   *
+   * 只数进军队（`march` / `siege`）。`hold`（撤退/守城）按 `S-004` 的规矩本来就该不停，
+   * `scout` 按 §2.2 的规矩本来就该退，`yield`/`build` 是差事——这些都不算缺口。
+   *
+   * `V4_ENCOUNTER_LOG=1` 时每手汇总成一行（由入口打）。**它不改变任何一手动作。**
+   */
+  const sqE = squadOf(con, u);
+  if (sqE && (sqE.order === 'march' || sqE.order === 'siege')) {
+    const foesNow = seenFoes(s, u);
+    if (foesNow.length > 0) tallyEnc('打了');
+    else {
+      const near = world.foeCombat
+        .filter((v) => canSeeTile(s, u.owner, v.x, v.y))
+        .sort((a, b) => manhattan(u, a) - manhattan(u, b) || (a.id < b.id ? -1 : 1))[0];
+      if (!near) tallyEnc('没看见敌');
+      else if (approachStep(s, u, near)) tallyEnc('够了没打');
+      else tallyEnc('没够着');
+    }
+  }
 
   /*
    * ② 让开：站在"必须空"的格子上。

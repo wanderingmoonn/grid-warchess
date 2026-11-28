@@ -27,7 +27,7 @@ import { EARTH } from '../board.ts';
 import { buildWorld, unitWorth, type World } from './world.ts';
 import { decide } from './decide.ts';
 import { constrain } from './constrain.ts';
-import { actFor, recruitAction, recruitEcon } from './tactics.ts';
+import { actFor, recruitAction, recruitEcon, takeEnc } from './tactics.ts';
 import { canSeeTile, effectiveStats, recruitPriceOf, utype, visionOf } from '../rules.ts';
 import type { Band, BandReport, Constraints, Decision, V4Memory } from './types.ts';
 import type { Action, GameState, PlayerId, Unit } from '../types.ts';
@@ -470,6 +470,21 @@ function laneMemo(
   const alreadyDiffed = exchange.length > 0 && exchange[exchange.length - 1]!.turn === turn;
   /* 预警读数：同一道门，一手打一行（阶段 5 §2.2-0，只打日志） */
   if (!alreadyDiffed && process.env.V4_ALERT_LOG) logAlert(s, world, con, decision, turn);
+  /*
+   * **遭遇读数**（阶段 5 §2.6 第 0 步）：`V4_ENCOUNTER_LOG=1` 时每手一行。
+   * `够了` = 偏一步就能打到、却没打的人次；`打了` = 本来就打到的人次。
+   * 只打日志、不参与判断。`takeEnc()` 会清零，所以一行就是一手。
+   */
+  if (process.env.V4_ENCOUNTER_LOG) {
+    const tally = takeEnc();
+    if (tally.length > 0) {
+      /* 人次（一个兵可能被问多次，所以也报"兵数"：用第一手的人头数当分母） */
+      const got = Object.fromEntries(tally);
+      console.log(
+        `[enc] T=${turn} ${decision.kind}${decision.stage ? '/' + decision.stage : ''} · 打了 ${got['打了'] ?? 0} · 够了没打 ${got['够了没打'] ?? 0} · 没够着 ${got['没够着'] ?? 0} · 没看见敌 ${got['没看见敌'] ?? 0}`,
+      );
+    }
+  }
   if (alreadyDiffed) {
     return {
       unitSeen: nextSeen,
