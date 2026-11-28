@@ -1045,19 +1045,30 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
 
   // ============ 时代 5 · 机械化（第六时代在原版表里是空的） ============
-  squad: {
-    id: 'squad',
-    name: '步兵班',
-    short: '班',
+  mod_commando: {
+    /*
+     * 突击队（原「时代军备 · 机械化」的单位，2026-11-28 转入原版）。
+     *
+     * 为什么转：机械化那一代本来就该有"潜行捅后排"的角色，把它留在扩展里
+     * 等于让不开时代军备的玩家少一条解法。数值原样搬过来（费 341 / 攻 49 /
+     * 甲 5 / 血 53 / 射 4 / 视 5），已含时代 5 的全局上调。
+     *
+     * 立绘沿用被删掉的「步兵班」那一张：`ERA5_UNIT_SPECS` 的键从 `squad`
+     * 改成了 `mod_commando`，美术资源既没新增也没浪费。
+     */
+    id: 'mod_commando',
+    name: '突击队',
+    short: '击',
     era: 5,
     category: 'combat',
-    cost: 330,
-    move: 2,
-    atk: 55,
+    cost: 341,
+    move: 3,
+    atk: 49,
     armor: 5,
-    maxHp: 56,
-    range: 5,
+    maxHp: 53,
+    range: 4,
     vision: 5,
+    abilities: ['stealth'],
   },
   tank: {
     id: 'tank',
@@ -1076,7 +1087,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
   artillery: {
     id: 'artillery',
-    name: '火炮',
+    name: '火箭炮',
     short: '炮',
     era: 5,
     category: 'combat',

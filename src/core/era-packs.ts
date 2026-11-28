@@ -757,7 +757,7 @@ export const ARMOR_PIERCE_2: AbilityDef = {
  */
 export const ANTI_AIR_2: AbilityDef = {
   id: 'anti-air-2',
-  name: '反空',
+  name: '防空',
   summary: '打飞行单位时伤害 ×2（先翻倍再减护甲，结算顺序同破城）；打地面目标没有加成。',
   group: 'attack',
   hooks: {
@@ -1287,26 +1287,6 @@ const INDUSTRY: UnitTypeDef[] = [
     abilities: ['siege-master'],
   },
   {
-    // 装甲列车：一战东线的主角，一门炮加几挺机枪装在铁路上。
-    // 本作没有轨道机制，所以按普通地面单位处理（说明列里注明这一点）。
-    // 第一版 atk 40 + burst 2，实测每百金 48.1、交换比 3.69，是全包最高（步枪兵 23.9）——
-    // 射程 4 加护甲 9 让它站在后排既打得到人又不挨打。攻击收到 34，保留连发作卖点。
-    id: 'ind_armoredtrain',
-    name: '装甲列车',
-    short: '轨',
-    era: 4,
-    category: 'combat',
-    cost: 340,
-    move: 2,
-    atk: 34,
-    armor: 9,
-    maxHp: 70,
-    range: 5,
-    vision: 4,
-    burst: 2,
-    abilities: ['siege-master'],
-  },
-  {
     // 机枪碉堡：把 burst 装进建筑，谁靠近谁碎
     id: 'ind_pillbox',
     name: '机枪碉堡',
@@ -1390,23 +1370,6 @@ const INDUSTRY: UnitTypeDef[] = [
     vision: 2,
     builds: [],
   },
-  {
-    // 驱逐舰：蒸汽时代的海上多面手，带一点溅射
-    id: 'ind_destroyer',
-    name: '雷击舰',
-    short: '雷',
-    era: 4,
-    category: 'combat',
-    cost: 285,
-    move: 5,
-    atk: 38,
-    armor: 8,
-    maxHp: 75,
-    range: 5,
-    vision: 5,
-    splash: 1,
-    domain: 'water',
-  },
 ];
 
 /* ================================================================== */
@@ -1430,24 +1393,6 @@ const MODERN: UnitTypeDef[] = [
     vision: 6,
   },
   {
-    // 突击队：潜行 + 高攻，用来捅后排。
-    // 第一版射程 2、330 金，实测每百金 6.7，是全包最差——"潜行贴近"在 AI 手里等于送死。
-    // 射程放到 3、价格降到 310，让它先能站着输出。
-    id: 'mod_commando',
-    name: '突击队',
-    short: '击',
-    era: 5,
-    category: 'combat',
-    cost: 341,
-    move: 3,
-    atk: 49,
-    armor: 5,
-    maxHp: 53,
-    range: 4,
-    vision: 5,
-    abilities: ['stealth'],
-  },
-  {
     // 反坦克炮：破甲 + 先手，专治重装甲
     id: 'mod_atgun',
     name: '反坦克炮',
@@ -1462,26 +1407,6 @@ const MODERN: UnitTypeDef[] = [
     range: 5,
     vision: 4,
     abilities: ['armor-pierce', 'first-strike'],
-  },
-  {
-    // 喀秋莎：一片覆盖，精度靠密度。
-    // 削了两轮才收住：第一版 atk 50 / 射程 6，交换比 5.64；降到 atk 46 后反而升到 7.48
-    // （承伤只有 633——射程 6 在这套对局里几乎不可能被摸到）。
-    // 真正的病根不是攻击而是**射程**：原版火炮是 5。现在收回 5，保留 splash 2 作为卖点。
-    id: 'mod_katyusha',
-    name: '火箭炮',
-    short: '喀',
-    era: 5,
-    category: 'combat',
-    cost: 341,
-    move: 2,
-    atk: 53,
-    armor: 6,
-    maxHp: 53,
-    range: 7,
-    vision: 4,
-    splash: 2,
-    abilities: ['siege-master'],
   },
   {
     // 重型坦克：装甲 14，正面几乎无解，代价是慢和贵
@@ -1692,7 +1617,7 @@ export const ERA_ARMS: Expansion = {
   summary:
     '每一代都多出一批可选兵种：青铜的投石兵/战车/攻城槌/旌旗车，铁器的瑞士长矛兵/重装军士/' +
     '战象/弩炮/攻城塔，火器的线列步兵/胸甲骑兵/猎兵/棱堡，蒸汽的堑壕突击队/火焰喷射器/' +
-    '列车炮/马克 I 坦克，机械化的伞兵/突击队/喀秋莎/重型坦克；布雷与扫雷的能力也在这一包里。' +
+    '列车炮/马克 I 坦克，机械化的伞兵/反坦克炮/重型坦克/自行火炮/驱逐舰；布雷与扫雷的能力也在这一包里。' +
     '另含第六时代的 14 个专精兵（机械化步兵、主战坦克、反坦克导弹、特种部队、自行榴弹炮、' +
     '远程火箭炮、防空导弹营、武装直升机、察打无人机、导弹驱逐舰、复合装甲墙、加固地堡、' +
     '前进指挥所、物流集团）——**这批要同时开「信息化」才会出现**，' +

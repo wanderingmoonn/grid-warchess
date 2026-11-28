@@ -143,9 +143,7 @@ export const VEHICLE_IDS: readonly string[] = [
   'ind_howitzer', // 榴弹炮
   'ind_railwaygun', // 列车炮
   'ind_landship', // 马克 I 坦克
-  'ind_armoredtrain', // 装甲列车
   'mod_atgun', // 反坦克炮
-  'mod_katyusha', // 火箭炮
   'mod_heavytank', // 重型坦克
   'mod_spg', // 自行火炮
   'mod_flak', // 高射炮

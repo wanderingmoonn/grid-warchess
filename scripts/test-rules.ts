@@ -4715,7 +4715,7 @@ test('关键数值按方案落定', () => {
     ['longbow', { cost: 60 }],
     ['musketeer', { cost: 130 }],
     ['rifleman', { cost: 200 }],
-    ['squad', { cost: 330 }],
+    ['mod_commando', { cost: 341 }],
     ['spearman', { cost: 55 }],
     ['halberdier', { cost: 90, range: 2 }],
     ['tank', { cost: 440, range: 4 }],
@@ -4731,7 +4731,7 @@ test('关键数值按方案落定', () => {
     ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 5 }],
     ['tank', { atk: 65, maxHp: 102 }],
     ['artillery', { atk: 55, maxHp: 63 }],
-    ['squad', { atk: 55, maxHp: 56 }],
+    ['mod_commando', { atk: 49, maxHp: 53 }],
     ['rifleman', { atk: 36 }],
     ['mg', { atk: 20 }],
     ['hmg', { atk: 20 }],
@@ -17844,7 +17844,7 @@ test('战报：挨打的一方也能看到自己为什么掉血', () => {
   s.cities = [];
   for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) putTerrain(s, x, y, 'plain');
 
-  // 火炮：射程 5、溅射 2 —— 一发能影响到离它 7 格的人
+  // 火炮（2026-11-28 起叫「火箭炮」）：射程 7、溅射 2 —— 一发能影响到离它 9 格的人
   const gun = place(s, 'A', 'artillery', 2, 2);
   const hit = place(s, 'B', 'militia', 7, 2); // 正好在射程上
   const splash = place(s, 'B', 'militia', 9, 2); // 主目标旁边 2 格，被溅射
@@ -17857,12 +17857,12 @@ test('战报：挨打的一方也能看到自己为什么掉血', () => {
 
   const mine = r.state.log.filter((l) => l.player === 'A').map((l) => l.text);
   const theirs = r.state.log.filter((l) => l.player === 'B').map((l) => l.text);
-  assert.ok(mine.some((t) => t.includes('火炮') && t.includes('攻击')), '出手方有自己的战报');
+  assert.ok(mine.some((t) => t.includes('火箭炮') && t.includes('攻击')), '出手方有自己的战报');
   // 关键：防守方也必须有一条。以前这条只发给出手的人，
   // 挨打的人看到的就是"血量掉了、战报里什么都没有"
   const notice = theirs.find((t) => t.includes('伤害'));
   assert.ok(notice, `防守方要能看到自己被谁打了，实际：${JSON.stringify(theirs)}`);
-  assert.ok(notice!.includes('火炮'), '要写出是什么打过来的');
+  assert.ok(notice!.includes('火箭炮'), '要写出是什么打过来的');
   assert.ok(notice!.includes('溅射'), '被溅射到的人也要写清楚');
 
   // 隐匿中的袭击者不给名字：否则"是谁打的我"这条信息把隐匿本身废掉了
