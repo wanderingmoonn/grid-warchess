@@ -135,7 +135,7 @@ export function actFor(
    */
   {
     const sqB = squadOf(con, u);
-    const target = sqB?.order === 'build' ? sqB.buildAt : undefined;
+    const target = sqB?.stance === 'build' ? sqB.buildAt : undefined;
     if (target && (utype(s, u.type).builds ?? []).includes('bridge')) {
       const def = s.unitTypes['bridge'];
       const gold = s.players[world.me]?.gold ?? 0;
@@ -168,7 +168,7 @@ export function actFor(
    */
   {
     const sqS = squadOf(con, u);
-    if (sqS && (sqS.order === 'march' || sqS.order === 'siege') && sqS.cityId) {
+    if (sqS && (sqS.stance === 'march' || sqS.stance === 'siege') && sqS.cityId) {
       const canHitEarly = siegeTargets(s, u).find((c) => c.id === sqS.cityId);
       if (canHitEarly) return { type: 'SIEGE', unitId: u.id, cityId: canHitEarly.id };
     }
@@ -187,7 +187,7 @@ export function actFor(
   {
     const sqC = squadOf(con, u);
     const t = sqC?.tactics;
-    if (t?.converge && sqC!.order === 'march') {
+    if (t?.converge && sqC!.stance === 'march') {
       const foe = s.units.find((v) => v.id === t.focusId && v.owner !== world.me);
       if (foe && !seenFoes(s, u).some((v) => v.id === foe.id)) {
         const spot = approachStep(s, u, foe);
@@ -232,7 +232,7 @@ export function actFor(
    * `V4_ENCOUNTER_LOG=1` 时每手汇总成一行（由入口打）。**它不改变任何一手动作。**
    */
   const sqE = squadOf(con, u);
-  if (sqE && (sqE.order === 'march' || sqE.order === 'siege')) {
+  if (sqE && (sqE.stance === 'march' || sqE.stance === 'siege')) {
     const foesNow = seenFoes(s, u);
     if (foesNow.length > 0) tallyEnc('打了');
     else {
@@ -274,7 +274,7 @@ export function actFor(
    * 约束说"回城"，那就先回城；路上能顺手打的，等站好位再说。
    */
   const sqNow = squadOf(con, u);
-  if (sqNow?.order === 'hold' && sqNow.cityId) {
+  if (sqNow?.stance === 'hold' && sqNow.cityId) {
     const home = s.cities.find((c) => c.id === sqNow.cityId);
     if (home) {
       /*
@@ -336,7 +336,7 @@ export function actFor(
    * 有人进它的视野就朝自己的城退一步（还在来路上、还看得见），
    * 站在那儿跟人对拼等于用 50 金换对方一个动作，这笔账永远亏。
    */
-  if (sq?.order === 'scout') {
+  if (sq?.stance === 'scout') {
     const reach = Math.max(1, effectiveStats(s, u).vision ?? 2);
     const spotted = seenFoes(s, u).some((f) => manhattan(u, f) <= reach);
     if (spotted) {
@@ -401,7 +401,7 @@ export function actFor(
   /* ④ 走：朝任务目标。`hold` 也不是"钉在原地"——离城还远就先走回去 */
   if (!sq) return null;
   const to = targetOf(s, sq);
-  if (sq.order === 'hold' && to && manhattan(u, to) <= 2) return null;
+  if (sq.stance === 'hold' && to && manhattan(u, to) <= 2) return null;
   if (!to) return null;
 
   /*
@@ -424,7 +424,7 @@ export function actFor(
    * 工兵（`build`）用 `straight`：同距离的两格优先"更正对目标"的那一格。
    * 不开的时候它会在桥头来回抖（4d-3 实测：工兵在 (7,8)/(7,9) 交替了 10 多手，桥停在第三格）。
    */
-  const spot = stepToward(s, u, to, sq.order === 'build', world.stepsFrom(to));
+  const spot = stepToward(s, u, to, sq.stance === 'build', world.stepsFrom(to));
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   return null;
 }

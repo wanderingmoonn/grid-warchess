@@ -15,6 +15,7 @@ import { attackableTargets, cityTiles, effectiveStats, previewAttack, produceAt,
 import { occupantAt, utype } from '../rules.ts';
 import { eraDef } from '../config.ts';
 import { upgradeTargetOf } from '../era-routes.ts';
+import { stanceOf } from './types.ts';
 import type { City } from '../types.ts';
 import type { GameState, Unit } from '../types.ts';
 import { DECIDE_HORIZON } from './decide.ts';
@@ -3048,6 +3049,15 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
           seats: world.siegeSeats(laneCity),
         }
       : undefined;
+  /*
+   * **统一给每支队填姿态**（阶段 5 §2.6a，2026-11-28）。
+   *
+   * 只写一次、只在出口写：上面十几个 `squads.push` 各有各的构造，
+   * 逐个补字段早晚漏一个（漏了就变成"没有姿态"，战术层会当默认值处理，很难发现）。
+   * 这一句等价于 `stance = order`，所以**行为一字不变**——§2.6a 是纯搬家。
+   */
+  for (const q of squads) q.stance = stanceOf(q);
+
   return {
     need,
     spendCap,
