@@ -253,6 +253,34 @@ export function actFor(
    *
    * 读数（`V4_ENCOUNTER_LOG=1`）保留：同一套判断顺带记 `打了 / 够了没打 / 没够着 / 没看见敌`。
    */
+  /*
+   * **读数：城圈上的兵遇到敌人（阶段 5 §2.6 第 0 步之二，2026-11-28）**。
+   *
+   * 问的是另一件事：**这个兵站在"必须空"的格子上（城圈/产兵口/过道），
+   * 视野里有人、而且偏一步就能打到**——这时候它按规矩该先让开，于是就没打。
+   *
+   * 这是 `S-002`（长线上的兵每手都偏步、原地横跳）和 `V-1-01`（三个兵贴城圈、
+   * 敌人从旁边过）共同指向的那个取舍的原料：**"让开"和"出城咬"到底谁先**。
+   * **只数不改。**`V4_ENCOUNTER_LOG=1` 时每手汇总成一行。
+   */
+  if (
+    process.env.V4_ENCOUNTER_LOG &&
+    (con.keepClear.includes(u.y * s.w + u.x) || con.yieldMoves.some((m) => m.unitId === u.id))
+  ) {
+    const cat = utype(s, u.type).category;
+    if (cat === 'combat') {
+      if (seenFoes(s, u).length > 0) tallyEnc('圈上·能打');
+      else {
+        const near = s.units
+          .filter((v) => v.owner !== u.owner && canSeeTile(s, u.owner, v.x, v.y))
+          .sort((a, b) => manhattan(u, a) - manhattan(u, b) || (a.id < b.id ? -1 : 1))[0];
+        if (!near) tallyEnc('圈上·没敌');
+        else if (approachStep(s, u, near)) tallyEnc('圈上·够得着');
+        else tallyEnc('圈上·够不着');
+      }
+    }
+  }
+
   const sqE = squadOf(con, u);
   if (sqE && (sqE.stance === 'march' || sqE.stance === 'siege')) {
     const foesNow = seenFoes(s, u);

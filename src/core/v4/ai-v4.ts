@@ -492,7 +492,7 @@ function laneMemo(
       /* 人次（一个兵可能被问多次，所以也报"兵数"：用第一手的人头数当分母） */
       const got = Object.fromEntries(tally);
       console.log(
-        `[enc] T=${turn} ${decision.kind}${decision.stage ? '/' + decision.stage : ''} · 打了 ${got['打了'] ?? 0} · 够了没打 ${got['够了没打'] ?? 0} · 没够着 ${got['没够着'] ?? 0} · 没看见敌 ${got['没看见敌'] ?? 0}`,
+        `[enc] T=${turn} ${decision.kind}${decision.stage ? '/' + decision.stage : ''} · 打了 ${got['打了'] ?? 0} · 够了没打 ${got['够了没打'] ?? 0} · 没够着 ${got['没够着'] ?? 0} · 没看见敌 ${got['没看见敌'] ?? 0} · 圈上 能打${got['圈上·能打'] ?? 0}/够得着${got['圈上·够得着'] ?? 0}/够不着${got['圈上·够不着'] ?? 0}/没敌${got['圈上·没敌'] ?? 0}`,
       );
     }
   }
