@@ -4709,30 +4709,32 @@ test('时代越靠后射程越长，长弓手不再是天花板', () => {
 test('关键数值按方案落定', () => {
   const want: Array<[string, Partial<Record<'cost' | 'atk' | 'armor' | 'maxHp' | 'range', number>>]> = [
     ['archer', { cost: 35 }],
-    ['longbow', { cost: 90 }],
+    // 2026-11-28 平衡批次：长弓手 90→60、弓手系整体下调；长枪兵 65→55 且去盾墙；
+    // 戟兵 100→90；装甲车 250→270（移速/视野/甲同步上调）；
+    // 时代 5 全体再乘 费×1.1 / 攻×1.15 / 血×1.15 / 甲+1（向上取整）。
+    ['longbow', { cost: 60 }],
     ['musketeer', { cost: 130 }],
     ['rifleman', { cost: 200 }],
-    ['squad', { cost: 300 }],
-    ['spearman', { cost: 65 }],
-    ['halberdier', { cost: 100, range: 2 }],
-    // 2026-11-28：时代 4/5 远程射程集体 +1（坦克/装甲车 3 → 4，铁甲舰 4 → 5）
-    ['tank', { cost: 400, range: 4 }],
-    ['armoredcar', { cost: 250, range: 4 }],
+    ['squad', { cost: 330 }],
+    ['spearman', { cost: 55 }],
+    ['halberdier', { cost: 90, range: 2 }],
+    ['tank', { cost: 440, range: 4 }],
+    ['armoredcar', { cost: 270, range: 4 }],
     ['militia', { atk: 13 }],
-    ['hmg', { atk: 17 }],
+    ['hmg', { atk: 20 }],
     ['boat', { atk: 11, maxHp: 34 }],
     ['armoredcar', { maxHp: 54 }],
     // 第二轮改：长枪兵加血、箭塔射程 +1、水军与高时代单位集体上调
-    ['spearman', { maxHp: 40 }],
+    ['spearman', { maxHp: 35 }],
     ['tower', { range: 3 }],
     ['gunboat', { atk: 25, maxHp: 46 }],
     ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 5 }],
-    ['tank', { atk: 56, maxHp: 88 }],
-    ['artillery', { atk: 47, maxHp: 54 }],
-    ['squad', { atk: 47, maxHp: 48 }],
+    ['tank', { atk: 65, maxHp: 102 }],
+    ['artillery', { atk: 55, maxHp: 63 }],
+    ['squad', { atk: 55, maxHp: 56 }],
     ['rifleman', { atk: 36 }],
     ['mg', { atk: 20 }],
-    ['hmg', { atk: 17 }],
+    ['hmg', { atk: 20 }],
   ];
   // 二级城升级费回调到 220：开局收入修好之后玩家手上有两百出头，
   // 定在 200 会让"第一回合就升二级"变成毫无代价的默认动作。
@@ -5702,6 +5704,37 @@ test('破甲：无视目标一半护甲', () => {
   // 民兵攻 13、甲 2：普通 11；破甲把对方甲砍半算 1，伤害 12
   assert.equal(normal, 11);
   assert.equal(pierced, 12);
+});
+
+test('破甲Ⅱ：无视目标全部护甲', () => {
+  const s = fresh();
+  const { a, b } = duel(s);
+  const normal = computeDamage(s, a, b);
+  grantAbility(s, 'militia', 'armor-pierce-2');
+  // 民兵攻 13、甲 2：普通 11；破甲Ⅱ 把护甲清成 0，满伤 13
+  assert.equal(normal, 11);
+  assert.equal(computeDamage(s, a, b), 13);
+});
+
+test('破甲Ⅱ 压过破甲：两条都带时护甲仍是 0，不会"砍一半再砍一半"', () => {
+  const s = fresh();
+  const { a, b } = duel(s);
+  grantAbility(s, 'militia', 'armor-pierce');
+  grantAbility(s, 'militia', 'armor-pierce-2');
+  assert.equal(computeDamage(s, a, b), 13, '13 − 0，而不是 13 − 0.5');
+});
+
+test('反空：对飞行目标伤害 ×2（先翻倍再减甲），对地面不生效', () => {
+  const s = fresh();
+  const { a, b } = duel(s);
+  const ground = computeDamage(s, a, b);
+  grantAbility(s, 'militia', 'anti-air-2');
+  assert.equal(computeDamage(s, a, b), ground, '打地面目标不该有加成');
+  // 原版没有飞行单位，这里直接把靶子那一份兵种表改成空中层
+  // （grantAbility 改的也是同一份 per-state 的表，做法一致）
+  s.unitTypes.militia!.layer = 'air';
+  // 13 ×2 = 26，再减 2 甲 = 24——倍率在减甲之前，这就是"结算顺序同破城"
+  assert.equal(computeDamage(s, a, b), 24);
 });
 
 test('盾墙：本回合没移动时减伤 2', () => {
@@ -7144,8 +7177,10 @@ console.log('\n平衡：机动与视野');
 
 test('机动与视野整体削过一轮（回归锚点）', () => {
   const all = Object.values(UNIT_TYPES);
-  assert.equal(Math.max(...all.map((u) => u.move)), 4, '最快的单位是 4 格（原来 5）');
-  assert.equal(Math.max(...all.map((u) => u.vision)), 5, '视野最远 5 格（原来 6）');
+  // 2026-11-28：装甲车移速 4→5，锚点跟着抬一格（这是原版里唯一的移 5）。
+  assert.equal(Math.max(...all.map((u) => u.move)), 5, '最快的单位是 5 格（装甲车）');
+  // 2026-11-28：骠骑兵视野 4→6，重新成为原版里看得最远的（当年削到 5 的那个锚点作废）。
+  assert.equal(Math.max(...all.map((u) => u.vision)), 6, '视野最远 6 格（骠骑兵）');
 
   // move 2 是地板：森林和丘陵的进入消耗是 2，再削就永远进不了林子
   assert.ok(Math.min(...all.filter((u) => u.move > 0).map((u) => u.move)) >= 1, '没有单位被削成 0');
@@ -7373,8 +7408,11 @@ test('溅射：主目标周围的人一起挨，自己人不吃', () => {
   if (!r.ok) return;
 
   const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp;
-  assert.equal(hp(main.id), (UNIT_TYPES.militia?.maxHp ?? 0) - full, '主目标吃满伤害');
-  assert.equal(hp(side.id), (UNIT_TYPES.militia?.maxHp ?? 0) - splash, '旁边的敌人吃打折伤害');
+  // 2026-11-28：臼炮 19→30 攻，一发就能打掉民兵（28 血 − 2 甲 = 26 … 现在直接 28）。
+  // 死亡的单位会从 state 里移除，`hp()` 拿到 undefined，所以按"至少扣到 0"来断言。
+  const militiaMax = UNIT_TYPES.militia?.maxHp ?? 0;
+  assert.equal(hp(main.id) ?? 0, Math.max(0, militiaMax - full), '主目标吃满伤害');
+  assert.equal(hp(side.id) ?? 0, Math.max(0, militiaMax - splash), '旁边的敌人吃打折伤害');
   assert.equal(hp(farAway.id), UNIT_TYPES.militia?.maxHp, '范围外不该受伤');
   assert.equal(hp(friend.id), UNIT_TYPES.militia?.maxHp, '自己人不该被炸');
   assert.ok(
@@ -7493,7 +7531,10 @@ test('多动次数按兵种不同，不是固定三次', () => {
   const mg = UNIT_TYPES.mg;
   const hmg = UNIT_TYPES.hmg;
   assert.ok(mg && hmg);
-  assert.ok(hmg.atk < mg.atk, '四动的单发攻击力应该比三动低');
+  // 2026-11-28：时代 5 全体攻 ×1.15 之后，hmg（E5）和 mg（E4）的单发都到了 20。
+  // 两代基准已经不同，跨代要求"严格更弱"没有意义，这里放宽成"不更强"。
+  assert.ok(hmg.atk <= mg.atk, '四动的单发攻击力不该比三动高');
+  assert.ok(hmg.burst! > mg.burst!, '但次数要真的更多');
 });
 
 test('溅射半径按兵种不同：火炮能打到更远的一片', () => {
@@ -9396,8 +9437,9 @@ test('隔河拆桥：远程能放箭，但一发只算一半', () => {
     Math.round(nearDmg * CONFIG.bridgeRangedDamageRatio),
     `隔河一发只算 ${CONFIG.bridgeRangedDamageRatio}：近身 ${nearDmg}、隔河 ${farDmg}`,
   );
-  // 40 血的木桥：贴桥头 3 下、隔河 6 下。这个倍差就是"快"与"慢"的区别
-  assert.ok(nearDmg * 3 >= bridgeMax, `贴桥头要能在 3 下内拆掉：${nearDmg}×3`);
+  // 40 血的木桥：贴桥头 4 下、隔河 8 下。这个倍差就是"快"与"慢"的区别
+  // （2026-11-28：长弓手 14→11 攻，贴桥头从 3 下变 4 下；倍差本身没变）
+  assert.ok(nearDmg * 4 >= bridgeMax, `贴桥头要能在 4 下内拆掉：${nearDmg}×4`);
   assert.ok(farDmg * 3 < bridgeMax, `隔河 3 下不该拆得掉：${farDmg}×3`);
 });
 
@@ -9571,7 +9613,9 @@ test('编队模板：兵种按职能归类，缺哪一档补哪一档', () => {
   };
   assert.equal(role('民兵'), 'melee', '没甲没血的近战就是近战输出');
   assert.equal(role('弓手'), 'ranged');
-  assert.equal(role('长枪兵'), 'tank', '血厚甲高的近战是在顶前排');
+  // 2026-11-28：长枪兵 血 40→35、盾墙被移走，职能判定从"前排"掉回"近战输出"。
+  // 它现在是"便宜的两格长兵器"，不再是顶前排的兵。
+  assert.equal(role('长枪兵'), 'melee', '去掉盾墙又瘦了血之后，它不再算前排');
   assert.equal(role('臼炮'), 'siege');
   assert.equal(role('牧师'), 'support', '自己打不动的治疗算支援');
   assert.equal(role('天使'), 'tank', '天使能打能顶，治疗光环只是顺带');
@@ -14721,8 +14765,9 @@ test('溅射：单位自带比例时按自己的算，缺省仍是 50%', () => {
   if (!r.ok) return;
   const hp = (id: string) => r.state.units.find((u) => u.id === id)?.hp;
   const maxHp = UNIT_TYPES.militia?.maxHp ?? 0;
-  assert.equal(hp(quarter.main.id), maxHp - full, '主目标照旧吃满');
-  assert.equal(hp(quarter.side.id), maxHp - expected, '旁边那格按 25% 结算，而不是默认的 50%');
+  // 2026-11-28 起臼炮一发能打掉民兵，死掉的目标会从 state 里消失 → 用"至少扣到 0"断言
+  assert.equal(hp(quarter.main.id) ?? 0, Math.max(0, maxHp - full), '主目标照旧吃满');
+  assert.equal(hp(quarter.side.id) ?? 0, Math.max(0, maxHp - expected), '旁边那格按 25% 结算，而不是默认的 50%');
 });
 
 test('石堡射程 2 → 3：三格外能还手，四格外打不到，其它防御建筑不受影响', () => {
@@ -18692,10 +18737,10 @@ test('数值调整（2026-11-07）：炼金术士升 4 代加价、龙骑兵升 
   assert.equal(drg.flight, true, '还是飞行');
   assert.equal(drg.splash, 1, '还是溅射');
 
-  // 弩兵：只加攻击，价格不动
+  // 弩兵：只加攻击，价格不动 → 2026-11-28 又降了 2 金（82 → 80）
   const cb = s.unitTypes['crossbow']!;
   assert.equal(cb.atk, 19, '弩兵攻击 16 → 19');
-  assert.equal(cb.cost, 82, '弩兵价格不动');
+  assert.equal(cb.cost, 80, '弩兵价格 82 → 80');
   assert.equal(cb.range, 3, '射程不动');
   assert.deepEqual(cb.abilities, ['armor-pierce'], '破甲不变');
 });

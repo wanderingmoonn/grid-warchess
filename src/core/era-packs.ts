@@ -41,7 +41,7 @@ import type { AbilityDef } from './abilities.ts';
 // （那边有按 EHP 校准过的数值口径），这里只负责把它们并进同一个包。
 // 依赖方向是单向的：era-packs → contemporary-packs，反过来没有引用。
 import { CONTEMPORARY_WAR, MODERN_ABILITIES } from './contemporary-packs.ts';
-import { TURN_START } from './ability-hooks.ts';
+import { ARMOR_STAGE, DAMAGE_STAGE, TURN_START } from './ability-hooks.ts';
 import type { Expansion } from './expansions.ts';
 import { addMark, markCountOf, markKindOf, marksAt, marksOf, removeMark } from './marks.ts';
 import type { MarkKindDef } from './marks.ts';
@@ -131,10 +131,9 @@ const ANTIQUITY: UnitTypeDef[] = [
     move: 2,
     atk: 10,
     armor: 4,
-    maxHp: 30,
+    maxHp: 35,
     range: 1,
-    vision: 4,
-    abilities: ['stealth'],
+    vision: 4,
   },
   {
     // 埃及/赫梯战车：青铜唯一的"高机动打击力量"，代价是脆
@@ -298,11 +297,11 @@ const ANTIQUITY: UnitTypeDef[] = [
     short: '剑',
     era: 1,
     category: 'combat',
-    cost: 36,
+    cost: 45,
     move: 2,
-    atk: 15,
+    atk: 20,
     armor: 2,
-    maxHp: 32,
+    maxHp: 37,
     range: 1,
     vision: 2,
   },
@@ -338,9 +337,9 @@ const MEDIEVAL: UnitTypeDef[] = [
     category: 'combat',
     cost: 78,
     move: 2,
-    atk: 19,
+    atk: 16,
     armor: 6,
-    maxHp: 48,
+    maxHp: 58,
     range: 1,
     vision: 2,
     abilities: ['shield-wall'],
@@ -390,7 +389,7 @@ const MEDIEVAL: UnitTypeDef[] = [
     category: 'combat',
     cost: 88,
     move: 2,
-    atk: 27,
+    atk: 28,
     armor: 3,
     maxHp: 42,
     range: 1,
@@ -421,8 +420,8 @@ const MEDIEVAL: UnitTypeDef[] = [
     era: 2,
     category: 'combat',
     cost: 100,
-    move: 1,
-    atk: 8,
+    move: 2,
+    atk: 12,
     armor: 7,
     maxHp: 90,
     range: 1,
@@ -520,11 +519,11 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '重',
     era: 2,
     category: 'combat',
-    cost: 58,
+    cost: 65,
     move: 2,
     atk: 16,
     armor: 5,
-    maxHp: 46,
+    maxHp: 50,
     range: 1,
     vision: 2,
     abilities: ['shield-wall'],
@@ -542,11 +541,11 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '弩',
     era: 2,
     category: 'combat',
-    cost: 64,
+    cost: 100,
     move: 1,
-    atk: 17,
+    atk: 30,
     armor: 1,
-    maxHp: 24,
+    maxHp: 27,
     range: 4,
     vision: 5,
     abilities: ['armor-pierce'],
@@ -558,10 +557,10 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '团',
     era: 2,
     category: 'combat',
-    cost: 62,
+    cost: 50,
     move: 2,
-    atk: 19,
-    armor: 4,
+    atk: 17,
+    armor: 3,
     maxHp: 42,
     range: 1,
     vision: 2,
@@ -574,13 +573,13 @@ const MEDIEVAL: UnitTypeDef[] = [
     short: '象',
     era: 2,
     category: 'combat',
-    cost: 72,
-    move: 2,
-    atk: 24,
+    cost: 75,
+    move: 1,
+    atk: 30,
     armor: 4,
-    maxHp: 58,
+    maxHp: 78,
     range: 1,
-    vision: 2,
+    vision: 3,
     abilities: ['kamikaze'],
   },
 ];
@@ -714,6 +713,68 @@ function makeMineLayer(kind: string, cap: number, label: string): AbilityDef {
   };
 }
 
+/**
+ * 破甲Ⅱ：无视目标**全部**护甲。
+ *
+ * 和「破甲」的关系：破甲是砍一半，破甲Ⅱ是清零。放在 `ARMOR_STAGE.postPierce`
+ * 而不是 `pierce` 是有意的——它要排在破甲之后。带破甲Ⅱ的兵同时带破甲时
+ * （比如自定义兵种两条都勾），结果是 0（"无视全部"本来就包含"无视一半"），
+ * 而不是"砍一半再砍一半"这种没人能预期的叠加。
+ *
+ * 为什么用清零而不是给个超大数：`armor` 在公式里是直接相减，清零后
+ * "攻击 - 0"就是满伤，语义最干净；写成 -999 会在任何"护甲不能为负"的
+ * 修正里露馅。
+ */
+export const ARMOR_PIERCE_2: AbilityDef = {
+  id: 'armor-pierce-2',
+  name: '破甲Ⅱ',
+  summary: '无视目标全部护甲。',
+  group: 'attack',
+  hooks: {
+    armorPhase: [
+      {
+        stage: ARMOR_STAGE.postPierce,
+        apply: (c) => {
+          if (c.side !== 'attacker') return;
+          c.armor = 0;
+        },
+      },
+    ],
+  },
+};
+
+/**
+ * 反空：对飞行单位的伤害 ×2，结算顺序同「破城」。
+ *
+ * "同破城"落在两件事上：① 乘的是**基础伤害**，不是最终伤害，所以之后还要
+ * 减目标护甲（破城也是先翻倍再啃城防）；② 在 `DAMAGE_STAGE.postRange`
+ * 这一段，射程折扣已经算完、护甲还没开始扣。
+ *
+ * 和现成的「对空」（`anti-air`，×1.6）是两条**不同的**能力，故意不合并：
+ * 对空是信息化底座那个防空导弹营的"打得更准"，反空是这一档的"专打天上的"。
+ * 两者都在 postRange，同时带会先后相乘（×1.6 ×2 = ×3.2）——目前没有兵同时带，
+ * 但这条写在这里，免得以后有人以为漏了去合并。
+ */
+export const ANTI_AIR_2: AbilityDef = {
+  id: 'anti-air-2',
+  name: '反空',
+  summary: '打飞行单位时伤害 ×2（先翻倍再减护甲，结算顺序同破城）；打地面目标没有加成。',
+  group: 'attack',
+  hooks: {
+    damage: [
+      {
+        stage: DAMAGE_STAGE.postRange,
+        apply: (c) => {
+          if (c.side !== 'attacker' || !c.foe) return;
+          const def = c.api.utype(c.state, c.foe.type);
+          const flying = def.layer === 'air' || c.api.hasAbility(c.state, c.foe, 'fly');
+          if (flying) c.damage = Math.round(c.damage * 2);
+        },
+      },
+    ],
+  },
+};
+
 const LAY_MINES: AbilityDef = makeMineLayer('era-mine', 6, '布雷');
 const LAY_AT_MINES: AbilityDef = makeMineLayer('era-at-mine', 4, '布反装甲雷');
 
@@ -809,11 +870,11 @@ const MINE_UNITS_MODERN: UnitTypeDef[] = [
     short: '雷',
     era: 5,
     category: 'combat',
-    cost: 260,
+    cost: 286,
     move: 4,
-    atk: 14,
-    armor: 6,
-    maxHp: 60,
+    atk: 17,
+    armor: 7,
+    maxHp: 69,
     range: 1,
     vision: 5,
     abilities: ['lay-at-mines'],
@@ -864,20 +925,20 @@ const GUNPOWDER: UnitTypeDef[] = [
     move: 4,
     atk: 30,
     armor: 7,
-    maxHp: 46,
+    maxHp: 50,
     range: 1,
     vision: 3,
   },
   {
     // 龙骑兵：骑马机动、下马射击，是火力与速度的结合
     id: 'gp_dragoon',
-    name: '龙骑兵',
+    name: '法国龙骑兵',
     short: '龙',
     era: 3,
     category: 'combat',
     cost: 155,
     move: 4,
-    atk: 22,
+    atk: 25,
     armor: 3,
     maxHp: 38,
     range: 3,
@@ -902,7 +963,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     armor: 1,
     maxHp: 24,
     range: 4,
-    vision: 5,
+    vision: 6,
     abilities: ['stealth'],
   },
   {
@@ -914,7 +975,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     category: 'combat',
     cost: 160,
     move: 1,
-    atk: 30,
+    atk: 33,
     armor: 3,
     maxHp: 36,
     range: 5,
@@ -937,7 +998,7 @@ const GUNPOWDER: UnitTypeDef[] = [
     armor: 1,
     maxHp: 28,
     range: 5,
-    vision: 2,
+    vision: 5,
     splash: 1,
   },
   {
@@ -947,9 +1008,9 @@ const GUNPOWDER: UnitTypeDef[] = [
     short: '长',
     era: 3,
     category: 'combat',
-    cost: 170,
+    cost: 185,
     move: 1,
-    atk: 28,
+    atk: 43,
     armor: 3,
     maxHp: 34,
     range: 6,
@@ -1117,7 +1178,7 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 26,
     armor: 3,
     maxHp: 32,
-    range: 5,
+    range: 6,
     vision: 3,
     splash: 1,
   },
@@ -1150,8 +1211,8 @@ const INDUSTRY: UnitTypeDef[] = [
     cost: 215,
     move: 2,
     atk: 42,
-    armor: 3,
-    maxHp: 36,
+    armor: 6,
+    maxHp: 40,
     range: 3,
     vision: 3,
     splash: 1,
@@ -1173,7 +1234,7 @@ const INDUSTRY: UnitTypeDef[] = [
     range: 4,
     vision: 3,
     splash: 2,
-    abilities: ['armor-pierce'],
+    abilities: ['armor-pierce-2'],
   },
   {
     // 榴弹炮：曲射，射程 6，专门拆堑壕体系
@@ -1218,7 +1279,7 @@ const INDUSTRY: UnitTypeDef[] = [
     category: 'combat',
     cost: 330,
     move: 2,
-    atk: 30,
+    atk: 35,
     armor: 10,
     maxHp: 80,
     range: 3,
@@ -1360,11 +1421,11 @@ const MODERN: UnitTypeDef[] = [
     short: '伞',
     era: 5,
     category: 'combat',
-    cost: 340,
+    cost: 374,
     move: 4,
-    atk: 41,
-    armor: 4,
-    maxHp: 48,
+    atk: 48,
+    armor: 5,
+    maxHp: 56,
     range: 4,
     vision: 6,
   },
@@ -1377,11 +1438,11 @@ const MODERN: UnitTypeDef[] = [
     short: '击',
     era: 5,
     category: 'combat',
-    cost: 310,
+    cost: 341,
     move: 3,
-    atk: 42,
-    armor: 4,
-    maxHp: 46,
+    atk: 49,
+    armor: 5,
+    maxHp: 53,
     range: 4,
     vision: 5,
     abilities: ['stealth'],
@@ -1393,11 +1454,11 @@ const MODERN: UnitTypeDef[] = [
     short: '反',
     era: 5,
     category: 'combat',
-    cost: 260,
+    cost: 286,
     move: 1,
-    atk: 54,
-    armor: 3,
-    maxHp: 34,
+    atk: 63,
+    armor: 4,
+    maxHp: 40,
     range: 5,
     vision: 4,
     abilities: ['armor-pierce', 'first-strike'],
@@ -1412,11 +1473,11 @@ const MODERN: UnitTypeDef[] = [
     short: '喀',
     era: 5,
     category: 'combat',
-    cost: 310,
+    cost: 341,
     move: 2,
-    atk: 46,
-    armor: 5,
-    maxHp: 46,
+    atk: 53,
+    armor: 6,
+    maxHp: 53,
     range: 7,
     vision: 4,
     splash: 2,
@@ -1429,11 +1490,11 @@ const MODERN: UnitTypeDef[] = [
     short: '重',
     era: 5,
     category: 'combat',
-    cost: 480,
+    cost: 638,
     move: 3,
-    atk: 60,
-    armor: 14,
-    maxHp: 100,
+    atk: 75,
+    armor: 20,
+    maxHp: 115,
     range: 4,
     vision: 4,
     abilities: ['siege-master'],
@@ -1449,11 +1510,11 @@ const MODERN: UnitTypeDef[] = [
     short: '自',
     era: 5,
     category: 'combat',
-    cost: 340,
+    cost: 374,
     move: 3,
-    atk: 42,
-    armor: 8,
-    maxHp: 62,
+    atk: 49,
+    armor: 9,
+    maxHp: 72,
     range: 5,
     vision: 3,
     splash: 2,
@@ -1466,14 +1527,15 @@ const MODERN: UnitTypeDef[] = [
     short: '空',
     era: 5,
     category: 'combat',
-    cost: 290,
+    cost: 319,
     move: 1,
-    atk: 46,
-    armor: 4,
-    maxHp: 40,
+    atk: 53,
+    armor: 5,
+    maxHp: 46,
     range: 5,
     vision: 4,
     burst: 2,
+    abilities: ['anti-air-2'],
   },
   {
     // 反坦克拒马：现代最便宜的"别过来"
@@ -1566,11 +1628,11 @@ const MODERN: UnitTypeDef[] = [
     short: '舰',
     era: 5,
     category: 'combat',
-    cost: 360,
+    cost: 396,
     move: 5,
-    atk: 52,
-    armor: 11,
-    maxHp: 100,
+    atk: 60,
+    armor: 12,
+    maxHp: 115,
     range: 7,
     vision: 7,
     domain: 'water',
@@ -1583,11 +1645,11 @@ const MODERN: UnitTypeDef[] = [
     short: '迫',
     era: 5,
     category: 'combat',
-    cost: 260,
+    cost: 286,
     move: 2,
-    atk: 38,
-    armor: 3,
-    maxHp: 30,
+    atk: 44,
+    armor: 4,
+    maxHp: 35,
     range: 5,
     vision: 3,
     splash: 1,
@@ -1636,7 +1698,7 @@ export const ERA_ARMS: Expansion = {
     '前进指挥所、物流集团）——**这批要同时开「信息化」才会出现**，' +
     '因为第六时代是那个包开出来的。',
   hooks: {},
-  abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ...MODERN_ABILITIES],
+  abilities: [LAY_MINES, CLEAR_MINES, LAY_AT_MINES, ARMOR_PIERCE_2, ANTI_AIR_2, ...MODERN_ABILITIES],
   // 两个雷种各来自不同时代：反装甲雷是机械化那一档的布雷车撒的
   marks: [LAND_MINE_KIND, AT_MINE_KIND],
   units: [
