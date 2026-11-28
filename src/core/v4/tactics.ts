@@ -25,7 +25,7 @@ import {
 import type { Action, City, GameState, Unit } from '../types.ts';
 import type { Constraints, Squad } from './types.ts';
 import type { World } from './world.ts';
-import { unitWorthOfType } from './world.ts';
+import { unitWorth, unitWorthOfType } from './world.ts';
 
 /**
  * **所有距离用曼哈顿距离**（`|dx| + |dy|`）：游戏里移动是四邻，斜着走一步要花两步，
@@ -216,20 +216,33 @@ export function actFor(
    */
 
   /*
-   * **①.6 遭遇（阶段 5 §2.6，2026-11-28）**：这一手按计划走之前，先看眼前有没有敌人。
+   * **①.6 遭遇 → 转身野战**（阶段 5 §2.6b，2026-11-28）。
    *
-   * 这件事必须排在**让开之前**：`V-1-01` 实测，三个兵还没离开城圈就都挂着"让开"，
-   * 排在让开之后的话，这里一次都数不到（也永远打不到人）。
+   * 这一手按计划走之前，先看眼前有没有敌人；有就**迎上去打**，下一手自动回行军
+   * （姿态不跨手，所以"短暂"是天然的，不需要记状态）。
    *
-   * 现状（第 0 步）：**只数不改**。三种情况按"每一个兵每一手"记一次：
-   *   · `打了`      —— 现在就能打到（射程内有人），那是"没放过"；
-   *   · `够了没打`  —— 偏一步就能打到某个看得见的敌人，但现在按计划走；
-   *   · `没够着`    —— 视野里有人、但这一步够不着（离得还远）。
+   * ── 用户 2026-11-28 11:35 的口径（照抄，别"优化"）──────────
    *
-   * 只数进军队（`march` / `siege`）。`hold`（撤退/守城）按 `S-004` 的规矩本来就该不停，
-   * `scout` 按 §2.2 的规矩本来就该退，`yield`/`build` 是差事——这些都不算缺口。
+   * > 行军途中遇到敌人就迎上去打，**除非敌人真的非常多**。
    *
-   * `V4_ENCOUNTER_LOG=1` 时每手汇总成一行（由入口打）。**它不改变任何一手动作。**
+   * **不要**加"伤害 ≥ 目标半血"那种门槛：**遇到的小兵可能是主力的一角，
+   * 放过它等于放整支主力过关**。想加门槛之前先回来看这句。
+   *
+   * ── 三条二值条件（都不打分）──────────────────────────────
+   *
+   *   1. **够得着**：偏一步就能进射程（`approachStep` 只回答"有没有这一格"）；
+   *   2. **不散队**：那一步不踩"必须空"的格子（产兵口/城门/过道）。
+   *      `V-1-01` 就吃过这个：三个兵全站在城圈上，去追敌人会把出城通道堵死；
+   *   3. **不是送死**：敌方在场身价 ≤ 我方这支队的 **2 倍**（`strength()`，不拍数字）。
+   *      这就是"敌人真的非常多"那条例外。
+   *
+   * ── 三个必须保住的反例 ──────────────────────────────────
+   *
+   *   · `S-004`：`hold`（撤退/守城）**不在这个 if 里**——回城路上停下来打，12 个兵只剩 4 个；
+   *   · `X-1-01`：这里只让**当事人自己**偏一步，不去拉别人（拉人是 `tactics.converge` 的事）；
+   *   · `S-017`：`engage` **不是集火**——只为自己眼前的目标偏一步，不改变"散开一人盯一个"。
+   *
+   * 读数（`V4_ENCOUNTER_LOG=1`）保留：同一套判断顺带记 `打了 / 够了没打 / 没够着 / 没看见敌`。
    */
   const sqE = squadOf(con, u);
   if (sqE && (sqE.stance === 'march' || sqE.stance === 'siege')) {
@@ -240,8 +253,19 @@ export function actFor(
         .filter((v) => canSeeTile(s, u.owner, v.x, v.y))
         .sort((a, b) => manhattan(u, a) - manhattan(u, b) || (a.id < b.id ? -1 : 1))[0];
       if (!near) tallyEnc('没看见敌');
-      else if (approachStep(s, u, near)) tallyEnc('够了没打');
-      else tallyEnc('没够着');
+      else {
+        const spot = approachStep(s, u, near);
+        if (!spot) tallyEnc('没够着');
+        else {
+          tallyEnc('够了没打');
+          /* 条件 2：那一步要能走（不踩必须空的格）；条件 3：对面不是压倒性的 */
+          const okSpot = !con.keepClear.includes(spot.y * s.w + spot.x);
+          if (okSpot && notOverwhelmed(s, world, sqE)) {
+            tallyEnc('转身');
+            return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+          }
+        }
+      }
     }
   }
 
@@ -427,6 +451,29 @@ export function actFor(
   const spot = stepToward(s, u, to, sq.stance === 'build', world.stepsFrom(to));
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
   return null;
+}
+
+
+/**
+ * **"敌人真的非常多"吗**（阶段 5 §2.6b 的第 3 条，用户 2026-11-28 留的例外）。
+ *
+ * 口径只有一句：**敌方在场身价 ≤ 我方这支队的 2 倍**就算"不算多"，可以迎上去。
+ * 用 `strength()`（项目里"身价"的唯一口径，一个四代兵不等于一个民兵），**不拍新的系数**。
+ *
+ * 为什么是 2 倍：1 倍太严（稍微吃亏就不打，等于把"遇到就打"又缩回去了）；
+ * 再大就变成"以少打多"。这个 2 是**这里唯一的数字**，要改就在这一处改、并重跑 §2.6b 的读数。
+ */
+function notOverwhelmed(s: GameState, world: World, sq: Squad): boolean {
+  /*
+   * 身价用 `unitWorth`（服务层那一份，和 `defensible`、采购同源），
+   * **不抄决定层的 `strength()`**：那是另一套口径（攻+血+射程×4），
+   * 跨层借过来会让"身价"在一个项目里长出两个答案。
+   */
+  const foe = world.foeCombat.reduce((n, u) => n + unitWorth(s, u), 0);
+  const mine = world.myCombat
+    .filter((u) => sq.unitIds.includes(u.id))
+    .reduce((n, u) => n + unitWorth(s, u), 0);
+  return foe <= mine * 2;
 }
 
 /**
