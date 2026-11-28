@@ -305,7 +305,40 @@ function logAlert(s: GameState, world: World, con: Constraints, decision: Decisi
       ? `派 ${scout.unitIds.join(',')} → (${decision.alert.at.x},${decision.alert.at.y})`
       : '想派·没人可派'
     : '不需要';
-  console.log(`[alert] T=${turn} · 敌速 ${world.raidMove} · 视野 ${vision} · 哨兵 ${act} · ${rows.join(' · ')}`);
+  /* 收缩读数（c 步的影子）：进攻时"这一手会被派出去几个 / 家里还剩几个" */
+  console.log(
+    `[alert] T=${turn} · 敌速 ${world.raidMove} · 视野 ${vision} · 哨兵 ${act} · ${shrinkNote(world, decision)} · ${rows.join(' · ')}`,
+  );
+}
+
+/**
+ * **收缩读数（阶段 5 §2.2c 的影子，2026-11-28）**：只打日志，**不参与任何判断**。
+ *
+ * 用户 2026-11-28 08:20 定的顺序：**预警不可行时，人类会先"尽快进攻"**——
+ * 与其留兵干等，不如趁现在能打就把仗打完；只有当"凑不出能打的部队"时，才退回去
+ * **缩减出征规模**（守住老家，用剩下的兵慢慢磨）。
+ *
+ * 所以这里量的是那两句话的原料，不是结论：
+ *   `攻 N`  = 这一手进攻会派出去的人数（不在守、不在架桥、不在岗上的战斗兵）
+ *   `留 M`  = 派完之后家里还剩几个
+ *   `需 K`  = 家里要组织守军，还得几手（`alertNeed`）
+ * 读法：`需 K` 越小、`留 M` 越接近 0，说明"守不住"的概率越大——
+ * 这些手才是将来要收缩的手。**现在一条也不改行为。**
+ */
+function shrinkNote(world: World, decision: Decision): string {
+  const atk = decision.kind === 'press' ? 'press' : decision.kind;
+  let send = 0;
+  let home = 0;
+  for (const u of world.myCombat) {
+    /* 用"它离最近的我城几手"粗分：一手能回城的算留守，其余算要被派出去 */
+    const back = Math.min(...world.myCities.map((c) => world.marchTurns(u, c)), Infinity);
+    if (back <= 1) home += 1;
+    else send += 1;
+  }
+  const need = world.myCities.length
+    ? Math.max(...world.myCities.map((c) => world.alertNeed(c)))
+    : 0;
+  return `收缩[${atk}] 攻 ${send} / 留 ${home} / 需 ${Number.isFinite(need) ? need : '∞'} 手`;
 }
 
 /**
