@@ -157,6 +157,17 @@ export function currentView(s: GameState, me: PlayerId): TurnCache {
    * 这也解释 v3 为什么把读写都收在 `focusOf` / `setFocus` 两个函数里——只有一处写，
    * 才不会出现"写到了副本上、看起来生效了其实没有"。
    */
+  /*
+   * **⚠️ 2026-11-28 查出来的一个坑（别删这段说明）**
+   *
+   * `world` 是拿 `view` 建的，而 `view` 可能已经把敌人裁掉了（`playerView` 在
+   * `s.fog && !reveal` 时按视野裁单位）。于是 `world.foeCombat` 里只有**视野内**的敌人，
+   * 任何"拿 `s` 里的单位去和 `world.foeCombat` 比对"的地方都会对不上——
+   * `tactics` 的遭遇读数就是这么一次都没数到过（`seenFoes(s,u)` 有 1 个、`world.foeCombat` 是 0）。
+   *
+   * 规矩：**视线的判断一律问引擎 `canSeeTile(s, u.owner, x, y)` + `attackableTargets(s, u)`，
+   * 不要从 `world.foeCombat` 里挑人**。`world` 里那些"看得见的敌人"只适合做估算（预警、账本）。
+   */
   const mem = memoryOf(s, me);
   const decision = decide(view, world, mem);
   const con = constrain(view, world, decision, mem);

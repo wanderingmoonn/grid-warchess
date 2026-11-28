@@ -203,6 +203,19 @@ export function actFor(
    * 可能已经被占了，这时退回自己的走位（`stepToward`），不要硬报一个必被拒的动作。
    * 单位自己不再判断"我该不该先走"：那是宏观决策。
    */
+  /*
+   * ①.9 **临时调令**的位置见下面（排在开火之后）。
+   */
+
+  /*
+   * **①.55 照走位计划走一格**（多起点 → 多终点，一人一格，见 `planMarch`）。
+   *
+   * ⚠️ 这一步排在遭遇**之后**、让开**之前**（2026-11-28 调整）：
+   * 它原来在最前面直接 `return`，于是"计划里给我排了一格"的人**永远不会停下来打**
+   * （`V-1-01` 的每个兵每一手都从这里走了，遭遇分支一次都进不去）。
+   * 但它也不能简单地"谁都可以先偏步"——`S-002` 那 30 个人会整条线原地横跳
+   * （敌城 15 手只掉 16 血）。所以真正的分流在遭遇分支里：**有敌人向自己走来才回头**。
+   */
   const planned = con.steps?.[u.id];
   if (planned && !(planned.x === u.x && planned.y === u.y)) {
     const key = planned.y * s.w + planned.x;
@@ -210,10 +223,6 @@ export function actFor(
       if (k === key) return { type: 'MOVE', unitId: u.id, x: planned.x, y: planned.y };
     }
   }
-
-  /*
-   * ①.9 **临时调令**的位置见下面（排在开火之后）。
-   */
 
   /*
    * **①.6 遭遇 → 转身野战**（阶段 5 §2.6b，2026-11-28）。
@@ -249,8 +258,16 @@ export function actFor(
     const foesNow = seenFoes(s, u);
     if (foesNow.length > 0) tallyEnc('打了');
     else {
-      const near = world.foeCombat
-        .filter((v) => canSeeTile(s, u.owner, v.x, v.y))
+      /*
+       * **在 `s.units` 里挑，不要用 `world.foeCombat`**（2026-11-28 查了很久，别再改）。
+       *
+       * `actFor` 的 `s` 和建 `world` 用的 `view` 不是同一个对象
+       * （`view` 是 `playerView` 的 `structuredClone` 副本），`buildWorld` 的 `foeCombat`
+       * 是拿副本筛的。同一个兵在 `s` 里能打到人、`world.foeCombat` 里却可能是空的
+       * —— 表现就是"遭遇分支一次都进不去"。**能打谁问引擎**（`attackableTargets`/`canSeeTile`）。
+       */
+      const near = s.units
+        .filter((v) => v.owner !== u.owner && canSeeTile(s, u.owner, v.x, v.y))
         .sort((a, b) => manhattan(u, a) - manhattan(u, b) || (a.id < b.id ? -1 : 1))[0];
       if (!near) tallyEnc('没看见敌');
       else {
