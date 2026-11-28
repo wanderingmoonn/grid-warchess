@@ -319,10 +319,27 @@ export function actFor(
        * 是拿副本筛的。同一个兵在 `s` 里能打到人、`world.foeCombat` 里却可能是空的
        * —— 表现就是"遭遇分支一次都进不去"。**能打谁问引擎**（`attackableTargets`/`canSeeTile`）。
        */
-      const near = s.units
+      const seenEnemies = s.units
         .filter((v) => v.owner !== u.owner && canSeeTile(s, u.owner, v.x, v.y))
-        .sort((a, b) => manhattan(u, a) - manhattan(u, b) || (a.id < b.id ? -1 : 1))[0];
-      if (!near) tallyEnc('没看见敌');
+        .sort((a, b) => manhattan(u, a) - manhattan(u, b) || (a.id < b.id ? -1 : 1));
+      /*
+       * **只挑"冲我来的"那一个**（阶段 5 §2.6-B①，2026-11-28）。
+       *
+       * 用户的口径是"遇到**敌方进攻队伍**要打"——不是"看见谁都打"。
+       * 判据用现成的数、不拍门槛：**它走到我这儿 ≤1 手，或者走到我某座城 ≤1 手**。
+       *
+       * ⚠️ 不要用 `world.foeEta`：那个场是"从敌人出发、到任意格"的最短路，
+       * 问"敌人自己脚下"永远是 **0**（实测把每个敌人都判成"冲我来"）。
+       * 方向要反过来问：`marchTurns(敌人 → 我/我的城)`。
+       */
+      const threat = seenEnemies.find((v) => {
+        const toMe = world.marchTurns(v, u);
+        const toCity = Math.min(...world.myCities.map((c) => world.marchTurns(v, c)), Infinity);
+        return toMe <= 1 || toCity <= 1;
+      });
+      if (seenEnemies.length > 0 && !threat) tallyEnc('路过没打');
+      const near = threat;
+      if (!near) tallyEnc(seenEnemies.length > 0 ? '路过没打' : '没看见敌');
       else {
         const spot = approachStep(s, u, near);
         if (!spot) tallyEnc('没够着');
