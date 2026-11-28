@@ -537,6 +537,43 @@ export function actFor(
    */
   const spot = stepToward(s, u, to, sq.stance === 'build', world.stepsFrom(to));
   if (spot) return { type: 'MOVE', unitId: u.id, x: spot.x, y: spot.y };
+  /*
+   * **死锁退路：只给"要走的人"用**（阶段 5 §2.6.17，2026-11-28）。
+   *
+   * 正常情况走到这里就是"没得走"。但 902 上工兵证明有一种例外：
+   * **它周围被自己人堵满、唯一能走的两格都更远**——于是它一小时一动不动，
+   * 桥永远架不成。
+   *
+   * 所以在 ④ 这一段单独加退路，**不动 `stepToward` 本身**：
+   *   · 只对 `march` / `build` / `siege` 生效（那是"有事要做"的队）；
+   *   · 只接受**不比现在更远**的格（`d <= cur`），所以不会越走越远；
+   *   · `hold`（守/撤）不走这条——守城不需要瞎挪，`S-004` 的规矩。
+   *
+   * 为什么不动 `stepToward`：那是一把公用尺子（经济兵排岗、让位、走位都用它），
+   * 给它加"暂时退步"的许可，会让本来该停的地方开始乱走——
+   * 实测三道题翻红（`S-002` 城伤 90→41、`S-015` 经济 44→40、`D-1-01` 丢城）。
+   * **修现象要修在那一处，不要修在公用尺子上。**
+   */
+  if (sq.stance === 'march' || sq.stance === 'build' || sq.stance === 'siege') {
+    const field = world.stepsFrom(to);
+    const cur = field[u.y * s.w + u.x] ?? Infinity;
+    let best: { x: number; y: number } | null = null;
+    let bestD = Infinity;
+    for (const k of reachableTiles(s, u).keys()) {
+      const x = k % s.w;
+      const y = Math.floor(k / s.w);
+      if (x === u.x && y === u.y) continue;
+      if (takenByOther(s, u, x, y)) continue;
+      const d = field[k] ?? Infinity;
+      if (!Number.isFinite(d)) continue;
+      if (d > cur) continue; /* 不许越走越远 */
+      if (d < bestD || (d === bestD && best && manhattan({ x, y }, to) < manhattan(best, to))) {
+        bestD = d;
+        best = { x, y };
+      }
+    }
+    if (best) return { type: 'MOVE', unitId: u.id, x: best.x, y: best.y };
+  }
   return null;
 }
 

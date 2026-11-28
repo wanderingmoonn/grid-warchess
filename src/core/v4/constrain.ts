@@ -1716,6 +1716,7 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
       cx += dx;
       cy += dy;
     }
+
   }
 
   const squads: Squad[] = [];
@@ -2303,7 +2304,14 @@ export function constrain(s: GameState, world: World, decision: Decision, mem?: 
               .map((b) => b.id);
       if (pick.length > 0) {
         outBuildBand = {
-          id: prev?.id ?? `build-${s.turn}`,
+          /*
+           * **队 id 不按手变**（阶段 5 §2.6.17，2026-11-28）。
+           *
+           * 原来是 `build-${s.turn}`——每手一个新 id。于是工兵走一格就被"重新编队"，
+           * 上一手的走位作废，看起来像原地抖（902 实测：它在 (13,16) 站了 20 手）。
+           * 现在固定成 `build-<目标城>`：只要还是同一座城的桥，就是同一支队。
+           */
+          id: `build-${decision.bridge.cityId}`,
           unitIds: pick,
           cityId: decision.bridge.cityId,
           formedAt: prev?.formedAt ?? s.turn,
