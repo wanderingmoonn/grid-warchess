@@ -4692,18 +4692,18 @@ test('时代越靠后射程越长，长弓手不再是天花板', () => {
       assert.ok(d.range >= 4, `${d.name} 是时代 ${d.era} 的远程，射程 ${d.range} 还不如长弓手`);
     }
   }
-  // 顶级火力要真的压过后排：火炮 5 格，长弓手 4 格。
-  // 水面上负责这一档的是 E5 的那几条钢铁舰队（重巡/战列舰），
-  // 铁甲舰 2026-11-02 挪回 E4、射程也跟着降到 4——它在蒸汽时代算远的，
-  // 但不该和火炮/战列舰同格。
+  // 顶级火力要真的压过后排：火炮 7 格，长弓手 4 格。
+  // 2026-11-28 调整：时代 4/5 的远程集体 +1，时代 5 射程最高的那一档（火炮/火箭炮/
+  // 驱逐舰、水面上的重巡与战列舰不在这次范围里）再 +2 到 7。水面上负责这一档的
+  // 仍是 E5 那几条钢铁舰队，5 格没动——它们属于海军包，不跟着这次调整走。
   assert.equal(UNIT_TYPES.longbow.range, 4);
-  assert.equal(UNIT_TYPES.artillery.range, 5);
-  assert.equal(UNIT_TYPES.ironclad!.range, 4, '铁甲舰是蒸汽时代的船，射程不该追平火炮');
+  assert.equal(UNIT_TYPES.artillery.range, 7);
+  assert.equal(UNIT_TYPES.ironclad!.range, 5, '铁甲舰随时代 4 远程 +1 落到 5，仍低于火炮');
   assert.equal(nvDef('nv_heavy_cruiser').range, 5, '重巡的 8 吋炮要打到 5 格');
   assert.equal(nvDef('nv_battleship').range, 5);
-  // 载具也上了一个台阶：射程 3 意味着能站在近战够不到的地方开火
-  assert.equal(UNIT_TYPES.tank.range, 3);
-  assert.equal(UNIT_TYPES.armoredcar.range, 3);
+  // 载具也上了一个台阶：射程 4 意味着能站在近战够不到的地方开火
+  assert.equal(UNIT_TYPES.tank.range, 4);
+  assert.equal(UNIT_TYPES.armoredcar.range, 4);
 });
 
 test('关键数值按方案落定', () => {
@@ -4715,8 +4715,9 @@ test('关键数值按方案落定', () => {
     ['squad', { cost: 300 }],
     ['spearman', { cost: 65 }],
     ['halberdier', { cost: 100, range: 2 }],
-    ['tank', { cost: 400, range: 3 }],
-    ['armoredcar', { cost: 250, range: 3 }],
+    // 2026-11-28：时代 4/5 远程射程集体 +1（坦克/装甲车 3 → 4，铁甲舰 4 → 5）
+    ['tank', { cost: 400, range: 4 }],
+    ['armoredcar', { cost: 250, range: 4 }],
     ['militia', { atk: 13 }],
     ['hmg', { atk: 17 }],
     ['boat', { atk: 11, maxHp: 34 }],
@@ -4725,7 +4726,7 @@ test('关键数值按方案落定', () => {
     ['spearman', { maxHp: 40 }],
     ['tower', { range: 3 }],
     ['gunboat', { atk: 25, maxHp: 46 }],
-    ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 4 }],
+    ['ironclad', { cost: 300, atk: 40, armor: 10, maxHp: 82, range: 5 }],
     ['tank', { atk: 56, maxHp: 88 }],
     ['artillery', { atk: 47, maxHp: 54 }],
     ['squad', { atk: 47, maxHp: 48 }],

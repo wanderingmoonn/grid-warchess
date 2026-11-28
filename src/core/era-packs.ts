@@ -1086,6 +1086,17 @@ const GUNPOWDER: UnitTypeDef[] = [
 /* 时代 4 · 蒸汽（原版 7 个 → 模组 13 个）                             */
 /* ================================================================== */
 
+/*
+ * 2026-11-28 射程调整（本包与 config.ts 里的原版同期兵一起改）：
+ *   时代 4/5 的远程单位射程集体 +1，视野跟着加同样的量；
+ *   时代 5 射程最高的那一档（火炮 / 火箭炮 / 驱逐舰）再额外 +1，直接到 7。
+ * 结果是时代 4 的远程带整体上移到 3~5，两头特化单位被拉长：
+ *   榴弹炮 6 → 7、列车炮 7 → **8**——列车炮现在是全游戏射程最远的单位，
+ *   比时代 5 的任何兵都远一格。这是这次调整的已知副作用，不是笔误。
+ * 视野同步的原因：射程一旦超过视野，单位就会"打得到、看不见"，
+ * 只能等对手走进视野才开火，等于射程白给。
+ */
+
 const INDUSTRY: UnitTypeDef[] = [
   {
     // 战壕迫击炮（斯托克斯式，1915）：堑壕战的产物，曲射、轻便、跟着步兵走。
@@ -1103,8 +1114,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 26,
     armor: 3,
     maxHp: 32,
-    range: 4,
-    vision: 2,
+    range: 5,
+    vision: 3,
     splash: 1,
   },
   {
@@ -1122,8 +1133,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 42,
     armor: 3,
     maxHp: 40,
-    range: 3,
-    vision: 3,
+    range: 4,
+    vision: 4,
     abilities: ['stealth'],
   },
   {
@@ -1138,8 +1149,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 42,
     armor: 3,
     maxHp: 36,
-    range: 2,
-    vision: 2,
+    range: 3,
+    vision: 3,
     splash: 1,
   },
   {
@@ -1156,8 +1167,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 36,
     armor: 3,
     maxHp: 36,
-    range: 3,
-    vision: 2,
+    range: 4,
+    vision: 3,
     splash: 2,
     abilities: ['armor-pierce'],
   },
@@ -1173,8 +1184,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 38,
     armor: 4,
     maxHp: 42,
-    range: 6,
-    vision: 2,
+    range: 7,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
   },
@@ -1190,8 +1201,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 44,
     armor: 6,
     maxHp: 60,
-    range: 7,
-    vision: 2,
+    range: 8,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
   },
@@ -1207,8 +1218,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 30,
     armor: 10,
     maxHp: 80,
-    range: 2,
-    vision: 2,
+    range: 3,
+    vision: 3,
     abilities: ['siege-master'],
   },
   {
@@ -1226,8 +1237,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 34,
     armor: 9,
     maxHp: 70,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     burst: 2,
     abilities: ['siege-master'],
   },
@@ -1327,8 +1338,8 @@ const INDUSTRY: UnitTypeDef[] = [
     atk: 38,
     armor: 8,
     maxHp: 75,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
     splash: 1,
     domain: 'water',
   },
@@ -1351,8 +1362,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 41,
     armor: 4,
     maxHp: 48,
-    range: 3,
-    vision: 5,
+    range: 4,
+    vision: 6,
   },
   {
     // 突击队：潜行 + 高攻，用来捅后排。
@@ -1368,8 +1379,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 42,
     armor: 4,
     maxHp: 46,
-    range: 3,
-    vision: 4,
+    range: 4,
+    vision: 5,
     abilities: ['stealth'],
   },
   {
@@ -1384,8 +1395,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 54,
     armor: 3,
     maxHp: 34,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     abilities: ['armor-pierce', 'first-strike'],
   },
   {
@@ -1403,8 +1414,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 46,
     armor: 5,
     maxHp: 46,
-    range: 5,
-    vision: 2,
+    range: 7,
+    vision: 4,
     splash: 2,
     abilities: ['siege-master'],
   },
@@ -1420,8 +1431,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 60,
     armor: 14,
     maxHp: 100,
-    range: 3,
-    vision: 3,
+    range: 4,
+    vision: 4,
     abilities: ['siege-master'],
   },
   {
@@ -1440,8 +1451,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 42,
     armor: 8,
     maxHp: 62,
-    range: 4,
-    vision: 2,
+    range: 5,
+    vision: 3,
     splash: 2,
     abilities: ['siege-master'],
   },
@@ -1457,8 +1468,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 46,
     armor: 4,
     maxHp: 40,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     burst: 2,
   },
   {
@@ -1557,8 +1568,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 52,
     armor: 11,
     maxHp: 100,
-    range: 5,
-    vision: 5,
+    range: 7,
+    vision: 7,
     domain: 'water',
     abilities: ['armor-pierce'],
   },
@@ -1574,8 +1585,8 @@ const MODERN: UnitTypeDef[] = [
     atk: 38,
     armor: 3,
     maxHp: 30,
-    range: 4,
-    vision: 2,
+    range: 5,
+    vision: 3,
     splash: 1,
   },
 ];

@@ -937,8 +937,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 36,
     armor: 3,
     maxHp: 38,
-    range: 4,
-    vision: 3,
+    range: 5,
+    vision: 4,
     abilities: ['armor-pierce'],
   },
   mg: {
@@ -958,8 +958,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 20,
     armor: 3,
     maxHp: 32,
-    range: 4,
-    vision: 2,
+    range: 5,
+    vision: 3,
     burst: 3,
   },
   hmg: {
@@ -974,8 +974,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 17,
     armor: 3,
     maxHp: 32,
-    range: 4,
-    vision: 2,
+    range: 5,
+    vision: 3,
     // 四动：比机枪队多一动，所以单发伤害压到更低——总输出靠次数堆
     burst: 4,
   },
@@ -990,10 +990,10 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 22,
     armor: 5,
     maxHp: 54,
-    range: 3,
+    range: 4,
     // 车顶机枪：两连发
     burst: 2,
-    vision: 3,
+    vision: 4,
   },
   foreman: {
     id: 'foreman',
@@ -1057,8 +1057,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 47,
     armor: 4,
     maxHp: 48,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
   },
   tank: {
     id: 'tank',
@@ -1071,8 +1071,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 56,
     armor: 10,
     maxHp: 88,
-    range: 3,
-    vision: 3,
+    range: 4,
+    vision: 4,
     abilities: ['shield-wall', 'siege-master'],
   },
   artillery: {
@@ -1093,11 +1093,11 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 47,
     armor: 5,
     maxHp: 54,
-    range: 5,
+    range: 7,
     splash: 2,
     // 视野 2 → 3：射程 5 却只能看 2 格，等于自己 60% 的射程要别人点灯。
     // 不改射程，就把"看得见"补回来一格；最后一格仍然需要前排。
-    vision: 3,
+    vision: 5,
     abilities: ['siege-master'],
   },
   agribusiness: {
@@ -1400,8 +1400,8 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
     atk: 40,
     armor: 10,
     maxHp: 82,
-    range: 4,
-    vision: 4,
+    range: 5,
+    vision: 5,
     domain: 'water',
     abilities: ['armor-pierce'],
   },
