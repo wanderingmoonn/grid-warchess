@@ -119,7 +119,7 @@ export const LAYERS: Record<LayerId, LayerTheme> = {
     // 同上：开局还留着第四代的兵，钟过 3 之后才全是第五代
     prevPool: ['rifleman', 'mg', 'armoredcar'],
     prevEra: 4,
-    pool: ['hmg', 'mod_commando', 'tank', 'artillery'],
+    pool: ['hmg', 'commando', 'tank', 'artillery'],
     poolHigh: ['ct_infantry', 'ct_tank', 'ct_howitzer', 'ct_recon'],
     expansions: ['pack-contemporary'],
     size: [12, 14, 14, 16],

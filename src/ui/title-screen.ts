@@ -104,7 +104,7 @@ function buildTitleDioramaState(): GameState {
     { id: 'u3', type: 'knight', owner: 'A' as const, x: 3, y: 6, hp: 36, moved: false, acted: false, kills: 0 },
     { id: 'u4', type: 'tank', owner: 'B' as const, x: 5, y: 2, hp: 58, moved: false, acted: false, kills: 0 },
     { id: 'u5', type: 'rifleman', owner: 'B' as const, x: 4, y: 1, hp: 34, moved: false, acted: false, kills: 0 },
-    { id: 'u6', type: 'mod_commando', owner: 'B' as const, x: 6, y: 3, hp: 40, moved: false, acted: false, kills: 0 },
+    { id: 'u6', type: 'commando', owner: 'B' as const, x: 6, y: 3, hp: 40, moved: false, acted: false, kills: 0 },
   ];
   s.units = candidates.filter((u) => Boolean(s.unitTypes[u.type]));
   return s;

@@ -750,7 +750,7 @@ function paintBridge3(ctx: CanvasRenderingContext2D, pal: TeamClothPalette, opts
 }
 
 export const ERA5_UNIT_SPECS: Readonly<Record<string, Era1UnitSpec>> = {
-  mod_commando: { paint: paintSquad, ringRx: 10.8, ringRy: 4.6, hitTop: 25 },
+  commando: { paint: paintSquad, ringRx: 10.8, ringRy: 4.6, hitTop: 25 },
   hmg: { paint: paintHmg, ringRx: 11.4, ringRy: 4.9, barY: 5.4, hitTop: 22 },
   tank: { paint: paintTank, ringRx: 13.4, ringRy: 5.8, barY: 6.4, hitTop: 24 },
   artillery: { paint: paintArtillery, ringRx: 12.2, ringRy: 5.2, barY: 5.8, hitTop: 26 },

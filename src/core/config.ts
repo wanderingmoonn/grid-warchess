@@ -1045,7 +1045,7 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
   },
 
   // ============ 时代 5 · 机械化（第六时代在原版表里是空的） ============
-  mod_commando: {
+  commando: {
     /*
      * 突击队（原「时代军备 · 机械化」的单位，2026-11-28 转入原版）。
      *
@@ -1054,9 +1054,9 @@ export const UNIT_TYPES: Record<string, UnitTypeDef> = {
      * 甲 5 / 血 53 / 射 4 / 视 5），已含时代 5 的全局上调。
      *
      * 立绘沿用被删掉的「步兵班」那一张：`ERA5_UNIT_SPECS` 的键从 `squad`
-     * 改成了 `mod_commando`，美术资源既没新增也没浪费。
+     * 改成了 `commando`，美术资源既没新增也没浪费。
      */
-    id: 'mod_commando',
+    id: 'commando',
     name: '突击队',
     short: '击',
     era: 5,

@@ -16,7 +16,7 @@ interface ShowcaseSlot {
 
 const SLOTS: ReadonlyArray<ShowcaseSlot> = [
   // 第 1 排（y=2）：时代 5 四大核心机械化陆战兵种（平原 / 森林 / 丘陵 / 台地）
-  { typeId: 'mod_commando', label: '突击队 341金', x: 2, y: 2, side: 'A' },
+  { typeId: 'commando', label: '突击队 341金', x: 2, y: 2, side: 'A' },
   { typeId: 'hmg', label: '重机枪组 215金', x: 5, y: 2, side: 'A' },
   { typeId: 'tank', label: '坦克 400金', x: 8, y: 2, side: 'B' },
   { typeId: 'artillery', label: '火炮 380金', x: 11, y: 2, side: 'B' },
